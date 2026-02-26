@@ -58,7 +58,6 @@ class KeboolaClient:
         Raises:
             KeboolaApiError: On HTTP errors (with masked token) or after retries exhausted.
         """
-        last_exception: Exception | None = None
         last_response: httpx.Response | None = None
 
         for attempt in range(MAX_RETRIES):
@@ -69,7 +68,7 @@ class KeboolaClient:
                     return response
 
                 if response.status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES - 1:
-                    delay = BACKOFF_BASE * (2 ** attempt)
+                    delay = BACKOFF_BASE * (2**attempt)
                     time.sleep(delay)
                     last_response = response
                     continue
@@ -78,9 +77,8 @@ class KeboolaClient:
 
             except httpx.TimeoutException as exc:
                 if attempt < MAX_RETRIES - 1:
-                    delay = BACKOFF_BASE * (2 ** attempt)
+                    delay = BACKOFF_BASE * (2**attempt)
                     time.sleep(delay)
-                    last_exception = exc
                     continue
                 raise KeboolaApiError(
                     message=f"Request timed out connecting to {self._stack_url} (token: {self._masked_token})",
@@ -91,9 +89,8 @@ class KeboolaClient:
 
             except httpx.ConnectError as exc:
                 if attempt < MAX_RETRIES - 1:
-                    delay = BACKOFF_BASE * (2 ** attempt)
+                    delay = BACKOFF_BASE * (2**attempt)
                     time.sleep(delay)
-                    last_exception = exc
                     continue
                 raise KeboolaApiError(
                     message=f"Cannot connect to {self._stack_url} (token: {self._masked_token})",

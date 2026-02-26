@@ -10,7 +10,9 @@ class ProjectConfig(BaseModel):
 
     stack_url: str = Field(description="Keboola stack URL, e.g. https://connection.keboola.com")
     token: str = Field(description="Storage API token")
-    project_name: str = Field(default="", description="Human-readable project name (populated on add)")
+    project_name: str = Field(
+        default="", description="Human-readable project name (populated on add)"
+    )
     project_id: int = Field(default=0, description="Keboola project ID (populated on add)")
 
 

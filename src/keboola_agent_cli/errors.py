@@ -21,7 +21,7 @@ def mask_token(token: str) -> str:
     if dash_index == -1 or dash_index >= len(token) - 4:
         return "***"
 
-    prefix = token[: dash_index]
+    prefix = token[:dash_index]
     last4 = token[-4:]
     return f"{prefix}-...{last4}"
 

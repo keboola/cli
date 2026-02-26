@@ -4,7 +4,8 @@ Orchestrates multi-project configuration retrieval, filtering, and aggregation
 without knowing about CLI or HTTP details.
 """
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
@@ -37,9 +38,7 @@ class ConfigService:
         self._config_store = config_store
         self._client_factory = client_factory or default_client_factory
 
-    def resolve_projects(
-        self, aliases: list[str] | None = None
-    ) -> dict[str, ProjectConfig]:
+    def resolve_projects(self, aliases: list[str] | None = None) -> dict[str, ProjectConfig]:
         """Resolve project aliases to ProjectConfig instances.
 
         Args:
@@ -115,21 +114,25 @@ class ConfigService:
 
                     configurations = component.get("configurations", [])
                     for cfg in configurations:
-                        all_configs.append({
-                            "project_alias": alias,
-                            "component_id": comp_id,
-                            "component_name": comp_name,
-                            "component_type": comp_type,
-                            "config_id": str(cfg.get("id", "")),
-                            "config_name": cfg.get("name", ""),
-                            "config_description": cfg.get("description", ""),
-                        })
+                        all_configs.append(
+                            {
+                                "project_alias": alias,
+                                "component_id": comp_id,
+                                "component_name": comp_name,
+                                "component_type": comp_type,
+                                "config_id": str(cfg.get("id", "")),
+                                "config_name": cfg.get("name", ""),
+                                "config_description": cfg.get("description", ""),
+                            }
+                        )
             except KeboolaApiError as exc:
-                errors.append({
-                    "project_alias": alias,
-                    "error_code": exc.error_code,
-                    "message": exc.message,
-                })
+                errors.append(
+                    {
+                        "project_alias": alias,
+                        "error_code": exc.error_code,
+                        "message": exc.message,
+                    }
+                )
             finally:
                 client.close()
 

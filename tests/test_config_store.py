@@ -135,12 +135,20 @@ class TestAddProject:
     def test_add_second_project_does_not_change_default(self, tmp_config_dir: Path) -> None:
         """Adding a second project does not change the default."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("first", ProjectConfig(
-            stack_url="https://a.com", token="901-abcdef-12345678",
-        ))
-        store.add_project("second", ProjectConfig(
-            stack_url="https://b.com", token="902-abcdef-12345678",
-        ))
+        store.add_project(
+            "first",
+            ProjectConfig(
+                stack_url="https://a.com",
+                token="901-abcdef-12345678",
+            ),
+        )
+        store.add_project(
+            "second",
+            ProjectConfig(
+                stack_url="https://b.com",
+                token="902-abcdef-12345678",
+            ),
+        )
 
         config = store.load()
         assert config.default_project == "first"
@@ -164,9 +172,13 @@ class TestRemoveProject:
     def test_remove_project_success(self, tmp_config_dir: Path) -> None:
         """Removing a project deletes it from config."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("test", ProjectConfig(
-            stack_url="https://a.com", token="901-abcdef-12345678",
-        ))
+        store.add_project(
+            "test",
+            ProjectConfig(
+                stack_url="https://a.com",
+                token="901-abcdef-12345678",
+            ),
+        )
 
         store.remove_project("test")
 
@@ -176,12 +188,20 @@ class TestRemoveProject:
     def test_remove_default_project_updates_default(self, tmp_config_dir: Path) -> None:
         """Removing the default project updates the default to the next available."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("first", ProjectConfig(
-            stack_url="https://a.com", token="901-abcdef-12345678",
-        ))
-        store.add_project("second", ProjectConfig(
-            stack_url="https://b.com", token="902-abcdef-12345678",
-        ))
+        store.add_project(
+            "first",
+            ProjectConfig(
+                stack_url="https://a.com",
+                token="901-abcdef-12345678",
+            ),
+        )
+        store.add_project(
+            "second",
+            ProjectConfig(
+                stack_url="https://b.com",
+                token="902-abcdef-12345678",
+            ),
+        )
 
         store.remove_project("first")
         config = store.load()
@@ -191,9 +211,13 @@ class TestRemoveProject:
     def test_remove_last_project_clears_default(self, tmp_config_dir: Path) -> None:
         """Removing the last project clears the default."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("only", ProjectConfig(
-            stack_url="https://a.com", token="901-abcdef-12345678",
-        ))
+        store.add_project(
+            "only",
+            ProjectConfig(
+                stack_url="https://a.com",
+                token="901-abcdef-12345678",
+            ),
+        )
 
         store.remove_project("only")
         config = store.load()
@@ -215,10 +239,13 @@ class TestEditProject:
     def test_edit_stack_url(self, tmp_config_dir: Path) -> None:
         """Editing stack_url updates it in the config."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("test", ProjectConfig(
-            stack_url="https://old.com",
-            token="901-abcdef-12345678",
-        ))
+        store.add_project(
+            "test",
+            ProjectConfig(
+                stack_url="https://old.com",
+                token="901-abcdef-12345678",
+            ),
+        )
 
         store.edit_project("test", stack_url="https://new.com")
 
@@ -229,10 +256,13 @@ class TestEditProject:
     def test_edit_token(self, tmp_config_dir: Path) -> None:
         """Editing token updates it in the config."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("test", ProjectConfig(
-            stack_url="https://a.com",
-            token="901-abcdef-12345678",
-        ))
+        store.add_project(
+            "test",
+            ProjectConfig(
+                stack_url="https://a.com",
+                token="901-abcdef-12345678",
+            ),
+        )
 
         store.edit_project("test", token="902-newtoken-87654321")
 
@@ -243,11 +273,14 @@ class TestEditProject:
     def test_edit_multiple_fields(self, tmp_config_dir: Path) -> None:
         """Editing multiple fields at once works."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("test", ProjectConfig(
-            stack_url="https://old.com",
-            token="901-abcdef-12345678",
-            project_name="Old Name",
-        ))
+        store.add_project(
+            "test",
+            ProjectConfig(
+                stack_url="https://old.com",
+                token="901-abcdef-12345678",
+                project_name="Old Name",
+            ),
+        )
 
         store.edit_project("test", stack_url="https://new.com", project_name="New Name")
 
@@ -259,10 +292,13 @@ class TestEditProject:
     def test_edit_none_values_ignored(self, tmp_config_dir: Path) -> None:
         """None values in kwargs are ignored and don't overwrite existing data."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("test", ProjectConfig(
-            stack_url="https://a.com",
-            token="901-abcdef-12345678",
-        ))
+        store.add_project(
+            "test",
+            ProjectConfig(
+                stack_url="https://a.com",
+                token="901-abcdef-12345678",
+            ),
+        )
 
         store.edit_project("test", stack_url=None, token="new-token-1234abcd")
 
@@ -285,11 +321,14 @@ class TestGetProject:
     def test_get_existing_project(self, tmp_config_dir: Path) -> None:
         """Getting an existing project returns it."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("test", ProjectConfig(
-            stack_url="https://a.com",
-            token="901-abcdef-12345678",
-            project_name="Test",
-        ))
+        store.add_project(
+            "test",
+            ProjectConfig(
+                stack_url="https://a.com",
+                token="901-abcdef-12345678",
+                project_name="Test",
+            ),
+        )
 
         project = store.get_project("test")
         assert project is not None
@@ -317,10 +356,14 @@ class TestVersionCheck:
         """Config with a future version raises ConfigError."""
         store = ConfigStore(config_dir=tmp_config_dir)
         config_file = tmp_config_dir / "config.json"
-        config_file.write_text(json.dumps({
-            "version": CURRENT_CONFIG_VERSION + 1,
-            "projects": {},
-        }))
+        config_file.write_text(
+            json.dumps(
+                {
+                    "version": CURRENT_CONFIG_VERSION + 1,
+                    "projects": {},
+                }
+            )
+        )
 
         with pytest.raises(ConfigError, match="newer than supported"):
             store.load()
@@ -338,10 +381,185 @@ class TestVersionCheck:
         """Config file with wrong structure raises ConfigError."""
         store = ConfigStore(config_dir=tmp_config_dir)
         config_file = tmp_config_dir / "config.json"
-        config_file.write_text(json.dumps({
-            "version": 1,
-            "projects": {"bad": {"not_a_valid_field_only": True}},
-        }))
+        config_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "projects": {"bad": {"not_a_valid_field_only": True}},
+                }
+            )
+        )
 
         with pytest.raises(ConfigError, match="invalid structure"):
             store.load()
+
+
+class TestCorruptedFile:
+    """Tests for handling corrupted config files."""
+
+    def test_binary_garbage_in_config(self, tmp_config_dir: Path) -> None:
+        """Loading a config file with binary garbage raises ConfigError."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        config_file = tmp_config_dir / "config.json"
+        config_file.write_bytes(b"\x00\x01\x02\x03\xff\xfe\xfd")
+
+        with pytest.raises(ConfigError, match="not valid UTF-8"):
+            store.load()
+
+    def test_truncated_json(self, tmp_config_dir: Path) -> None:
+        """Loading a truncated JSON config raises ConfigError."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        config_file = tmp_config_dir / "config.json"
+        config_file.write_text('{"version": 1, "projects": {')
+
+        with pytest.raises(ConfigError, match="not valid JSON"):
+            store.load()
+
+    def test_json_array_instead_of_object(self, tmp_config_dir: Path) -> None:
+        """Loading a JSON array instead of object raises ConfigError."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        config_file = tmp_config_dir / "config.json"
+        config_file.write_text("[1, 2, 3]")
+
+        with pytest.raises(ConfigError, match="invalid structure"):
+            store.load()
+
+    def test_json_null_value(self, tmp_config_dir: Path) -> None:
+        """Loading JSON null raises ConfigError."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        config_file = tmp_config_dir / "config.json"
+        config_file.write_text("null")
+
+        with pytest.raises(ConfigError, match="invalid structure"):
+            store.load()
+
+    def test_empty_file(self, tmp_config_dir: Path) -> None:
+        """Loading an empty file raises ConfigError."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        config_file = tmp_config_dir / "config.json"
+        config_file.write_text("")
+
+        with pytest.raises(ConfigError, match="not valid JSON"):
+            store.load()
+
+    def test_config_with_extra_fields_loads(self, tmp_config_dir: Path) -> None:
+        """Config with extra fields (forward compatibility) loads successfully."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        config_file = tmp_config_dir / "config.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "default_project": "",
+                    "projects": {},
+                    "future_field": "some value",
+                    "another_future": 42,
+                }
+            )
+        )
+
+        config = store.load()
+        assert config.version == 1
+        assert config.projects == {}
+
+
+class TestMissingDirectory:
+    """Tests for config operations when directory does not exist."""
+
+    def test_load_from_nonexistent_directory(self, tmp_path: Path) -> None:
+        """Loading from a nonexistent directory returns empty config."""
+        nonexistent = tmp_path / "does" / "not" / "exist"
+        store = ConfigStore(config_dir=nonexistent)
+        config = store.load()
+
+        assert isinstance(config, AppConfig)
+        assert config.projects == {}
+
+    def test_save_creates_nested_directory(self, tmp_path: Path) -> None:
+        """Save creates deeply nested directory structure."""
+        deep_dir = tmp_path / "a" / "b" / "c" / "d" / "config"
+        store = ConfigStore(config_dir=deep_dir)
+        store.save(AppConfig(default_project="test"))
+
+        assert deep_dir.exists()
+        loaded = store.load()
+        assert loaded.default_project == "test"
+
+    def test_add_project_creates_directory(self, tmp_path: Path) -> None:
+        """add_project creates the config directory and file if needed."""
+        new_dir = tmp_path / "fresh" / "config"
+        store = ConfigStore(config_dir=new_dir)
+        store.add_project(
+            "test",
+            ProjectConfig(
+                stack_url="https://a.com",
+                token="901-abcdef-12345678",
+            ),
+        )
+
+        assert (new_dir / "config.json").exists()
+        config = store.load()
+        assert "test" in config.projects
+
+
+class TestPermissionDenied:
+    """Tests for permission-related errors."""
+
+    def test_save_to_readonly_directory(self, tmp_config_dir: Path) -> None:
+        """Saving to a read-only directory raises ConfigError."""
+        # Make the directory read-only
+        tmp_config_dir.chmod(0o444)
+        store = ConfigStore(config_dir=tmp_config_dir)
+
+        try:
+            with pytest.raises(ConfigError, match="Cannot write"):
+                store.save(AppConfig())
+        finally:
+            # Restore permissions for cleanup
+            tmp_config_dir.chmod(0o755)
+
+    def test_load_unreadable_config_file(self, tmp_config_dir: Path) -> None:
+        """Loading an unreadable config file raises ConfigError."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        config_file = tmp_config_dir / "config.json"
+        config_file.write_text(json.dumps({"version": 1, "projects": {}}))
+
+        # Make the file unreadable
+        config_file.chmod(0o000)
+
+        try:
+            with pytest.raises(ConfigError, match="Cannot read"):
+                store.load()
+        finally:
+            # Restore permissions for cleanup
+            config_file.chmod(0o644)
+
+
+class TestConfigPath:
+    """Tests for config_path property."""
+
+    def test_config_path_returns_correct_path(self, tmp_config_dir: Path) -> None:
+        """config_path property returns the full path to config.json."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        assert store.config_path == tmp_config_dir / "config.json"
+
+    def test_multiple_save_load_cycles(self, tmp_config_dir: Path) -> None:
+        """Multiple save/load cycles preserve data integrity."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+
+        for i in range(10):
+            store.add_project(
+                f"project-{i}",
+                ProjectConfig(
+                    stack_url=f"https://stack-{i}.keboola.com",
+                    token=f"901-token-{i}-abcdefgh",
+                    project_name=f"Project {i}",
+                    project_id=i,
+                ),
+            )
+
+        config = store.load()
+        assert len(config.projects) == 10
+        assert config.projects["project-0"].project_name == "Project 0"
+        assert config.projects["project-9"].project_id == 9
+        assert config.default_project == "project-0"

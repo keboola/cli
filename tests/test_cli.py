@@ -1,18 +1,15 @@
 """Tests for CLI commands via CliRunner - project, config, context, doctor commands."""
 
 import json
-import os
-import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError, KeboolaApiError
-from keboola_agent_cli.models import AppConfig, ProjectConfig, TokenVerifyResponse
+from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.project_service import ProjectService
 
@@ -44,9 +41,10 @@ class TestProjectAdd:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
 
@@ -56,13 +54,20 @@ class TestProjectAdd:
             )
             MockService.return_value = service_instance
 
-            result = runner.invoke(app, [
-                "--json",
-                "project", "add",
-                "--alias", "prod",
-                "--url", "https://connection.keboola.com",
-                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--alias",
+                    "prod",
+                    "--url",
+                    "https://connection.keboola.com",
+                    "--token",
+                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                ],
+            )
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         output = json.loads(result.output)
@@ -79,9 +84,10 @@ class TestProjectAdd:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
 
@@ -91,12 +97,19 @@ class TestProjectAdd:
             )
             MockService.return_value = service_instance
 
-            result = runner.invoke(app, [
-                "project", "add",
-                "--alias", "test",
-                "--url", "https://connection.keboola.com",
-                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "project",
+                    "add",
+                    "--alias",
+                    "test",
+                    "--url",
+                    "https://connection.keboola.com",
+                    "--token",
+                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                ],
+            )
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         assert "test" in result.output
@@ -115,9 +128,10 @@ class TestProjectAdd:
             retryable=False,
         )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
 
@@ -127,12 +141,18 @@ class TestProjectAdd:
             )
             MockService.return_value = service_instance
 
-            result = runner.invoke(app, [
-                "--json",
-                "project", "add",
-                "--alias", "bad",
-                "--token", "invalid-token-abcdefgh",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--alias",
+                    "bad",
+                    "--token",
+                    "invalid-token-abcdefgh",
+                ],
+            )
 
         assert result.exit_code == 3
         output = json.loads(result.output)
@@ -152,9 +172,10 @@ class TestProjectAdd:
             retryable=True,
         )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
 
@@ -164,12 +185,18 @@ class TestProjectAdd:
             )
             MockService.return_value = service_instance
 
-            result = runner.invoke(app, [
-                "--json",
-                "project", "add",
-                "--alias", "timeout",
-                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--alias",
+                    "timeout",
+                    "--token",
+                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                ],
+            )
 
         assert result.exit_code == 4
 
@@ -182,9 +209,10 @@ class TestProjectList:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
             MockService.return_value = ProjectService(config_store=store_instance)
@@ -202,9 +230,10 @@ class TestProjectList:
         config_dir.mkdir()
         mock_client = _make_mock_client()
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
 
@@ -215,12 +244,19 @@ class TestProjectList:
             MockService.return_value = service_instance
 
             # Add a project first
-            runner.invoke(app, [
-                "project", "add",
-                "--alias", "test",
-                "--url", "https://connection.keboola.com",
-                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            ])
+            runner.invoke(
+                app,
+                [
+                    "project",
+                    "add",
+                    "--alias",
+                    "test",
+                    "--url",
+                    "https://connection.keboola.com",
+                    "--token",
+                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                ],
+            )
 
             result = runner.invoke(app, ["--json", "project", "list"])
 
@@ -239,9 +275,10 @@ class TestProjectList:
         config_dir.mkdir()
         mock_client = _make_mock_client(project_name="My Production")
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
 
@@ -251,12 +288,19 @@ class TestProjectList:
             )
             MockService.return_value = service_instance
 
-            runner.invoke(app, [
-                "project", "add",
-                "--alias", "prod",
-                "--url", "https://connection.keboola.com",
-                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            ])
+            runner.invoke(
+                app,
+                [
+                    "project",
+                    "add",
+                    "--alias",
+                    "prod",
+                    "--url",
+                    "https://connection.keboola.com",
+                    "--token",
+                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                ],
+            )
 
             result = runner.invoke(app, ["project", "list"])
 
@@ -269,9 +313,10 @@ class TestProjectList:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
             MockService.return_value = ProjectService(config_store=store_instance)
@@ -291,9 +336,10 @@ class TestProjectRemove:
         config_dir.mkdir()
         mock_client = _make_mock_client()
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
 
@@ -303,17 +349,28 @@ class TestProjectRemove:
             )
             MockService.return_value = service_instance
 
-            runner.invoke(app, [
-                "project", "add",
-                "--alias", "test",
-                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            ])
+            runner.invoke(
+                app,
+                [
+                    "project",
+                    "add",
+                    "--alias",
+                    "test",
+                    "--token",
+                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                ],
+            )
 
-            result = runner.invoke(app, [
-                "--json",
-                "project", "remove",
-                "--alias", "test",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "remove",
+                    "--alias",
+                    "test",
+                ],
+            )
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -325,18 +382,24 @@ class TestProjectRemove:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
             MockService.return_value = ProjectService(config_store=store_instance)
 
-            result = runner.invoke(app, [
-                "--json",
-                "project", "remove",
-                "--alias", "nonexistent",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "remove",
+                    "--alias",
+                    "nonexistent",
+                ],
+            )
 
         assert result.exit_code == 5
         output = json.loads(result.output)
@@ -353,9 +416,10 @@ class TestProjectStatus:
         config_dir.mkdir()
         mock_client = _make_mock_client(project_name="Prod", project_id=123)
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
 
@@ -365,11 +429,17 @@ class TestProjectStatus:
             )
             MockService.return_value = service_instance
 
-            runner.invoke(app, [
-                "project", "add",
-                "--alias", "prod",
-                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            ])
+            runner.invoke(
+                app,
+                [
+                    "project",
+                    "add",
+                    "--alias",
+                    "prod",
+                    "--token",
+                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                ],
+            )
 
             result = runner.invoke(app, ["--json", "project", "status"])
 
@@ -387,9 +457,10 @@ class TestProjectStatus:
         config_dir.mkdir()
         mock_client = _make_mock_client()
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
 
@@ -399,11 +470,17 @@ class TestProjectStatus:
             )
             MockService.return_value = service_instance
 
-            runner.invoke(app, [
-                "project", "add",
-                "--alias", "test",
-                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            ])
+            runner.invoke(
+                app,
+                [
+                    "project",
+                    "add",
+                    "--alias",
+                    "test",
+                    "--token",
+                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                ],
+            )
 
             result = runner.invoke(app, ["project", "status"])
 
@@ -420,9 +497,10 @@ class TestProjectEdit:
         config_dir.mkdir()
         mock_client = _make_mock_client()
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
 
@@ -432,19 +510,32 @@ class TestProjectEdit:
             )
             MockService.return_value = service_instance
 
-            runner.invoke(app, [
-                "project", "add",
-                "--alias", "test",
-                "--url", "https://old.keboola.com",
-                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            ])
+            runner.invoke(
+                app,
+                [
+                    "project",
+                    "add",
+                    "--alias",
+                    "test",
+                    "--url",
+                    "https://old.keboola.com",
+                    "--token",
+                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                ],
+            )
 
-            result = runner.invoke(app, [
-                "--json",
-                "project", "edit",
-                "--alias", "test",
-                "--url", "https://new.keboola.com",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "edit",
+                    "--alias",
+                    "test",
+                    "--url",
+                    "https://new.keboola.com",
+                ],
+            )
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -457,9 +548,10 @@ class TestProjectEdit:
         config_dir.mkdir()
         mock_client = _make_mock_client()
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
 
@@ -469,17 +561,28 @@ class TestProjectEdit:
             )
             MockService.return_value = service_instance
 
-            runner.invoke(app, [
-                "project", "add",
-                "--alias", "test",
-                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            ])
+            runner.invoke(
+                app,
+                [
+                    "project",
+                    "add",
+                    "--alias",
+                    "test",
+                    "--token",
+                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                ],
+            )
 
-            result = runner.invoke(app, [
-                "--json",
-                "project", "edit",
-                "--alias", "test",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "edit",
+                    "--alias",
+                    "test",
+                ],
+            )
 
         assert result.exit_code == 5
         output = json.loads(result.output)
@@ -558,12 +661,15 @@ def _setup_config_test(config_dir: Path, projects: dict[str, dict] | None = None
     store = ConfigStore(config_dir=config_dir)
     if projects:
         for alias, info in projects.items():
-            store.add_project(alias, ProjectConfig(
-                stack_url=info.get("stack_url", "https://connection.keboola.com"),
-                token=info["token"],
-                project_name=info.get("project_name", alias),
-                project_id=info.get("project_id", 1234),
-            ))
+            store.add_project(
+                alias,
+                ProjectConfig(
+                    stack_url=info.get("stack_url", "https://connection.keboola.com"),
+                    token=info["token"],
+                    project_name=info.get("project_name", alias),
+                    project_id=info.get("project_id", 1234),
+                ),
+            )
     return store
 
 
@@ -576,14 +682,18 @@ class TestConfigList:
         config_dir.mkdir()
 
         mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
 
@@ -610,14 +720,18 @@ class TestConfigList:
         config_dir.mkdir()
 
         mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
 
@@ -645,20 +759,24 @@ class TestConfigList:
         prod_client = _make_list_components_client(SAMPLE_COMPONENTS)
         dev_client = _make_list_components_client(SAMPLE_COMPONENTS_2)
 
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-            "dev": {"token": "532-abcdef-ghijklmnopqrst"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "dev": {"token": "532-abcdef-ghijklmnopqrst"},
+            },
+        )
 
         def factory(url, token):
             if "901" in token:
                 return prod_client
             return dev_client
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
 
@@ -668,10 +786,16 @@ class TestConfigList:
             )
             MockCfgService.return_value = config_service
 
-            result = runner.invoke(app, [
-                "--json", "config", "list",
-                "--project", "prod",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "list",
+                    "--project",
+                    "prod",
+                ],
+            )
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -687,20 +811,24 @@ class TestConfigList:
         prod_client = _make_list_components_client(SAMPLE_COMPONENTS)
         dev_client = _make_list_components_client(SAMPLE_COMPONENTS_2)
 
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-            "dev": {"token": "532-abcdef-ghijklmnopqrst"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "dev": {"token": "532-abcdef-ghijklmnopqrst"},
+            },
+        )
 
         def factory(url, token):
             if "901" in token:
                 return prod_client
             return dev_client
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
 
@@ -710,11 +838,18 @@ class TestConfigList:
             )
             MockCfgService.return_value = config_service
 
-            result = runner.invoke(app, [
-                "--json", "config", "list",
-                "--project", "prod",
-                "--project", "dev",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "list",
+                    "--project",
+                    "prod",
+                    "--project",
+                    "dev",
+                ],
+            )
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -732,14 +867,18 @@ class TestConfigList:
         extractor_only = [SAMPLE_COMPONENTS[0]]
         mock_client = _make_list_components_client(extractor_only)
 
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
 
@@ -749,10 +888,16 @@ class TestConfigList:
             )
             MockCfgService.return_value = config_service
 
-            result = runner.invoke(app, [
-                "--json", "config", "list",
-                "--component-type", "extractor",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "list",
+                    "--component-type",
+                    "extractor",
+                ],
+            )
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -766,14 +911,18 @@ class TestConfigList:
         config_dir.mkdir()
 
         mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
 
@@ -783,10 +932,16 @@ class TestConfigList:
             )
             MockCfgService.return_value = config_service
 
-            result = runner.invoke(app, [
-                "--json", "config", "list",
-                "--component-id", "keboola.wr-db-snowflake",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "list",
+                    "--component-id",
+                    "keboola.wr-db-snowflake",
+                ],
+            )
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -801,18 +956,25 @@ class TestConfigList:
 
         store = _setup_config_test(config_dir)
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
             MockCfgService.return_value = ConfigService(config_store=store)
 
-            result = runner.invoke(app, [
-                "--json", "config", "list",
-                "--project", "nonexistent",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "list",
+                    "--project",
+                    "nonexistent",
+                ],
+            )
 
         assert result.exit_code == 5
         output = json.loads(result.output)
@@ -834,20 +996,24 @@ class TestConfigList:
             retryable=False,
         )
 
-        store = _setup_config_test(config_dir, {
-            "good": {"token": "901-good-abcdefghijklmnop"},
-            "bad": {"token": "532-bad-abcdefghijklmnopq"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "good": {"token": "901-good-abcdefghijklmnop"},
+                "bad": {"token": "532-bad-abcdefghijklmnopq"},
+            },
+        )
 
         def factory(url, token):
             if "good" in token:
                 return good_client
             return bad_client
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
 
@@ -887,20 +1053,24 @@ class TestConfigList:
             retryable=False,
         )
 
-        store = _setup_config_test(config_dir, {
-            "good": {"token": "901-good-abcdefghijklmnop"},
-            "bad": {"token": "532-bad-abcdefghijklmnopq"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "good": {"token": "901-good-abcdefghijklmnop"},
+                "bad": {"token": "532-bad-abcdefghijklmnopq"},
+            },
+        )
 
         def factory(url, token):
             if "good" in token:
                 return good_client
             return bad_client
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
 
@@ -926,14 +1096,18 @@ class TestConfigList:
         config_dir.mkdir()
 
         mock_client = _make_list_components_client([])
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
 
@@ -956,22 +1130,32 @@ class TestConfigList:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
             MockCfgService.return_value = ConfigService(config_store=store)
 
-            result = runner.invoke(app, [
-                "--json", "config", "list",
-                "--component-type", "invalid-type",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "list",
+                    "--component-type",
+                    "invalid-type",
+                ],
+            )
 
         assert result.exit_code == 2
         output = json.loads(result.output)
@@ -999,14 +1183,18 @@ class TestConfigDetail:
         mock_client = MagicMock()
         mock_client.get_config_detail.return_value = detail_response
 
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
 
@@ -1016,12 +1204,20 @@ class TestConfigDetail:
             )
             MockCfgService.return_value = config_service
 
-            result = runner.invoke(app, [
-                "--json", "config", "detail",
-                "--project", "prod",
-                "--component-id", "keboola.ex-db-snowflake",
-                "--config-id", "101",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "101",
+                ],
+            )
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         output = json.loads(result.output)
@@ -1048,14 +1244,18 @@ class TestConfigDetail:
         mock_client = MagicMock()
         mock_client.get_config_detail.return_value = detail_response
 
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
 
@@ -1065,12 +1265,19 @@ class TestConfigDetail:
             )
             MockCfgService.return_value = config_service
 
-            result = runner.invoke(app, [
-                "config", "detail",
-                "--project", "prod",
-                "--component-id", "keboola.ex-db-snowflake",
-                "--config-id", "101",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "101",
+                ],
+            )
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         assert "Production Load" in result.output
@@ -1083,20 +1290,29 @@ class TestConfigDetail:
 
         store = _setup_config_test(config_dir)
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
             MockCfgService.return_value = ConfigService(config_store=store)
 
-            result = runner.invoke(app, [
-                "--json", "config", "detail",
-                "--project", "nonexistent",
-                "--component-id", "keboola.ex-db-snowflake",
-                "--config-id", "101",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "nonexistent",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "101",
+                ],
+            )
 
         assert result.exit_code == 5
         output = json.loads(result.output)
@@ -1117,14 +1333,18 @@ class TestConfigDetail:
             retryable=False,
         )
 
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
 
@@ -1134,12 +1354,20 @@ class TestConfigDetail:
             )
             MockCfgService.return_value = config_service
 
-            result = runner.invoke(app, [
-                "--json", "config", "detail",
-                "--project", "prod",
-                "--component-id", "keboola.ex-db-snowflake",
-                "--config-id", "999",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "999",
+                ],
+            )
 
         assert result.exit_code == 1
         output = json.loads(result.output)
@@ -1159,14 +1387,18 @@ class TestConfigDetail:
             retryable=False,
         )
 
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
 
@@ -1176,12 +1408,20 @@ class TestConfigDetail:
             )
             MockCfgService.return_value = config_service
 
-            result = runner.invoke(app, [
-                "--json", "config", "detail",
-                "--project", "prod",
-                "--component-id", "keboola.ex-db-snowflake",
-                "--config-id", "101",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "101",
+                ],
+            )
 
         assert result.exit_code == 3
         output = json.loads(result.output)
@@ -1321,12 +1561,15 @@ class TestDoctor:
         config_dir.mkdir()
 
         store = ConfigStore(config_dir=config_dir)
-        store.add_project("test", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            project_name="Test",
-            project_id=1234,
-        ))
+        store.add_project(
+            "test",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                project_name="Test",
+                project_id=1234,
+            ),
+        )
 
         with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
             MockStore.return_value = store
@@ -1386,18 +1629,22 @@ class TestDoctor:
         config_dir.mkdir()
 
         store = ConfigStore(config_dir=config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            project_name="Prod",
-            project_id=1234,
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                project_name="Prod",
+                project_id=1234,
+            ),
+        )
 
         mock_client = _make_mock_client(project_name="Prod", project_id=1234)
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.commands.doctor.default_client_factory") as MockFactory:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.commands.doctor.default_client_factory") as MockFactory,
+        ):
             MockStore.return_value = store
             MockFactory.return_value = mock_client
 
@@ -1418,12 +1665,15 @@ class TestDoctor:
         config_dir.mkdir()
 
         store = ConfigStore(config_dir=config_dir)
-        store.add_project("bad", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-badtoken-abcdefghijklmn",
-            project_name="Bad",
-            project_id=9999,
-        ))
+        store.add_project(
+            "bad",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-badtoken-abcdefghijklmn",
+                project_name="Bad",
+                project_id=9999,
+            ),
+        )
 
         fail_client = MagicMock()
         fail_client.verify_token.side_effect = KeboolaApiError(
@@ -1433,9 +1683,10 @@ class TestDoctor:
             retryable=False,
         )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.commands.doctor.default_client_factory") as MockFactory:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.commands.doctor.default_client_factory") as MockFactory,
+        ):
             MockStore.return_value = store
             MockFactory.return_value = fail_client
 
@@ -1513,9 +1764,10 @@ class TestNoColor:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
             MockService.return_value = ProjectService(config_store=store_instance)
@@ -1558,9 +1810,10 @@ class TestExitCodes:
             retryable=False,
         )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
             MockService.return_value = ProjectService(
@@ -1568,11 +1821,18 @@ class TestExitCodes:
                 client_factory=lambda url, token: fail_client,
             )
 
-            result = runner.invoke(app, [
-                "--json", "project", "add",
-                "--alias", "bad",
-                "--token", "invalid-token-abcdefgh",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--alias",
+                    "bad",
+                    "--token",
+                    "invalid-token-abcdefgh",
+                ],
+            )
 
         assert result.exit_code == 3
         output = json.loads(result.output)
@@ -1592,9 +1852,10 @@ class TestExitCodes:
             retryable=True,
         )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
             MockService.return_value = ProjectService(
@@ -1602,11 +1863,18 @@ class TestExitCodes:
                 client_factory=lambda url, token: fail_client,
             )
 
-            result = runner.invoke(app, [
-                "--json", "project", "add",
-                "--alias", "unreachable",
-                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--alias",
+                    "unreachable",
+                    "--token",
+                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                ],
+            )
 
         assert result.exit_code == 4
         output = json.loads(result.output)
@@ -1617,17 +1885,24 @@ class TestExitCodes:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
             MockService.return_value = ProjectService(config_store=store_instance)
 
-            result = runner.invoke(app, [
-                "--json", "project", "remove",
-                "--alias", "nonexistent",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "remove",
+                    "--alias",
+                    "nonexistent",
+                ],
+            )
 
         assert result.exit_code == 5
         output = json.loads(result.output)
@@ -1641,20 +1916,29 @@ class TestExitCodes:
 
         store = _setup_config_test(config_dir)
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
             MockCfgService.return_value = ConfigService(config_store=store)
 
-            result = runner.invoke(app, [
-                "--json", "config", "detail",
-                "--project", "nonexistent",
-                "--component-id", "test",
-                "--config-id", "123",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "nonexistent",
+                    "--component-id",
+                    "test",
+                    "--config-id",
+                    "123",
+                ],
+            )
 
         assert result.exit_code == 5
 
@@ -1671,14 +1955,18 @@ class TestExitCodes:
             retryable=False,
         )
 
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
             MockCfgService.return_value = ConfigService(
@@ -1686,12 +1974,20 @@ class TestExitCodes:
                 client_factory=lambda url, token: mock_client,
             )
 
-            result = runner.invoke(app, [
-                "--json", "config", "detail",
-                "--project", "prod",
-                "--component-id", "test",
-                "--config-id", "123",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "test",
+                    "--config-id",
+                    "123",
+                ],
+            )
 
         assert result.exit_code == 3
 
@@ -1708,14 +2004,18 @@ class TestExitCodes:
             retryable=True,
         )
 
-        store = _setup_config_test(config_dir, {
-            "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
-        })
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
 
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
-             patch("keboola_agent_cli.cli.ProjectService") as MockProjService, \
-             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService:
-
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
             MockCfgService.return_value = ConfigService(
@@ -1723,11 +2023,266 @@ class TestExitCodes:
                 client_factory=lambda url, token: mock_client,
             )
 
-            result = runner.invoke(app, [
-                "--json", "config", "detail",
-                "--project", "prod",
-                "--component-id", "test",
-                "--config-id", "123",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "test",
+                    "--config-id",
+                    "123",
+                ],
+            )
 
         assert result.exit_code == 4
+
+
+# ---------------------------------------------------------------------------
+# Help and usage tests
+# ---------------------------------------------------------------------------
+
+
+class TestHelp:
+    """Tests for help output on all commands."""
+
+    def test_root_help(self) -> None:
+        """Root --help shows app description and command groups."""
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "project" in result.output
+        assert "config" in result.output
+        assert "context" in result.output
+        assert "doctor" in result.output
+
+    def test_project_help(self) -> None:
+        """project --help shows subcommands."""
+        result = runner.invoke(app, ["project", "--help"])
+        assert result.exit_code == 0
+        assert "add" in result.output
+        assert "list" in result.output
+        assert "remove" in result.output
+        assert "edit" in result.output
+        assert "status" in result.output
+
+    def test_config_help(self) -> None:
+        """config --help shows subcommands."""
+        result = runner.invoke(app, ["config", "--help"])
+        assert result.exit_code == 0
+        assert "list" in result.output
+        assert "detail" in result.output
+
+    def test_project_add_help(self) -> None:
+        """project add --help shows options."""
+        result = runner.invoke(app, ["project", "add", "--help"])
+        assert result.exit_code == 0
+        assert "--alias" in result.output
+        assert "--token" in result.output
+        assert "--url" in result.output
+
+    def test_config_list_help(self) -> None:
+        """config list --help shows options."""
+        result = runner.invoke(app, ["config", "list", "--help"])
+        assert result.exit_code == 0
+        assert "--project" in result.output
+        assert "--component-type" in result.output
+        assert "--component-id" in result.output
+
+    def test_config_detail_help(self) -> None:
+        """config detail --help shows required options."""
+        result = runner.invoke(app, ["config", "detail", "--help"])
+        assert result.exit_code == 0
+        assert "--project" in result.output
+        assert "--component-id" in result.output
+        assert "--config-id" in result.output
+
+
+class TestVerboseFlag:
+    """Tests for --verbose global flag."""
+
+    def test_verbose_flag_accepted(self, tmp_path: Path) -> None:
+        """--verbose flag is accepted without error."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["--verbose", "context"])
+
+        assert result.exit_code == 0
+
+    def test_verbose_with_json(self, tmp_path: Path) -> None:
+        """--verbose and --json can be used together."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["--verbose", "--json", "context"])
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+
+
+class TestMissingRequiredArgs:
+    """Tests for missing required arguments."""
+
+    def test_project_add_missing_alias(self, tmp_path: Path) -> None:
+        """project add without --alias shows error."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            MockService.return_value = ProjectService(config_store=MockStore.return_value)
+
+            result = runner.invoke(
+                app,
+                [
+                    "project",
+                    "add",
+                    "--token",
+                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                ],
+            )
+
+        assert result.exit_code != 0
+
+    def test_project_add_missing_token(self, tmp_path: Path) -> None:
+        """project add without --token shows error."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            MockService.return_value = ProjectService(config_store=MockStore.return_value)
+
+            result = runner.invoke(
+                app,
+                [
+                    "project",
+                    "add",
+                    "--alias",
+                    "test",
+                ],
+            )
+
+        assert result.exit_code != 0
+
+    def test_project_remove_missing_alias(self, tmp_path: Path) -> None:
+        """project remove without --alias shows error."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            MockService.return_value = ProjectService(config_store=MockStore.return_value)
+
+            result = runner.invoke(app, ["project", "remove"])
+
+        assert result.exit_code != 0
+
+    def test_config_detail_missing_project(self, tmp_path: Path) -> None:
+        """config detail without --project shows error."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            MockProjService.return_value = ProjectService(config_store=MockStore.return_value)
+            MockCfgService.return_value = ConfigService(config_store=MockStore.return_value)
+
+            result = runner.invoke(
+                app,
+                [
+                    "config",
+                    "detail",
+                    "--component-id",
+                    "test",
+                    "--config-id",
+                    "123",
+                ],
+            )
+
+        assert result.exit_code != 0
+
+
+class TestProjectEditTokenReverify:
+    """Tests for project edit with token changes."""
+
+    def test_project_edit_token_reverify_json(self, tmp_path: Path) -> None:
+        """project edit --token triggers re-verification and returns updated info."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        mock_client = _make_mock_client(project_name="Original", project_id=100)
+        new_mock_client = _make_mock_client(project_name="Updated", project_id=200)
+
+        call_count = 0
+
+        def client_factory(url, token):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return mock_client
+            return new_mock_client
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+
+            service_instance = ProjectService(
+                config_store=store_instance,
+                client_factory=client_factory,
+            )
+            MockService.return_value = service_instance
+
+            # Add project first
+            runner.invoke(
+                app,
+                [
+                    "project",
+                    "add",
+                    "--alias",
+                    "test",
+                    "--token",
+                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                ],
+            )
+
+            # Edit with new token
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "edit",
+                    "--alias",
+                    "test",
+                    "--token",
+                    "902-newtoken-abcdefghijklmn",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"

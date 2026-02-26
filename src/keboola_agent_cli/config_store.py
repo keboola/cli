@@ -52,11 +52,18 @@ class ConfigStore:
             raw = self._config_path.read_text(encoding="utf-8")
         except OSError as exc:
             raise ConfigError(f"Cannot read config file {self._config_path}: {exc}") from exc
+        except UnicodeDecodeError as exc:
+            raise ConfigError(f"Config file is not valid UTF-8 text: {exc}") from exc
 
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise ConfigError(f"Config file is not valid JSON: {exc}") from exc
+
+        if not isinstance(data, dict):
+            raise ConfigError(
+                f"Config file has invalid structure: expected JSON object, got {type(data).__name__}"
+            )
 
         version = data.get("version", 1)
         if version > CURRENT_CONFIG_VERSION:

@@ -16,12 +16,10 @@ from typing import Any
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 
 from .. import __version__
-from ..client import KeboolaClient
 from ..config_store import ConfigStore
-from ..errors import KeboolaApiError, mask_token
+from ..errors import KeboolaApiError
 from ..models import AppConfig
 from ..output import OutputFormatter
 from ..services.project_service import ClientFactory, default_client_factory
@@ -141,12 +139,14 @@ def _check_connectivity(
         List of check result dicts, one per project.
     """
     if config is None or not config.projects:
-        return [{
-            "check": "connectivity",
-            "name": "Project connectivity",
-            "status": "skip",
-            "message": "No projects configured.",
-        }]
+        return [
+            {
+                "check": "connectivity",
+                "name": "Project connectivity",
+                "status": "skip",
+                "message": "No projects configured.",
+            }
+        ]
 
     results = []
     for alias, project in config.projects.items():
@@ -155,29 +155,33 @@ def _check_connectivity(
         try:
             token_info = client.verify_token()
             elapsed = time.monotonic() - start_time
-            results.append({
-                "check": "connectivity",
-                "name": f"Project '{alias}'",
-                "status": "pass",
-                "message": (
-                    f"Connected to {project.stack_url} "
-                    f"(project: {token_info.project_name}, id: {token_info.project_id}) "
-                    f"in {round(elapsed * 1000)}ms"
-                ),
-                "alias": alias,
-                "response_time_ms": round(elapsed * 1000),
-            })
+            results.append(
+                {
+                    "check": "connectivity",
+                    "name": f"Project '{alias}'",
+                    "status": "pass",
+                    "message": (
+                        f"Connected to {project.stack_url} "
+                        f"(project: {token_info.project_name}, id: {token_info.project_id}) "
+                        f"in {round(elapsed * 1000)}ms"
+                    ),
+                    "alias": alias,
+                    "response_time_ms": round(elapsed * 1000),
+                }
+            )
         except KeboolaApiError as exc:
             elapsed = time.monotonic() - start_time
-            results.append({
-                "check": "connectivity",
-                "name": f"Project '{alias}'",
-                "status": "fail",
-                "message": f"Failed: {exc.message}",
-                "alias": alias,
-                "error_code": exc.error_code,
-                "response_time_ms": round(elapsed * 1000),
-            })
+            results.append(
+                {
+                    "check": "connectivity",
+                    "name": f"Project '{alias}'",
+                    "status": "fail",
+                    "message": f"Failed: {exc.message}",
+                    "alias": alias,
+                    "error_code": exc.error_code,
+                    "response_time_ms": round(elapsed * 1000),
+                }
+            )
         finally:
             client.close()
 

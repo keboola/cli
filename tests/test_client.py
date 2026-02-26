@@ -3,9 +3,8 @@
 import httpx
 import pytest
 
-from keboola_agent_cli.client import KeboolaClient, MAX_RETRIES
+from keboola_agent_cli.client import MAX_RETRIES, KeboolaClient
 from keboola_agent_cli.errors import KeboolaApiError
-
 
 VERIFY_TOKEN_RESPONSE = {
     "id": "12345",
@@ -105,6 +104,7 @@ class TestRetryBehavior:
 
         # Monkeypatch time.sleep to avoid actual delays in tests
         import keboola_agent_cli.client as client_module
+
         original_sleep = client_module.time.sleep
         client_module.time.sleep = lambda x: None
         try:
@@ -129,6 +129,7 @@ class TestRetryBehavior:
         )
 
         import keboola_agent_cli.client as client_module
+
         original_sleep = client_module.time.sleep
         client_module.time.sleep = lambda x: None
         try:
@@ -158,6 +159,7 @@ class TestRetryBehavior:
         )
 
         import keboola_agent_cli.client as client_module
+
         original_sleep = client_module.time.sleep
         client_module.time.sleep = lambda x: None
         try:
@@ -212,6 +214,7 @@ class TestTimeoutHandling:
         )
 
         import keboola_agent_cli.client as client_module
+
         original_sleep = client_module.time.sleep
         client_module.time.sleep = lambda x: None
         try:
@@ -244,6 +247,7 @@ class TestTimeoutHandling:
         )
 
         import keboola_agent_cli.client as client_module
+
         original_sleep = client_module.time.sleep
         client_module.time.sleep = lambda x: None
         try:
@@ -297,6 +301,7 @@ class TestTokenMaskingInErrors:
         )
 
         import keboola_agent_cli.client as client_module
+
         original_sleep = client_module.time.sleep
         client_module.time.sleep = lambda x: None
         try:
@@ -426,3 +431,264 @@ class TestGetConfigDetail:
             result = client.get_config_detail("keboola.ex-db-snowflake", "42")
             assert result["id"] == "42"
             assert result["name"] == "My Config"
+
+
+class TestMalformedJsonResponse:
+    """Tests for handling malformed JSON responses from the API."""
+
+    def test_malformed_json_in_error_response(self, httpx_mock) -> None:
+        """Client handles non-JSON error response body gracefully."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            text="<html>502 Bad Gateway</html>",
+            status_code=502,
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            text="<html>502 Bad Gateway</html>",
+            status_code=502,
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            text="<html>502 Bad Gateway</html>",
+            status_code=502,
+        )
+
+        import keboola_agent_cli.client as client_module
+
+        original_sleep = client_module.time.sleep
+        client_module.time.sleep = lambda x: None
+        try:
+            with KeboolaClient(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ) as client:
+                with pytest.raises(KeboolaApiError) as exc_info:
+                    client.verify_token()
+                assert exc_info.value.retryable is True
+                # Error message should contain the raw text body
+                assert "502" in exc_info.value.message
+        finally:
+            client_module.time.sleep = original_sleep
+
+    def test_malformed_json_in_success_response(self, httpx_mock) -> None:
+        """Client raises error when success response has non-parseable JSON."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            text="not json at all",
+            status_code=200,
+            headers={"content-type": "text/plain"},
+        )
+
+        with (
+            KeboolaClient(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ) as client,
+            pytest.raises((ValueError, KeyError)),
+        ):
+            # verify_token calls response.json() which will fail
+            client.verify_token()
+
+    def test_empty_json_error_body(self, httpx_mock) -> None:
+        """Client handles empty JSON object in error response."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json={},
+            status_code=401,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client.verify_token()
+            assert exc_info.value.error_code == "INVALID_TOKEN"
+            assert exc_info.value.status_code == 401
+
+
+class TestEmptyResponse:
+    """Tests for handling empty responses."""
+
+    def test_empty_body_error_response(self, httpx_mock) -> None:
+        """Client handles completely empty error response body."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            text="",
+            status_code=500,
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            text="",
+            status_code=500,
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            text="",
+            status_code=500,
+        )
+
+        import keboola_agent_cli.client as client_module
+
+        original_sleep = client_module.time.sleep
+        client_module.time.sleep = lambda x: None
+        try:
+            with KeboolaClient(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ) as client:
+                with pytest.raises(KeboolaApiError) as exc_info:
+                    client.verify_token()
+                assert exc_info.value.retryable is True
+                assert exc_info.value.status_code == 500
+        finally:
+            client_module.time.sleep = original_sleep
+
+    def test_empty_components_list(self, httpx_mock) -> None:
+        """list_components returns empty list when API returns empty array."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components?include=configuration",
+            json=[],
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.list_components()
+            assert result == []
+
+    def test_verify_token_minimal_response(self, httpx_mock) -> None:
+        """verify_token handles response with minimal/missing fields."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json={"id": "1"},
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.verify_token()
+            assert result.token_id == "1"
+            assert result.project_name == ""
+            assert result.project_id == 0
+
+
+class TestLargeResponse:
+    """Tests for handling large API responses."""
+
+    def test_large_components_list(self, httpx_mock) -> None:
+        """Client handles response with many components."""
+        # Generate 200 components with 10 configs each
+        components = []
+        for i in range(200):
+            configs = []
+            for j in range(10):
+                configs.append(
+                    {
+                        "id": str(i * 10 + j),
+                        "name": f"Config {j} of Component {i}",
+                        "description": f"Description for config {j}",
+                    }
+                )
+            components.append(
+                {
+                    "id": f"keboola.component-{i}",
+                    "name": f"Component {i}",
+                    "type": "extractor",
+                    "configurations": configs,
+                }
+            )
+
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components?include=configuration",
+            json=components,
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.list_components()
+            assert len(result) == 200
+            assert len(result[0]["configurations"]) == 10
+            assert result[199]["id"] == "keboola.component-199"
+
+    def test_large_config_detail(self, httpx_mock) -> None:
+        """Client handles config detail with large configuration payload."""
+        # Simulate a large configuration with nested parameters
+        large_config = {
+            "id": "42",
+            "name": "Large Config",
+            "description": "A config with large parameters",
+            "componentId": "keboola.ex-db-snowflake",
+            "configuration": {
+                "parameters": {f"param_{i}": f"value_{i}" for i in range(500)},
+                "storage": {
+                    "input": {
+                        "tables": [
+                            {"source": f"in.c-data.table_{i}", "destination": f"table_{i}.csv"}
+                            for i in range(100)
+                        ]
+                    }
+                },
+            },
+            "rows": [{"id": str(i), "name": f"Row {i}"} for i in range(50)],
+        }
+
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components/keboola.ex-db-snowflake/configs/42",
+            json=large_config,
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.get_config_detail("keboola.ex-db-snowflake", "42")
+            assert result["id"] == "42"
+            assert len(result["configuration"]["parameters"]) == 500
+            assert len(result["rows"]) == 50
+
+
+class TestStackUrlNormalization:
+    """Tests for stack URL handling edge cases."""
+
+    def test_trailing_slash_removed(self, httpx_mock) -> None:
+        """Client strips trailing slash from stack URL."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json=VERIFY_TOKEN_RESPONSE,
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com/",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.verify_token()
+            assert result.project_name == "Test Project"
+
+    def test_404_returns_not_found_error(self, httpx_mock) -> None:
+        """Client returns NOT_FOUND error code for 404 responses."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components/nonexistent/configs/999",
+            json={"error": "Configuration not found"},
+            status_code=404,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client.get_config_detail("nonexistent", "999")
+            assert exc_info.value.error_code == "NOT_FOUND"
+            assert exc_info.value.status_code == 404
+            assert exc_info.value.retryable is False

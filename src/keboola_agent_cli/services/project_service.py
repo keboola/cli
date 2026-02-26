@@ -4,7 +4,8 @@ Orchestrates config persistence and API calls without knowing about CLI or HTTP 
 """
 
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
@@ -158,14 +159,16 @@ class ProjectService:
         config = self._config_store.load()
         result = []
         for alias, project in config.projects.items():
-            result.append({
-                "alias": alias,
-                "project_name": project.project_name,
-                "project_id": project.project_id,
-                "stack_url": project.stack_url,
-                "token": mask_token(project.token),
-                "is_default": alias == config.default_project,
-            })
+            result.append(
+                {
+                    "alias": alias,
+                    "project_name": project.project_name,
+                    "project_id": project.project_id,
+                    "stack_url": project.stack_url,
+                    "token": mask_token(project.token),
+                    "is_default": alias == config.default_project,
+                }
+            )
         return result
 
     def get_status(self, aliases: list[str] | None = None) -> list[dict[str, Any]]:

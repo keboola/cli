@@ -4,8 +4,6 @@ Thin CLI layer: parses arguments, calls ConfigService, formats output.
 No business logic belongs here.
 """
 
-from typing import Optional
-
 import typer
 
 from ..errors import ConfigError, KeboolaApiError
@@ -30,17 +28,17 @@ def _get_service(ctx: typer.Context) -> ConfigService:
 @config_app.command("list")
 def config_list(
     ctx: typer.Context,
-    project: Optional[list[str]] = typer.Option(
+    project: list[str] | None = typer.Option(
         None,
         "--project",
         help="Project alias to query (can be repeated for multiple projects)",
     ),
-    component_type: Optional[str] = typer.Option(
+    component_type: str | None = typer.Option(
         None,
         "--component-type",
         help="Filter by component type: extractor, writer, transformation, application",
     ),
-    component_id: Optional[str] = typer.Option(
+    component_id: str | None = typer.Option(
         None,
         "--component-id",
         help="Filter by specific component ID (e.g. keboola.ex-db-snowflake)",
@@ -67,7 +65,7 @@ def config_list(
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
-        raise typer.Exit(code=5)
+        raise typer.Exit(code=5) from None
 
     # In JSON mode, include both configs and errors in the response
     if formatter.json_mode:
@@ -78,9 +76,7 @@ def config_list(
 
         # Show error warnings on stderr too
         for err in result.get("errors", []):
-            formatter.warning(
-                f"Project '{err['project_alias']}': {err['message']}"
-            )
+            formatter.warning(f"Project '{err['project_alias']}': {err['message']}")
 
 
 @config_app.command("detail")
@@ -103,7 +99,7 @@ def config_detail(
         formatter.output(result, format_config_detail)
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
-        raise typer.Exit(code=5)
+        raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         if exc.error_code == "INVALID_TOKEN":
             exit_code = 3
@@ -117,4 +113,4 @@ def config_detail(
             project=project,
             retryable=exc.retryable,
         )
-        raise typer.Exit(code=exit_code)
+        raise typer.Exit(code=exit_code) from None

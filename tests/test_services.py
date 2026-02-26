@@ -333,7 +333,7 @@ class TestListProjects:
 
         result = service.list_projects()
         assert result[0]["token"] != full_token
-        assert "901-...pt0k" == result[0]["token"]
+        assert result[0]["token"] == "901-...pt0k"
 
 
 class TestGetStatus:
@@ -388,18 +388,24 @@ class TestGetStatus:
             client_factory=factory,
         )
 
-        store.add_project("ok-project", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-ok-abcdefghijklmnop",
-            project_name="OK",
-            project_id=1,
-        ))
-        store.add_project("bad-project", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="902-bad-abcdefghijklmnop",
-            project_name="Bad",
-            project_id=2,
-        ))
+        store.add_project(
+            "ok-project",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-ok-abcdefghijklmnop",
+                project_name="OK",
+                project_id=1,
+            ),
+        )
+        store.add_project(
+            "bad-project",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="902-bad-abcdefghijklmnop",
+                project_name="Bad",
+                project_id=2,
+            ),
+        )
 
         result = service.get_status()
         assert len(result) == 2
@@ -423,14 +429,20 @@ class TestGetStatus:
             client_factory=lambda url, token: mock_client,
         )
 
-        store.add_project("first", ProjectConfig(
-            stack_url="https://a.com",
-            token="901-abcdef-12345678",
-        ))
-        store.add_project("second", ProjectConfig(
-            stack_url="https://b.com",
-            token="902-abcdef-12345678",
-        ))
+        store.add_project(
+            "first",
+            ProjectConfig(
+                stack_url="https://a.com",
+                token="901-abcdef-12345678",
+            ),
+        )
+        store.add_project(
+            "second",
+            ProjectConfig(
+                stack_url="https://b.com",
+                token="902-abcdef-12345678",
+            ),
+        )
 
         result = service.get_status(aliases=["first"])
         assert len(result) == 1
@@ -454,19 +466,23 @@ class TestGetStatus:
             client_factory=lambda url, token: mock_client,
         )
 
-        store.add_project("test", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token=full_token,
-        ))
+        store.add_project(
+            "test",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=full_token,
+            ),
+        )
 
         result = service.get_status()
         assert result[0]["token"] != full_token
-        assert "901-...pt0k" == result[0]["token"]
+        assert result[0]["token"] == "901-...pt0k"
 
 
 # ---------------------------------------------------------------------------
 # Helpers for ConfigService tests
 # ---------------------------------------------------------------------------
+
 
 def _make_list_components_client(
     components: list[dict],
@@ -531,12 +547,15 @@ class TestConfigServiceListConfigs:
     def test_list_configs_single_project_all_configs(self, tmp_config_dir: Path) -> None:
         """list_configs returns all configs from a single project."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            project_name="Production",
-            project_id=1234,
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                project_name="Production",
+                project_id=1234,
+            ),
+        )
 
         mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
         service = ConfigService(
@@ -564,18 +583,24 @@ class TestConfigServiceListConfigs:
     def test_list_configs_multi_project_aggregation(self, tmp_config_dir: Path) -> None:
         """list_configs aggregates configs across multiple projects."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-            project_name="Production",
-            project_id=1234,
-        ))
-        store.add_project("dev", ProjectConfig(
-            stack_url="https://connection.north-europe.azure.keboola.com",
-            token="532-abcdef-ghijklmnopqrst",
-            project_name="Development",
-            project_id=5678,
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                project_name="Production",
+                project_id=1234,
+            ),
+        )
+        store.add_project(
+            "dev",
+            ProjectConfig(
+                stack_url="https://connection.north-europe.azure.keboola.com",
+                token="532-abcdef-ghijklmnopqrst",
+                project_name="Development",
+                project_id=5678,
+            ),
+        )
 
         prod_client = _make_list_components_client(SAMPLE_COMPONENTS)
         dev_client = _make_list_components_client(SAMPLE_COMPONENTS_2)
@@ -607,10 +632,13 @@ class TestConfigServiceListConfigs:
     def test_list_configs_filter_by_component_type(self, tmp_config_dir: Path) -> None:
         """list_configs passes component_type filter to the client."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
 
         # When filtering by type, API returns only matching components
         extractor_only = [SAMPLE_COMPONENTS[0]]
@@ -632,10 +660,13 @@ class TestConfigServiceListConfigs:
     def test_list_configs_filter_by_component_id(self, tmp_config_dir: Path) -> None:
         """list_configs filters configs to only the specified component_id."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
 
         mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
         service = ConfigService(
@@ -653,14 +684,20 @@ class TestConfigServiceListConfigs:
     def test_list_configs_filter_by_project_alias(self, tmp_config_dir: Path) -> None:
         """list_configs with aliases only queries specified projects."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-        ))
-        store.add_project("dev", ProjectConfig(
-            stack_url="https://connection.north-europe.azure.keboola.com",
-            token="532-abcdef-ghijklmnopqrst",
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+        store.add_project(
+            "dev",
+            ProjectConfig(
+                stack_url="https://connection.north-europe.azure.keboola.com",
+                token="532-abcdef-ghijklmnopqrst",
+            ),
+        )
 
         prod_client = _make_list_components_client(SAMPLE_COMPONENTS)
         dev_client = _make_list_components_client(SAMPLE_COMPONENTS_2)
@@ -688,14 +725,20 @@ class TestConfigServiceListConfigs:
     def test_list_configs_partial_failure(self, tmp_config_dir: Path) -> None:
         """list_configs continues when one project fails, reporting the error."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("good", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-good-abcdefghijklmnop",
-        ))
-        store.add_project("bad", ProjectConfig(
-            stack_url="https://connection.north-europe.azure.keboola.com",
-            token="532-bad-abcdefghijklmnopq",
-        ))
+        store.add_project(
+            "good",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-good-abcdefghijklmnop",
+            ),
+        )
+        store.add_project(
+            "bad",
+            ProjectConfig(
+                stack_url="https://connection.north-europe.azure.keboola.com",
+                token="532-bad-abcdefghijklmnopq",
+            ),
+        )
 
         good_client = _make_list_components_client(SAMPLE_COMPONENTS)
         bad_client = MagicMock()
@@ -733,10 +776,13 @@ class TestConfigServiceListConfigs:
     def test_list_configs_empty_results(self, tmp_config_dir: Path) -> None:
         """list_configs returns empty configs list when no configurations exist."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("empty", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-        ))
+        store.add_project(
+            "empty",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
 
         # No components returned
         mock_client = _make_list_components_client([])
@@ -769,10 +815,13 @@ class TestConfigServiceListConfigs:
     def test_list_configs_client_closed_after_use(self, tmp_config_dir: Path) -> None:
         """list_configs always closes the client after querying."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
 
         mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
         service = ConfigService(
@@ -786,10 +835,13 @@ class TestConfigServiceListConfigs:
     def test_list_configs_client_closed_on_error(self, tmp_config_dir: Path) -> None:
         """list_configs closes the client even when the API call fails."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("bad", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-        ))
+        store.add_project(
+            "bad",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
 
         mock_client = MagicMock()
         mock_client.list_components.side_effect = KeboolaApiError(
@@ -809,10 +861,13 @@ class TestConfigServiceListConfigs:
     def test_list_configs_combined_type_and_component_id_filter(self, tmp_config_dir: Path) -> None:
         """list_configs applies both component_type and component_id filters."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
 
         mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
         service = ConfigService(
@@ -835,18 +890,27 @@ class TestConfigServiceListConfigs:
     def test_list_configs_multiple_aliases(self, tmp_config_dir: Path) -> None:
         """list_configs with multiple aliases queries exactly those projects."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("proj-a", ProjectConfig(
-            stack_url="https://a.com",
-            token="901-aaa-abcdefghijklmnop",
-        ))
-        store.add_project("proj-b", ProjectConfig(
-            stack_url="https://b.com",
-            token="902-bbb-abcdefghijklmnop",
-        ))
-        store.add_project("proj-c", ProjectConfig(
-            stack_url="https://c.com",
-            token="903-ccc-abcdefghijklmnop",
-        ))
+        store.add_project(
+            "proj-a",
+            ProjectConfig(
+                stack_url="https://a.com",
+                token="901-aaa-abcdefghijklmnop",
+            ),
+        )
+        store.add_project(
+            "proj-b",
+            ProjectConfig(
+                stack_url="https://b.com",
+                token="902-bbb-abcdefghijklmnop",
+            ),
+        )
+        store.add_project(
+            "proj-c",
+            ProjectConfig(
+                stack_url="https://c.com",
+                token="903-ccc-abcdefghijklmnop",
+            ),
+        )
 
         client_a = _make_list_components_client(SAMPLE_COMPONENTS)
         client_b = _make_list_components_client(SAMPLE_COMPONENTS_2)
@@ -881,10 +945,13 @@ class TestConfigServiceGetConfigDetail:
     def test_get_config_detail_success(self, tmp_config_dir: Path) -> None:
         """get_config_detail returns full config detail with project_alias."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
 
         detail_response = {
             "id": "101",
@@ -913,9 +980,7 @@ class TestConfigServiceGetConfigDetail:
         assert result["name"] == "Production Load"
         assert result["project_alias"] == "prod"
         assert result["configuration"] == {"parameters": {"db": "prod"}}
-        mock_client.get_config_detail.assert_called_once_with(
-            "keboola.ex-db-snowflake", "101"
-        )
+        mock_client.get_config_detail.assert_called_once_with("keboola.ex-db-snowflake", "101")
         mock_client.close.assert_called_once()
 
     def test_get_config_detail_unknown_alias(self, tmp_config_dir: Path) -> None:
@@ -933,10 +998,13 @@ class TestConfigServiceGetConfigDetail:
     def test_get_config_detail_api_error(self, tmp_config_dir: Path) -> None:
         """get_config_detail propagates KeboolaApiError from the client."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
 
         mock_client = MagicMock()
         mock_client.get_config_detail.side_effect = KeboolaApiError(
@@ -964,10 +1032,13 @@ class TestConfigServiceGetConfigDetail:
     def test_get_config_detail_client_closed_on_error(self, tmp_config_dir: Path) -> None:
         """get_config_detail closes the client even when API call fails."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
 
         mock_client = MagicMock()
         mock_client.get_config_detail.side_effect = KeboolaApiError(
@@ -994,14 +1065,20 @@ class TestResolveProjects:
     def test_resolve_all_projects(self, tmp_config_dir: Path) -> None:
         """resolve_projects with no aliases returns all projects."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://a.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-        ))
-        store.add_project("dev", ProjectConfig(
-            stack_url="https://b.com",
-            token="532-abcdef-ghijklmnopqrst",
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://a.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+        store.add_project(
+            "dev",
+            ProjectConfig(
+                stack_url="https://b.com",
+                token="532-abcdef-ghijklmnopqrst",
+            ),
+        )
 
         service = ConfigService(config_store=store)
         result = service.resolve_projects()
@@ -1010,14 +1087,20 @@ class TestResolveProjects:
     def test_resolve_specific_aliases(self, tmp_config_dir: Path) -> None:
         """resolve_projects with aliases returns only matching projects."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://a.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-        ))
-        store.add_project("dev", ProjectConfig(
-            stack_url="https://b.com",
-            token="532-abcdef-ghijklmnopqrst",
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://a.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+        store.add_project(
+            "dev",
+            ProjectConfig(
+                stack_url="https://b.com",
+                token="532-abcdef-ghijklmnopqrst",
+            ),
+        )
 
         service = ConfigService(config_store=store)
         result = service.resolve_projects(aliases=["prod"])
@@ -1034,10 +1117,13 @@ class TestResolveProjects:
     def test_resolve_empty_aliases_list(self, tmp_config_dir: Path) -> None:
         """resolve_projects with empty list returns all projects."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project("prod", ProjectConfig(
-            stack_url="https://a.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
-        ))
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://a.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
 
         service = ConfigService(config_store=store)
         result = service.resolve_projects(aliases=[])

@@ -4,7 +4,7 @@ Thin CLI layer: parses arguments, calls ProjectService, formats output.
 No business logic belongs here.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -106,10 +106,13 @@ def project_add(
 
     try:
         result = service.add_project(alias=alias, stack_url=url, token=token)
-        formatter.output(result, lambda c, d: c.print(
-            f"[bold green]Success:[/bold green] Project [bold]{d['alias']}[/bold] added "
-            f"(project: {d['project_name']}, id: {d['project_id']})"
-        ))
+        formatter.output(
+            result,
+            lambda c, d: c.print(
+                f"[bold green]Success:[/bold green] Project [bold]{d['alias']}[/bold] added "
+                f"(project: {d['project_name']}, id: {d['project_id']})"
+            ),
+        )
     except KeboolaApiError as exc:
         exit_code = 3 if exc.error_code == "INVALID_TOKEN" else 4
         formatter.error(
@@ -117,10 +120,10 @@ def project_add(
             error_code=exc.error_code,
             retryable=exc.retryable,
         )
-        raise typer.Exit(code=exit_code)
+        raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
-        raise typer.Exit(code=5)
+        raise typer.Exit(code=5) from None
 
 
 @project_app.command("list")
@@ -134,7 +137,7 @@ def project_list(ctx: typer.Context) -> None:
         formatter.output(projects, _format_project_table)
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
-        raise typer.Exit(code=5)
+        raise typer.Exit(code=5) from None
 
 
 @project_app.command("remove")
@@ -148,20 +151,20 @@ def project_remove(
 
     try:
         result = service.remove_project(alias=alias)
-        formatter.output(result, lambda c, d: c.print(
-            f"[bold green]Success:[/bold green] {d['message']}"
-        ))
+        formatter.output(
+            result, lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}")
+        )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
-        raise typer.Exit(code=5)
+        raise typer.Exit(code=5) from None
 
 
 @project_app.command("edit")
 def project_edit(
     ctx: typer.Context,
     alias: str = typer.Option(..., help="Alias of the project to edit"),
-    url: Optional[str] = typer.Option(None, help="New Keboola stack URL"),
-    token: Optional[str] = typer.Option(None, help="New Storage API token"),
+    url: str | None = typer.Option(None, help="New Keboola stack URL"),
+    token: str | None = typer.Option(None, help="New Storage API token"),
 ) -> None:
     """Edit an existing Keboola project connection."""
     formatter = _get_formatter(ctx)
@@ -169,9 +172,12 @@ def project_edit(
 
     try:
         result = service.edit_project(alias=alias, stack_url=url, token=token)
-        formatter.output(result, lambda c, d: c.print(
-            f"[bold green]Success:[/bold green] Project [bold]{d['alias']}[/bold] updated."
-        ))
+        formatter.output(
+            result,
+            lambda c, d: c.print(
+                f"[bold green]Success:[/bold green] Project [bold]{d['alias']}[/bold] updated."
+            ),
+        )
     except KeboolaApiError as exc:
         exit_code = 3 if exc.error_code == "INVALID_TOKEN" else 4
         formatter.error(
@@ -179,16 +185,18 @@ def project_edit(
             error_code=exc.error_code,
             retryable=exc.retryable,
         )
-        raise typer.Exit(code=exit_code)
+        raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
-        raise typer.Exit(code=5)
+        raise typer.Exit(code=5) from None
 
 
 @project_app.command("status")
 def project_status(
     ctx: typer.Context,
-    project: Optional[str] = typer.Option(None, "--project", help="Check only this project (default: all)"),
+    project: str | None = typer.Option(
+        None, "--project", help="Check only this project (default: all)"
+    ),
 ) -> None:
     """Test connectivity to connected Keboola projects."""
     formatter = _get_formatter(ctx)
@@ -201,7 +209,7 @@ def project_status(
         formatter.output(statuses, _format_status_table)
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
-        raise typer.Exit(code=5)
+        raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = 3 if exc.error_code == "INVALID_TOKEN" else 4
         formatter.error(
@@ -209,4 +217,4 @@ def project_status(
             error_code=exc.error_code,
             retryable=exc.retryable,
         )
-        raise typer.Exit(code=exit_code)
+        raise typer.Exit(code=exit_code) from None

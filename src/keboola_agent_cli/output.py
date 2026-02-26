@@ -2,7 +2,8 @@
 
 import json
 import sys
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -38,7 +39,9 @@ class OutputFormatter:
             force_terminal=force_terminal,
         )
 
-    def output(self, data: Any, human_formatter: Callable[[Console, Any], None] | None = None) -> None:
+    def output(
+        self, data: Any, human_formatter: Callable[[Console, Any], None] | None = None
+    ) -> None:
         """Output data in the appropriate format.
 
         Args:
@@ -56,7 +59,9 @@ class OutputFormatter:
             else:
                 self.console.print(data)
 
-    def error(self, message: str, error_code: str = "ERROR", project: str = "", retryable: bool = False) -> None:
+    def error(
+        self, message: str, error_code: str = "ERROR", project: str = "", retryable: bool = False
+    ) -> None:
         """Output an error message.
 
         Args:
@@ -121,7 +126,9 @@ def format_configs_table(console: Console, data: dict[str, Any]) -> None:
 
     if not configs:
         if not errors:
-            console.print("No configurations found. Use [bold]kbagent project add[/bold] to connect a project first.")
+            console.print(
+                "No configurations found. Use [bold]kbagent project add[/bold] to connect a project first."
+            )
         else:
             console.print("No configurations retrieved (all projects failed).")
         return
@@ -185,6 +192,7 @@ def format_config_detail(console: Console, data: dict[str, Any]) -> None:
     configuration = data.get("configuration", {})
     if configuration:
         import json as _json
+
         config_str = _json.dumps(configuration, indent=2)
         lines.append(f"\n[bold]Configuration:[/bold]\n{config_str}")
 
