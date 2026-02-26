@@ -10,6 +10,7 @@ from .commands.doctor import doctor_command
 from .commands.project import project_app
 from .config_store import ConfigStore
 from .output import OutputFormatter
+from .services.config_service import ConfigService
 from .services.project_service import ProjectService
 
 app = typer.Typer(
@@ -58,6 +59,7 @@ def main(
     config_store = ConfigStore()
 
     project_service = ProjectService(config_store=config_store)
+    config_service = ConfigService(config_store=config_store)
 
     ctx.ensure_object(dict)
     ctx.obj["formatter"] = formatter
@@ -66,3 +68,4 @@ def main(
     ctx.obj["no_color"] = effective_no_color
     ctx.obj["config_store"] = config_store
     ctx.obj["project_service"] = project_service
+    ctx.obj["config_service"] = config_service
