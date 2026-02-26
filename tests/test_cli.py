@@ -1,16 +1,15 @@
-"""Tests for CLI commands via CliRunner - project add, list in JSON and human mode."""
+"""Tests for CLI commands via CliRunner - project add, list, context, doctor, exit codes."""
 
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError, KeboolaApiError
-from keboola_agent_cli.models import TokenVerifyResponse
+from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.models import AppConfig, ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services.project_service import ProjectService
 
 runner = CliRunner()
@@ -481,3 +480,541 @@ class TestProjectEdit:
         assert result.exit_code == 5
         output = json.loads(result.output)
         assert output["status"] == "error"
+
+
+class TestContextCommand:
+    """Tests for `kbagent context` command."""
+
+    def test_context_contains_key_phrases(self, tmp_path: Path) -> None:
+        """context command output contains essential information for AI agents."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(config_store=store_instance)
+
+            result = runner.invoke(app, ["context"])
+
+        assert result.exit_code == 0
+        output = result.output
+
+        # Must mention the tool name
+        assert "kbagent" in output
+
+        # Must mention --json flag
+        assert "--json" in output
+
+        # Must mention exit codes
+        assert "Exit Code" in output or "exit code" in output.lower()
+
+        # Must mention common commands
+        assert "project add" in output
+        assert "project list" in output
+        assert "config list" in output
+        assert "doctor" in output
+
+        # Must mention workflows
+        assert "workflow" in output.lower() or "Workflow" in output
+
+        # Must mention JSON output format
+        assert '"status"' in output or "status" in output
+
+    def test_context_json_mode(self, tmp_path: Path) -> None:
+        """context --json returns the context text as structured JSON data."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(config_store=store_instance)
+
+            result = runner.invoke(app, ["--json", "context"])
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        # The data should contain the context text
+        assert "kbagent" in output["data"]
+        assert "--json" in output["data"]
+
+    def test_context_mentions_exit_codes_table(self, tmp_path: Path) -> None:
+        """context command includes the exit codes table."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(config_store=store_instance)
+
+            result = runner.invoke(app, ["--json", "context"])
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        context_text = output["data"]
+
+        # Verify all exit codes are documented
+        assert "0" in context_text  # Success
+        assert "1" in context_text  # General error
+        assert "2" in context_text  # Usage error
+        assert "3" in context_text  # Auth error
+        assert "4" in context_text  # Network error
+        assert "5" in context_text  # Config error
+
+    def test_context_mentions_environment_variables(self, tmp_path: Path) -> None:
+        """context command documents environment variables."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(config_store=store_instance)
+
+            result = runner.invoke(app, ["--json", "context"])
+
+        output = json.loads(result.output)
+        context_text = output["data"]
+        assert "KBC_TOKEN" in context_text
+        assert "KBC_STORAGE_API_URL" in context_text
+
+
+class TestDoctorCommand:
+    """Tests for `kbagent doctor` command."""
+
+    def test_doctor_no_config_file(self, tmp_path: Path) -> None:
+        """doctor with no config file reports warning for missing file."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(config_store=store_instance)
+
+            result = runner.invoke(app, ["doctor"])
+
+        assert result.exit_code == 0
+        # Should mention that config file is not found or similar
+        assert "not found" in result.output.lower() or "WARN" in result.output or "SKIP" in result.output
+
+    def test_doctor_json_with_config_and_projects(self, tmp_path: Path) -> None:
+        """doctor --json with config file and projects outputs structured checks."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        mock_client = _make_mock_client(project_name="Prod Project", project_id=5678)
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService, \
+             patch("keboola_agent_cli.commands.doctor.KeboolaClient", return_value=mock_client):
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+
+            service_instance = ProjectService(
+                config_store=store_instance,
+                client_factory=lambda url, token: mock_client,
+            )
+            MockService.return_value = service_instance
+
+            # Add a project first to have something to check
+            runner.invoke(app, [
+                "project", "add",
+                "--alias", "prod",
+                "--url", "https://connection.keboola.com",
+                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ])
+
+            result = runner.invoke(app, ["--json", "doctor"])
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+
+        checks = output["data"]
+        assert isinstance(checks, list)
+        assert len(checks) >= 3  # config_exists, config_valid, cli_version at minimum
+
+        # Verify check types
+        check_names = [c["check"] for c in checks]
+        assert "config_exists" in check_names
+        assert "config_valid" in check_names
+        assert "cli_version" in check_names
+        # With a project configured, should also have connectivity check
+        assert "project_connectivity" in check_names
+
+    def test_doctor_json_checks_config_permissions(self, tmp_path: Path) -> None:
+        """doctor --json checks that config file has correct 0600 permissions."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        # Create a config file with correct permissions
+        store = ConfigStore(config_dir=config_dir)
+        project = ProjectConfig(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            project_name="Test",
+            project_id=123,
+        )
+        config = AppConfig(projects={"test": project})
+        store.save(config)
+
+        mock_client = _make_mock_client()
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService, \
+             patch("keboola_agent_cli.commands.doctor.KeboolaClient", return_value=mock_client):
+
+            MockStore.return_value = store
+
+            service_instance = ProjectService(
+                config_store=store,
+                client_factory=lambda url, token: mock_client,
+            )
+            MockService.return_value = service_instance
+
+            result = runner.invoke(app, ["--json", "doctor"])
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        checks = output["data"]
+
+        # Find the config_exists check
+        config_check = next(c for c in checks if c["check"] == "config_exists")
+        assert config_check["status"] == "ok"
+        assert "0600" in config_check.get("message", "") or "0o600" in config_check.get("permissions", "")
+
+    def test_doctor_json_checks_project_connectivity(self, tmp_path: Path) -> None:
+        """doctor --json verifies token connectivity for each project."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        # Create config with a project
+        store = ConfigStore(config_dir=config_dir)
+        project = ProjectConfig(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            project_name="Prod",
+            project_id=5678,
+        )
+        config = AppConfig(projects={"prod": project})
+        store.save(config)
+
+        mock_client = _make_mock_client(project_name="Prod", project_id=5678)
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService, \
+             patch("keboola_agent_cli.commands.doctor.KeboolaClient", return_value=mock_client):
+
+            MockStore.return_value = store
+            MockService.return_value = ProjectService(config_store=store)
+
+            result = runner.invoke(app, ["--json", "doctor"])
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        checks = output["data"]
+
+        # Find the connectivity check
+        conn_checks = [c for c in checks if c["check"] == "project_connectivity"]
+        assert len(conn_checks) == 1
+        conn_check = conn_checks[0]
+        assert conn_check["alias"] == "prod"
+        assert conn_check["status"] == "ok"
+        assert conn_check["project_name"] == "Prod"
+        assert conn_check["project_id"] == 5678
+        assert "response_time_ms" in conn_check
+        # Token should be masked
+        assert "10493007" not in conn_check.get("token", "")
+
+    def test_doctor_json_includes_cli_version(self, tmp_path: Path) -> None:
+        """doctor --json includes CLI version check."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(config_store=store_instance)
+
+            result = runner.invoke(app, ["--json", "doctor"])
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        checks = output["data"]
+
+        version_check = next(c for c in checks if c["check"] == "cli_version")
+        assert version_check["status"] == "ok"
+        assert "version" in version_check
+        assert version_check["version"]  # non-empty
+
+    def test_doctor_human_mode_shows_panel(self, tmp_path: Path) -> None:
+        """doctor in human mode shows formatted output with check names."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(config_store=store_instance)
+
+            result = runner.invoke(app, ["doctor"])
+
+        assert result.exit_code == 0
+        # Should include doctor-related output
+        assert "Doctor" in result.output or "doctor" in result.output.lower()
+        # Should mention version
+        assert "version" in result.output.lower() or "Version" in result.output
+
+    def test_doctor_with_invalid_config_json(self, tmp_path: Path) -> None:
+        """doctor reports error when config file contains invalid JSON."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        # Write invalid JSON to config file
+        config_path = config_dir / "config.json"
+        config_path.write_text("{ invalid json !!!", encoding="utf-8")
+        config_path.chmod(0o600)
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(config_store=store_instance)
+
+            result = runner.invoke(app, ["--json", "doctor"])
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        checks = output["data"]
+
+        # Config valid check should report error
+        validity_check = next(c for c in checks if c["check"] == "config_valid")
+        assert validity_check["status"] == "error"
+        assert "invalid" in validity_check["message"].lower() or "JSON" in validity_check["message"]
+
+
+class TestNoColorFlag:
+    """Tests for `--no-color` flag behavior."""
+
+    def test_no_color_help(self, tmp_path: Path) -> None:
+        """--no-color flag works with --help."""
+        result = runner.invoke(app, ["--no-color", "--help"])
+        assert result.exit_code == 0
+        assert "kbagent" in result.output.lower() or "Keboola" in result.output
+
+    def test_no_color_project_list(self, tmp_path: Path) -> None:
+        """--no-color flag works with project list output."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        mock_client = _make_mock_client(project_name="NoCo Project")
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+
+            service_instance = ProjectService(
+                config_store=store_instance,
+                client_factory=lambda url, token: mock_client,
+            )
+            MockService.return_value = service_instance
+
+            runner.invoke(app, [
+                "project", "add",
+                "--alias", "noco",
+                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ])
+
+            result = runner.invoke(app, ["--no-color", "project", "list"])
+
+        assert result.exit_code == 0
+        assert "noco" in result.output
+
+    def test_no_color_context(self, tmp_path: Path) -> None:
+        """--no-color flag works with context command."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(config_store=store_instance)
+
+            result = runner.invoke(app, ["--no-color", "context"])
+
+        assert result.exit_code == 0
+        assert "kbagent" in result.output
+
+    def test_no_color_doctor(self, tmp_path: Path) -> None:
+        """--no-color flag works with doctor command."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(config_store=store_instance)
+
+            result = runner.invoke(app, ["--no-color", "doctor"])
+
+        assert result.exit_code == 0
+
+
+class TestExitCodes:
+    """Tests for consistent exit codes across commands."""
+
+    def test_auth_error_exit_code_3(self, tmp_path: Path) -> None:
+        """Authentication errors return exit code 3 in JSON mode."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        fail_client = MagicMock()
+        fail_client.verify_token.side_effect = KeboolaApiError(
+            message="Invalid or expired token",
+            status_code=401,
+            error_code="INVALID_TOKEN",
+            retryable=False,
+        )
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+
+            service_instance = ProjectService(
+                config_store=store_instance,
+                client_factory=lambda url, token: fail_client,
+            )
+            MockService.return_value = service_instance
+
+            result = runner.invoke(app, [
+                "--json",
+                "project", "add",
+                "--alias", "badauth",
+                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ])
+
+        assert result.exit_code == 3
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["error"]["code"] == "INVALID_TOKEN"
+        assert output["error"]["retryable"] is False
+
+    def test_network_error_exit_code_4(self, tmp_path: Path) -> None:
+        """Network errors return exit code 4 in JSON mode."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        timeout_client = MagicMock()
+        timeout_client.verify_token.side_effect = KeboolaApiError(
+            message="Connection timed out",
+            status_code=0,
+            error_code="TIMEOUT",
+            retryable=True,
+        )
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+
+            service_instance = ProjectService(
+                config_store=store_instance,
+                client_factory=lambda url, token: timeout_client,
+            )
+            MockService.return_value = service_instance
+
+            result = runner.invoke(app, [
+                "--json",
+                "project", "add",
+                "--alias", "timeout",
+                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ])
+
+        assert result.exit_code == 4
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["error"]["retryable"] is True
+
+    def test_config_error_exit_code_5(self, tmp_path: Path) -> None:
+        """Configuration errors return exit code 5 in JSON mode."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(config_store=store_instance)
+
+            result = runner.invoke(app, [
+                "--json",
+                "project", "remove",
+                "--alias", "doesnotexist",
+            ])
+
+        assert result.exit_code == 5
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["error"]["code"] == "CONFIG_ERROR"
+
+    def test_connection_error_exit_code_4(self, tmp_path: Path) -> None:
+        """Connection errors (not just timeout) also return exit code 4."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        conn_client = MagicMock()
+        conn_client.verify_token.side_effect = KeboolaApiError(
+            message="Cannot connect to server",
+            status_code=0,
+            error_code="CONNECTION_ERROR",
+            retryable=True,
+        )
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore, \
+             patch("keboola_agent_cli.cli.ProjectService") as MockService:
+
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+
+            service_instance = ProjectService(
+                config_store=store_instance,
+                client_factory=lambda url, token: conn_client,
+            )
+            MockService.return_value = service_instance
+
+            result = runner.invoke(app, [
+                "--json",
+                "project", "add",
+                "--alias", "unreachable",
+                "--token", "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ])
+
+        assert result.exit_code == 4
