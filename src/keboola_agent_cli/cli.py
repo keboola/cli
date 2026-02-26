@@ -1,7 +1,6 @@
 """Typer root application with global options and subcommand registration."""
 
 import sys
-from typing import Optional
 
 import typer
 
@@ -9,7 +8,9 @@ from .commands.config import config_app
 from .commands.context import context_command
 from .commands.doctor import doctor_command
 from .commands.project import project_app
+from .config_store import ConfigStore
 from .output import OutputFormatter
+from .services.project_service import ProjectService
 
 app = typer.Typer(
     name="kbagent",
@@ -54,8 +55,14 @@ def main(
         verbose=verbose,
     )
 
+    config_store = ConfigStore()
+
+    project_service = ProjectService(config_store=config_store)
+
     ctx.ensure_object(dict)
     ctx.obj["formatter"] = formatter
     ctx.obj["json_output"] = json_output
     ctx.obj["verbose"] = verbose
     ctx.obj["no_color"] = effective_no_color
+    ctx.obj["config_store"] = config_store
+    ctx.obj["project_service"] = project_service

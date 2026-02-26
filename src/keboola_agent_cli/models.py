@@ -25,6 +25,16 @@ class AppConfig(BaseModel):
     )
 
 
+class TokenVerifyResponse(BaseModel):
+    """Response from the Keboola token verification endpoint."""
+
+    token_id: str = Field(default="", description="Token identifier")
+    token_description: str = Field(default="", description="Human-readable token description")
+    project_id: int = Field(default=0, description="Keboola project numeric ID")
+    project_name: str = Field(default="", description="Keboola project name")
+    owner_name: str = Field(default="", description="Project owner name")
+
+
 class ErrorResponse(BaseModel):
     """Structured error response for JSON output mode."""
 
