@@ -7,7 +7,7 @@ mapping are encapsulated here.
 
 import time
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlunparse
 
 import httpx
 
@@ -158,6 +158,11 @@ class KeboolaClient:
         except Exception:
             api_message = response.text
 
+        # Truncate to prevent Rich markup injection and excessive output
+        max_api_error_length = 500
+        if isinstance(api_message, str) and len(api_message) > max_api_error_length:
+            api_message = api_message[:max_api_error_length] + "..."
+
         if status == 401:
             raise KeboolaApiError(
                 message=f"Invalid or expired token (token: {self._masked_token}): {api_message}",
@@ -236,9 +241,11 @@ class KeboolaClient:
         Returns:
             Configuration detail dict from the API.
         """
+        safe_component_id = quote(component_id, safe="")
+        safe_config_id = quote(config_id, safe="")
         response = self._request(
             "GET",
-            f"/v2/storage/components/{component_id}/configs/{config_id}",
+            f"/v2/storage/components/{safe_component_id}/configs/{safe_config_id}",
         )
         return response.json()
 
@@ -297,5 +304,6 @@ class KeboolaClient:
         Returns:
             Job detail dict from the Queue API.
         """
-        response = self._queue_request("GET", f"/jobs/{job_id}")
+        safe_job_id = quote(job_id, safe="")
+        response = self._queue_request("GET", f"/jobs/{safe_job_id}")
         return response.json()

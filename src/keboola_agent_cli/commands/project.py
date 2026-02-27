@@ -4,6 +4,8 @@ Thin CLI layer: parses arguments, calls ProjectService, formats output.
 No business logic belongs here.
 """
 
+import os
+import sys
 from typing import Any
 
 import typer
@@ -85,6 +87,36 @@ def _format_status_table(console: Console, statuses: list[dict[str, Any]]) -> No
     console.print(table)
 
 
+def _resolve_token() -> str:
+    """Resolve the Storage API token from env var or interactive prompt.
+
+    Token resolution order:
+    1. KBC_TOKEN env var (for CI/CD and automation)
+    2. Interactive prompt with hidden input (if TTY)
+    3. Error if neither available
+
+    Returns:
+        The Storage API token.
+
+    Raises:
+        typer.Exit: If no token can be resolved.
+    """
+    env_token = os.environ.get("KBC_TOKEN")
+    if env_token:
+        return env_token
+
+    is_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+    if is_tty:
+        return typer.prompt("Storage API token", hide_input=True)
+
+    typer.echo(
+        "Error: No token available. Set KBC_TOKEN env var "
+        "or run interactively.",
+        err=True,
+    )
+    raise typer.Exit(code=2)
+
+
 @project_app.command("add")
 def project_add(
     ctx: typer.Context,
@@ -94,15 +126,15 @@ def project_add(
         help="Keboola stack URL",
         envvar="KBC_STORAGE_API_URL",
     ),
-    token: str = typer.Option(
-        ...,
-        help="Storage API token",
-        envvar="KBC_TOKEN",
-    ),
 ) -> None:
-    """Add a new Keboola project connection."""
+    """Add a new Keboola project connection.
+
+    The Storage API token is read from KBC_TOKEN env var or prompted
+    interactively (never passed as a CLI argument for security).
+    """
     formatter = _get_formatter(ctx)
     service = _get_service(ctx)
+    token = _resolve_token()
 
     try:
         result = service.add_project(alias=alias, stack_url=url, token=token)
@@ -164,11 +196,23 @@ def project_edit(
     ctx: typer.Context,
     alias: str = typer.Option(..., help="Alias of the project to edit"),
     url: str | None = typer.Option(None, help="New Keboola stack URL"),
-    token: str | None = typer.Option(None, help="New Storage API token"),
+    new_token: bool = typer.Option(
+        False,
+        "--new-token",
+        help="Provide a new Storage API token (from KBC_TOKEN env var or interactive prompt)",
+    ),
 ) -> None:
-    """Edit an existing Keboola project connection."""
+    """Edit an existing Keboola project connection.
+
+    To change the token, use --new-token flag. The token is read from
+    KBC_TOKEN env var or prompted interactively (never passed as a CLI
+    argument for security).
+    """
     formatter = _get_formatter(ctx)
     service = _get_service(ctx)
+    token: str | None = None
+    if new_token:
+        token = _resolve_token()
 
     try:
         result = service.edit_project(alias=alias, stack_url=url, token=token)

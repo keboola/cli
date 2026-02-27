@@ -1,6 +1,7 @@
 """Tests for CLI commands via CliRunner - project, config, context, doctor commands."""
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -14,6 +15,8 @@ from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
 from keboola_agent_cli.services.lineage_service import LineageService
 from keboola_agent_cli.services.project_service import ProjectService
+
+TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
 
 runner = CliRunner()
 
@@ -46,6 +49,7 @@ class TestProjectAdd:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -66,8 +70,6 @@ class TestProjectAdd:
                     "prod",
                     "--url",
                     "https://connection.keboola.com",
-                    "--token",
-                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
                 ],
             )
 
@@ -89,6 +91,7 @@ class TestProjectAdd:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -108,8 +111,6 @@ class TestProjectAdd:
                     "test",
                     "--url",
                     "https://connection.keboola.com",
-                    "--token",
-                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
                 ],
             )
 
@@ -133,6 +134,7 @@ class TestProjectAdd:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": "invalid-token-abcdefgh"}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -151,8 +153,6 @@ class TestProjectAdd:
                     "add",
                     "--alias",
                     "bad",
-                    "--token",
-                    "invalid-token-abcdefgh",
                 ],
             )
 
@@ -177,6 +177,7 @@ class TestProjectAdd:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -195,8 +196,6 @@ class TestProjectAdd:
                     "add",
                     "--alias",
                     "timeout",
-                    "--token",
-                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
                 ],
             )
 
@@ -235,6 +234,7 @@ class TestProjectList:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -255,8 +255,6 @@ class TestProjectList:
                     "test",
                     "--url",
                     "https://connection.keboola.com",
-                    "--token",
-                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
                 ],
             )
 
@@ -268,8 +266,7 @@ class TestProjectList:
         assert len(output["data"]) == 1
         assert output["data"][0]["alias"] == "test"
         # Token must be masked
-        full_token = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
-        assert output["data"][0]["token"] != full_token
+        assert output["data"][0]["token"] != TEST_TOKEN
 
     def test_project_list_human_mode(self, tmp_path: Path) -> None:
         """project list in human mode outputs a Rich table."""
@@ -280,6 +277,7 @@ class TestProjectList:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -299,8 +297,6 @@ class TestProjectList:
                     "prod",
                     "--url",
                     "https://connection.keboola.com",
-                    "--token",
-                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
                 ],
             )
 
@@ -341,6 +337,7 @@ class TestProjectRemove:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -358,8 +355,6 @@ class TestProjectRemove:
                     "add",
                     "--alias",
                     "test",
-                    "--token",
-                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
                 ],
             )
 
@@ -421,6 +416,7 @@ class TestProjectStatus:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -438,8 +434,6 @@ class TestProjectStatus:
                     "add",
                     "--alias",
                     "prod",
-                    "--token",
-                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
                 ],
             )
 
@@ -462,6 +456,7 @@ class TestProjectStatus:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -479,8 +474,6 @@ class TestProjectStatus:
                     "add",
                     "--alias",
                     "test",
-                    "--token",
-                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
                 ],
             )
 
@@ -502,6 +495,7 @@ class TestProjectEdit:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -521,8 +515,6 @@ class TestProjectEdit:
                     "test",
                     "--url",
                     "https://old.keboola.com",
-                    "--token",
-                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
                 ],
             )
 
@@ -553,6 +545,7 @@ class TestProjectEdit:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -570,8 +563,6 @@ class TestProjectEdit:
                     "add",
                     "--alias",
                     "test",
-                    "--token",
-                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
                 ],
             )
 
@@ -2306,6 +2297,7 @@ class TestExitCodes:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": "invalid-token-abcdefgh"}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -2322,8 +2314,6 @@ class TestExitCodes:
                     "add",
                     "--alias",
                     "bad",
-                    "--token",
-                    "invalid-token-abcdefgh",
                 ],
             )
 
@@ -2348,6 +2338,7 @@ class TestExitCodes:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -2364,8 +2355,6 @@ class TestExitCodes:
                     "add",
                     "--alias",
                     "unreachable",
-                    "--token",
-                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
                 ],
             )
 
@@ -2570,12 +2559,13 @@ class TestHelp:
         assert "detail" in result.output
 
     def test_project_add_help(self) -> None:
-        """project add --help shows options."""
+        """project add --help shows options but NOT --token (security)."""
         result = runner.invoke(app, ["project", "add", "--help"])
         assert result.exit_code == 0
         assert "--alias" in result.output
-        assert "--token" in result.output
         assert "--url" in result.output
+        # --token must NOT appear as a CLI option (S1 security fix)
+        assert "--token" not in result.output
 
     def test_config_list_help(self) -> None:
         """config list --help shows options."""
@@ -2650,6 +2640,7 @@ class TestMissingRequiredArgs:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
         ):
             MockStore.return_value = ConfigStore(config_dir=config_dir)
             MockService.return_value = ProjectService(config_store=MockStore.return_value)
@@ -2659,22 +2650,23 @@ class TestMissingRequiredArgs:
                 [
                     "project",
                     "add",
-                    "--token",
-                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
                 ],
             )
 
         assert result.exit_code != 0
 
-    def test_project_add_missing_token(self, tmp_path: Path) -> None:
-        """project add without --token shows error."""
+    def test_project_add_missing_token_non_tty(self, tmp_path: Path) -> None:
+        """project add without KBC_TOKEN in non-TTY exits with code 2."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {}, clear=False),
         ):
+            # Ensure KBC_TOKEN is not set
+            os.environ.pop("KBC_TOKEN", None)
             MockStore.return_value = ConfigStore(config_dir=config_dir)
             MockService.return_value = ProjectService(config_store=MockStore.return_value)
 
@@ -2739,7 +2731,7 @@ class TestProjectEditTokenReverify:
     """Tests for project edit with token changes."""
 
     def test_project_edit_token_reverify_json(self, tmp_path: Path) -> None:
-        """project edit --token triggers re-verification and returns updated info."""
+        """project edit --new-token triggers re-verification and returns updated info."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         mock_client = _make_mock_client(project_name="Original", project_id=100)
@@ -2757,6 +2749,7 @@ class TestProjectEditTokenReverify:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
         ):
             store_instance = ConfigStore(config_dir=config_dir)
             MockStore.return_value = store_instance
@@ -2775,12 +2768,10 @@ class TestProjectEditTokenReverify:
                     "add",
                     "--alias",
                     "test",
-                    "--token",
-                    "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
                 ],
             )
 
-            # Edit with new token
+            # Edit with new token via --new-token flag + env var
             result = runner.invoke(
                 app,
                 [
@@ -2789,14 +2780,209 @@ class TestProjectEditTokenReverify:
                     "edit",
                     "--alias",
                     "test",
-                    "--token",
-                    "902-newtoken-abcdefghijklmn",
+                    "--new-token",
                 ],
             )
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         output = json.loads(result.output)
         assert output["status"] == "ok"
+
+
+class TestProjectAddTokenSecurity:
+    """Tests for S1: Token input security (env var and interactive prompt)."""
+
+    def test_project_add_token_from_env(self, tmp_path: Path) -> None:
+        """Token from KBC_TOKEN env var works for project add."""
+        mock_client = _make_mock_client(project_name="EnvProject", project_id=999)
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
+        ):
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+
+            service_instance = ProjectService(
+                config_store=store_instance,
+                client_factory=lambda url, token: mock_client,
+            )
+            MockService.return_value = service_instance
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--alias",
+                    "envtest",
+                    "--url",
+                    "https://connection.keboola.com",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["alias"] == "envtest"
+        assert output["data"]["project_name"] == "EnvProject"
+
+    def test_project_add_token_interactive(self, tmp_path: Path) -> None:
+        """Interactive hidden prompt works for project add when no env var.
+
+        We mock _resolve_token to simulate the interactive prompt returning a token,
+        since CliRunner does not have a real TTY and sys.stdin.isatty() is False.
+        """
+        mock_client = _make_mock_client(project_name="PromptProject", project_id=888)
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch(
+                "keboola_agent_cli.commands.project._resolve_token",
+                return_value=TEST_TOKEN,
+            ),
+        ):
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+
+            service_instance = ProjectService(
+                config_store=store_instance,
+                client_factory=lambda url, token: mock_client,
+            )
+            MockService.return_value = service_instance
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--alias",
+                    "prompttest",
+                    "--url",
+                    "https://connection.keboola.com",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["alias"] == "prompttest"
+
+    def test_project_add_rejects_http_url(self, tmp_path: Path) -> None:
+        """http:// URL rejected with error at project add time."""
+        mock_client = _make_mock_client()
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
+        ):
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+
+            service_instance = ProjectService(
+                config_store=store_instance,
+                client_factory=lambda url, token: mock_client,
+            )
+            MockService.return_value = service_instance
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--alias",
+                    "insecure",
+                    "--url",
+                    "http://connection.keboola.com",
+                ],
+            )
+
+        assert result.exit_code != 0, f"Expected failure but got: {result.output}"
+
+    def test_project_add_rejects_file_url(self, tmp_path: Path) -> None:
+        """file:// URL rejected with error at project add time."""
+        mock_client = _make_mock_client()
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
+        ):
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+
+            service_instance = ProjectService(
+                config_store=store_instance,
+                client_factory=lambda url, token: mock_client,
+            )
+            MockService.return_value = service_instance
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--alias",
+                    "fileurl",
+                    "--url",
+                    "file:///etc/passwd",
+                ],
+            )
+
+        assert result.exit_code != 0, f"Expected failure but got: {result.output}"
+
+    def test_project_add_accepts_https_url(self, tmp_path: Path) -> None:
+        """https:// URL is accepted at project add time."""
+        mock_client = _make_mock_client(project_name="SecureProject", project_id=777)
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
+        ):
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+
+            service_instance = ProjectService(
+                config_store=store_instance,
+                client_factory=lambda url, token: mock_client,
+            )
+            MockService.return_value = service_instance
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--alias",
+                    "secure",
+                    "--url",
+                    "https://connection.keboola.com",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["alias"] == "secure"
 
 
 # ---------------------------------------------------------------------------

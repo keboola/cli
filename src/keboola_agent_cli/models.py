@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ProjectConfig(BaseModel):
@@ -14,6 +14,17 @@ class ProjectConfig(BaseModel):
         default="", description="Human-readable project name (populated on add)"
     )
     project_id: int = Field(default=0, description="Keboola project ID (populated on add)")
+
+    @field_validator("stack_url")
+    @classmethod
+    def validate_stack_url_scheme(cls, v: str) -> str:
+        """Enforce HTTPS scheme on stack URL to prevent SSRF and protocol abuse."""
+        if not v.startswith("https://"):
+            raise ValueError(
+                f"Stack URL must use https:// scheme, got: {v!r}. "
+                "Plain HTTP, file://, and other protocols are not allowed."
+            )
+        return v
 
 
 class AppConfig(BaseModel):

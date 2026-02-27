@@ -122,7 +122,11 @@ class ProjectService(BaseService):
         self._config_store.edit_project(alias, **updates)
 
         updated = self._config_store.get_project(alias)
-        assert updated is not None  # we just edited it
+        if updated is None:
+            raise ConfigError(
+                f"Project '{alias}' could not be retrieved after editing. "
+                "Config store may be in an inconsistent state."
+            )
 
         return {
             "alias": alias,

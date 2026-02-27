@@ -1,5 +1,7 @@
 """Tests for KeboolaClient - verify_token, retries, timeouts, error handling."""
 
+from urllib.parse import quote
+
 import httpx
 import pytest
 
@@ -988,3 +990,160 @@ class TestListBuckets:
         ) as client:
             result = client.list_buckets()
             assert result == []
+
+
+class TestApiErrorMessageTruncation:
+    """Tests for S4: API error message truncation to 500 characters."""
+
+    def test_api_error_message_truncation(self, httpx_mock) -> None:
+        """Long server response is truncated to 500 characters in error message."""
+        long_message = "A" * 1000
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json={"error": long_message},
+            status_code=400,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client.verify_token()
+
+            # The full 1000 char message should NOT appear
+            assert long_message not in exc_info.value.message
+            # The truncated message (500 chars + "...") should be present
+            assert "A" * 500 + "..." in exc_info.value.message
+
+    def test_short_error_message_not_truncated(self, httpx_mock) -> None:
+        """Short server response is not truncated."""
+        short_message = "Bad request"
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json={"error": short_message},
+            status_code=400,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client.verify_token()
+
+            assert short_message in exc_info.value.message
+            # Should not have the truncation indicator
+            assert "..." not in exc_info.value.message or short_message in exc_info.value.message
+
+    def test_exactly_500_chars_not_truncated(self, httpx_mock) -> None:
+        """Error message of exactly 500 characters is not truncated."""
+        exact_message = "B" * 500
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json={"error": exact_message},
+            status_code=400,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client.verify_token()
+
+            # Exactly 500 chars should not be truncated
+            assert exact_message in exc_info.value.message
+
+    def test_rich_markup_in_error_truncated(self, httpx_mock) -> None:
+        """Rich markup brackets in error messages are contained by truncation."""
+        malicious_msg = "[bold red]" + "X" * 600 + "[/bold red]"
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json={"error": malicious_msg},
+            status_code=400,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client.verify_token()
+
+            # Full malicious markup should not appear
+            assert malicious_msg not in exc_info.value.message
+            # Should be truncated
+            assert "..." in exc_info.value.message
+
+
+class TestUrlPathEncoding:
+    """Tests for S5: URL-encode path parameters to prevent path traversal."""
+
+    def test_url_path_encoding_component_id(self, httpx_mock) -> None:
+        """Special characters in component_id are URL-encoded."""
+        encoded_component = quote("keboola.ex-db/../admin", safe="")
+        encoded_config = quote("42", safe="")
+
+        httpx_mock.add_response(
+            url=f"https://connection.keboola.com/v2/storage/components/{encoded_component}/configs/{encoded_config}",
+            json={"id": "42", "name": "Config"},
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.get_config_detail("keboola.ex-db/../admin", "42")
+            assert result["id"] == "42"
+
+    def test_url_path_encoding_config_id(self, httpx_mock) -> None:
+        """Special characters in config_id are URL-encoded."""
+        encoded_component = quote("keboola.ex-db-snowflake", safe="")
+        encoded_config = quote("42/../secret", safe="")
+
+        httpx_mock.add_response(
+            url=f"https://connection.keboola.com/v2/storage/components/{encoded_component}/configs/{encoded_config}",
+            json={"id": "42", "name": "Config"},
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.get_config_detail("keboola.ex-db-snowflake", "42/../secret")
+            assert result["id"] == "42"
+
+    def test_url_path_encoding_job_id(self, httpx_mock) -> None:
+        """Special characters in job_id are URL-encoded."""
+        encoded_job = quote("1001/../admin", safe="")
+
+        httpx_mock.add_response(
+            url=f"https://queue.keboola.com/jobs/{encoded_job}",
+            json={"id": "1001", "status": "success"},
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.get_job_detail("1001/../admin")
+            assert result["id"] == "1001"
+
+    def test_normal_ids_not_affected(self, httpx_mock) -> None:
+        """Normal IDs without special chars work correctly with encoding."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components/keboola.ex-db-snowflake/configs/42",
+            json={"id": "42", "name": "Config"},
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.get_config_detail("keboola.ex-db-snowflake", "42")
+            assert result["id"] == "42"

@@ -535,6 +535,39 @@ class TestPermissionDenied:
             config_file.chmod(0o644)
 
 
+class TestDirectoryPermissions:
+    """Tests for S3: config directory permissions."""
+
+    def test_config_dir_permissions(self, tmp_path: Path) -> None:
+        """Config directory is created with 0o700 permissions (owner only)."""
+        nested_dir = tmp_path / "secure" / "config"
+        store = ConfigStore(config_dir=nested_dir)
+        store.save(AppConfig())
+
+        dir_stat = os.stat(nested_dir)
+        mode = stat.S_IMODE(dir_stat.st_mode)
+
+        # Directory should be owner-only accessible (0o700)
+        assert mode == 0o700, f"Expected 0o700, got {oct(mode)}"
+
+    def test_config_dir_permissions_on_add_project(self, tmp_path: Path) -> None:
+        """Config directory created via add_project also has 0o700 permissions."""
+        new_dir = tmp_path / "fresh" / "secure_config"
+        store = ConfigStore(config_dir=new_dir)
+        store.add_project(
+            "test",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-abcdef-12345678",
+            ),
+        )
+
+        dir_stat = os.stat(new_dir)
+        mode = stat.S_IMODE(dir_stat.st_mode)
+
+        assert mode == 0o700, f"Expected 0o700, got {oct(mode)}"
+
+
 class TestConfigPath:
     """Tests for config_path property."""
 

@@ -86,7 +86,7 @@ class ConfigStore:
             ConfigError: If the file cannot be written.
         """
         try:
-            self._config_dir.mkdir(parents=True, exist_ok=True)
+            self._config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             json_str = config.model_dump_json(indent=2)
             self._config_path.write_text(json_str + "\n", encoding="utf-8")
             self._config_path.chmod(0o600)

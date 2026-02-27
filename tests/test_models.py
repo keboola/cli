@@ -2,6 +2,9 @@
 
 import json
 
+import pytest
+from pydantic import ValidationError
+
 from keboola_agent_cli.models import AppConfig, ErrorResponse, ProjectConfig, SuccessResponse
 
 
@@ -190,3 +193,63 @@ class TestSuccessResponse:
         json_str = original.model_dump_json()
         restored = SuccessResponse.model_validate_json(json_str)
         assert restored == original
+
+
+class TestStackUrlValidation:
+    """Tests for S2: URL validation on ProjectConfig.stack_url."""
+
+    def test_project_add_rejects_http_url(self) -> None:
+        """http:// URL is rejected with a ValidationError."""
+        with pytest.raises(ValidationError, match="https://"):
+            ProjectConfig(
+                stack_url="http://connection.keboola.com",
+                token="901-token",
+            )
+
+    def test_project_add_rejects_file_url(self) -> None:
+        """file:// URL is rejected with a ValidationError."""
+        with pytest.raises(ValidationError, match="https://"):
+            ProjectConfig(
+                stack_url="file:///etc/passwd",
+                token="901-token",
+            )
+
+    def test_project_add_rejects_ftp_url(self) -> None:
+        """ftp:// URL is rejected with a ValidationError."""
+        with pytest.raises(ValidationError, match="https://"):
+            ProjectConfig(
+                stack_url="ftp://connection.keboola.com",
+                token="901-token",
+            )
+
+    def test_project_add_rejects_no_scheme(self) -> None:
+        """URL without scheme is rejected with a ValidationError."""
+        with pytest.raises(ValidationError, match="https://"):
+            ProjectConfig(
+                stack_url="connection.keboola.com",
+                token="901-token",
+            )
+
+    def test_project_add_accepts_https_url(self) -> None:
+        """https:// URL is accepted without error."""
+        config = ProjectConfig(
+            stack_url="https://connection.keboola.com",
+            token="901-token",
+        )
+        assert config.stack_url == "https://connection.keboola.com"
+
+    def test_project_add_accepts_https_azure(self) -> None:
+        """https:// Azure stack URL is accepted."""
+        config = ProjectConfig(
+            stack_url="https://connection.north-europe.azure.keboola.com",
+            token="901-token",
+        )
+        assert config.stack_url == "https://connection.north-europe.azure.keboola.com"
+
+    def test_project_add_accepts_https_gcp(self) -> None:
+        """https:// GCP stack URL is accepted."""
+        config = ProjectConfig(
+            stack_url="https://connection.europe-west3.gcp.keboola.com",
+            token="901-token",
+        )
+        assert config.stack_url == "https://connection.europe-west3.gcp.keboola.com"

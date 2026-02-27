@@ -120,6 +120,11 @@ class ManageClient:
         except Exception:
             api_message = response.text
 
+        # Truncate to prevent Rich markup injection and excessive output
+        max_api_error_length = 500
+        if isinstance(api_message, str) and len(api_message) > max_api_error_length:
+            api_message = api_message[:max_api_error_length] + "..."
+
         if status == 401:
             raise KeboolaApiError(
                 message=f"Invalid or expired manage token (token: {self._masked_token}): {api_message}",
