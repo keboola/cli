@@ -4,6 +4,7 @@ Provides resolve_projects(), worker pool management, and _run_parallel()
 scaffold used by ConfigService, JobService, ProjectService, and LineageService.
 """
 
+import logging
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,6 +15,8 @@ from ..config_store import ConfigStore
 from ..constants import ENV_MAX_PARALLEL_WORKERS
 from ..errors import ConfigError
 from ..models import ProjectConfig
+
+logger = logging.getLogger(__name__)
 
 ClientFactory = Callable[[str, str], KeboolaClient]
 
@@ -125,6 +128,9 @@ class BaseService:
                     result = future.result()
                 except Exception as exc:
                     proj_alias = future_to_alias[future]
+                    logger.debug(
+                        "Worker error for project '%s': %s", proj_alias, exc,
+                    )
                     errors.append(
                         {
                             "project_alias": proj_alias,

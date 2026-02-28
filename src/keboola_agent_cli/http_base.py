@@ -5,6 +5,7 @@ from BaseHttpClient to avoid duplicating the retry loop, error mapping,
 and message sanitization code.
 """
 
+import logging
 import time
 from typing import Any
 
@@ -14,9 +15,12 @@ from .constants import (
     BACKOFF_BASE,
     MAX_API_ERROR_LENGTH,
     MAX_RETRIES,
+    MAX_RETRY_AFTER_SECONDS,
     RETRYABLE_STATUS_CODES,
 )
 from .errors import KeboolaApiError, mask_token
+
+logger = logging.getLogger(__name__)
 
 
 class BaseHttpClient:
@@ -99,7 +103,21 @@ class BaseHttpClient:
                     return response
 
                 if response.status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES - 1:
-                    delay = BACKOFF_BASE * (2**attempt)
+                    if response.status_code == 429:
+                        retry_after = response.headers.get("Retry-After")
+                        if retry_after:
+                            try:
+                                delay = min(float(retry_after), MAX_RETRY_AFTER_SECONDS)
+                            except ValueError:
+                                delay = BACKOFF_BASE * (2**attempt)
+                        else:
+                            delay = BACKOFF_BASE * (2**attempt)
+                    else:
+                        delay = BACKOFF_BASE * (2**attempt)
+                    logger.debug(
+                        "Retry attempt %d/%d for %s %s (status %d), delay %.1fs",
+                        attempt + 1, MAX_RETRIES, method, path, response.status_code, delay,
+                    )
                     time.sleep(delay)
                     last_response = response
                     continue
@@ -109,6 +127,10 @@ class BaseHttpClient:
             except httpx.TimeoutException as exc:
                 if attempt < MAX_RETRIES - 1:
                     delay = BACKOFF_BASE * (2**attempt)
+                    logger.debug(
+                        "Retry attempt %d/%d for %s %s (timeout), delay %.1fs",
+                        attempt + 1, MAX_RETRIES, method, path, delay,
+                    )
                     time.sleep(delay)
                     continue
                 raise KeboolaApiError(
@@ -121,6 +143,10 @@ class BaseHttpClient:
             except httpx.ConnectError as exc:
                 if attempt < MAX_RETRIES - 1:
                     delay = BACKOFF_BASE * (2**attempt)
+                    logger.debug(
+                        "Retry attempt %d/%d for %s %s (connection error), delay %.1fs",
+                        attempt + 1, MAX_RETRIES, method, path, delay,
+                    )
                     time.sleep(delay)
                     continue
                 raise KeboolaApiError(

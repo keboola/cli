@@ -4,6 +4,7 @@ Orchestrates the Manage API (list projects, create tokens) and the Storage API
 (verify tokens) to register all organization projects in one shot.
 """
 
+import logging
 import re
 from collections.abc import Callable
 from typing import Any
@@ -14,6 +15,8 @@ from ..constants import DEFAULT_TOKEN_DESCRIPTION
 from ..errors import KeboolaApiError, mask_token
 from ..manage_client import ManageClient
 from ..models import ProjectConfig
+
+logger = logging.getLogger(__name__)
 
 ManageClientFactory = Callable[[str, str], ManageClient]
 StorageClientFactory = Callable[[str, str], KeboolaClient]
@@ -198,6 +201,11 @@ class OrgService:
             token_description: Description for the created token.
         """
         description = f"{token_description} ({project_name})"
+
+        logger.info(
+            "Creating token for project %d (%s) with description '%s'",
+            project_id, project_name, description,
+        )
 
         # Create a Storage API token via Manage API
         manage_client = self._manage_client_factory(stack_url, manage_token)

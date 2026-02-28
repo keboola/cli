@@ -253,3 +253,27 @@ class TestStackUrlValidation:
             token="901-token",
         )
         assert config.stack_url == "https://connection.europe-west3.gcp.keboola.com"
+
+
+class TestMaxParallelWorkersValidation:
+    """Tests for max_parallel_workers upper bound validation."""
+
+    def test_max_workers_upper_bound(self) -> None:
+        """max_parallel_workers > 100 raises ValidationError."""
+        with pytest.raises(ValidationError, match="less than or equal to 100"):
+            AppConfig(max_parallel_workers=200)
+
+    def test_max_workers_at_100_is_valid(self) -> None:
+        """max_parallel_workers = 100 is accepted."""
+        config = AppConfig(max_parallel_workers=100)
+        assert config.max_parallel_workers == 100
+
+    def test_max_workers_default_is_valid(self) -> None:
+        """Default max_parallel_workers (10) is accepted."""
+        config = AppConfig()
+        assert config.max_parallel_workers == 10
+
+    def test_max_workers_at_1_is_valid(self) -> None:
+        """max_parallel_workers = 1 is accepted."""
+        config = AppConfig(max_parallel_workers=1)
+        assert config.max_parallel_workers == 1

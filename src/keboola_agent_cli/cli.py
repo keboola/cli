@@ -1,5 +1,6 @@
 """Typer root application with global options and subcommand registration."""
 
+import logging
 import sys
 
 import typer
@@ -60,6 +61,13 @@ def main(
     ),
 ) -> None:
     """Global options applied to all commands."""
+    log_level = logging.DEBUG if verbose else logging.WARNING
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        stream=sys.stderr,
+    )
+
     is_tty = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
     effective_no_color = no_color or not is_tty
 

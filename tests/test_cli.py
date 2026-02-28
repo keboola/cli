@@ -3917,3 +3917,63 @@ class TestOrgSetup:
         )
 
         assert result.exit_code == 2
+
+
+class TestVerboseFlag:
+    """Tests for --verbose flag enabling DEBUG logging."""
+
+    def test_verbose_enables_debug_logging(self, tmp_path: Path) -> None:
+        """--verbose sets logging level to DEBUG, output goes to stderr."""
+        import logging
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.logging.basicConfig") as mock_basic_config,
+        ):
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockProjService.return_value = ProjectService(config_store=store_instance)
+
+            result = runner.invoke(
+                app,
+                ["--json", "--verbose", "project", "list"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        # Verify logging.basicConfig was called with DEBUG level
+        mock_basic_config.assert_called_once()
+        call_kwargs = mock_basic_config.call_args
+        assert call_kwargs[1]["level"] == logging.DEBUG
+
+    def test_default_log_level_is_warning(self, tmp_path: Path) -> None:
+        """Without --verbose, logging level defaults to WARNING (no debug noise)."""
+        import logging
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.logging.basicConfig") as mock_basic_config,
+        ):
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockProjService.return_value = ProjectService(config_store=store_instance)
+
+            result = runner.invoke(
+                app,
+                ["--json", "project", "list"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        # Verify logging.basicConfig was called with WARNING level
+        mock_basic_config.assert_called_once()
+        call_kwargs = mock_basic_config.call_args
+        assert call_kwargs[1]["level"] == logging.WARNING

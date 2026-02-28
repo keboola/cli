@@ -6,6 +6,8 @@ Read tools run across ALL projects in parallel; write tools target a single proj
 
 import asyncio
 import json
+import logging
+import os
 import shutil
 import subprocess
 from contextlib import AsyncExitStack
@@ -15,14 +17,26 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from ..config_store import ConfigStore
+from ..constants import (
+    DEFAULT_MCP_INIT_TIMEOUT,
+    DEFAULT_MCP_TOOL_TIMEOUT,
+    ENV_MCP_INIT_TIMEOUT,
+    ENV_MCP_TOOL_TIMEOUT,
+)
 from ..errors import ConfigError
 from ..models import ProjectConfig
 from .base import BaseService, ClientFactory
 
+logger = logging.getLogger(__name__)
+
 # Timeout for individual MCP operations (seconds)
-MCP_TOOL_TIMEOUT_SECONDS = 60
+MCP_TOOL_TIMEOUT_SECONDS = int(
+    os.environ.get(ENV_MCP_TOOL_TIMEOUT, DEFAULT_MCP_TOOL_TIMEOUT)
+)
 # Timeout for MCP session initialization (seconds)
-MCP_INIT_TIMEOUT_SECONDS = 30
+MCP_INIT_TIMEOUT_SECONDS = int(
+    os.environ.get(ENV_MCP_INIT_TIMEOUT, DEFAULT_MCP_INIT_TIMEOUT)
+)
 
 # Prefixes that indicate write/mutating tools
 WRITE_PREFIXES = (
@@ -115,6 +129,7 @@ async def _connect_and_list_tools(
     params = _build_server_params(project)
     exit_stack = AsyncExitStack()
 
+    logger.info("Starting MCP server for project %s", project.project_name or "unknown")
     try:
         read_stream, write_stream = await asyncio.wait_for(
             exit_stack.enter_async_context(
@@ -141,8 +156,10 @@ async def _connect_and_list_tools(
                     "inputSchema": tool.inputSchema if tool.inputSchema else {},
                 }
             )
+        logger.info("MCP server listed %d tools", len(tools))
         return tools
     finally:
+        logger.info("Closing MCP server session")
         await exit_stack.aclose()
 
 
@@ -165,6 +182,7 @@ async def _open_session(
     exit_stack: AsyncExitStack,
 ) -> "ClientSession":
     """Open an MCP session for a project, managed by the given exit stack."""
+    logger.info("Opening MCP session for project %s", project.project_name or "unknown")
     params = _build_server_params(project)
 
     read_stream, write_stream = await asyncio.wait_for(

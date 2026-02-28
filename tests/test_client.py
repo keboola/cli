@@ -1,5 +1,6 @@
 """Tests for KeboolaClient - verify_token, retries, timeouts, error handling."""
 
+from unittest.mock import patch
 from urllib.parse import quote
 
 import httpx
@@ -1148,3 +1149,184 @@ class TestUrlPathEncoding:
         ) as client:
             result = client.get_config_detail("keboola.ex-db-snowflake", "42")
             assert result["id"] == "42"
+
+
+class TestRetryAfterHeader:
+    """Tests for Retry-After header on 429 responses."""
+
+    def test_retry_after_header_respected(self, httpx_mock) -> None:
+        """429 response with Retry-After header uses specified delay."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            status_code=429,
+            text="Rate limit exceeded",
+            headers={"Retry-After": "5"},
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json=VERIFY_TOKEN_RESPONSE,
+            status_code=200,
+        )
+
+        import keboola_agent_cli.http_base as http_base_module
+
+        sleep_calls: list[float] = []
+        original_sleep = http_base_module.time.sleep
+
+        def capture_sleep(seconds: float) -> None:
+            sleep_calls.append(seconds)
+
+        http_base_module.time.sleep = capture_sleep
+        try:
+            with KeboolaClient(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ) as client:
+                result = client.verify_token()
+                assert result.project_name == "Test Project"
+                # Should have used 5.0 from Retry-After header, not default backoff (1.0)
+                assert len(sleep_calls) == 1
+                assert sleep_calls[0] == 5.0
+        finally:
+            http_base_module.time.sleep = original_sleep
+
+    def test_retry_after_capped_at_60(self, httpx_mock) -> None:
+        """Retry-After values > 60s are capped at 60s."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            status_code=429,
+            text="Rate limit exceeded",
+            headers={"Retry-After": "120"},
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json=VERIFY_TOKEN_RESPONSE,
+            status_code=200,
+        )
+
+        import keboola_agent_cli.http_base as http_base_module
+
+        sleep_calls: list[float] = []
+        original_sleep = http_base_module.time.sleep
+
+        def capture_sleep(seconds: float) -> None:
+            sleep_calls.append(seconds)
+
+        http_base_module.time.sleep = capture_sleep
+        try:
+            with KeboolaClient(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ) as client:
+                result = client.verify_token()
+                assert result.project_name == "Test Project"
+                # Should be capped at 60.0
+                assert len(sleep_calls) == 1
+                assert sleep_calls[0] == 60.0
+        finally:
+            http_base_module.time.sleep = original_sleep
+
+    def test_retry_after_invalid_falls_back_to_backoff(self, httpx_mock) -> None:
+        """Invalid Retry-After value falls back to exponential backoff."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            status_code=429,
+            text="Rate limit exceeded",
+            headers={"Retry-After": "not-a-number"},
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json=VERIFY_TOKEN_RESPONSE,
+            status_code=200,
+        )
+
+        import keboola_agent_cli.http_base as http_base_module
+
+        sleep_calls: list[float] = []
+        original_sleep = http_base_module.time.sleep
+
+        def capture_sleep(seconds: float) -> None:
+            sleep_calls.append(seconds)
+
+        http_base_module.time.sleep = capture_sleep
+        try:
+            with KeboolaClient(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ) as client:
+                result = client.verify_token()
+                assert result.project_name == "Test Project"
+                # Should fall back to backoff: BACKOFF_BASE * 2^0 = 1.0
+                assert len(sleep_calls) == 1
+                assert sleep_calls[0] == 1.0
+        finally:
+            http_base_module.time.sleep = original_sleep
+
+    def test_429_without_retry_after_uses_backoff(self, httpx_mock) -> None:
+        """429 response without Retry-After header uses default exponential backoff."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            status_code=429,
+            text="Rate limit exceeded",
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json=VERIFY_TOKEN_RESPONSE,
+            status_code=200,
+        )
+
+        import keboola_agent_cli.http_base as http_base_module
+
+        sleep_calls: list[float] = []
+        original_sleep = http_base_module.time.sleep
+
+        def capture_sleep(seconds: float) -> None:
+            sleep_calls.append(seconds)
+
+        http_base_module.time.sleep = capture_sleep
+        try:
+            with KeboolaClient(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ) as client:
+                result = client.verify_token()
+                assert result.project_name == "Test Project"
+                # Should use default backoff: BACKOFF_BASE * 2^0 = 1.0
+                assert len(sleep_calls) == 1
+                assert sleep_calls[0] == 1.0
+        finally:
+            http_base_module.time.sleep = original_sleep
+
+
+class TestQueueUrlWarning:
+    """Tests for queue URL derivation warning when hostname doesn't change."""
+
+    def test_non_standard_url_warns(self) -> None:
+        """Non-standard URL without 'connection.' in hostname logs warning."""
+        import logging
+
+        with patch(
+            "keboola_agent_cli.client.logger"
+        ) as mock_logger:
+            client = KeboolaClient(
+                stack_url="https://custom.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            )
+            # Access _queue_base_url to trigger derivation
+            _ = client._queue_base_url
+            mock_logger.warning.assert_called_once()
+            assert "did not change hostname" in mock_logger.warning.call_args[0][0]
+            client.close()
+
+    def test_standard_url_no_warning(self) -> None:
+        """Standard URL with 'connection.' in hostname does not log warning."""
+        with patch(
+            "keboola_agent_cli.client.logger"
+        ) as mock_logger:
+            client = KeboolaClient(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            )
+            _ = client._queue_base_url
+            mock_logger.warning.assert_not_called()
+            client.close()

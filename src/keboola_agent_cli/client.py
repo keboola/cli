@@ -7,6 +7,7 @@ mapping are encapsulated here.
 Inherits shared retry/error logic from BaseHttpClient.
 """
 
+import logging
 from typing import Any
 from urllib.parse import quote, urlparse, urlunparse
 
@@ -16,6 +17,8 @@ from . import __version__
 from .constants import DEFAULT_JOB_LIMIT, DEFAULT_TIMEOUT
 from .http_base import BaseHttpClient
 from .models import TokenVerifyResponse
+
+logger = logging.getLogger(__name__)
 
 
 class KeboolaClient(BaseHttpClient):
@@ -52,6 +55,8 @@ class KeboolaClient(BaseHttpClient):
         parsed = urlparse(self._stack_url)
         hostname = parsed.hostname or ""
         queue_host = hostname.replace("connection.", "queue.", 1)
+        if queue_host == hostname:
+            logger.warning("Queue URL derivation did not change hostname: %s", hostname)
         return urlunparse(parsed._replace(netloc=queue_host))
 
     def close(self) -> None:

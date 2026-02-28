@@ -5,12 +5,15 @@ File permissions are set to 0600 to protect stored tokens.
 """
 
 import json
+import logging
 from pathlib import Path
 
 import platformdirs
 
 from .errors import ConfigError
 from .models import AppConfig, ProjectConfig
+
+logger = logging.getLogger(__name__)
 
 CURRENT_CONFIG_VERSION = 1
 
@@ -45,7 +48,9 @@ class ConfigStore:
         Raises:
             ConfigError: If the config file is corrupted or has an unsupported version.
         """
+        logger.debug("Loading config from %s", self._config_path)
         if not self._config_path.exists():
+            logger.debug("Config file does not exist, returning empty config")
             return AppConfig()
 
         try:
@@ -85,6 +90,7 @@ class ConfigStore:
         Raises:
             ConfigError: If the file cannot be written.
         """
+        logger.debug("Saving config to %s", self._config_path)
         try:
             self._config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             json_str = config.model_dump_json(indent=2)
