@@ -10,6 +10,7 @@ from keboola_agent_cli.errors import ConfigError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.mcp_service import (
     McpService,
+    _extract_ids,
     _is_write_tool,
     detect_mcp_server_command,
 )
@@ -741,3 +742,105 @@ class TestMcpTimeoutFromEnv:
                 assert mcp_mod.MCP_INIT_TIMEOUT_SECONDS == DEFAULT_MCP_INIT_TIMEOUT
         finally:
             importlib.reload(mcp_mod)
+
+
+# ---------------------------------------------------------------------------
+# TestUnknownToolName
+# ---------------------------------------------------------------------------
+
+
+class TestUnknownToolName:
+    """Tests for Phase 6: Unknown MCP tool name validation."""
+
+    @patch("keboola_agent_cli.services.mcp_service.asyncio.run")
+    def test_unknown_tool_name_error(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Calling a nonexistent tool raises ConfigError with a clear message."""
+        mock_run.return_value = _sample_tools()
+
+        store = _setup_store(
+            tmp_path,
+            projects={"prod": {"token": "tok-prod"}},
+        )
+        svc = McpService(config_store=store)
+
+        with pytest.raises(ConfigError, match="Unknown MCP tool 'nonexistent_tool'"):
+            svc.call_tool("nonexistent_tool", {})
+
+    @patch("keboola_agent_cli.services.mcp_service.asyncio.run")
+    def test_known_tool_name_passes_validation(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Calling a known tool does not raise ConfigError for tool name."""
+        call_count = 0
+        tools = _sample_tools()
+
+        def side_effect(coro):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First call is list_tools
+                return tools
+            # Second call is the actual tool call
+            return {"content": [{"data": "ok"}], "isError": False}
+
+        mock_run.side_effect = side_effect
+
+        store = _setup_store(
+            tmp_path,
+            projects={"prod": {"token": "tok-prod"}},
+            default_project="prod",
+        )
+        svc = McpService(config_store=store)
+        # create_config is in the sample tools and is a write tool
+        result = svc.call_tool("create_config", {"name": "test"})
+        assert result["results"] or result["errors"]  # No ConfigError raised
+
+
+# ---------------------------------------------------------------------------
+# TestExtractIdsDeduplication
+# ---------------------------------------------------------------------------
+
+
+class TestExtractIdsDeduplication:
+    """Tests for Phase 6: _extract_ids deduplication."""
+
+    def test_extract_ids_deduplication(self) -> None:
+        """_extract_ids removes duplicate IDs while preserving order."""
+        content = [
+            [
+                {"id": "bucket-1"},
+                {"id": "bucket-2"},
+                {"id": "bucket-1"},  # duplicate
+                {"id": "bucket-3"},
+                {"id": "bucket-2"},  # duplicate
+            ]
+        ]
+        result = _extract_ids(content, "id")
+        assert result == ["bucket-1", "bucket-2", "bucket-3"]
+
+    def test_extract_ids_no_duplicates(self) -> None:
+        """_extract_ids works normally when there are no duplicates."""
+        content = [
+            [
+                {"id": "a"},
+                {"id": "b"},
+                {"id": "c"},
+            ]
+        ]
+        result = _extract_ids(content, "id")
+        assert result == ["a", "b", "c"]
+
+    def test_extract_ids_empty_input(self) -> None:
+        """_extract_ids returns empty list for empty input."""
+        result = _extract_ids([], "id")
+        assert result == []
+
+    def test_extract_ids_nested_dict_deduplication(self) -> None:
+        """_extract_ids deduplicates across nested dict formats."""
+        content = [
+            {"id": "x", "items": [{"id": "y"}, {"id": "x"}]},
+        ]
+        result = _extract_ids(content, "id")
+        assert result == ["x", "y"]

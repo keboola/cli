@@ -105,7 +105,7 @@ class KeboolaClient(BaseHttpClient):
         return TokenVerifyResponse(
             token_id=str(data.get("id", "")),
             token_description=data.get("description", ""),
-            project_id=data.get("owner", {}).get("id", 0),
+            project_id=data.get("owner", {}).get("id"),
             project_name=data.get("owner", {}).get("name", ""),
             owner_name=data.get("owner", {}).get("name", ""),
         )

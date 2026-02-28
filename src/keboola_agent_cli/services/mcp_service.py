@@ -302,9 +302,10 @@ async def _connect_and_auto_expand(
 
 
 def _extract_ids(content_items: list[Any], key: str) -> list[str]:
-    """Extract ID values from parsed MCP tool content.
+    """Extract unique ID values from parsed MCP tool content.
 
     Handles both list-of-dicts format and single-dict-with-list format.
+    Deduplicates while preserving insertion order.
     """
     ids = []
     for item in content_items:
@@ -321,7 +322,7 @@ def _extract_ids(content_items: list[Any], key: str) -> list[str]:
                     for sub in value:
                         if isinstance(sub, dict) and key in sub:
                             ids.append(str(sub[key]))
-    return ids
+    return list(dict.fromkeys(ids))
 
 
 class McpService(BaseService):
@@ -333,13 +334,6 @@ class McpService(BaseService):
 
     Uses the same DI pattern as JobService/ConfigService.
     """
-
-    def __init__(
-        self,
-        config_store: ConfigStore,
-        client_factory: ClientFactory | None = None,
-    ) -> None:
-        super().__init__(config_store, client_factory)
 
     def resolve_project(self, alias: str | None = None) -> tuple[str, ProjectConfig]:
         """Resolve a single project alias (or the default project).
@@ -456,7 +450,7 @@ class McpService(BaseService):
         """
         schema = self.get_tool_schema(tool_name, aliases=aliases)
         if schema is None:
-            return []  # Can't validate - tool not found, let it fail at call time
+            return []  # Tool not found; call_tool will raise ConfigError
 
         required = schema.get("required", [])
         missing = [param for param in required if param not in tool_input]
@@ -490,9 +484,21 @@ class McpService(BaseService):
 
         Returns:
             Dict with "results" list and "errors" list.
+
+        Raises:
+            ConfigError: If tool_name is not found in the available tool list.
         """
         if tool_input is None:
             tool_input = {}
+
+        # Validate tool name exists in the MCP tool list
+        tool_list_result = self.list_tools(aliases=[alias] if alias else None)
+        known_tools = {t["name"] for t in tool_list_result.get("tools", [])}
+        if known_tools and tool_name not in known_tools:
+            raise ConfigError(
+                f"Unknown MCP tool '{tool_name}'. "
+                f"Use 'kbagent tool list' to see available tools."
+            )
 
         is_write = _is_write_tool(tool_name)
 

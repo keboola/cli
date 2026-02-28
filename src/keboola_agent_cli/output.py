@@ -3,6 +3,7 @@
 import json
 import sys
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from rich.console import Console
@@ -192,9 +193,7 @@ def format_config_detail(console: Console, data: dict[str, Any]) -> None:
     # Show configuration parameters if present
     configuration = data.get("configuration", {})
     if configuration:
-        import json as _json
-
-        config_str = _json.dumps(configuration, indent=2)
+        config_str = json.dumps(configuration, indent=2)
         lines.append(f"\n[bold]Configuration:[/bold]\n{config_str}")
 
     # Show rows if present
@@ -298,8 +297,6 @@ def _format_duration(job: dict[str, Any]) -> str:
     start = job.get("startTime")
     end = job.get("endTime")
     if start and end:
-        from datetime import datetime
-
         try:
             start_dt = datetime.fromisoformat(start)
             end_dt = datetime.fromisoformat(end)
@@ -698,7 +695,5 @@ def format_doctor_panel(console: Console, data: dict[str, Any]) -> None:
 
     lines.append("")
     lines.append(f"  Summary: {', '.join(parts)}")
-
-    from rich.panel import Panel
 
     console.print(Panel("\n".join(lines), title="kbagent doctor", expand=False))

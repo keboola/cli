@@ -5,7 +5,13 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from keboola_agent_cli.models import AppConfig, ErrorResponse, ProjectConfig, SuccessResponse
+from keboola_agent_cli.models import (
+    AppConfig,
+    ErrorResponse,
+    ProjectConfig,
+    SuccessResponse,
+    TokenVerifyResponse,
+)
 
 
 class TestProjectConfig:
@@ -31,7 +37,7 @@ class TestProjectConfig:
             token="901-token",
         )
         assert config.project_name == ""
-        assert config.project_id == 0
+        assert config.project_id is None
 
     def test_json_round_trip(self) -> None:
         """ProjectConfig can be serialized to JSON and deserialized back."""
@@ -253,6 +259,82 @@ class TestStackUrlValidation:
             token="901-token",
         )
         assert config.stack_url == "https://connection.europe-west3.gcp.keboola.com"
+
+
+class TestTokenVerifyResponseValidation:
+    """Tests for Phase 6: TokenVerifyResponse required fields and project_id default."""
+
+    def test_token_verify_response_rejects_missing_fields(self) -> None:
+        """TokenVerifyResponse with missing required fields raises ValidationError."""
+        with pytest.raises(ValidationError):
+            TokenVerifyResponse(
+                token_id="123",
+                token_description="My Token",
+                # project_name missing
+                # owner_name missing
+            )
+
+    def test_token_verify_response_rejects_missing_owner_name(self) -> None:
+        """TokenVerifyResponse with missing owner_name raises ValidationError."""
+        with pytest.raises(ValidationError, match="owner_name"):
+            TokenVerifyResponse(
+                token_id="123",
+                token_description="My Token",
+                project_name="Test Project",
+                # owner_name missing
+            )
+
+    def test_token_verify_response_rejects_missing_token_id(self) -> None:
+        """TokenVerifyResponse with missing token_id raises ValidationError."""
+        with pytest.raises(ValidationError, match="token_id"):
+            TokenVerifyResponse(
+                token_description="My Token",
+                project_name="Test Project",
+                owner_name="Test Owner",
+            )
+
+    def test_token_verify_response_rejects_missing_token_description(self) -> None:
+        """TokenVerifyResponse with missing token_description raises ValidationError."""
+        with pytest.raises(ValidationError, match="token_description"):
+            TokenVerifyResponse(
+                token_id="123",
+                project_name="Test Project",
+                owner_name="Test Owner",
+            )
+
+    def test_token_verify_response_rejects_missing_project_name(self) -> None:
+        """TokenVerifyResponse with missing project_name raises ValidationError."""
+        with pytest.raises(ValidationError, match="project_name"):
+            TokenVerifyResponse(
+                token_id="123",
+                token_description="My Token",
+                owner_name="Test Owner",
+            )
+
+    def test_project_id_default_none(self) -> None:
+        """TokenVerifyResponse project_id defaults to None, not 0."""
+        response = TokenVerifyResponse(
+            token_id="123",
+            token_description="My Token",
+            project_name="Test Project",
+            owner_name="Test Owner",
+        )
+        assert response.project_id is None
+
+    def test_token_verify_response_with_all_fields(self) -> None:
+        """TokenVerifyResponse with all fields specified works correctly."""
+        response = TokenVerifyResponse(
+            token_id="123",
+            token_description="My Token",
+            project_id=4567,
+            project_name="Test Project",
+            owner_name="Test Owner",
+        )
+        assert response.token_id == "123"
+        assert response.token_description == "My Token"
+        assert response.project_id == 4567
+        assert response.project_name == "Test Project"
+        assert response.owner_name == "Test Owner"
 
 
 class TestMaxParallelWorkersValidation:

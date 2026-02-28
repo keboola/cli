@@ -579,7 +579,7 @@ class TestEmptyResponse:
             result = client.verify_token()
             assert result.token_id == "1"
             assert result.project_name == ""
-            assert result.project_id == 0
+            assert result.project_id is None
 
 
 class TestLargeResponse:

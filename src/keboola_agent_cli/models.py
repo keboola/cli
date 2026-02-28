@@ -13,7 +13,7 @@ class ProjectConfig(BaseModel):
     project_name: str = Field(
         default="", description="Human-readable project name (populated on add)"
     )
-    project_id: int = Field(default=0, description="Keboola project ID (populated on add)")
+    project_id: int | None = Field(default=None, description="Keboola project ID (populated on add)")
 
     @field_validator("stack_url")
     @classmethod
@@ -46,11 +46,11 @@ class AppConfig(BaseModel):
 class TokenVerifyResponse(BaseModel):
     """Response from the Keboola token verification endpoint."""
 
-    token_id: str = Field(default="", description="Token identifier")
-    token_description: str = Field(default="", description="Human-readable token description")
-    project_id: int = Field(default=0, description="Keboola project numeric ID")
-    project_name: str = Field(default="", description="Keboola project name")
-    owner_name: str = Field(default="", description="Project owner name")
+    token_id: str = Field(description="Token identifier")
+    token_description: str = Field(description="Human-readable token description")
+    project_id: int | None = Field(default=None, description="Keboola project numeric ID")
+    project_name: str = Field(description="Keboola project name")
+    owner_name: str = Field(description="Project owner name")
 
 
 class ErrorResponse(BaseModel):
