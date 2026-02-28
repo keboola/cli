@@ -6,6 +6,7 @@ and aggregation without knowing about CLI or HTTP details.
 
 from typing import Any
 
+from ..constants import DEFAULT_JOB_LIMIT
 from ..errors import KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
@@ -28,7 +29,7 @@ class JobService(BaseService):
         component_id: str | None = None,
         config_id: str | None = None,
         status: str | None = None,
-        limit: int = 50,
+        limit: int = DEFAULT_JOB_LIMIT,
     ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, str]]:
         """Fetch jobs for a single project (runs in a worker thread).
 
@@ -74,7 +75,7 @@ class JobService(BaseService):
         component_id: str | None = None,
         config_id: str | None = None,
         status: str | None = None,
-        limit: int = 50,
+        limit: int = DEFAULT_JOB_LIMIT,
     ) -> dict[str, Any]:
         """List jobs across one or multiple projects.
 

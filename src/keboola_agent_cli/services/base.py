@@ -11,11 +11,9 @@ from typing import Any
 
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
+from ..constants import ENV_MAX_PARALLEL_WORKERS
 from ..errors import ConfigError
 from ..models import ProjectConfig
-
-# Env var name for overriding max_parallel_workers from config.json
-ENV_MAX_PARALLEL_WORKERS = "KBAGENT_MAX_PARALLEL_WORKERS"
 
 ClientFactory = Callable[[str, str], KeboolaClient]
 

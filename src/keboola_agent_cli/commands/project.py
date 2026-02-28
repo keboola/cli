@@ -12,6 +12,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from ..constants import DEFAULT_STACK_URL, ENV_KBC_STORAGE_API_URL, ENV_KBC_TOKEN
 from ..errors import ConfigError, KeboolaApiError
 from ..output import OutputFormatter
 from ..services.project_service import ProjectService
@@ -101,7 +102,7 @@ def _resolve_token() -> str:
     Raises:
         typer.Exit: If no token can be resolved.
     """
-    env_token = os.environ.get("KBC_TOKEN")
+    env_token = os.environ.get(ENV_KBC_TOKEN)
     if env_token:
         return env_token
 
@@ -110,7 +111,7 @@ def _resolve_token() -> str:
         return typer.prompt("Storage API token", hide_input=True)
 
     typer.echo(
-        "Error: No token available. Set KBC_TOKEN env var "
+        f"Error: No token available. Set {ENV_KBC_TOKEN} env var "
         "or run interactively.",
         err=True,
     )
@@ -122,9 +123,9 @@ def project_add(
     ctx: typer.Context,
     alias: str = typer.Option(..., help="Human-friendly name for this project"),
     url: str = typer.Option(
-        "https://connection.keboola.com",
+        DEFAULT_STACK_URL,
         help="Keboola stack URL",
-        envvar="KBC_STORAGE_API_URL",
+        envvar=ENV_KBC_STORAGE_API_URL,
     ),
 ) -> None:
     """Add a new Keboola project connection.

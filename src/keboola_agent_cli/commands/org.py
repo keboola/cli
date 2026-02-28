@@ -11,6 +11,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from ..constants import DEFAULT_TOKEN_DESCRIPTION, ENV_KBC_MANAGE_API_TOKEN, ENV_KBC_STORAGE_API_URL
 from ..errors import KeboolaApiError
 from ..output import OutputFormatter
 from ..services.org_service import OrgService
@@ -42,7 +43,7 @@ def _resolve_manage_token() -> str:
     Raises:
         typer.Exit: If no token can be resolved.
     """
-    env_token = os.environ.get("KBC_MANAGE_API_TOKEN")
+    env_token = os.environ.get(ENV_KBC_MANAGE_API_TOKEN)
     if env_token:
         return env_token
 
@@ -51,7 +52,7 @@ def _resolve_manage_token() -> str:
         return typer.prompt("Manage API token", hide_input=True)
 
     typer.echo(
-        "Error: No manage token available. Set KBC_MANAGE_API_TOKEN env var "
+        f"Error: No manage token available. Set {ENV_KBC_MANAGE_API_TOKEN} env var "
         "or run interactively.",
         err=True,
     )
@@ -141,7 +142,7 @@ def org_setup(
     url: str = typer.Option(
         ...,
         "--url",
-        envvar="KBC_STORAGE_API_URL",
+        envvar=ENV_KBC_STORAGE_API_URL,
         help="Keboola stack URL (e.g. https://connection.keboola.com)",
     ),
     dry_run: bool = typer.Option(
@@ -156,7 +157,7 @@ def org_setup(
         help="Skip confirmation prompt",
     ),
     token_description: str = typer.Option(
-        "kbagent-cli",
+        DEFAULT_TOKEN_DESCRIPTION,
         "--token-description",
         help="Description prefix for created Storage API tokens",
     ),

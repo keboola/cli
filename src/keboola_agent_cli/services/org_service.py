@@ -10,6 +10,7 @@ from typing import Any
 
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
+from ..constants import DEFAULT_TOKEN_DESCRIPTION
 from ..errors import KeboolaApiError, mask_token
 from ..manage_client import ManageClient
 from ..models import ProjectConfig
@@ -70,7 +71,7 @@ class OrgService:
         stack_url: str,
         manage_token: str,
         org_id: int,
-        token_description: str = "kbagent-cli",
+        token_description: str = DEFAULT_TOKEN_DESCRIPTION,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Set up all projects from a Keboola organization.

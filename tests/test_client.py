@@ -5,7 +5,8 @@ from urllib.parse import quote
 import httpx
 import pytest
 
-from keboola_agent_cli.client import MAX_RETRIES, KeboolaClient
+from keboola_agent_cli.client import KeboolaClient
+from keboola_agent_cli.constants import MAX_RETRIES
 from keboola_agent_cli.errors import KeboolaApiError
 
 VERIFY_TOKEN_RESPONSE = {
@@ -105,15 +106,15 @@ class TestRetryBehavior:
         )
 
         # Monkeypatch time.sleep to avoid actual delays in tests
-        import keboola_agent_cli.client as client_module
+        import keboola_agent_cli.http_base as http_base_module
 
-        original_sleep = client_module.time.sleep
-        client_module.time.sleep = lambda x: None
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = lambda x: None
         try:
             result = client.verify_token()
             assert result.project_name == "Test Project"
         finally:
-            client_module.time.sleep = original_sleep
+            http_base_module.time.sleep = original_sleep
             client.close()
 
     def test_retry_exhausted_raises_error(self, httpx_mock) -> None:
@@ -130,16 +131,16 @@ class TestRetryBehavior:
             token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
         )
 
-        import keboola_agent_cli.client as client_module
+        import keboola_agent_cli.http_base as http_base_module
 
-        original_sleep = client_module.time.sleep
-        client_module.time.sleep = lambda x: None
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = lambda x: None
         try:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.verify_token()
             assert exc_info.value.retryable is True
         finally:
-            client_module.time.sleep = original_sleep
+            http_base_module.time.sleep = original_sleep
             client.close()
 
     def test_retry_on_429(self, httpx_mock) -> None:
@@ -160,15 +161,15 @@ class TestRetryBehavior:
             token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
         )
 
-        import keboola_agent_cli.client as client_module
+        import keboola_agent_cli.http_base as http_base_module
 
-        original_sleep = client_module.time.sleep
-        client_module.time.sleep = lambda x: None
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = lambda x: None
         try:
             result = client.verify_token()
             assert result.project_name == "Test Project"
         finally:
-            client_module.time.sleep = original_sleep
+            http_base_module.time.sleep = original_sleep
             client.close()
 
     def test_no_retry_on_400(self, httpx_mock) -> None:
@@ -215,17 +216,17 @@ class TestTimeoutHandling:
             token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
         )
 
-        import keboola_agent_cli.client as client_module
+        import keboola_agent_cli.http_base as http_base_module
 
-        original_sleep = client_module.time.sleep
-        client_module.time.sleep = lambda x: None
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = lambda x: None
         try:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.verify_token()
             assert exc_info.value.error_code == "TIMEOUT"
             assert exc_info.value.retryable is True
         finally:
-            client_module.time.sleep = original_sleep
+            http_base_module.time.sleep = original_sleep
             client.close()
 
     def test_connect_error_raises_api_error(self, httpx_mock) -> None:
@@ -248,17 +249,17 @@ class TestTimeoutHandling:
             token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
         )
 
-        import keboola_agent_cli.client as client_module
+        import keboola_agent_cli.http_base as http_base_module
 
-        original_sleep = client_module.time.sleep
-        client_module.time.sleep = lambda x: None
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = lambda x: None
         try:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.verify_token()
             assert exc_info.value.error_code == "CONNECTION_ERROR"
             assert exc_info.value.retryable is True
         finally:
-            client_module.time.sleep = original_sleep
+            http_base_module.time.sleep = original_sleep
             client.close()
 
 
@@ -302,17 +303,17 @@ class TestTokenMaskingInErrors:
             token=full_token,
         )
 
-        import keboola_agent_cli.client as client_module
+        import keboola_agent_cli.http_base as http_base_module
 
-        original_sleep = client_module.time.sleep
-        client_module.time.sleep = lambda x: None
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = lambda x: None
         try:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.verify_token()
             assert full_token not in exc_info.value.message
             assert "901-...pt0k" in exc_info.value.message
         finally:
-            client_module.time.sleep = original_sleep
+            http_base_module.time.sleep = original_sleep
             client.close()
 
 
@@ -456,10 +457,10 @@ class TestMalformedJsonResponse:
             status_code=502,
         )
 
-        import keboola_agent_cli.client as client_module
+        import keboola_agent_cli.http_base as http_base_module
 
-        original_sleep = client_module.time.sleep
-        client_module.time.sleep = lambda x: None
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = lambda x: None
         try:
             with KeboolaClient(
                 stack_url="https://connection.keboola.com",
@@ -471,7 +472,7 @@ class TestMalformedJsonResponse:
                 # Error message should contain the raw text body
                 assert "502" in exc_info.value.message
         finally:
-            client_module.time.sleep = original_sleep
+            http_base_module.time.sleep = original_sleep
 
     def test_malformed_json_in_success_response(self, httpx_mock) -> None:
         """Client raises error when success response has non-parseable JSON."""
@@ -531,10 +532,10 @@ class TestEmptyResponse:
             status_code=500,
         )
 
-        import keboola_agent_cli.client as client_module
+        import keboola_agent_cli.http_base as http_base_module
 
-        original_sleep = client_module.time.sleep
-        client_module.time.sleep = lambda x: None
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = lambda x: None
         try:
             with KeboolaClient(
                 stack_url="https://connection.keboola.com",
@@ -545,7 +546,7 @@ class TestEmptyResponse:
                 assert exc_info.value.retryable is True
                 assert exc_info.value.status_code == 500
         finally:
-            client_module.time.sleep = original_sleep
+            http_base_module.time.sleep = original_sleep
 
     def test_empty_components_list(self, httpx_mock) -> None:
         """list_components returns empty list when API returns empty array."""
@@ -815,10 +816,10 @@ class TestListJobs:
             status_code=200,
         )
 
-        import keboola_agent_cli.client as client_module
+        import keboola_agent_cli.http_base as http_base_module
 
-        original_sleep = client_module.time.sleep
-        client_module.time.sleep = lambda x: None
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = lambda x: None
         try:
             with KeboolaClient(
                 stack_url="https://connection.keboola.com",
@@ -827,7 +828,7 @@ class TestListJobs:
                 result = client.list_jobs()
                 assert len(result) == 1
         finally:
-            client_module.time.sleep = original_sleep
+            http_base_module.time.sleep = original_sleep
 
     def test_list_jobs_empty_result(self, httpx_mock) -> None:
         """list_jobs() returns empty list when no jobs match."""

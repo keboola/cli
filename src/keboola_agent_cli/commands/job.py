@@ -6,6 +6,7 @@ No business logic belongs here.
 
 import typer
 
+from ..constants import DEFAULT_JOB_LIMIT, MAX_JOB_LIMIT
 from ..errors import ConfigError, KeboolaApiError
 from ..output import OutputFormatter, format_job_detail, format_jobs_table
 from ..services.job_service import JobService
@@ -49,9 +50,9 @@ def job_list(
         help="Filter by job status: processing, terminated, cancelled, success, error",
     ),
     limit: int = typer.Option(
-        50,
+        DEFAULT_JOB_LIMIT,
         "--limit",
-        help="Maximum number of jobs to return per project (1-500)",
+        help=f"Maximum number of jobs to return per project (1-{MAX_JOB_LIMIT})",
     ),
 ) -> None:
     """List jobs from connected projects."""
@@ -67,9 +68,9 @@ def job_list(
         raise typer.Exit(code=2)
 
     # Validate limit range
-    if limit < 1 or limit > 500:
+    if limit < 1 or limit > MAX_JOB_LIMIT:
         formatter.error(
-            message=f"Invalid limit {limit}. Must be between 1 and 500.",
+            message=f"Invalid limit {limit}. Must be between 1 and {MAX_JOB_LIMIT}.",
             error_code="INVALID_ARGUMENT",
         )
         raise typer.Exit(code=2)
