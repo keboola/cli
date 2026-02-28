@@ -8,22 +8,12 @@ import typer
 
 from ..constants import DEFAULT_JOB_LIMIT, MAX_JOB_LIMIT
 from ..errors import ConfigError, KeboolaApiError
-from ..output import OutputFormatter, format_job_detail, format_jobs_table
-from ..services.job_service import JobService
+from ..output import format_job_detail, format_jobs_table
+from ._helpers import emit_project_warnings, get_formatter, get_service, map_error_to_exit_code
 
 job_app = typer.Typer(help="Browse job history")
 
 VALID_STATUSES = ["processing", "terminated", "cancelled", "success", "error"]
-
-
-def _get_formatter(ctx: typer.Context) -> OutputFormatter:
-    """Retrieve the OutputFormatter from the Typer context."""
-    return ctx.obj["formatter"]
-
-
-def _get_service(ctx: typer.Context) -> JobService:
-    """Retrieve the JobService from the Typer context."""
-    return ctx.obj["job_service"]
 
 
 @job_app.command("list")
@@ -56,8 +46,8 @@ def job_list(
     ),
 ) -> None:
     """List jobs from connected projects."""
-    formatter = _get_formatter(ctx)
-    service = _get_service(ctx)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "job_service")
 
     # Validate status
     if status and status not in VALID_STATUSES:
@@ -99,9 +89,7 @@ def job_list(
         formatter.output(result)
     else:
         format_jobs_table(formatter.console, result)
-
-        for err in result.get("errors", []):
-            formatter.warning(f"Project '{err['project_alias']}': {err['message']}")
+        emit_project_warnings(formatter, result)
 
 
 @job_app.command("detail")
@@ -111,8 +99,8 @@ def job_detail(
     job_id: str = typer.Option(..., "--job-id", help="Job ID"),
 ) -> None:
     """Show detailed information about a specific job."""
-    formatter = _get_formatter(ctx)
-    service = _get_service(ctx)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "job_service")
 
     try:
         result = service.get_job_detail(alias=project, job_id=job_id)
@@ -121,12 +109,7 @@ def job_detail(
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        if exc.error_code == "INVALID_TOKEN":
-            exit_code = 3
-        elif exc.error_code in ("TIMEOUT", "CONNECTION_ERROR", "RETRY_EXHAUSTED"):
-            exit_code = 4
-        else:
-            exit_code = 1
+        exit_code = map_error_to_exit_code(exc)
         formatter.error(
             message=exc.message,
             error_code=exc.error_code,

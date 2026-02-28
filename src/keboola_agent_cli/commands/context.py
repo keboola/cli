@@ -7,7 +7,7 @@ can consume to understand how to use kbagent effectively.
 import typer
 
 from .. import __version__
-from ..output import OutputFormatter
+from ._helpers import get_formatter
 
 AGENT_CONTEXT = f"""\
 # kbagent - Keboola Agent CLI v{__version__}
@@ -229,14 +229,9 @@ When you receive a non-zero exit code, use --json to get structured error detail
 """
 
 
-def _get_formatter(ctx: typer.Context) -> OutputFormatter:
-    """Retrieve the OutputFormatter from the Typer context."""
-    return ctx.obj["formatter"]
-
-
 def context_command(ctx: typer.Context) -> None:
     """Show usage instructions for AI agents interacting with Keboola."""
-    formatter = _get_formatter(ctx)
+    formatter = get_formatter(ctx)
 
     if formatter.json_mode:
         # In JSON mode, output the context text as structured data

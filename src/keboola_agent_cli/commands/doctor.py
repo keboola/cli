@@ -21,19 +21,9 @@ from .. import __version__
 from ..config_store import ConfigStore
 from ..errors import KeboolaApiError
 from ..models import AppConfig
-from ..output import OutputFormatter
 from ..services.mcp_service import McpService
 from ..services.base import ClientFactory, default_client_factory
-
-
-def _get_formatter(ctx: typer.Context) -> OutputFormatter:
-    """Retrieve the OutputFormatter from the Typer context."""
-    return ctx.obj["formatter"]
-
-
-def _get_config_store(ctx: typer.Context) -> ConfigStore:
-    """Retrieve the ConfigStore from the Typer context."""
-    return ctx.obj["config_store"]
+from ._helpers import get_formatter, get_service
 
 
 def _check_config_file(config_store: ConfigStore) -> dict[str, Any]:
@@ -243,8 +233,8 @@ def _format_doctor_human(console: Console, data: dict[str, Any]) -> None:
 
 def doctor_command(ctx: typer.Context) -> None:
     """Run health checks on CLI configuration and project connectivity."""
-    formatter = _get_formatter(ctx)
-    config_store = _get_config_store(ctx)
+    formatter = get_formatter(ctx)
+    config_store = get_service(ctx, "config_store")
 
     # Determine client factory - use the default unless we're in a test context
     client_factory: ClientFactory = ctx.obj.get("client_factory", default_client_factory)

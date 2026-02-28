@@ -7,22 +7,12 @@ No business logic belongs here.
 import typer
 
 from ..errors import ConfigError, KeboolaApiError
-from ..output import OutputFormatter, format_config_detail, format_configs_table
-from ..services.config_service import ConfigService
+from ..output import format_config_detail, format_configs_table
+from ._helpers import emit_project_warnings, get_formatter, get_service, map_error_to_exit_code
 
 config_app = typer.Typer(help="Browse and inspect configurations")
 
 VALID_COMPONENT_TYPES = ["extractor", "writer", "transformation", "application"]
-
-
-def _get_formatter(ctx: typer.Context) -> OutputFormatter:
-    """Retrieve the OutputFormatter from the Typer context."""
-    return ctx.obj["formatter"]
-
-
-def _get_service(ctx: typer.Context) -> ConfigService:
-    """Retrieve the ConfigService from the Typer context."""
-    return ctx.obj["config_service"]
 
 
 @config_app.command("list")
@@ -45,8 +35,8 @@ def config_list(
     ),
 ) -> None:
     """List configurations from connected projects."""
-    formatter = _get_formatter(ctx)
-    service = _get_service(ctx)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "config_service")
 
     # Validate component_type if provided
     if component_type and component_type not in VALID_COMPONENT_TYPES:
@@ -73,10 +63,7 @@ def config_list(
     else:
         # In human mode, show per-project errors as warnings and configs as table
         format_configs_table(formatter.console, result)
-
-        # Show error warnings on stderr too
-        for err in result.get("errors", []):
-            formatter.warning(f"Project '{err['project_alias']}': {err['message']}")
+        emit_project_warnings(formatter, result)
 
 
 @config_app.command("detail")
@@ -87,8 +74,8 @@ def config_detail(
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
 ) -> None:
     """Show detailed information about a specific configuration."""
-    formatter = _get_formatter(ctx)
-    service = _get_service(ctx)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "config_service")
 
     try:
         result = service.get_config_detail(
@@ -101,12 +88,7 @@ def config_detail(
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        if exc.error_code == "INVALID_TOKEN":
-            exit_code = 3
-        elif exc.error_code in ("TIMEOUT", "CONNECTION_ERROR", "RETRY_EXHAUSTED"):
-            exit_code = 4
-        else:
-            exit_code = 1
+        exit_code = map_error_to_exit_code(exc)
         formatter.error(
             message=exc.message,
             error_code=exc.error_code,

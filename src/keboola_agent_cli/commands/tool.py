@@ -9,20 +9,10 @@ import json
 import typer
 
 from ..errors import ConfigError
-from ..output import OutputFormatter, format_tool_result, format_tools_table
-from ..services.mcp_service import McpService
+from ..output import format_tool_result, format_tools_table
+from ._helpers import emit_project_warnings, get_formatter, get_service
 
 tool_app = typer.Typer(help="MCP tools - interact with Keboola via MCP server")
-
-
-def _get_formatter(ctx: typer.Context) -> OutputFormatter:
-    """Retrieve the OutputFormatter from the Typer context."""
-    return ctx.obj["formatter"]
-
-
-def _get_service(ctx: typer.Context) -> McpService:
-    """Retrieve the McpService from the Typer context."""
-    return ctx.obj["mcp_service"]
 
 
 @tool_app.command("list")
@@ -35,8 +25,8 @@ def tool_list(
     ),
 ) -> None:
     """List available MCP tools from the keboola-mcp-server."""
-    formatter = _get_formatter(ctx)
-    service = _get_service(ctx)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "mcp_service")
 
     aliases = [project] if project else None
 
@@ -50,9 +40,7 @@ def tool_list(
         formatter.output(result)
     else:
         format_tools_table(formatter.console, result)
-
-        for err in result.get("errors", []):
-            formatter.warning(f"Project '{err['project_alias']}': {err['message']}")
+        emit_project_warnings(formatter, result)
 
 
 @tool_app.command("call")
@@ -78,8 +66,8 @@ def tool_call(
     Write tools (create_*, update_*, delete_*, add_*) run on a single project.
     Use --project to specify the target, or the default project is used.
     """
-    formatter = _get_formatter(ctx)
-    service = _get_service(ctx)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "mcp_service")
 
     # Parse tool input JSON
     parsed_input: dict = {}
@@ -137,6 +125,4 @@ def tool_call(
         formatter.output(result)
     else:
         format_tool_result(formatter.console, result)
-
-        for err in result.get("errors", []):
-            formatter.warning(f"Project '{err['project_alias']}': {err['message']}")
+        emit_project_warnings(formatter, result)

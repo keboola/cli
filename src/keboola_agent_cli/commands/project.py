@@ -14,20 +14,9 @@ from rich.table import Table
 
 from ..constants import DEFAULT_STACK_URL, ENV_KBC_STORAGE_API_URL, ENV_KBC_TOKEN
 from ..errors import ConfigError, KeboolaApiError
-from ..output import OutputFormatter
-from ..services.project_service import ProjectService
+from ._helpers import get_formatter, get_service, map_error_to_exit_code
 
 project_app = typer.Typer(help="Manage connected Keboola projects")
-
-
-def _get_formatter(ctx: typer.Context) -> OutputFormatter:
-    """Retrieve the OutputFormatter from the Typer context."""
-    return ctx.obj["formatter"]
-
-
-def _get_service(ctx: typer.Context) -> ProjectService:
-    """Retrieve the ProjectService from the Typer context."""
-    return ctx.obj["project_service"]
 
 
 def _format_project_table(console: Console, projects: list[dict[str, Any]]) -> None:
@@ -133,8 +122,8 @@ def project_add(
     The Storage API token is read from KBC_TOKEN env var or prompted
     interactively (never passed as a CLI argument for security).
     """
-    formatter = _get_formatter(ctx)
-    service = _get_service(ctx)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "project_service")
     token = _resolve_token()
 
     try:
@@ -147,7 +136,7 @@ def project_add(
             ),
         )
     except KeboolaApiError as exc:
-        exit_code = 3 if exc.error_code == "INVALID_TOKEN" else 4
+        exit_code = map_error_to_exit_code(exc)
         formatter.error(
             message=exc.message,
             error_code=exc.error_code,
@@ -162,8 +151,8 @@ def project_add(
 @project_app.command("list")
 def project_list(ctx: typer.Context) -> None:
     """List all connected Keboola projects."""
-    formatter = _get_formatter(ctx)
-    service = _get_service(ctx)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "project_service")
 
     try:
         projects = service.list_projects()
@@ -179,8 +168,8 @@ def project_remove(
     alias: str = typer.Option(..., help="Alias of the project to remove"),
 ) -> None:
     """Remove a Keboola project connection."""
-    formatter = _get_formatter(ctx)
-    service = _get_service(ctx)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "project_service")
 
     try:
         result = service.remove_project(alias=alias)
@@ -209,8 +198,8 @@ def project_edit(
     KBC_TOKEN env var or prompted interactively (never passed as a CLI
     argument for security).
     """
-    formatter = _get_formatter(ctx)
-    service = _get_service(ctx)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "project_service")
     token: str | None = None
     if new_token:
         token = _resolve_token()
@@ -224,7 +213,7 @@ def project_edit(
             ),
         )
     except KeboolaApiError as exc:
-        exit_code = 3 if exc.error_code == "INVALID_TOKEN" else 4
+        exit_code = map_error_to_exit_code(exc)
         formatter.error(
             message=exc.message,
             error_code=exc.error_code,
@@ -244,8 +233,8 @@ def project_status(
     ),
 ) -> None:
     """Test connectivity to connected Keboola projects."""
-    formatter = _get_formatter(ctx)
-    service = _get_service(ctx)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "project_service")
 
     aliases = [project] if project else None
 
@@ -256,7 +245,7 @@ def project_status(
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        exit_code = 3 if exc.error_code == "INVALID_TOKEN" else 4
+        exit_code = map_error_to_exit_code(exc)
         formatter.error(
             message=exc.message,
             error_code=exc.error_code,

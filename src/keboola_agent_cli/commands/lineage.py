@@ -7,20 +7,10 @@ No business logic belongs here.
 import typer
 
 from ..errors import ConfigError
-from ..output import OutputFormatter, format_lineage_table
-from ..services.lineage_service import LineageService
+from ..output import format_lineage_table
+from ._helpers import emit_project_warnings, get_formatter, get_service
 
 lineage_app = typer.Typer(help="Analyze cross-project data lineage via bucket sharing")
-
-
-def _get_formatter(ctx: typer.Context) -> OutputFormatter:
-    """Retrieve the OutputFormatter from the Typer context."""
-    return ctx.obj["formatter"]
-
-
-def _get_service(ctx: typer.Context) -> LineageService:
-    """Retrieve the LineageService from the Typer context."""
-    return ctx.obj["lineage_service"]
 
 
 @lineage_app.command("show")
@@ -33,8 +23,8 @@ def lineage_show(
     ),
 ) -> None:
     """Show cross-project data lineage via bucket sharing."""
-    formatter = _get_formatter(ctx)
-    service = _get_service(ctx)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "lineage_service")
 
     try:
         result = service.get_lineage(aliases=project)
@@ -46,9 +36,7 @@ def lineage_show(
         formatter.output(result)
     else:
         format_lineage_table(formatter.console, result)
-
-        for err in result.get("errors", []):
-            formatter.warning(f"Project '{err['project_alias']}': {err['message']}")
+        emit_project_warnings(formatter, result)
 
 
 @lineage_app.callback(invoke_without_command=True)

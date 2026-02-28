@@ -13,20 +13,9 @@ from rich.table import Table
 
 from ..constants import DEFAULT_TOKEN_DESCRIPTION, ENV_KBC_MANAGE_API_TOKEN, ENV_KBC_STORAGE_API_URL
 from ..errors import KeboolaApiError
-from ..output import OutputFormatter
-from ..services.org_service import OrgService
+from ._helpers import get_formatter, get_service, map_error_to_exit_code
 
 org_app = typer.Typer(help="Organization management")
-
-
-def _get_formatter(ctx: typer.Context) -> OutputFormatter:
-    """Retrieve the OutputFormatter from the Typer context."""
-    return ctx.obj["formatter"]
-
-
-def _get_service(ctx: typer.Context) -> OrgService:
-    """Retrieve the OrgService from the Typer context."""
-    return ctx.obj["org_service"]
 
 
 def _resolve_manage_token() -> str:
@@ -171,8 +160,8 @@ def org_setup(
     The manage token is read from KBC_MANAGE_API_TOKEN env var or prompted
     interactively (never passed as a CLI argument for security).
     """
-    formatter = _get_formatter(ctx)
-    service = _get_service(ctx)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "org_service")
 
     manage_token = _resolve_manage_token()
 
@@ -220,14 +209,9 @@ def org_setup(
     formatter.output(result, _format_setup_result)
 
 
-def _handle_api_error(formatter: OutputFormatter, exc: KeboolaApiError) -> None:
+def _handle_api_error(formatter, exc: KeboolaApiError) -> None:
     """Handle a KeboolaApiError by outputting it and raising Exit."""
-    if exc.error_code == "INVALID_TOKEN":
-        exit_code = 3
-    elif exc.error_code in ("TIMEOUT", "CONNECTION_ERROR", "RETRY_EXHAUSTED"):
-        exit_code = 4
-    else:
-        exit_code = 1
+    exit_code = map_error_to_exit_code(exc)
     formatter.error(
         message=exc.message,
         error_code=exc.error_code,
