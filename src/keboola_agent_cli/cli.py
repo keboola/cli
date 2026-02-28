@@ -15,6 +15,7 @@ from .commands.tool import tool_app
 from .config_store import ConfigStore
 from .output import OutputFormatter
 from .services.config_service import ConfigService
+from .services.doctor_service import DoctorService
 from .services.job_service import JobService
 from .services.lineage_service import LineageService
 from .services.mcp_service import McpService
@@ -76,6 +77,7 @@ def main(
     lineage_service = LineageService(config_store=config_store)
     org_service = OrgService(config_store=config_store)
     mcp_service = McpService(config_store=config_store)
+    doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
 
     ctx.ensure_object(dict)
     ctx.obj["formatter"] = formatter
@@ -89,3 +91,4 @@ def main(
     ctx.obj["lineage_service"] = lineage_service
     ctx.obj["org_service"] = org_service
     ctx.obj["mcp_service"] = mcp_service
+    ctx.obj["doctor_service"] = doctor_service

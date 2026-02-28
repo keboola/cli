@@ -2,10 +2,9 @@
 
 Queries the Storage API for bucket sharing metadata and builds
 a graph of data flow edges between projects. Fetches buckets from
-all projects in parallel using ThreadPoolExecutor.
+all projects in parallel using BaseService._run_parallel().
 """
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from ..errors import KeboolaApiError
@@ -20,7 +19,7 @@ class LineageService(BaseService):
     classifies buckets as shared or linked, and builds a deduplicated
     set of data flow edges.
 
-    Uses dependency injection for config_store and client_factory.
+    Uses BaseService._run_parallel() for concurrent project fetching.
     """
 
     def _fetch_project_buckets(
@@ -61,8 +60,8 @@ class LineageService(BaseService):
         """Analyze cross-project data lineage via bucket sharing.
 
         For each resolved project, fetches buckets with linkedBuckets info
-        in parallel using ThreadPoolExecutor, classifies them as shared or
-        linked, and builds deduplicated edges.
+        in parallel using BaseService._run_parallel(), classifies them as
+        shared or linked, and builds deduplicated edges.
 
         Args:
             aliases: Project aliases to query. None means all projects.
@@ -80,7 +79,7 @@ class LineageService(BaseService):
         """
         projects = self.resolve_projects(aliases)
 
-        # Early return for zero projects (avoids ThreadPoolExecutor(max_workers=0))
+        # Early return for zero projects
         if not projects:
             return {
                 "edges": [],
@@ -104,46 +103,21 @@ class LineageService(BaseService):
         all_shared_buckets: list[dict[str, Any]] = []
         all_linked_buckets: list[dict[str, Any]] = []
         edges_by_key: dict[tuple[int, str, int, str], dict[str, Any]] = {}
-        errors: list[dict[str, str]] = []
 
-        # Fetch buckets from all projects in parallel
-        max_workers = min(len(projects), self._resolve_max_workers())
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_alias = {
-                executor.submit(self._fetch_project_buckets, alias, project): alias
-                for alias, project in projects.items()
-            }
+        # Fetch buckets from all projects in parallel using BaseService._run_parallel()
+        successes, errors = self._run_parallel(projects, self._fetch_project_buckets)
 
-            for future in as_completed(future_to_alias):
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    # Unexpected exception from the future itself
-                    proj_alias = future_to_alias[future]
-                    errors.append(
-                        {
-                            "project_alias": proj_alias,
-                            "error_code": "UNEXPECTED_ERROR",
-                            "message": str(exc),
-                        }
-                    )
-                    continue
-
-                # Distinguish success (3-tuple) from error (2-tuple)
-                if len(result) == 3:
-                    alias, project, buckets = result
-                    self._process_buckets(
-                        buckets=buckets,
-                        alias=alias,
-                        project=project,
-                        project_id_to_alias=project_id_to_alias,
-                        all_shared_buckets=all_shared_buckets,
-                        all_linked_buckets=all_linked_buckets,
-                        edges_by_key=edges_by_key,
-                    )
-                else:
-                    _alias, error_dict = result
-                    errors.append(error_dict)
+        for success in successes:
+            alias, project, buckets = success
+            self._process_buckets(
+                buckets=buckets,
+                alias=alias,
+                project=project,
+                project_id_to_alias=project_id_to_alias,
+                all_shared_buckets=all_shared_buckets,
+                all_linked_buckets=all_linked_buckets,
+                edges_by_key=edges_by_key,
+            )
 
         # Sort results for deterministic output (parallel execution order varies).
         # Use str() in sort keys: source_project_id comes from Pydantic (int) but

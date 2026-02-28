@@ -535,6 +535,42 @@ class McpService(BaseService):
 
         return asyncio.run(self._gather_read_results(projects, tool_name, tool_input))
 
+    @staticmethod
+    async def _gather_results(
+        tasks: dict[str, "asyncio.Task[dict[str, Any]]"],
+    ) -> dict[str, Any]:
+        """Gather results from async tasks using asyncio.gather.
+
+        Shared helper for both read and auto-expand gather operations.
+        Uses asyncio.gather with return_exceptions=True for true concurrency.
+
+        Args:
+            tasks: Dict mapping project alias to asyncio.Task.
+
+        Returns:
+            Dict with "results" list and "errors" list.
+        """
+        aliases = list(tasks.keys())
+        outcomes = await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+        all_results: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+
+        for alias, outcome in zip(aliases, outcomes):
+            if isinstance(outcome, BaseException):
+                errors.append(
+                    {
+                        "project_alias": alias,
+                        "error_code": "MCP_ERROR",
+                        "message": str(outcome),
+                    }
+                )
+            else:
+                outcome["project_alias"] = alias
+                all_results.append(outcome)
+
+        return {"results": all_results, "errors": errors}
+
     async def _gather_auto_expand_results(
         self,
         projects: dict[str, ProjectConfig],
@@ -552,25 +588,7 @@ class McpService(BaseService):
             tasks[a] = asyncio.create_task(
                 _connect_and_auto_expand(project, tool_name, tool_input, expand_config)
             )
-
-        all_results: list[dict[str, Any]] = []
-        errors: list[dict[str, str]] = []
-
-        for a, task in tasks.items():
-            try:
-                result = await task
-                result["project_alias"] = a
-                all_results.append(result)
-            except Exception as exc:
-                errors.append(
-                    {
-                        "project_alias": a,
-                        "error_code": "MCP_ERROR",
-                        "message": str(exc),
-                    }
-                )
-
-        return {"results": all_results, "errors": errors}
+        return await self._gather_results(tasks)
 
     async def _gather_read_results(
         self,
@@ -584,25 +602,7 @@ class McpService(BaseService):
             tasks[a] = asyncio.create_task(
                 _connect_and_call_tool(project, tool_name, tool_input)
             )
-
-        all_results: list[dict[str, Any]] = []
-        errors: list[dict[str, str]] = []
-
-        for a, task in tasks.items():
-            try:
-                result = await task
-                result["project_alias"] = a
-                all_results.append(result)
-            except Exception as exc:
-                errors.append(
-                    {
-                        "project_alias": a,
-                        "error_code": "MCP_ERROR",
-                        "message": str(exc),
-                    }
-                )
-
-        return {"results": all_results, "errors": errors}
+        return await self._gather_results(tasks)
 
     def check_server_available(self) -> dict[str, Any]:
         """Check if MCP server is available (for doctor command).

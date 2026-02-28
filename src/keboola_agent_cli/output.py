@@ -666,3 +666,39 @@ def _render_linked_buckets_table(console: Console, linked_buckets: list[dict[str
 
     console.print(table)
     console.print()
+
+
+def format_doctor_panel(console: Console, data: dict[str, Any]) -> None:
+    """Render doctor check results as a Rich panel with colored status indicators.
+
+    Args:
+        console: Rich Console instance.
+        data: Dict with "checks" list and "summary" dict from DoctorService.
+    """
+    status_icons = {
+        "pass": "[bold green]PASS[/bold green]",
+        "fail": "[bold red]FAIL[/bold red]",
+        "warn": "[bold yellow]WARN[/bold yellow]",
+    }
+
+    checks = data.get("checks", [])
+    lines = [
+        f"  {status_icons.get(c['status'], '[dim]SKIP[/dim]')}  {c['name']}: {c['message']}"
+        for c in checks
+    ]
+
+    summary = data.get("summary", {})
+    parts = [f"{summary.get('total', 0)} checks"]
+    if summary.get("passed"):
+        parts.append(f"[green]{summary['passed']} passed[/green]")
+    if summary.get("failed"):
+        parts.append(f"[red]{summary['failed']} failed[/red]")
+    if summary.get("warnings"):
+        parts.append(f"[yellow]{summary['warnings']} warnings[/yellow]")
+
+    lines.append("")
+    lines.append(f"  Summary: {', '.join(parts)}")
+
+    from rich.panel import Panel
+
+    console.print(Panel("\n".join(lines), title="kbagent doctor", expand=False))

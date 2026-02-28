@@ -153,7 +153,14 @@ class OrgService:
                     "token": mask_token(registered.token) if registered else "***",
                     "action": "added",
                 })
-            except (KeboolaApiError, Exception) as exc:
+            except KeboolaApiError as exc:
+                failed.append({
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "alias": alias,
+                    "error": str(exc),
+                })
+            except Exception as exc:
                 failed.append({
                     "project_id": project_id,
                     "project_name": project_name,

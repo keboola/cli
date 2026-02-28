@@ -2127,7 +2127,7 @@ class TestDoctor:
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
-            patch("keboola_agent_cli.commands.doctor.default_client_factory") as MockFactory,
+            patch("keboola_agent_cli.services.doctor_service.default_client_factory") as MockFactory,
         ):
             MockStore.return_value = store
             MockFactory.return_value = mock_client
@@ -2169,7 +2169,7 @@ class TestDoctor:
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
-            patch("keboola_agent_cli.commands.doctor.default_client_factory") as MockFactory,
+            patch("keboola_agent_cli.services.doctor_service.default_client_factory") as MockFactory,
         ):
             MockStore.return_value = store
             MockFactory.return_value = fail_client
