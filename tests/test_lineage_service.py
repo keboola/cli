@@ -11,6 +11,8 @@ from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.base import ENV_MAX_PARALLEL_WORKERS
 from keboola_agent_cli.services.lineage_service import LineageService
 
+from helpers import setup_single_project, setup_two_projects
+
 
 def _make_lineage_client(buckets: list[dict]) -> MagicMock:
     """Create a mock KeboolaClient that returns the given list of buckets."""
@@ -26,58 +28,12 @@ def _make_failing_lineage_client(error: KeboolaApiError) -> MagicMock:
     return mock_client
 
 
-def _setup_single_project(
-    tmp_config_dir: Path,
-    alias: str = "prod",
-    stack_url: str = "https://connection.keboola.com",
-    token: str = "901-xxx",
-    project_name: str = "Production",
-    project_id: int = 258,
-) -> ConfigStore:
-    """Create a ConfigStore with a single project configured."""
-    store = ConfigStore(config_dir=tmp_config_dir)
-    store.add_project(
-        alias,
-        ProjectConfig(
-            stack_url=stack_url,
-            token=token,
-            project_name=project_name,
-            project_id=project_id,
-        ),
-    )
-    return store
-
-
-def _setup_two_projects(tmp_config_dir: Path) -> ConfigStore:
-    """Create a ConfigStore with two projects (prod and dev) configured."""
-    store = ConfigStore(config_dir=tmp_config_dir)
-    store.add_project(
-        "prod",
-        ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-xxx",
-            project_name="Production",
-            project_id=258,
-        ),
-    )
-    store.add_project(
-        "dev",
-        ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="7012-yyy",
-            project_name="Development",
-            project_id=7012,
-        ),
-    )
-    return store
-
-
 class TestLineageSharedBucket:
     """Tests for a project with a shared bucket that has linkedBy entries."""
 
     def test_shared_bucket_with_linked_by(self, tmp_config_dir: Path) -> None:
         """A shared bucket with linkedBy entries produces edges and shared_buckets."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
 
         buckets = [
             {
@@ -133,7 +89,7 @@ class TestLineageSharedBucket:
 
     def test_shared_bucket_multiple_linked_by(self, tmp_config_dir: Path) -> None:
         """A shared bucket linked by multiple projects produces multiple edges."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
 
         buckets = [
             {
@@ -165,7 +121,7 @@ class TestLineageLinkedBucket:
 
     def test_linked_bucket_with_source(self, tmp_config_dir: Path) -> None:
         """A linked bucket with sourceBucket produces edges and linked_buckets."""
-        store = _setup_single_project(
+        store = setup_single_project(
             tmp_config_dir,
             alias="dev",
             token="7012-yyy",
@@ -228,7 +184,7 @@ class TestLineageMultiProjectDedup:
 
     def test_edges_deduplicated_across_two_projects(self, tmp_config_dir: Path) -> None:
         """When project A shares and project B links the same bucket, edges are deduplicated."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
 
         # Project A (prod, id=258) shares bucket with linkedBy pointing to project B
         prod_buckets = [
@@ -294,7 +250,7 @@ class TestLineageMultiProjectDedup:
 
     def test_dedup_with_same_edge_key(self, tmp_config_dir: Path) -> None:
         """Both projects report the same edge key, result is 1 edge not 2."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
 
         # Both projects produce the same edge key: (258, "in.c-shared", 7012, "in.c-linked")
         prod_buckets = [
@@ -338,7 +294,7 @@ class TestLineageErrorAccumulation:
 
     def test_one_project_fails_other_succeeds(self, tmp_config_dir: Path) -> None:
         """When one project fails with KeboolaApiError, the other still produces results."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
 
         # prod client will fail
         error = KeboolaApiError(
@@ -389,7 +345,7 @@ class TestLineageErrorAccumulation:
 
     def test_client_close_called_even_on_error(self, tmp_config_dir: Path) -> None:
         """Client.close() is called even when list_buckets raises an error."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
 
         error = KeboolaApiError(
             message="Server Error",
@@ -415,7 +371,7 @@ class TestLineageNoSharing:
 
     def test_no_sharing_no_linking(self, tmp_config_dir: Path) -> None:
         """Buckets without sharing, linkedBy, or sourceBucket produce empty results."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
 
         buckets = [
             {"id": "in.c-data", "name": "data"},
@@ -441,7 +397,7 @@ class TestLineageNoSharing:
 
     def test_empty_bucket_list(self, tmp_config_dir: Path) -> None:
         """A project with no buckets at all produces empty results."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         mock_client = _make_lineage_client([])
 
         service = LineageService(
@@ -457,7 +413,7 @@ class TestLineageNoSharing:
 
     def test_empty_linked_by_list(self, tmp_config_dir: Path) -> None:
         """A shared bucket with empty linkedBy list produces no edges."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
 
         buckets = [
             {
@@ -486,7 +442,7 @@ class TestLineageNonexistentAlias:
 
     def test_nonexistent_alias_raises_config_error(self, tmp_config_dir: Path) -> None:
         """Passing an alias not in the config raises ConfigError."""
-        store = _setup_single_project(tmp_config_dir, alias="prod")
+        store = setup_single_project(tmp_config_dir, alias="prod")
 
         service = LineageService(
             config_store=store,
@@ -498,7 +454,7 @@ class TestLineageNonexistentAlias:
 
     def test_nonexistent_alias_in_resolve_projects(self, tmp_config_dir: Path) -> None:
         """resolve_projects also raises ConfigError for unknown aliases."""
-        store = _setup_single_project(tmp_config_dir, alias="prod")
+        store = setup_single_project(tmp_config_dir, alias="prod")
 
         service = LineageService(
             config_store=store,
@@ -514,7 +470,7 @@ class TestLineageProjectFilter:
 
     def test_filter_to_single_alias(self, tmp_config_dir: Path) -> None:
         """With 2 projects configured, passing aliases=['prod'] queries only prod."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
 
         prod_buckets = [
             {
@@ -547,7 +503,7 @@ class TestLineageProjectFilter:
 
     def test_no_aliases_queries_all(self, tmp_config_dir: Path) -> None:
         """Passing aliases=None queries all configured projects."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
 
         mock_client = _make_lineage_client([])
 
@@ -564,7 +520,7 @@ class TestLineageProjectFilter:
 
     def test_resolve_projects_returns_filtered(self, tmp_config_dir: Path) -> None:
         """resolve_projects with aliases returns only the requested project."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
 
         service = LineageService(
             config_store=store,
@@ -577,7 +533,7 @@ class TestLineageProjectFilter:
 
     def test_resolve_projects_no_aliases_returns_all(self, tmp_config_dir: Path) -> None:
         """resolve_projects with aliases=None returns all configured projects."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
 
         service = LineageService(
             config_store=store,
@@ -613,7 +569,7 @@ class TestLineageParallelExecution:
 
     def test_all_projects_queried_in_parallel(self, tmp_config_dir: Path) -> None:
         """All configured projects are queried (each client gets called)."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
 
         prod_client = _make_lineage_client([])
         dev_client = _make_lineage_client([])
@@ -638,7 +594,7 @@ class TestLineageParallelExecution:
 
     def test_mixed_success_and_failure(self, tmp_config_dir: Path) -> None:
         """One project succeeds and one fails; results and errors both preserved."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
 
         # prod fails with API error
         error = KeboolaApiError(
@@ -682,7 +638,7 @@ class TestLineageParallelExecution:
 
     def test_unexpected_exception_accumulated_as_error(self, tmp_config_dir: Path) -> None:
         """Non-KeboolaApiError exceptions are caught and accumulated as errors."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
 
         mock_client = MagicMock()
         mock_client.list_buckets.side_effect = RuntimeError("connection pool exhausted")
@@ -704,7 +660,7 @@ class TestLineageParallelExecution:
 
     def test_deterministic_output_ordering(self, tmp_config_dir: Path) -> None:
         """Edges and buckets are sorted deterministically regardless of execution order."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
 
         # prod (id=258) shares a bucket linked by dev (id=7012)
         prod_buckets = [
@@ -746,7 +702,7 @@ class TestLineageParallelExecution:
 
     def test_mixed_int_str_project_ids_in_sort(self, tmp_config_dir: Path) -> None:
         """Sorting works when API returns project IDs as mix of int and str."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
 
         # prod shares bucket, linkedBy has project id as int
         prod_buckets = [
@@ -789,13 +745,13 @@ class TestLineageParallelExecution:
 
     def test_default_max_workers_from_config(self, tmp_config_dir: Path) -> None:
         """Default max_parallel_workers is 10 from AppConfig."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         service = LineageService(config_store=store)
         assert service._resolve_max_workers() == 10
 
     def test_max_workers_from_config_file(self, tmp_config_dir: Path) -> None:
         """max_parallel_workers can be set in config.json."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         config = store.load()
         config.max_parallel_workers = 20
         store.save(config)
@@ -805,7 +761,7 @@ class TestLineageParallelExecution:
 
     def test_env_var_overrides_config(self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """KBAGENT_MAX_PARALLEL_WORKERS env var overrides config.json value."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         config = store.load()
         config.max_parallel_workers = 5
         store.save(config)
@@ -816,7 +772,7 @@ class TestLineageParallelExecution:
 
     def test_invalid_env_var_falls_back_to_config(self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Invalid env var value falls back to config.json."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         config = store.load()
         config.max_parallel_workers = 15
         store.save(config)

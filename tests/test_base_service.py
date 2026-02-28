@@ -16,6 +16,8 @@ from keboola_agent_cli.errors import ConfigError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.base import BaseService, ENV_MAX_PARALLEL_WORKERS
 
+from helpers import setup_single_project, setup_two_projects
+
 
 class _TestService(BaseService):
     """Concrete subclass of BaseService used exclusively for testing."""
@@ -23,55 +25,9 @@ class _TestService(BaseService):
     pass
 
 
-def _setup_single_project(
-    tmp_config_dir: Path,
-    alias: str = "prod",
-    stack_url: str = "https://connection.keboola.com",
-    token: str = "901-xxx",
-    project_name: str = "Production",
-    project_id: int = 258,
-) -> ConfigStore:
-    """Create a ConfigStore with a single project configured."""
-    store = ConfigStore(config_dir=tmp_config_dir)
-    store.add_project(
-        alias,
-        ProjectConfig(
-            stack_url=stack_url,
-            token=token,
-            project_name=project_name,
-            project_id=project_id,
-        ),
-    )
-    return store
-
-
-def _setup_two_projects(tmp_config_dir: Path) -> ConfigStore:
-    """Create a ConfigStore with two projects (prod and dev) configured."""
-    store = ConfigStore(config_dir=tmp_config_dir)
-    store.add_project(
-        "prod",
-        ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="901-xxx",
-            project_name="Production",
-            project_id=258,
-        ),
-    )
-    store.add_project(
-        "dev",
-        ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token="7012-yyy",
-            project_name="Development",
-            project_id=7012,
-        ),
-    )
-    return store
-
-
 def _setup_three_projects(tmp_config_dir: Path) -> ConfigStore:
     """Create a ConfigStore with three projects (prod, dev, staging) configured."""
-    store = _setup_two_projects(tmp_config_dir)
+    store = setup_two_projects(tmp_config_dir)
     store.add_project(
         "staging",
         ProjectConfig(
@@ -89,7 +45,7 @@ class TestResolveProjects:
 
     def test_resolve_all_projects_with_none_aliases(self, tmp_config_dir: Path) -> None:
         """Passing aliases=None returns all configured projects."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
         service = _TestService(config_store=store)
 
         resolved = service.resolve_projects(aliases=None)
@@ -112,7 +68,7 @@ class TestResolveProjects:
 
     def test_unknown_alias_raises_config_error(self, tmp_config_dir: Path) -> None:
         """Passing an alias not in the config raises ConfigError."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         service = _TestService(config_store=store)
 
         with pytest.raises(ConfigError, match="Project 'nonexistent' not found"):
@@ -120,7 +76,7 @@ class TestResolveProjects:
 
     def test_mixed_valid_and_unknown_alias_raises(self, tmp_config_dir: Path) -> None:
         """If any alias in the list is unknown, ConfigError is raised."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
         service = _TestService(config_store=store)
 
         with pytest.raises(ConfigError, match="Project 'missing' not found"):
@@ -128,7 +84,7 @@ class TestResolveProjects:
 
     def test_empty_aliases_list_returns_all(self, tmp_config_dir: Path) -> None:
         """Passing an empty list returns all configured projects (same as None)."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
         service = _TestService(config_store=store)
 
         resolved = service.resolve_projects(aliases=[])
@@ -137,7 +93,7 @@ class TestResolveProjects:
 
     def test_resolve_single_alias(self, tmp_config_dir: Path) -> None:
         """Resolving a single valid alias returns just that project."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
         service = _TestService(config_store=store)
 
         resolved = service.resolve_projects(aliases=["dev"])
@@ -147,7 +103,7 @@ class TestResolveProjects:
 
     def test_resolve_projects_preserves_config(self, tmp_config_dir: Path) -> None:
         """Resolved ProjectConfig instances have the correct stack_url and token."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         service = _TestService(config_store=store)
 
         resolved = service.resolve_projects(aliases=["prod"])
@@ -161,14 +117,14 @@ class TestResolveMaxWorkers:
 
     def test_default_value_from_app_config(self, tmp_config_dir: Path) -> None:
         """Default max_parallel_workers is 10 from AppConfig."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         service = _TestService(config_store=store)
 
         assert service._resolve_max_workers() == 10
 
     def test_custom_value_from_config_json(self, tmp_config_dir: Path) -> None:
         """max_parallel_workers can be set in config.json."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         config = store.load()
         config.max_parallel_workers = 20
         store.save(config)
@@ -181,7 +137,7 @@ class TestResolveMaxWorkers:
         self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """KBAGENT_MAX_PARALLEL_WORKERS env var overrides config.json value."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         config = store.load()
         config.max_parallel_workers = 5
         store.save(config)
@@ -195,7 +151,7 @@ class TestResolveMaxWorkers:
         self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Invalid (non-numeric) env var value falls back to config.json."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         config = store.load()
         config.max_parallel_workers = 15
         store.save(config)
@@ -209,7 +165,7 @@ class TestResolveMaxWorkers:
         self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Zero is not a valid positive integer, so it falls back to config.json."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         config = store.load()
         config.max_parallel_workers = 8
         store.save(config)
@@ -223,7 +179,7 @@ class TestResolveMaxWorkers:
         self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Negative env var value is not positive, so it falls back to config.json."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         config = store.load()
         config.max_parallel_workers = 12
         store.save(config)
@@ -237,7 +193,7 @@ class TestResolveMaxWorkers:
         self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Env var set to 1 is valid and should be used (sequential execution)."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
 
         monkeypatch.setenv(ENV_MAX_PARALLEL_WORKERS, "1")
         service = _TestService(config_store=store)
@@ -250,7 +206,7 @@ class TestRunParallel:
 
     def test_empty_projects_returns_empty_tuple(self, tmp_config_dir: Path) -> None:
         """Empty projects dict returns ([], []) without spawning threads."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         service = _TestService(config_store=store)
 
         def worker(alias: str, project: ProjectConfig) -> tuple[Any, ...]:
@@ -263,7 +219,7 @@ class TestRunParallel:
 
     def test_single_project_success_three_tuple(self, tmp_config_dir: Path) -> None:
         """Worker returning a 3-tuple is classified as success."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         service = _TestService(config_store=store)
         projects = service.resolve_projects()
 
@@ -278,7 +234,7 @@ class TestRunParallel:
 
     def test_multiple_projects_success(self, tmp_config_dir: Path) -> None:
         """All workers succeeding with 3-tuples are collected in successes."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
         service = _TestService(config_store=store)
         projects = service.resolve_projects()
 
@@ -299,7 +255,7 @@ class TestRunParallel:
 
     def test_worker_returning_two_tuple_classified_as_error(self, tmp_config_dir: Path) -> None:
         """Worker returning a 2-tuple (alias, error_dict) is classified as error."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         service = _TestService(config_store=store)
         projects = service.resolve_projects()
 
@@ -320,7 +276,7 @@ class TestRunParallel:
 
     def test_mixed_success_and_error(self, tmp_config_dir: Path) -> None:
         """One worker returns success (3-tuple), another returns error (2-tuple)."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
         service = _TestService(config_store=store)
         projects = service.resolve_projects()
 
@@ -346,7 +302,7 @@ class TestRunParallel:
 
     def test_unexpected_exception_caught_as_unexpected_error(self, tmp_config_dir: Path) -> None:
         """Exception raised by worker is caught and recorded as UNEXPECTED_ERROR."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         service = _TestService(config_store=store)
         projects = service.resolve_projects()
 
@@ -363,7 +319,7 @@ class TestRunParallel:
 
     def test_exception_mixed_with_success(self, tmp_config_dir: Path) -> None:
         """One worker raises, the other succeeds. Both results are collected."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
         service = _TestService(config_store=store)
         projects = service.resolve_projects()
 
@@ -386,7 +342,7 @@ class TestRunParallel:
         self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """max_workers is min(len(projects), _resolve_max_workers())."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
 
         # Set a very high max_workers via env var
         monkeypatch.setenv(ENV_MAX_PARALLEL_WORKERS, "100")
@@ -409,7 +365,7 @@ class TestRunParallel:
 
     def test_four_plus_tuple_classified_as_success(self, tmp_config_dir: Path) -> None:
         """Worker returning a 4-tuple is also classified as success (len > 2)."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         service = _TestService(config_store=store)
         projects = service.resolve_projects()
 
@@ -424,7 +380,7 @@ class TestRunParallel:
 
     def test_all_projects_fail_with_exceptions(self, tmp_config_dir: Path) -> None:
         """When all workers raise exceptions, successes is empty and all are errors."""
-        store = _setup_two_projects(tmp_config_dir)
+        store = setup_two_projects(tmp_config_dir)
         service = _TestService(config_store=store)
         projects = service.resolve_projects()
 
@@ -447,7 +403,7 @@ class TestDefaultClientFactory:
 
     def test_default_client_factory_is_used_when_none(self, tmp_config_dir: Path) -> None:
         """When client_factory is None, default_client_factory is assigned."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         service = _TestService(config_store=store, client_factory=None)
 
         # The internal _client_factory should be callable
@@ -455,7 +411,7 @@ class TestDefaultClientFactory:
 
     def test_custom_client_factory_is_used(self, tmp_config_dir: Path) -> None:
         """When a custom client_factory is provided, it is stored and used."""
-        store = _setup_single_project(tmp_config_dir)
+        store = setup_single_project(tmp_config_dir)
         mock_factory = MagicMock()
         service = _TestService(config_store=store, client_factory=mock_factory)
 

@@ -12,29 +12,7 @@ from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
 from keboola_agent_cli.services.project_service import ProjectService
 
-
-def _make_mock_client(
-    project_name: str = "Test Project",
-    project_id: int = 1234,
-    token_description: str = "My Token",
-) -> MagicMock:
-    """Create a mock KeboolaClient that returns a successful verify_token response."""
-    mock_client = MagicMock()
-    mock_client.verify_token.return_value = TokenVerifyResponse(
-        token_id="12345",
-        token_description=token_description,
-        project_id=project_id,
-        project_name=project_name,
-        owner_name=project_name,
-    )
-    return mock_client
-
-
-def _make_failing_client(error: KeboolaApiError) -> MagicMock:
-    """Create a mock KeboolaClient whose verify_token raises the given error."""
-    mock_client = MagicMock()
-    mock_client.verify_token.side_effect = error
-    return mock_client
+from helpers import make_failing_client, make_mock_client
 
 
 class TestAddProject:
@@ -43,7 +21,7 @@ class TestAddProject:
     def test_add_project_success(self, tmp_config_dir: Path) -> None:
         """add_project verifies token, saves to config, returns project info."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        mock_client = _make_mock_client(project_name="Production", project_id=9999)
+        mock_client = make_mock_client(project_name="Production", project_id=9999)
 
         service = ProjectService(
             config_store=store,
@@ -73,7 +51,7 @@ class TestAddProject:
     def test_add_project_invalid_token(self, tmp_config_dir: Path) -> None:
         """add_project raises KeboolaApiError when token verification fails."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        mock_client = _make_failing_client(
+        mock_client = make_failing_client(
             KeboolaApiError(
                 message="Invalid token",
                 status_code=401,
@@ -102,7 +80,7 @@ class TestAddProject:
     def test_add_project_duplicate_alias(self, tmp_config_dir: Path) -> None:
         """add_project raises ConfigError when alias already exists."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
 
         service = ProjectService(
             config_store=store,
@@ -125,7 +103,7 @@ class TestAddProject:
     def test_add_project_network_error(self, tmp_config_dir: Path) -> None:
         """add_project raises KeboolaApiError on network timeout."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        mock_client = _make_failing_client(
+        mock_client = make_failing_client(
             KeboolaApiError(
                 message="Request timed out",
                 status_code=0,
@@ -156,7 +134,7 @@ class TestRemoveProject:
     def test_remove_project_success(self, tmp_config_dir: Path) -> None:
         """remove_project removes the project and returns confirmation."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
         service = ProjectService(
             config_store=store,
             client_factory=lambda url, token: mock_client,
@@ -188,7 +166,7 @@ class TestEditProject:
     def test_edit_url_only(self, tmp_config_dir: Path) -> None:
         """edit_project with only URL updates the stack URL without re-verifying."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
 
         service = ProjectService(
             config_store=store,
@@ -213,8 +191,8 @@ class TestEditProject:
     def test_edit_token_reverifies(self, tmp_config_dir: Path) -> None:
         """edit_project with new token re-verifies against the API."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        initial_client = _make_mock_client(project_name="Old Project", project_id=1000)
-        new_client = _make_mock_client(project_name="New Project", project_id=2000)
+        initial_client = make_mock_client(project_name="Old Project", project_id=1000)
+        new_client = make_mock_client(project_name="New Project", project_id=2000)
 
         call_count = [0]
 
@@ -246,7 +224,7 @@ class TestEditProject:
     def test_edit_no_changes_raises_error(self, tmp_config_dir: Path) -> None:
         """edit_project with no changes raises ConfigError."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
         service = ProjectService(
             config_store=store,
             client_factory=lambda url, token: mock_client,
@@ -284,7 +262,7 @@ class TestListProjects:
     def test_list_multiple_projects(self, tmp_config_dir: Path) -> None:
         """list_projects returns all projects with masked tokens."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
         service = ProjectService(
             config_store=store,
             client_factory=lambda url, token: mock_client,
@@ -320,7 +298,7 @@ class TestListProjects:
         """list_projects never returns the full token."""
         store = ConfigStore(config_dir=tmp_config_dir)
         full_token = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
         service = ProjectService(
             config_store=store,
             client_factory=lambda url, token: mock_client,
@@ -343,7 +321,7 @@ class TestGetStatus:
     def test_status_all_ok(self, tmp_config_dir: Path) -> None:
         """get_status returns OK status with response time for healthy projects."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        mock_client = _make_mock_client(project_name="Production", project_id=1234)
+        mock_client = make_mock_client(project_name="Production", project_id=1234)
         service = ProjectService(
             config_store=store,
             client_factory=lambda url, token: mock_client,
@@ -367,8 +345,8 @@ class TestGetStatus:
         """get_status handles mixed success/failure across projects."""
         store = ConfigStore(config_dir=tmp_config_dir)
 
-        ok_client = _make_mock_client(project_name="OK Project")
-        fail_client = _make_failing_client(
+        ok_client = make_mock_client(project_name="OK Project")
+        fail_client = make_failing_client(
             KeboolaApiError(
                 message="Token expired",
                 status_code=401,
@@ -424,7 +402,7 @@ class TestGetStatus:
     def test_status_specific_project(self, tmp_config_dir: Path) -> None:
         """get_status with specific alias only checks that project."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
         service = ProjectService(
             config_store=store,
             client_factory=lambda url, token: mock_client,
@@ -461,7 +439,7 @@ class TestGetStatus:
         """get_status always masks tokens in output."""
         store = ConfigStore(config_dir=tmp_config_dir)
         full_token = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
         service = ProjectService(
             config_store=store,
             client_factory=lambda url, token: mock_client,
@@ -1955,7 +1933,7 @@ class TestStatusParallel:
             ),
         )
 
-        mock_client = _make_mock_client(project_name="Generic", project_id=1)
+        mock_client = make_mock_client(project_name="Generic", project_id=1)
 
         service = ProjectService(
             config_store=store,
@@ -1985,7 +1963,7 @@ class TestStatusParallel:
             ),
         )
 
-        mock_client = _make_failing_client(
+        mock_client = make_failing_client(
             KeboolaApiError(
                 message="Token expired",
                 status_code=401,
@@ -2070,8 +2048,8 @@ class TestStatusParallel:
             ),
         )
 
-        ok_client = _make_mock_client(project_name="OK Project", project_id=1)
-        expired_client = _make_failing_client(
+        ok_client = make_mock_client(project_name="OK Project", project_id=1)
+        expired_client = make_failing_client(
             KeboolaApiError(
                 message="Token expired",
                 status_code=401,

@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -14,27 +16,14 @@ from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
 from keboola_agent_cli.services.lineage_service import LineageService
+from keboola_agent_cli.services.org_service import OrgService
 from keboola_agent_cli.services.project_service import ProjectService
+
+from helpers import make_mock_client
 
 TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
 
 runner = CliRunner()
-
-
-def _make_mock_client(
-    project_name: str = "Test Project",
-    project_id: int = 1234,
-) -> MagicMock:
-    """Create a mock client for the factory."""
-    mock_client = MagicMock()
-    mock_client.verify_token.return_value = TokenVerifyResponse(
-        token_id="12345",
-        token_description="My Token",
-        project_id=project_id,
-        project_name=project_name,
-        owner_name=project_name,
-    )
-    return mock_client
 
 
 class TestProjectAdd:
@@ -42,7 +31,7 @@ class TestProjectAdd:
 
     def test_project_add_success_json(self, tmp_path: Path) -> None:
         """project add with --json outputs structured success response."""
-        mock_client = _make_mock_client(project_name="Prod Project", project_id=5678)
+        mock_client = make_mock_client(project_name="Prod Project", project_id=5678)
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -84,7 +73,7 @@ class TestProjectAdd:
 
     def test_project_add_success_human(self, tmp_path: Path) -> None:
         """project add in human mode outputs success message."""
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -229,7 +218,7 @@ class TestProjectList:
         """project list --json returns project data with masked tokens."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
@@ -272,7 +261,7 @@ class TestProjectList:
         """project list in human mode outputs a Rich table."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        mock_client = _make_mock_client(project_name="My Production")
+        mock_client = make_mock_client(project_name="My Production")
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
@@ -332,7 +321,7 @@ class TestProjectRemove:
         """project remove --json returns structured success."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
@@ -411,7 +400,7 @@ class TestProjectStatus:
         """project status --json returns connectivity info."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        mock_client = _make_mock_client(project_name="Prod", project_id=123)
+        mock_client = make_mock_client(project_name="Prod", project_id=123)
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
@@ -451,7 +440,7 @@ class TestProjectStatus:
         """project status in human mode shows status table."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
@@ -490,7 +479,7 @@ class TestProjectEdit:
         """project edit --url with --json updates URL and returns result."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
@@ -540,7 +529,7 @@ class TestProjectEdit:
         """project edit with no changes returns exit code 5."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
@@ -2123,7 +2112,7 @@ class TestDoctor:
             ),
         )
 
-        mock_client = _make_mock_client(project_name="Prod", project_id=1234)
+        mock_client = make_mock_client(project_name="Prod", project_id=1234)
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
@@ -2734,8 +2723,8 @@ class TestProjectEditTokenReverify:
         """project edit --new-token triggers re-verification and returns updated info."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        mock_client = _make_mock_client(project_name="Original", project_id=100)
-        new_mock_client = _make_mock_client(project_name="Updated", project_id=200)
+        mock_client = make_mock_client(project_name="Original", project_id=100)
+        new_mock_client = make_mock_client(project_name="Updated", project_id=200)
 
         call_count = 0
 
@@ -2794,7 +2783,7 @@ class TestProjectAddTokenSecurity:
 
     def test_project_add_token_from_env(self, tmp_path: Path) -> None:
         """Token from KBC_TOKEN env var works for project add."""
-        mock_client = _make_mock_client(project_name="EnvProject", project_id=999)
+        mock_client = make_mock_client(project_name="EnvProject", project_id=999)
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -2837,7 +2826,7 @@ class TestProjectAddTokenSecurity:
         We mock _resolve_token to simulate the interactive prompt returning a token,
         since CliRunner does not have a real TTY and sys.stdin.isatty() is False.
         """
-        mock_client = _make_mock_client(project_name="PromptProject", project_id=888)
+        mock_client = make_mock_client(project_name="PromptProject", project_id=888)
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -2878,7 +2867,7 @@ class TestProjectAddTokenSecurity:
 
     def test_project_add_rejects_http_url(self, tmp_path: Path) -> None:
         """http:// URL rejected with error at project add time."""
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -2913,7 +2902,7 @@ class TestProjectAddTokenSecurity:
 
     def test_project_add_rejects_file_url(self, tmp_path: Path) -> None:
         """file:// URL rejected with error at project add time."""
-        mock_client = _make_mock_client()
+        mock_client = make_mock_client()
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -2948,7 +2937,7 @@ class TestProjectAddTokenSecurity:
 
     def test_project_add_accepts_https_url(self, tmp_path: Path) -> None:
         """https:// URL is accepted at project add time."""
-        mock_client = _make_mock_client(project_name="SecureProject", project_id=777)
+        mock_client = make_mock_client(project_name="SecureProject", project_id=777)
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -3977,3 +3966,557 @@ class TestVerboseFlag:
         mock_basic_config.assert_called_once()
         call_kwargs = mock_basic_config.call_args
         assert call_kwargs[1]["level"] == logging.WARNING
+
+
+# ---------------------------------------------------------------------------
+# Lineage command tests
+# ---------------------------------------------------------------------------
+
+
+SAMPLE_LINEAGE_RESULT = {
+    "edges": [
+        {
+            "source_project_alias": "prod",
+            "source_project_id": 258,
+            "source_project_name": "Production",
+            "source_bucket_id": "in.c-shared-data",
+            "source_bucket_name": "shared-data",
+            "sharing_type": "organization-project",
+            "target_project_alias": "dev",
+            "target_project_id": 7012,
+            "target_project_name": "Development",
+            "target_bucket_id": "in.c-linked",
+        },
+    ],
+    "shared_buckets": [
+        {
+            "project_alias": "prod",
+            "project_id": 258,
+            "project_name": "Production",
+            "bucket_id": "in.c-shared-data",
+            "bucket_name": "shared-data",
+            "sharing_type": "organization-project",
+            "shared_by": {},
+        },
+    ],
+    "linked_buckets": [],
+    "summary": {
+        "total_shared_buckets": 1,
+        "total_linked_buckets": 0,
+        "total_edges": 1,
+        "projects_queried": 2,
+        "projects_with_errors": 0,
+    },
+    "errors": [],
+}
+
+
+class TestLineageShow:
+    """Tests for `kbagent lineage` and `kbagent lineage show` commands."""
+
+    def test_lineage_show_json(self, tmp_path: Path) -> None:
+        """lineage show --json returns structured JSON with lineage data."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.LineageService") as MockLineageService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+
+            mock_service = MagicMock()
+            mock_service.get_lineage.return_value = SAMPLE_LINEAGE_RESULT
+            MockLineageService.return_value = mock_service
+
+            result = runner.invoke(app, ["--json", "lineage", "show"])
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert len(output["data"]["edges"]) == 1
+        assert output["data"]["edges"][0]["source_project_alias"] == "prod"
+        assert output["data"]["edges"][0]["target_project_alias"] == "dev"
+        assert output["data"]["summary"]["total_edges"] == 1
+        assert output["data"]["summary"]["projects_queried"] == 2
+
+    def test_lineage_show_human(self, tmp_path: Path) -> None:
+        """lineage show in human mode shows Rich table with data flow edges."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.LineageService") as MockLineageService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+
+            mock_service = MagicMock()
+            mock_service.get_lineage.return_value = SAMPLE_LINEAGE_RESULT
+            MockLineageService.return_value = mock_service
+
+            result = runner.invoke(app, ["lineage", "show"])
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        # Verify human output contains key information
+        assert "Data Flow" in result.output or "shared" in result.output
+        # Rich may truncate long strings in table columns, so check prefixes
+        assert "in.c-shared" in result.output
+        assert "organization" in result.output
+
+    def test_lineage_default_subcommand(self, tmp_path: Path) -> None:
+        """kbagent lineage (without 'show') invokes the show subcommand."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.LineageService") as MockLineageService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+
+            mock_service = MagicMock()
+            mock_service.get_lineage.return_value = SAMPLE_LINEAGE_RESULT
+            MockLineageService.return_value = mock_service
+
+            result = runner.invoke(app, ["--json", "lineage"])
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert "edges" in output["data"]
+        assert len(output["data"]["edges"]) == 1
+
+    def test_lineage_config_error_exit_code_5(self, tmp_path: Path) -> None:
+        """lineage with nonexistent project alias returns exit code 5."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(config_dir)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.LineageService") as MockLineageService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+
+            mock_service = MagicMock()
+            mock_service.get_lineage.side_effect = ConfigError("Project 'nonexistent' not found")
+            MockLineageService.return_value = mock_service
+
+            result = runner.invoke(
+                app,
+                ["--json", "lineage", "show", "--project", "nonexistent"],
+            )
+
+        assert result.exit_code == 5
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["error"]["code"] == "CONFIG_ERROR"
+
+    def test_lineage_show_with_warnings(self, tmp_path: Path) -> None:
+        """lineage show in human mode displays per-project warnings."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        result_with_errors = {
+            "edges": [],
+            "shared_buckets": [],
+            "linked_buckets": [],
+            "summary": {
+                "total_shared_buckets": 0,
+                "total_linked_buckets": 0,
+                "total_edges": 0,
+                "projects_queried": 2,
+                "projects_with_errors": 1,
+            },
+            "errors": [
+                {
+                    "project_alias": "bad",
+                    "error_code": "INVALID_TOKEN",
+                    "message": "Token expired",
+                },
+            ],
+        }
+
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.LineageService") as MockLineageService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+
+            mock_service = MagicMock()
+            mock_service.get_lineage.return_value = result_with_errors
+            MockLineageService.return_value = mock_service
+
+            result = runner.invoke(app, ["lineage", "show"])
+
+        assert result.exit_code == 0
+        assert "bad" in result.output
+        assert "Token expired" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Org setup command tests
+# ---------------------------------------------------------------------------
+
+
+SAMPLE_ORG_SETUP_RESULT = {
+    "organization_id": 42,
+    "stack_url": "https://connection.keboola.com",
+    "projects_found": 2,
+    "projects_added": [
+        {
+            "project_id": 100,
+            "project_name": "New Project",
+            "alias": "new-project",
+            "token": "100-***",
+            "action": "added",
+        },
+    ],
+    "projects_skipped": [
+        {
+            "project_id": 200,
+            "project_name": "Existing Project",
+            "reason": "Already registered in config",
+        },
+    ],
+    "projects_failed": [],
+    "dry_run": False,
+}
+
+SAMPLE_ORG_DRY_RUN_RESULT = {
+    "organization_id": 42,
+    "stack_url": "https://connection.keboola.com",
+    "projects_found": 2,
+    "projects_added": [
+        {
+            "project_id": 100,
+            "project_name": "New Project",
+            "alias": "new-project",
+            "action": "would_add",
+        },
+    ],
+    "projects_skipped": [
+        {
+            "project_id": 200,
+            "project_name": "Existing Project",
+            "reason": "Already registered in config",
+        },
+    ],
+    "projects_failed": [],
+    "dry_run": True,
+}
+
+
+class TestOrgSetup:
+    """Tests for `kbagent org setup` command."""
+
+    def test_org_setup_dry_run(self, tmp_path: Path) -> None:
+        """org setup --dry-run returns structured preview without changes."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(config_dir)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.OrgService") as MockOrgService,
+            patch(
+                "keboola_agent_cli.commands.org._resolve_manage_token",
+                return_value="manage-token-abcdef",
+            ),
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+
+            mock_service = MagicMock()
+            mock_service.setup_organization.return_value = SAMPLE_ORG_DRY_RUN_RESULT
+            MockOrgService.return_value = mock_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "org",
+                    "setup",
+                    "--org-id",
+                    "42",
+                    "--url",
+                    "https://connection.keboola.com",
+                    "--dry-run",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["dry_run"] is True
+        assert len(output["data"]["projects_added"]) == 1
+        assert output["data"]["projects_added"][0]["action"] == "would_add"
+
+    def test_org_setup_with_env_token(self, tmp_path: Path) -> None:
+        """org setup uses KBC_MANAGE_API_TOKEN env var for authentication."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(config_dir)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.OrgService") as MockOrgService,
+            patch.dict(os.environ, {"KBC_MANAGE_API_TOKEN": "manage-test-token"}),
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+
+            mock_service = MagicMock()
+            mock_service.setup_organization.return_value = SAMPLE_ORG_DRY_RUN_RESULT
+            MockOrgService.return_value = mock_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "org",
+                    "setup",
+                    "--org-id",
+                    "42",
+                    "--url",
+                    "https://connection.keboola.com",
+                    "--dry-run",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+
+    def test_org_setup_confirmation_declined(self, tmp_path: Path) -> None:
+        """org setup exits cleanly when user declines confirmation."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(config_dir)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.OrgService") as MockOrgService,
+            patch(
+                "keboola_agent_cli.commands.org._resolve_manage_token",
+                return_value="manage-token-abcdef",
+            ),
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+
+            mock_service = MagicMock()
+            # The preview dry-run call returns projects to add
+            mock_service.setup_organization.return_value = SAMPLE_ORG_DRY_RUN_RESULT
+            MockOrgService.return_value = mock_service
+
+            # Simulate user typing "n" to decline confirmation
+            result = runner.invoke(
+                app,
+                [
+                    "org",
+                    "setup",
+                    "--org-id",
+                    "42",
+                    "--url",
+                    "https://connection.keboola.com",
+                ],
+                input="n\n",
+            )
+
+        assert result.exit_code == 0
+        assert "Aborted" in result.output
+
+    def test_org_setup_api_error(self, tmp_path: Path) -> None:
+        """org setup with API error returns appropriate exit code."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(config_dir)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.OrgService") as MockOrgService,
+            patch(
+                "keboola_agent_cli.commands.org._resolve_manage_token",
+                return_value="manage-token-abcdef",
+            ),
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+
+            mock_service = MagicMock()
+            mock_service.setup_organization.side_effect = KeboolaApiError(
+                message="Invalid manage token",
+                status_code=401,
+                error_code="INVALID_TOKEN",
+                retryable=False,
+            )
+            MockOrgService.return_value = mock_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "org",
+                    "setup",
+                    "--org-id",
+                    "42",
+                    "--url",
+                    "https://connection.keboola.com",
+                    "--dry-run",
+                ],
+            )
+
+        assert result.exit_code == 3
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["error"]["code"] == "INVALID_TOKEN"
+
+    def test_org_setup_json_with_yes_flag(self, tmp_path: Path) -> None:
+        """org setup --json --yes skips confirmation and executes directly."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(config_dir)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.OrgService") as MockOrgService,
+            patch(
+                "keboola_agent_cli.commands.org._resolve_manage_token",
+                return_value="manage-token-abcdef",
+            ),
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+
+            mock_service = MagicMock()
+            mock_service.setup_organization.return_value = SAMPLE_ORG_SETUP_RESULT
+            MockOrgService.return_value = mock_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "org",
+                    "setup",
+                    "--org-id",
+                    "42",
+                    "--url",
+                    "https://connection.keboola.com",
+                    "--yes",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["organization_id"] == 42
+        assert len(output["data"]["projects_added"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# _resolve_manage_token tests
+# ---------------------------------------------------------------------------
+
+
+class TestResolveManageToken:
+    """Tests for _resolve_manage_token() in org.py."""
+
+    def test_token_from_env(self) -> None:
+        """_resolve_manage_token returns token from KBC_MANAGE_API_TOKEN env var."""
+        from keboola_agent_cli.commands.org import _resolve_manage_token
+
+        with patch.dict(os.environ, {"KBC_MANAGE_API_TOKEN": "env-manage-token"}):
+            token = _resolve_manage_token()
+
+        assert token == "env-manage-token"
+
+    def test_token_from_prompt(self) -> None:
+        """_resolve_manage_token prompts interactively when env var is not set."""
+        import sys
+
+        from keboola_agent_cli.commands.org import _resolve_manage_token
+
+        with (
+            patch.dict(os.environ, {}, clear=False),
+            patch("keboola_agent_cli.commands.org.typer.prompt", return_value="prompted-token"),
+            patch.object(sys, "stdin") as mock_stdin,
+        ):
+            # Ensure KBC_MANAGE_API_TOKEN is not set
+            os.environ.pop("KBC_MANAGE_API_TOKEN", None)
+            mock_stdin.isatty.return_value = True
+
+            token = _resolve_manage_token()
+
+        assert token == "prompted-token"
+
+    def test_non_tty_error(self) -> None:
+        """_resolve_manage_token raises Exit when not TTY and no env var."""
+        import sys
+
+        import typer
+
+        from keboola_agent_cli.commands.org import _resolve_manage_token
+
+        with (
+            patch.dict(os.environ, {}, clear=False),
+            patch.object(sys, "stdin") as mock_stdin,
+            pytest.raises(typer.Exit) as exc_info,
+        ):
+            # Ensure KBC_MANAGE_API_TOKEN is not set
+            os.environ.pop("KBC_MANAGE_API_TOKEN", None)
+            mock_stdin.isatty.return_value = False
+
+            _resolve_manage_token()
+
+        assert exc_info.value.exit_code == 2

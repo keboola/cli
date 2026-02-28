@@ -29,7 +29,7 @@ packages = ["src/keboola_agent_cli"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 markers = [
     "integration: marks tests as integration tests requiring real API credentials (deselect with '-m \"not integration\"')",
 ]
