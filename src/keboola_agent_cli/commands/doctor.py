@@ -17,10 +17,58 @@ def doctor_command(
         "--fix",
         help="Auto-fix issues: install MCP server binary for faster startup.",
     ),
+    stop_daemon: bool = typer.Option(
+        False,
+        "--stop-daemon",
+        help="Stop the persistent MCP server daemon.",
+    ),
+    daemon_status: bool = typer.Option(
+        False,
+        "--daemon-status",
+        help="Show status of the persistent MCP server daemon.",
+    ),
 ) -> None:
     """Run health checks on CLI configuration and project connectivity."""
     formatter = get_formatter(ctx)
     doctor_service = get_service(ctx, "doctor_service")
+
+    # Handle daemon control flags (mutually exclusive with normal checks)
+    if stop_daemon:
+        console = Console()
+        try:
+            from ..services.mcp_transport import get_server_manager
+            manager = get_server_manager()
+            status = manager.get_status()
+            if status["running"]:
+                manager.stop()
+                console.print(f"[green]Stopped[/green] MCP daemon (pid={status['pid']})")
+            else:
+                console.print("[dim]MCP daemon is not running[/dim]")
+        except Exception as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(1)
+        return
+
+    if daemon_status:
+        console = Console()
+        try:
+            from ..services.mcp_transport import get_server_manager
+            manager = get_server_manager()
+            status = manager.get_status()
+            if status["running"]:
+                idle = status.get("idle_seconds")
+                idle_str = f", idle {idle}s / 1800s" if idle is not None else ""
+                console.print(
+                    f"[green]Running[/green] MCP daemon "
+                    f"pid={status['pid']} port={status['port']}"
+                    f"{idle_str}"
+                )
+            else:
+                console.print("[dim]MCP daemon is not running[/dim]")
+        except Exception as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(1)
+        return
 
     # If --fix, run warmup before checks
     if fix:

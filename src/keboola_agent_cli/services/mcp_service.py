@@ -434,8 +434,19 @@ async def _connect_validate_and_call(
 
 
 def _get_transport_mode() -> str:
-    """Get configured MCP transport mode ('http' or 'stdio')."""
-    return os.environ.get(ENV_MCP_TRANSPORT, DEFAULT_MCP_TRANSPORT)
+    """Get configured MCP transport mode ('http' or 'stdio').
+
+    When not explicitly set, auto-selects 'http' (daemon mode) if a local
+    keboola_mcp_server binary is available — avoids the ~2s session-init
+    overhead on every call. Falls back to 'stdio' otherwise.
+    """
+    explicit = os.environ.get(ENV_MCP_TRANSPORT)
+    if explicit:
+        return explicit
+    # Auto-detect: use daemon mode when local binary is installed
+    if shutil.which("keboola_mcp_server"):
+        return "http"
+    return DEFAULT_MCP_TRANSPORT
 
 
 def _build_http_headers(
