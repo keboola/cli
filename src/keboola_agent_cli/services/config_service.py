@@ -71,10 +71,6 @@ class ConfigService(BaseService):
                 # Use active branch or find the default branch ID
                 branch_id = project.active_branch_id
                 if not branch_id:
-                    default_branch = next(
-                        (c for c in components if True),  # just need any component to get branch
-                        None,
-                    )
                     # Fetch default branch ID from dev-branches endpoint
                     branches = client.list_dev_branches()
                     default = next((b for b in branches if b.get("isDefault")), None)
