@@ -67,6 +67,14 @@ This prints all commands, flags, workflows, and tips. Read it fully before proce
 | Load tables into a workspace | `kbagent workspace load --project PROJECT --workspace-id WORKSPACE-ID --tables TABLES` |
 | Execute SQL query in a workspace via Query Service | `kbagent workspace query --project PROJECT --workspace-id WORKSPACE-ID` |
 | Create a workspace from a transformation config | `kbagent workspace from-transformation --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Initialize a sync working directory for a Keboola project | `kbagent sync init --project PROJECT` |
+| Download all configurations from a Keboola project to local files | `kbagent sync pull --project PROJECT` |
+| Show which local configurations have been modified, added, or deleted | `kbagent sync status` |
+| Show detailed diff between local and remote configurations | `kbagent sync diff --project PROJECT` |
+| Push local configuration changes to a Keboola project | `kbagent sync push --project PROJECT` |
+| Link the current git branch to a Keboola development branch | `kbagent sync branch-link --project PROJECT` |
+| Remove the branch mapping for the current git branch | `kbagent sync branch-unlink` |
+| Show the branch mapping status for the current git branch | `kbagent sync branch-status` |
 <!-- END AUTO-GENERATED COMMANDS -->
 
 ## Response format

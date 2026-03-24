@@ -337,6 +337,60 @@ Then explore:
     Example:
       kbagent --json workspace from-transformation --project prod --component-id keboola.snowflake-transformation --config-id 22777254
 
+### Project Sync (GitOps Workflow)
+
+  kbagent sync init --project ALIAS [--directory DIR] [--git-branching]
+    Initialize a sync working directory for a Keboola project.
+    Creates .keboola/manifest.json with project metadata and naming conventions.
+    Use --git-branching to enable git-to-Keboola branch mapping.
+    Example:
+      mkdir my-project && cd my-project
+      kbagent --json sync init --project prod
+      kbagent --json sync init --project prod --git-branching
+
+  kbagent sync pull --project ALIAS [--directory DIR] [--force]
+    Download all configurations from Keboola to local files.
+    Creates a dev-friendly directory structure with _config.yml files.
+    SQL transformations are extracted into transform.sql with block markers.
+    Python code is extracted into transform.py/code.py + pyproject.toml.
+    Example:
+      kbagent --json sync pull --project prod
+
+  kbagent sync status [--directory DIR]
+    Show which local configs have been modified, added, or deleted since last pull.
+    Uses SHA256 hash comparison for reliable change detection.
+    Example:
+      kbagent --json sync status
+
+  kbagent sync diff --project ALIAS [--directory DIR]
+    Show detailed diff between local files and remote Keboola state.
+    Compares config content (ignoring encrypted value nonces).
+    Example:
+      kbagent --json sync diff --project prod
+
+  kbagent sync push --project ALIAS [--directory DIR] [--dry-run] [--force]
+    Push local changes to Keboola. Creates new configs, updates modified,
+    deletes removed (with --force). New configs get IDs from API automatically.
+    --dry-run shows what would change without applying.
+    Example:
+      kbagent --json sync push --project prod --dry-run
+      kbagent --json sync push --project prod
+
+  kbagent sync branch-link --project ALIAS [--branch-id ID] [--branch-name NAME]
+    Link current git branch to a Keboola development branch.
+    Auto-creates the Keboola branch if it doesn't exist with the same name.
+    Requires --git-branching mode enabled via sync init.
+    Example:
+      git checkout -b feature/new-etl
+      kbagent --json sync branch-link --project prod
+
+  kbagent sync branch-unlink [--directory DIR]
+    Remove the branch mapping for the current git branch.
+    Does NOT delete the Keboola branch itself.
+
+  kbagent sync branch-status [--directory DIR]
+    Show the current git branch mapping status.
+
 ### Utility Commands
 
   kbagent init [--from-global]
@@ -496,6 +550,29 @@ Then explore:
     b) Entire organization (you have a Manage API token):
        KBC_MANAGE_API_TOKEN=xxx kbagent --json org setup --org-id 123 --url https://connection.keboola.com --yes
        This creates Storage API tokens for ALL projects in the org and registers them automatically.
+
+17. Sync workflow -- manage configs as local files with GitOps:
+     # Step 1: Initialize and pull
+     mkdir my-project && cd my-project
+     kbagent --json sync init --project prod
+     kbagent --json sync pull --project prod
+
+     # Step 2: Edit configs locally
+     # SQL is in transform.sql, Python in code.py, config in _config.yml
+     # Edit with any IDE, get git diffs, code review, etc.
+
+     # Step 3: Review and push
+     kbagent --json sync status                      # local changes
+     kbagent --json sync diff --project prod         # vs remote
+     kbagent --json sync push --project prod --dry-run  # preview
+     kbagent --json sync push --project prod         # apply
+
+     # Git-branching mode (maps git branches to Keboola dev branches):
+     kbagent --json sync init --project prod --git-branching
+     git checkout -b feature/new-etl
+     kbagent --json sync branch-link --project prod  # creates Keboola dev branch
+     kbagent --json sync pull --project prod
+     # ... edit, push, then merge via PR + Keboola UI
 
 ## Exit Codes
 
