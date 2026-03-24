@@ -727,9 +727,9 @@ class TestConfigList:
         # Should show project-grouped table
         assert "prod" in result.output
         assert "Configurations" in result.output
-        # Rich may truncate long names in narrow terminals, check for prefix
-        assert "Production" in result.output
-        assert "keboola.ex" in result.output
+        # Rich may truncate long names in narrow terminals
+        assert "Product" in result.output
+        assert "keboola" in result.output
 
     def test_config_list_project_filter(self, tmp_path: Path) -> None:
         """config list --project X returns configs only from that project."""
@@ -1065,8 +1065,8 @@ class TestConfigList:
         assert result.exit_code == 0
         # Should show configs from good project
         assert "Configurations" in result.output
-        # Rich may truncate long names in narrow terminals, check for prefix
-        assert "Production" in result.output
+        # Rich may truncate long names in narrow terminals
+        assert "Product" in result.output
         # Should show warning about bad project
         assert "bad" in result.output
         assert "Token expired" in result.output

@@ -163,6 +163,7 @@ def format_configs_table(console: Console, data: dict[str, Any]) -> None:
         table.add_column("Type", style="dim")
         table.add_column("Config ID", justify="right")
         table.add_column("Config Name")
+        table.add_column("Folder", style="dim")
         table.add_column("Last Modified", style="dim")
         table.add_column("Modified By", style="dim")
 
@@ -177,6 +178,7 @@ def format_configs_table(console: Console, data: dict[str, Any]) -> None:
                 cfg["component_type"],
                 cfg["config_id"],
                 cfg["config_name"],
+                cfg.get("folder", ""),
                 last_mod,
                 cfg.get("last_modified_by", ""),
             )

@@ -233,6 +233,39 @@ class KeboolaClient(BaseHttpClient):
         )
         return response.json()
 
+    def list_config_folder_metadata(self, branch_id: int | None = None) -> dict[str, str]:
+        """Fetch folder names for all configurations via metadata search.
+
+        Uses the search/component-configurations endpoint to find configs
+        with ``KBC.configuration.folderName`` metadata.
+
+        Args:
+            branch_id: If set, search in a specific dev branch.
+
+        Returns:
+            Dict mapping ``"{component_id}/{config_id}"`` to folder name.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        resp = self._request(
+            "GET",
+            f"{prefix}/search/component-configurations",
+            params={
+                "metadataKeys[]": "KBC.configuration.folderName",
+                "include": "filteredMetadata",
+            },
+        )
+        folder_map: dict[str, str] = {}
+        for item in resp.json():
+            comp_id = item.get("idComponent", "")
+            config_id = str(item.get("configurationId", ""))
+            meta = next(
+                (m for m in item.get("metadata", []) if m["key"] == "KBC.configuration.folderName"),
+                None,
+            )
+            if meta:
+                folder_map[f"{comp_id}/{config_id}"] = meta["value"]
+        return folder_map
+
     def create_config(
         self,
         component_id: str,

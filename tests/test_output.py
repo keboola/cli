@@ -891,9 +891,9 @@ class TestFormatConfigsTable:
 
         assert "Configurations" in output
         assert "prod" in output
-        # Rich may word-wrap long names across lines in narrow console
-        assert "Production" in output
-        assert "Write to" in output
+        # Rich may truncate long names in narrow console (7 columns)
+        assert "Product" in output
+        assert "Write" in output
 
     def test_configs_table_empty(self) -> None:
         """format_configs_table shows helpful message when no configs found."""
