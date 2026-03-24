@@ -565,6 +565,17 @@ Then explore:
      kbagent --json workspace load --project prod --workspace-id WS_ID --tables in.c-bucket.my-table
      kbagent --json workspace query --project prod --workspace-id WS_ID --sql "SELECT * FROM \"my-table\" LIMIT 10"
 
+     IMPORTANT -- Snowflake quoting rules for workspace queries:
+     Snowflake converts unquoted identifiers to UPPERCASE. If a database,
+     schema, or table name contains lowercase letters, dots, or hyphens,
+     you MUST double-quote it. This applies to ALL identifiers:
+       WRONG: SELECT * FROM sap_9.my_schema.my_table
+              (Snowflake reads this as SAP_9.MY_SCHEMA.MY_TABLE -- not found!)
+       RIGHT: SELECT * FROM "sap_9"."my_schema"."my_table"
+     Best practice: ALWAYS double-quote database, schema, and table names
+     in workspace queries, even if they look like they don't need it.
+     Keboola workspace database/schema names are often lowercase.
+
 16. Setting up projects -- two approaches:
 
     a) Single project (you have a Storage API token):
@@ -596,6 +607,14 @@ Then explore:
      kbagent --json sync branch-link --project prod  # creates Keboola dev branch
      kbagent --json sync pull --project prod
      # ... edit, push, then merge via PR + Keboola UI
+
+18. Claude Code plugin -- teach Claude how to use kbagent automatically:
+     Install the kbagent skill as a Claude Code plugin:
+       claude install-plugin https://github.com/padak/keboola_agent_cli
+     After installation, Claude Code will automatically know when and how
+     to use kbagent commands (the skill triggers on Keboola-related tasks).
+     The plugin provides a decision table mapping goals to commands and
+     references for common workflows (workspace debugging, branch lifecycle).
 
 ## Exit Codes
 
