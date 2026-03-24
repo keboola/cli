@@ -516,6 +516,55 @@ class KeboolaClient(BaseHttpClient):
         response = self._request("GET", "/v2/storage/buckets", params=params)
         return response.json()
 
+    def get_bucket_detail(
+        self,
+        bucket_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Get detailed information about a storage bucket.
+
+        Returns full bucket metadata including sharing/linked info
+        (sourceBucket, sourceTable with project references).
+
+        Args:
+            bucket_id: Bucket ID (e.g. 'in.c-db').
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Bucket detail dict from the API.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_id = quote(bucket_id, safe="")
+        response = self._request("GET", f"{prefix}/buckets/{safe_id}")
+        return response.json()
+
+    def list_tables(
+        self,
+        bucket_id: str | None = None,
+        branch_id: int | None = None,
+        include: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List storage tables, optionally filtered by bucket.
+
+        Args:
+            bucket_id: If set, list tables only from this bucket.
+            branch_id: If set, target a specific dev branch.
+            include: Optional include parameter (e.g. 'columns').
+
+        Returns:
+            List of table dicts from the API.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        params: dict[str, str] = {}
+        if include:
+            params["include"] = include
+        if bucket_id:
+            safe_id = quote(bucket_id, safe="")
+            response = self._request("GET", f"{prefix}/buckets/{safe_id}/tables", params=params)
+        else:
+            response = self._request("GET", f"{prefix}/tables", params=params)
+        return response.json()
+
     def list_jobs(
         self,
         component_id: str | None = None,

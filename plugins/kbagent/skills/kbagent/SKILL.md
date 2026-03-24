@@ -69,6 +69,9 @@ This prints all commands, flags, workflows, and tips. Read it fully before proce
 | Load tables into a workspace | `kbagent workspace load --project PROJECT --workspace-id WORKSPACE-ID --tables TABLES` |
 | Execute SQL query in a workspace via Query Service | `kbagent workspace query --project PROJECT --workspace-id WORKSPACE-ID` |
 | Create a workspace from a transformation config | `kbagent workspace from-transformation --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| List storage buckets with sharing/linked bucket information | `kbagent storage buckets` |
+| Show detailed bucket info including Snowflake direct access paths | `kbagent storage bucket-detail --project PROJECT --bucket-id BUCKET-ID` |
+| List storage tables from a project | `kbagent storage tables --project PROJECT` |
 | Initialize a sync working directory for a Keboola project | `kbagent sync init --project PROJECT` |
 | Download all configurations from a Keboola project to local files | `kbagent sync pull --project PROJECT` |
 | Show which local configurations have been modified, added, or deleted | `kbagent sync status` |

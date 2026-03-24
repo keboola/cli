@@ -17,6 +17,7 @@ from .commands.llm import llm_app
 from .commands.org import org_app
 from .commands.project import project_app
 from .commands.repl import repl_command
+from .commands.storage import storage_app
 from .commands.sync import sync_app
 from .commands.tool import tool_app
 from .commands.version import version_command
@@ -33,6 +34,7 @@ from .services.lineage_service import LineageService
 from .services.mcp_service import McpService
 from .services.org_service import OrgService
 from .services.project_service import ProjectService
+from .services.storage_service import StorageService
 from .services.sync_service import SyncService
 from .services.version_service import VersionService
 from .services.workspace_service import WorkspaceService
@@ -53,6 +55,7 @@ app.add_typer(branch_app, name="branch")
 app.add_typer(explorer_app, name="explorer")
 app.add_typer(llm_app, name="llm")
 app.add_typer(workspace_app, name="workspace")
+app.add_typer(storage_app, name="storage")
 app.add_typer(sync_app, name="sync")
 app.command("context")(context_command)
 app.command("doctor")(doctor_command)
@@ -128,6 +131,7 @@ def main(
     org_service = OrgService(config_store=config_store)
     mcp_service = McpService(config_store=config_store)
     branch_service = BranchService(config_store=config_store)
+    storage_service = StorageService(config_store=config_store)
     sync_service = SyncService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
     kbc_service = KbcService(config_store=config_store)
@@ -153,6 +157,7 @@ def main(
     ctx.obj["org_service"] = org_service
     ctx.obj["mcp_service"] = mcp_service
     ctx.obj["branch_service"] = branch_service
+    ctx.obj["storage_service"] = storage_service
     ctx.obj["sync_service"] = sync_service
     ctx.obj["workspace_service"] = workspace_service
     ctx.obj["kbc_service"] = kbc_service

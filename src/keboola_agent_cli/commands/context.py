@@ -142,6 +142,32 @@ Then explore:
     Example:
       kbagent --json job detail --project prod --job-id 148512262
 
+### Storage (Buckets and Tables)
+
+  kbagent storage buckets [--project NAME]
+    List storage buckets with sharing/linked bucket information.
+    Shows which buckets are linked from other projects, including the
+    source project ID and name. This info is NOT available via MCP tools.
+    Examples:
+      kbagent --json storage buckets
+      kbagent --json storage buckets --project prod
+
+  kbagent storage bucket-detail --project NAME --bucket-id BUCKET_ID
+    Show detailed bucket info including Snowflake direct access paths.
+    For linked/shared buckets, resolves the correct Snowflake database
+    and schema from the source project. Each table includes a ready-to-use
+    fully-qualified Snowflake path with proper quoting.
+    CRITICAL for direct Snowflake access: linked buckets live in a different
+    database than the current project (e.g. sapi_1507 instead of sapi_226).
+    Example:
+      kbagent --json storage bucket-detail --project slevomat --bucket-id in.c-db
+
+  kbagent storage tables --project NAME [--bucket-id BUCKET_ID]
+    List storage tables, optionally filtered by bucket.
+    Example:
+      kbagent --json storage tables --project prod
+      kbagent --json storage tables --project prod --bucket-id in.c-main
+
 ### Data Lineage
 
   kbagent lineage [--project NAME]
