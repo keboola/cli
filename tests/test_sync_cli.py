@@ -1030,9 +1030,7 @@ class TestSyncBranchLinkCli:
         )
 
         mock_sync = _make_sync_service_mock()
-        mock_sync.branch_link.side_effect = ConfigError(
-            "Git-branching mode is not enabled."
-        )
+        mock_sync.branch_link.side_effect = ConfigError("Git-branching mode is not enabled.")
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,

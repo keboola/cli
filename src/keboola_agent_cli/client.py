@@ -170,9 +170,7 @@ class KeboolaClient(BaseHttpClient):
         response = self._request("GET", "/v2/storage/components", params=params)
         return response.json()
 
-    def list_components_with_configs(
-        self, branch_id: int | None = None
-    ) -> list[dict[str, Any]]:
+    def list_components_with_configs(self, branch_id: int | None = None) -> list[dict[str, Any]]:
         """List all components with full configuration bodies and rows.
 
         Makes a single API call to fetch everything needed for sync pull.

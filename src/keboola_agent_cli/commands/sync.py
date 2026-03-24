@@ -67,8 +67,7 @@ def sync_init(
         formatter.output(result)
     else:
         formatter.success(
-            f"Initialized sync for project '{result['project_alias']}' "
-            f"(ID: {result['project_id']})"
+            f"Initialized sync for project '{result['project_alias']}' (ID: {result['project_id']})"
         )
         formatter.console.print(f"  API host: {result['api_host']}")
         if result["git_branching"]:
@@ -174,8 +173,7 @@ def sync_status(
 
         if not modified and not added and not deleted:
             formatter.console.print(
-                f"[green]No changes detected.[/green] "
-                f"({unchanged} configurations tracked)"
+                f"[green]No changes detected.[/green] ({unchanged} configurations tracked)"
             )
             return
 
@@ -244,8 +242,7 @@ def sync_diff(
 
         if not changes:
             formatter.console.print(
-                "[green]No differences found.[/green] "
-                "Local and remote are in sync."
+                "[green]No differences found.[/green] Local and remote are in sync."
             )
             return
 
@@ -360,8 +357,12 @@ def sync_branch_link(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     directory: Path = typer.Option(Path("."), "--directory", "-d", help="Project root directory"),
-    branch_id: int | None = typer.Option(None, "--branch-id", help="Link to existing Keboola branch by ID"),
-    branch_name: str | None = typer.Option(None, "--branch-name", help="Create/find branch with this name"),
+    branch_id: int | None = typer.Option(
+        None, "--branch-id", help="Link to existing Keboola branch by ID"
+    ),
+    branch_name: str | None = typer.Option(
+        None, "--branch-name", help="Create/find branch with this name"
+    ),
 ) -> None:
     """Link the current git branch to a Keboola development branch.
 
@@ -434,8 +435,7 @@ def sync_branch_unlink(
             formatter.console.print(f"Branch '{result['git_branch']}' is not linked.")
         else:
             formatter.success(
-                f"Unlinked {result['git_branch']} from "
-                f"Keboola branch {result['keboola_branch_id']}"
+                f"Unlinked {result['git_branch']} from Keboola branch {result['keboola_branch_id']}"
             )
 
 
@@ -466,9 +466,7 @@ def sync_branch_status(
         if result.get("linked"):
             if result.get("is_production"):
                 formatter.console.print(
-                    f"Branch: {git_branch}\n"
-                    f"Keboola: production\n"
-                    f"Status: [green]Linked[/green]"
+                    f"Branch: {git_branch}\nKeboola: production\nStatus: [green]Linked[/green]"
                 )
             else:
                 formatter.console.print(

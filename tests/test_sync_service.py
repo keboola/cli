@@ -303,9 +303,7 @@ class TestInitSync:
                 git_branching=True,
             )
 
-    def test_init_sync_strips_https_prefix(
-        self, tmp_config_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_init_sync_strips_https_prefix(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """init_sync strips https:// prefix from stack_url for api_host."""
         mock_client = _make_sync_mock_client(
             verify_token_response=SAMPLE_VERIFY_TOKEN,
@@ -415,9 +413,7 @@ class TestPull:
         assert len(config_files) == 3  # 2 configs + 1 row _config.yml
 
         # Find the row config file (under rows/ subdirectory relative to project_root)
-        row_config_files = [
-            f for f in config_files if "/rows/" in str(f.relative_to(project_root))
-        ]
+        row_config_files = [f for f in config_files if "/rows/" in str(f.relative_to(project_root))]
         assert len(row_config_files) == 1
 
         row_data = yaml.safe_load(row_config_files[0].read_text(encoding="utf-8"))
@@ -560,9 +556,7 @@ class TestStatus:
         # Delete one config file
         config_files = list(project_root.rglob(CONFIG_FILENAME))
         # Find a config file that is NOT under rows/
-        top_level_configs = [
-            f for f in config_files if "rows" not in str(f)
-        ]
+        top_level_configs = [f for f in config_files if "rows" not in str(f)]
         assert len(top_level_configs) >= 1
 
         # Delete the first top-level config
@@ -597,9 +591,7 @@ class TestStatus:
 
         # Modify a config file by changing the _keboola metadata
         config_files = list(project_root.rglob(CONFIG_FILENAME))
-        top_level_configs = [
-            f for f in config_files if "rows" not in str(f)
-        ]
+        top_level_configs = [f for f in config_files if "rows" not in str(f)]
         assert len(top_level_configs) >= 1
 
         modified_file = top_level_configs[0]
@@ -811,9 +803,7 @@ class TestPush:
             client_factory=lambda url, token: dry_client,
         )
 
-        result = dry_svc.push(
-            alias="prod", project_root=project_root, dry_run=True
-        )
+        result = dry_svc.push(alias="prod", project_root=project_root, dry_run=True)
 
         assert result["status"] == "dry_run"
         assert "changes" in result
@@ -904,9 +894,7 @@ class TestBranchLink:
             )
         return store
 
-    def test_branch_link_creates_branch(
-        self, tmp_config_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_branch_link_creates_branch(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_link creates a Keboola branch when none exists with the git branch name."""
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -950,9 +938,7 @@ class TestBranchLink:
         assert entry is not None
         assert entry.keboola_id == "99999"
 
-    def test_branch_link_finds_existing_branch(
-        self, tmp_config_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_branch_link_finds_existing_branch(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_link links to an existing Keboola branch that matches the name."""
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -983,9 +969,7 @@ class TestBranchLink:
         # Should not have created a new branch
         link_client.create_dev_branch.assert_not_called()
 
-    def test_branch_link_default_branch_error(
-        self, tmp_config_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_branch_link_default_branch_error(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_link raises ConfigError when on the default (main) branch."""
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -1033,9 +1017,7 @@ class TestBranchLink:
                 project_root=project_root,
             )
 
-    def test_branch_link_already_linked(
-        self, tmp_config_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_branch_link_already_linked(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_link returns already_linked when mapping already exists."""
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -1065,9 +1047,7 @@ class TestBranchLink:
         assert result["git_branch"] == "feature-x"
         assert result["keboola_branch_id"] == "99999"
 
-    def test_branch_link_with_branch_id(
-        self, tmp_config_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_branch_link_with_branch_id(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_link with --branch-id links to a specific existing branch."""
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -1187,9 +1167,7 @@ class TestBranchUnlink:
 
         return store
 
-    def test_branch_unlink_success(
-        self, tmp_config_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_branch_unlink_success(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_unlink removes the mapping for the current git branch."""
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -1215,9 +1193,7 @@ class TestBranchUnlink:
         mapping = load_branch_mapping(project_root)
         assert mapping.get("feature-x") is None
 
-    def test_branch_unlink_not_linked(
-        self, tmp_config_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_branch_unlink_not_linked(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_unlink returns not_linked when branch has no mapping."""
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -1235,9 +1211,7 @@ class TestBranchUnlink:
         assert result["status"] == "not_linked"
         assert result["git_branch"] == "other-branch"
 
-    def test_branch_unlink_default_branch_error(
-        self, tmp_config_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_branch_unlink_default_branch_error(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_unlink raises ConfigError when on default branch."""
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -1296,9 +1270,7 @@ class TestBranchStatus:
             )
         return store
 
-    def test_branch_status_linked(
-        self, tmp_config_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_branch_status_linked(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_status shows linked status when mapping exists."""
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -1334,9 +1306,7 @@ class TestBranchStatus:
         assert result["keboola_branch_name"] == "feature-x"
         assert result["is_production"] is False
 
-    def test_branch_status_not_linked(
-        self, tmp_config_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_branch_status_not_linked(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_status shows not linked when no mapping exists."""
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -1354,9 +1324,7 @@ class TestBranchStatus:
         assert result["git_branch"] == "unlinked-branch"
         assert result["linked"] is False
 
-    def test_branch_status_production(
-        self, tmp_config_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_branch_status_production(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_status shows is_production=True for the main branch mapping."""
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -1400,9 +1368,7 @@ class TestBranchStatus:
 
         assert result == {"git_branching": False}
 
-    def test_branch_status_no_mapping_file(
-        self, tmp_config_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_branch_status_no_mapping_file(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_status returns linked=False when mapping file is missing."""
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -1410,9 +1376,7 @@ class TestBranchStatus:
         store = self._init_git_branching_project(tmp_config_dir, project_root)
 
         # Delete the branch-mapping.json
-        mapping_path = (
-            project_root / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME
-        )
+        mapping_path = project_root / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME
         mapping_path.unlink()
 
         svc = SyncService(config_store=store)
