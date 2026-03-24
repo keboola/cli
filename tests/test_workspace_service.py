@@ -208,6 +208,7 @@ class TestListWorkspacesSingleProject:
     def test_list_workspaces_single_project(self, tmp_config_dir: Path) -> None:
         """list_workspaces returns workspaces annotated with project alias."""
         mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
         mock_client.list_workspaces.return_value = SAMPLE_WORKSPACE_LIST
 
         store = setup_single_project(tmp_config_dir)
@@ -236,6 +237,7 @@ class TestListWorkspacesSingleProject:
     def test_list_workspaces_empty(self, tmp_config_dir: Path) -> None:
         """list_workspaces returns empty list when no workspaces exist."""
         mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
         mock_client.list_workspaces.return_value = []
 
         store = setup_single_project(tmp_config_dir)
@@ -257,6 +259,7 @@ class TestListWorkspacesMultiProject:
 
         def make_client(url: str, token: str) -> MagicMock:
             mock = MagicMock()
+            mock.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
             if token == "901-xxx":
                 mock.list_workspaces.return_value = SAMPLE_WORKSPACE_LIST
             else:
@@ -302,6 +305,7 @@ class TestListWorkspacesWithError:
 
         def make_client(url: str, token: str) -> MagicMock:
             mock = MagicMock()
+            mock.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
             if token == "901-xxx":
                 mock.list_workspaces.return_value = SAMPLE_WORKSPACE_LIST
             else:
@@ -332,6 +336,7 @@ class TestListWorkspacesWithError:
     def test_list_workspaces_unexpected_error(self, tmp_config_dir: Path) -> None:
         """Unexpected exceptions are captured as UNEXPECTED_ERROR."""
         mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
         mock_client.list_workspaces.side_effect = RuntimeError("Something broke")
 
         store = setup_single_project(tmp_config_dir)
@@ -353,6 +358,7 @@ class TestGetWorkspace:
     def test_get_workspace_success(self, tmp_config_dir: Path) -> None:
         """get_workspace returns workspace details without password."""
         mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
         mock_client.get_workspace.return_value = SAMPLE_WORKSPACE_NO_PASSWORD
 
         store = setup_single_project(tmp_config_dir)
@@ -372,12 +378,14 @@ class TestGetWorkspace:
         assert result["created"] == "2025-09-10T14:00:00Z"
         assert "password" not in result
 
-        mock_client.get_workspace.assert_called_once_with(42)
-        mock_client.close.assert_called_once()
+        mock_client.get_workspace.assert_called_once_with(42, branch_id=123)
+        # close() called twice: once in _resolve_branch_id, once in get_workspace
+        assert mock_client.close.call_count == 2
 
     def test_get_workspace_not_found(self, tmp_config_dir: Path) -> None:
         """get_workspace propagates 404 KeboolaApiError."""
         mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
         mock_client.get_workspace.side_effect = KeboolaApiError(
             message="Workspace not found",
             error_code="NOT_FOUND",
@@ -418,8 +426,8 @@ class TestDeleteWorkspace:
         assert result["project_alias"] == "prod"
         assert result["workspace_id"] == 42
         assert "deleted" in result["message"]
-        mock_client.get_workspace.assert_called_once_with(42)
-        mock_client.delete_workspace.assert_called_once_with(42)
+        mock_client.get_workspace.assert_called_once_with(42, branch_id=123)
+        mock_client.delete_workspace.assert_called_once_with(42, branch_id=123)
         mock_client.delete_config.assert_called_once_with(
             "keboola.sandboxes", "cfg-123", branch_id=123
         )
@@ -480,6 +488,8 @@ class TestDeleteWorkspace:
         result = svc.delete_workspace(alias="prod", workspace_id=42)
 
         assert result["workspace_id"] == 42
+        mock_client.get_workspace.assert_called_once_with(42, branch_id=200)
+        mock_client.delete_workspace.assert_called_once_with(42, branch_id=200)
         mock_client.delete_config.assert_called_once_with(
             "keboola.sandboxes", "cfg-789", branch_id=200
         )
@@ -491,6 +501,7 @@ class TestResetPassword:
     def test_reset_password_success(self, tmp_config_dir: Path) -> None:
         """reset_password returns the new password."""
         mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
         mock_client.reset_workspace_password.return_value = {
             "password": "n3wS3cret!Pwd",
         }
@@ -509,8 +520,9 @@ class TestResetPassword:
         assert "Password reset" in result["message"]
         assert "Save the new password" in result["message"]
 
-        mock_client.reset_workspace_password.assert_called_once_with(42)
-        mock_client.close.assert_called_once()
+        mock_client.reset_workspace_password.assert_called_once_with(42, branch_id=123)
+        # close() called twice: once in _resolve_branch_id, once in reset_password
+        assert mock_client.close.call_count == 2
 
 
 class TestLoadTables:
@@ -519,6 +531,7 @@ class TestLoadTables:
     def test_load_tables_success(self, tmp_config_dir: Path) -> None:
         """load_tables builds table defs and returns job result."""
         mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
         mock_client.load_workspace_tables.return_value = {
             "id": 777,
             "status": "success",
@@ -548,11 +561,14 @@ class TestLoadTables:
         assert len(table_defs) == 2
         assert table_defs[0] == {"source": "in.c-main.orders", "destination": "orders"}
         assert table_defs[1] == {"source": "in.c-main.customers", "destination": "customers"}
-        mock_client.close.assert_called_once()
+        assert call_args[1] == {"branch_id": 123}
+        # close() called twice: once in _resolve_branch_id, once in load_tables
+        assert mock_client.close.call_count == 2
 
     def test_load_tables_api_error(self, tmp_config_dir: Path) -> None:
         """load_tables propagates KeboolaApiError when job fails."""
         mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
         mock_client.load_workspace_tables.side_effect = KeboolaApiError(
             message="Storage job failed",
             error_code="STORAGE_JOB_FAILED",

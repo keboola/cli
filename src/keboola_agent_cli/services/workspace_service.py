@@ -244,7 +244,8 @@ class WorkspaceService(BaseService):
         ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, str]]:
             client = self._client_factory(project.stack_url, project.token)
             try:
-                raw_workspaces = client.list_workspaces()
+                branch_id = self._resolve_branch_id(alias, project)
+                raw_workspaces = client.list_workspaces(branch_id=branch_id)
                 workspaces: list[dict[str, Any]] = []
                 for ws in raw_workspaces:
                     connection = ws.get("connection", {})
@@ -310,10 +311,11 @@ class WorkspaceService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
+        branch_id = self._resolve_branch_id(alias, project)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            ws_data = client.get_workspace(workspace_id)
+            ws_data = client.get_workspace(workspace_id, branch_id=branch_id)
         finally:
             client.close()
 
@@ -349,14 +351,14 @@ class WorkspaceService(BaseService):
             # Get workspace details to find associated config
             config_id = None
             try:
-                ws_data = client.get_workspace(workspace_id)
+                ws_data = client.get_workspace(workspace_id, branch_id=branch_id)
                 component = ws_data.get("component")
                 config_id = ws_data.get("configurationId")
             except KeboolaApiError:
                 pass  # Workspace might not exist, proceed with delete
 
             # Delete the workspace
-            client.delete_workspace(workspace_id)
+            client.delete_workspace(workspace_id, branch_id=branch_id)
 
             # Clean up associated sandboxes config (in the correct branch)
             if config_id and component == "keboola.sandboxes":
@@ -387,10 +389,11 @@ class WorkspaceService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
+        branch_id = self._resolve_branch_id(alias, project)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            result = client.reset_workspace_password(workspace_id)
+            result = client.reset_workspace_password(workspace_id, branch_id=branch_id)
         finally:
             client.close()
 
@@ -425,6 +428,7 @@ class WorkspaceService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
+        branch_id = self._resolve_branch_id(alias, project)
 
         # Build table load definitions
         table_defs: list[dict[str, Any]] = []
@@ -441,7 +445,7 @@ class WorkspaceService(BaseService):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            job_result = client.load_workspace_tables(workspace_id, table_defs)
+            job_result = client.load_workspace_tables(workspace_id, table_defs, branch_id=branch_id)
         finally:
             client.close()
 
@@ -620,7 +624,7 @@ class WorkspaceService(BaseService):
 
             # Load tables into workspace
             if table_defs:
-                client.load_workspace_tables(workspace_id, table_defs)
+                client.load_workspace_tables(workspace_id, table_defs, branch_id=branch_id)
 
             return {
                 "project_alias": alias,
