@@ -90,6 +90,14 @@ Then explore:
     Example:
       kbagent --json config detail --project prod --component-id keboola.ex-db-snowflake --config-id 12345
 
+  kbagent config delete --project NAME --component-id ID --config-id ID [--branch BRANCH_ID]
+    Delete a configuration. If a dev branch is active, deletion targets that branch.
+    Use --branch to override. Deleting in a branch marks the config as removed
+    without affecting Main.
+    Example:
+      kbagent --json config delete --project prod --component-id keboola.python-transformation-v2 --config-id 12345
+      kbagent --json config delete --project prod --component-id keboola.ex-http --config-id 67890 --branch 456
+
   kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [--component-id ID] [--ignore-case] [--regex]
     Search through configuration bodies (names, descriptions, parameters, rows)
     for a string or regex pattern. Reports matching configs and WHERE in the JSON

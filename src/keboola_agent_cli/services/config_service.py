@@ -197,6 +197,53 @@ class ConfigService(BaseService):
         detail["project_alias"] = alias
         return detail
 
+    def delete_config(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Delete a configuration from a project.
+
+        Args:
+            alias: Project alias.
+            component_id: The component ID (e.g. keboola.python-transformation-v2).
+            config_id: The configuration ID to delete.
+            branch_id: If set, delete from a specific dev branch.
+                       If None, uses the project's active branch (if any).
+
+        Returns:
+            Dict with deletion confirmation details.
+
+        Raises:
+            ConfigError: If the alias is not found.
+            KeboolaApiError: If the API call fails.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        # Use active branch if no explicit branch_id given
+        effective_branch_id = branch_id or project.active_branch_id
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            client.delete_config(
+                component_id=component_id,
+                config_id=config_id,
+                branch_id=effective_branch_id,
+            )
+        finally:
+            client.close()
+
+        return {
+            "status": "deleted",
+            "project_alias": alias,
+            "component_id": component_id,
+            "config_id": config_id,
+            "branch_id": effective_branch_id,
+        }
+
     def search_configs(
         self,
         query: str,

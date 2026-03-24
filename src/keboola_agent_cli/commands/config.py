@@ -1,4 +1,4 @@
-"""Configuration browsing commands - list, detail, and search.
+"""Configuration commands - list, detail, search, and delete.
 
 Thin CLI layer: parses arguments, calls ConfigService, formats output.
 No business logic belongs here.
@@ -177,3 +177,65 @@ def config_search(
     else:
         format_search_results(formatter.console, result)
         emit_project_warnings(formatter, result)
+
+
+@config_app.command("delete")
+def config_delete(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    component_id: str = typer.Option(
+        ...,
+        "--component-id",
+        help="Component ID (e.g. keboola.python-transformation-v2)",
+    ),
+    config_id: str = typer.Option(
+        ...,
+        "--config-id",
+        help="Configuration ID to delete",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Delete from a specific dev branch ID (defaults to active branch)",
+    ),
+) -> None:
+    """Delete a configuration from a project.
+
+    If a dev branch is active (via 'branch use'), the deletion targets
+    that branch. Use --branch to override. Deleting in a branch marks
+    the config as removed without affecting Main.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "config_service")
+
+    try:
+        result = service.delete_config(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            branch_id=branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        branch_info = ""
+        if result.get("branch_id"):
+            branch_info = f" (branch {result['branch_id']})"
+        formatter.success(
+            f"Deleted config {result['component_id']}/{result['config_id']} "
+            f"from project '{result['project_alias']}'{branch_info}"
+        )
