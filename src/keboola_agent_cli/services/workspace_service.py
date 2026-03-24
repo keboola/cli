@@ -363,9 +363,7 @@ class WorkspaceService(BaseService):
             # Clean up associated sandboxes config (in the correct branch)
             if config_id and component == "keboola.sandboxes":
                 try:
-                    client.delete_config(
-                        "keboola.sandboxes", config_id, branch_id=branch_id
-                    )
+                    client.delete_config("keboola.sandboxes", config_id, branch_id=branch_id)
                 except KeboolaApiError:
                     logger.debug("Could not delete sandbox config %s", config_id)
         finally:

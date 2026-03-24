@@ -51,7 +51,7 @@ class KbagentCompleter(Completer):
         for cmd, help_text in sorted(self._commands.items()):
             if cmd.startswith(text):
                 # Yield the remaining part after what's already typed
-                suffix = cmd[len(text):]
+                suffix = cmd[len(text) :]
                 yield Completion(
                     suffix,
                     start_position=0,
@@ -164,9 +164,11 @@ def repl_command(ctx: typer.Context) -> None:
 
     if formatter.json_mode:
         # In JSON mode, REPL doesn't make sense -- output instructions
-        formatter.output({
-            "message": "REPL mode is for interactive use. Run 'kbagent repl' without --json.",
-        })
+        formatter.output(
+            {
+                "message": "REPL mode is for interactive use. Run 'kbagent repl' without --json.",
+            }
+        )
         return
 
     _run_repl(

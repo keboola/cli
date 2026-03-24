@@ -178,9 +178,7 @@ class ConfigStore:
 
             # Acquire an exclusive lock on the target file before writing.
             # The lock file is opened (or created) with 0600 permissions.
-            lock_fd = os.open(
-                str(self._config_path), os.O_RDONLY | os.O_CREAT, 0o600
-            )
+            lock_fd = os.open(str(self._config_path), os.O_RDONLY | os.O_CREAT, 0o600)
             _try_flock(lock_fd, _LOCK_EX)
 
             # Write to a temp file created with 0600 from the start,

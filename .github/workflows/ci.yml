@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Lint
+        run: uv run ruff check src/ tests/ scripts/
+
+      - name: Format check
+        run: uv run ruff format . --check
+
+      - name: SKILL.md freshness check
+        run: |
+          uv run python scripts/generate_skill.py > /dev/null 2>&1
+          if ! git diff --quiet plugins/kbagent/skills/kbagent/SKILL.md; then
+            echo "::error::SKILL.md is out-of-date. Run 'make skill-gen' and commit."
+            git diff plugins/kbagent/skills/kbagent/SKILL.md
+            exit 1
+          fi
+
+      - name: Tests
+        run: uv run pytest tests/ -v -m "not integration"

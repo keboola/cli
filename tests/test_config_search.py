@@ -3,12 +3,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from helpers import setup_single_project, setup_two_projects
-from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.config_service import ConfigService, _find_matches_in_json
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -264,9 +260,7 @@ class TestSearchConfigs:
             client_factory=lambda url, token: mock_client,
         )
 
-        result = service.search_configs(
-            query="SNOWFLAKECOMPUTING", ignore_case=True
-        )
+        result = service.search_configs(query="SNOWFLAKECOMPUTING", ignore_case=True)
 
         matches = result["matches"]
         # All 3 configs have "snowflakecomputing" in their host

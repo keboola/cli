@@ -8,7 +8,6 @@ from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.project_service import ProjectService

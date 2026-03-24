@@ -421,7 +421,9 @@ class KeboolaClient(BaseHttpClient):
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         self._request("DELETE", f"{prefix}/workspaces/{workspace_id}")
 
-    def reset_workspace_password(self, workspace_id: int, branch_id: int | None = None) -> dict[str, Any]:
+    def reset_workspace_password(
+        self, workspace_id: int, branch_id: int | None = None
+    ) -> dict[str, Any]:
         """Reset workspace password. Returns new password."""
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         response = self._request("POST", f"{prefix}/workspaces/{workspace_id}/password")

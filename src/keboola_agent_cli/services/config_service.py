@@ -4,7 +4,6 @@ Orchestrates multi-project configuration retrieval in parallel, filtering,
 aggregation, and full-text search without knowing about CLI or HTTP details.
 """
 
-import json
 import re
 from typing import Any
 
@@ -245,9 +244,7 @@ class ConfigService(BaseService):
             all_matches.extend(result["matches"])
             total_configs += result["configs_searched"]
 
-        all_matches.sort(
-            key=lambda m: (m["project_alias"], m["component_id"], m["config_id"])
-        )
+        all_matches.sort(key=lambda m: (m["project_alias"], m["component_id"], m["config_id"]))
         errors.sort(key=lambda e: e.get("project_alias", ""))
 
         return {

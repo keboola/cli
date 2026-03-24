@@ -182,9 +182,7 @@ class TestCreateWorkspace:
             client_factory=lambda url, token: mock_client,
         )
 
-        result = svc.create_workspace(
-            alias="prod", name="branch-ws", backend="snowflake"
-        )
+        result = svc.create_workspace(alias="prod", name="branch-ws", backend="snowflake")
 
         assert result["config_id"] == "cfg-456"
         # Sandbox config must be created in the dev branch

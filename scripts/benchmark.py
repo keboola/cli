@@ -30,14 +30,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 def timer(label: str):
     """Context manager that prints elapsed time."""
+
     class Timer:
         def __init__(self):
             self.elapsed = 0.0
+
         def __enter__(self):
             self._start = time.perf_counter()
             return self
+
         def __exit__(self, *args):
             self.elapsed = time.perf_counter() - self._start
+
     return Timer()
 
 
@@ -66,6 +70,7 @@ def measure_import_time() -> float:
 def measure_mcp_detection() -> tuple[float, list[str] | None]:
     """Measure MCP server detection time."""
     from keboola_agent_cli.services.mcp_service import detect_mcp_server_command
+
     start = time.perf_counter()
     cmd = detect_mcp_server_command()
     elapsed = time.perf_counter() - start
@@ -85,19 +90,22 @@ def measure_cli_tool_call(project: str, tool: str, tool_input: str = "{}") -> tu
     return elapsed, success
 
 
-async def measure_raw_stdio_call(project_alias: str, tool: str, tool_input: dict | None = None) -> tuple[float, float, float, float, bool]:
+async def measure_raw_stdio_call(
+    project_alias: str, tool: str, tool_input: dict | None = None
+) -> tuple[float, float, float, float, bool]:
     """Measure raw MCP stdio call with phase breakdown.
 
     Returns: (total, spawn_time, init_time, call_time, success)
     """
+    from contextlib import AsyncExitStack
+
+    from mcp import ClientSession
+    from mcp.client.stdio import stdio_client
+
     from keboola_agent_cli.config_store import ConfigStore
     from keboola_agent_cli.services.mcp_service import (
         _build_server_params,
-        _parse_content,
     )
-    from mcp import ClientSession
-    from mcp.client.stdio import stdio_client
-    from contextlib import AsyncExitStack
 
     store = ConfigStore()
     project = store.get_project(project_alias)
@@ -110,18 +118,14 @@ async def measure_raw_stdio_call(project_alias: str, tool: str, tool_input: dict
     exit_stack = AsyncExitStack()
 
     read_stream, write_stream = await asyncio.wait_for(
-        exit_stack.enter_async_context(
-            stdio_client(params, errlog=subprocess.DEVNULL)
-        ),
+        exit_stack.enter_async_context(stdio_client(params, errlog=subprocess.DEVNULL)),
         timeout=30,
     )
     spawn_time = time.perf_counter() - spawn_start
 
     # Phase 2: Initialize session
     init_start = time.perf_counter()
-    session = await exit_stack.enter_async_context(
-        ClientSession(read_stream, write_stream)
-    )
+    session = await exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
     await asyncio.wait_for(session.initialize(), timeout=30)
     init_time = time.perf_counter() - init_start
 
@@ -140,20 +144,23 @@ async def measure_raw_stdio_call(project_alias: str, tool: str, tool_input: dict
     return total, spawn_time, init_time, call_time, success
 
 
-async def measure_raw_http_call(project_alias: str, tool: str, tool_input: dict | None = None) -> tuple[float, float, float, float, float, bool]:
+async def measure_raw_http_call(
+    project_alias: str, tool: str, tool_input: dict | None = None
+) -> tuple[float, float, float, float, float, bool]:
     """Measure raw MCP HTTP call with phase breakdown.
 
     Returns: (total, server_ensure_time, connect_time, init_time, call_time, success)
     """
+    from contextlib import AsyncExitStack
+
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+
     from keboola_agent_cli.config_store import ConfigStore
     from keboola_agent_cli.services.mcp_service import (
         _build_http_headers,
-        _parse_content,
     )
     from keboola_agent_cli.services.mcp_transport import get_server_manager
-    from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
-    from contextlib import AsyncExitStack
 
     store = ConfigStore()
     project = store.get_project(project_alias)
@@ -179,9 +186,7 @@ async def measure_raw_http_call(project_alias: str, tool: str, tool_input: dict 
 
     # Phase 3: Initialize session
     init_start = time.perf_counter()
-    session = await exit_stack.enter_async_context(
-        ClientSession(read_stream, write_stream)
-    )
+    session = await exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
     await asyncio.wait_for(session.initialize(), timeout=30)
     init_time = time.perf_counter() - init_start
 
@@ -200,7 +205,9 @@ async def measure_raw_http_call(project_alias: str, tool: str, tool_input: dict 
     return total, server_time, connect_time, init_time, call_time, success
 
 
-async def measure_multi_project_stdio(projects: list[str], tool: str) -> tuple[float, dict[str, float]]:
+async def measure_multi_project_stdio(
+    projects: list[str], tool: str
+) -> tuple[float, dict[str, float]]:
     """Measure parallel multi-project stdio calls."""
     start = time.perf_counter()
 
@@ -209,7 +216,7 @@ async def measure_multi_project_stdio(projects: list[str], tool: str) -> tuple[f
         try:
             total, _, _, _, success = await measure_raw_stdio_call(alias, tool)
             return alias, total, success
-        except Exception as e:
+        except Exception:
             return alias, time.perf_counter() - t_start, False
 
     tasks = [_call(alias) for alias in projects]
@@ -223,6 +230,7 @@ async def measure_multi_project_stdio(projects: list[str], tool: str) -> tuple[f
 def get_all_projects() -> list[str]:
     """Get all configured project aliases."""
     from keboola_agent_cli.config_store import ConfigStore
+
     store = ConfigStore()
     config = store.load()
     return list(config.projects.keys())
@@ -231,14 +239,14 @@ def get_all_projects() -> list[str]:
 def format_time(seconds: float) -> str:
     """Format time nicely."""
     if seconds < 0.01:
-        return f"{seconds*1000:.1f}ms"
+        return f"{seconds * 1000:.1f}ms"
     return f"{seconds:.2f}s"
 
 
 def print_header(title: str):
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  {title}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
 
 def print_bar(label: str, seconds: float, max_seconds: float = 15.0, width: int = 40):
@@ -261,7 +269,7 @@ BENCHMARK_TOOLS = [
 
 def run_benchmarks(project: str, runs: int = 1, run_multi: bool = False):
     """Run all benchmark suites."""
-    print(f"\nkbagent Performance Benchmark")
+    print("\nkbagent Performance Benchmark")
     print(f"Date: {time.strftime('%Y-%m-%d %H:%M')}")
     print(f"Project: {project}")
     print(f"Runs per test: {runs}")
@@ -306,14 +314,16 @@ def run_benchmarks(project: str, runs: int = 1, run_multi: bool = False):
         all_ok = all(t[4] for t in tool_times)
         status = "ok" if all_ok else "FAIL"
 
-        stdio_results.append({
-            "tool": tool_name,
-            "total": avg_total,
-            "spawn": avg_spawn,
-            "init": avg_init,
-            "call": avg_call,
-            "status": status,
-        })
+        stdio_results.append(
+            {
+                "tool": tool_name,
+                "total": avg_total,
+                "spawn": avg_spawn,
+                "init": avg_init,
+                "call": avg_call,
+                "status": status,
+            }
+        )
 
         input_str = json.dumps(tool_input) if tool_input else "-"
         print(f"\n  {tool_name} ({input_str}) [{status}]")
@@ -327,7 +337,7 @@ def run_benchmarks(project: str, runs: int = 1, run_multi: bool = False):
     avg_init = sum(r["init"] for r in stdio_results) / len(stdio_results)
     avg_api = sum(r["call"] for r in stdio_results) / len(stdio_results)
 
-    print(f"\n  --- Stdio Averages ---")
+    print("\n  --- Stdio Averages ---")
     print(f"  Total:           {format_time(avg_stdio)}")
     print(f"  Subprocess spawn: {format_time(avg_spawn)}")
     print(f"  Session init:     {format_time(avg_init)}")
@@ -360,16 +370,18 @@ def run_benchmarks(project: str, runs: int = 1, run_multi: bool = False):
         stdio_total = stdio_results[i]["total"]
         vs_stdio = ((avg_total - stdio_total) / stdio_total) * 100
 
-        http_results.append({
-            "tool": tool_name,
-            "total": avg_total,
-            "server": avg_server,
-            "connect": avg_connect,
-            "init": avg_init,
-            "call": avg_call,
-            "status": status,
-            "vs_stdio": vs_stdio,
-        })
+        http_results.append(
+            {
+                "tool": tool_name,
+                "total": avg_total,
+                "server": avg_server,
+                "connect": avg_connect,
+                "init": avg_init,
+                "call": avg_call,
+                "status": status,
+                "vs_stdio": vs_stdio,
+            }
+        )
 
         input_str = json.dumps(tool_input) if tool_input else "-"
         print(f"\n  {tool_name} ({input_str}) [{status}] vs stdio: {vs_stdio:+.0f}%")
@@ -382,12 +394,13 @@ def run_benchmarks(project: str, runs: int = 1, run_multi: bool = False):
     avg_http = sum(r["total"] for r in http_results) / len(http_results)
     avg_vs_stdio = sum(r["vs_stdio"] for r in http_results) / len(http_results)
 
-    print(f"\n  --- HTTP Averages ---")
+    print("\n  --- HTTP Averages ---")
     print(f"  Total:           {format_time(avg_http)}")
     print(f"  vs Stdio:        {avg_vs_stdio:+.0f}%")
 
     # Stop the persistent server
     from keboola_agent_cli.services.mcp_transport import get_server_manager
+
     get_server_manager().stop()
     os.environ["KBAGENT_MCP_TRANSPORT"] = "stdio"
 
@@ -398,7 +411,9 @@ def run_benchmarks(project: str, runs: int = 1, run_multi: bool = False):
     for tool_name, tool_input in BENCHMARK_TOOLS[:3]:  # Only first 3 to save time
         tool_times = []
         for _ in range(runs):
-            elapsed, ok = measure_cli_tool_call(project, tool_name, json.dumps(tool_input) if tool_input else "{}")
+            elapsed, ok = measure_cli_tool_call(
+                project, tool_name, json.dumps(tool_input) if tool_input else "{}"
+            )
             tool_times.append((elapsed, ok))
 
         avg_elapsed = sum(t[0] for t in tool_times) / len(tool_times)
@@ -421,9 +436,7 @@ def run_benchmarks(project: str, runs: int = 1, run_multi: bool = False):
         print(f"  Projects: {len(all_projects)}")
 
         for tool_name in ["get_buckets", "get_tables"]:
-            total, per_project = asyncio.run(
-                measure_multi_project_stdio(all_projects, tool_name)
-            )
+            total, per_project = asyncio.run(measure_multi_project_stdio(all_projects, tool_name))
             print(f"\n  {tool_name} x {len(all_projects)} projects")
             print(f"  Wall time:  {format_time(total)}")
             slowest = max(per_project.values())
@@ -434,23 +447,35 @@ def run_benchmarks(project: str, runs: int = 1, run_multi: bool = False):
     # ---- Summary ----
     print_header("SUMMARY")
     print(f"\n  {'Metric':<30s} {'Stdio':>10s} {'HTTP':>10s} {'Diff':>10s}")
-    print(f"  {'-'*60}")
-    print(f"  {'Avg tool call':<30s} {format_time(avg_stdio):>10s} {format_time(avg_http):>10s} {avg_vs_stdio:>+9.0f}%")
+    print(f"  {'-' * 60}")
+    print(
+        f"  {'Avg tool call':<30s} {format_time(avg_stdio):>10s} {format_time(avg_http):>10s} {avg_vs_stdio:>+9.0f}%"
+    )
     print(f"  {'CLI startup':<30s} {format_time(avg_startup):>10s} {'-':>10s} {'-':>10s}")
 
     if cli_results:
         print(f"  {'Full CLI call (avg)':<30s} {format_time(avg_cli):>10s} {'-':>10s} {'-':>10s}")
 
-    print(f"\n  Bottleneck breakdown (stdio avg):")
-    print(f"  {'CLI startup:':<30s} {format_time(avg_startup)} ({avg_startup/avg_cli*100:.0f}% of full CLI call)" if cli_results else "")
-    print(f"  {'Subprocess spawn:':<30s} {format_time(avg_spawn)} ({avg_spawn/avg_stdio*100:.0f}% of raw call)")
-    print(f"  {'Session init:':<30s} {format_time(avg_init)} ({avg_init/avg_stdio*100:.0f}% of raw call)")
-    print(f"  {'API call:':<30s} {format_time(avg_api)} ({avg_api/avg_stdio*100:.0f}% of raw call)")
+    print("\n  Bottleneck breakdown (stdio avg):")
+    print(
+        f"  {'CLI startup:':<30s} {format_time(avg_startup)} ({avg_startup / avg_cli * 100:.0f}% of full CLI call)"
+        if cli_results
+        else ""
+    )
+    print(
+        f"  {'Subprocess spawn:':<30s} {format_time(avg_spawn)} ({avg_spawn / avg_stdio * 100:.0f}% of raw call)"
+    )
+    print(
+        f"  {'Session init:':<30s} {format_time(avg_init)} ({avg_init / avg_stdio * 100:.0f}% of raw call)"
+    )
+    print(
+        f"  {'API call:':<30s} {format_time(avg_api)} ({avg_api / avg_stdio * 100:.0f}% of raw call)"
+    )
 
     # Daemon estimate
-    print(f"\n  Daemon mode estimate:")
-    print(f"  IPC overhead:            ~0.001s")
-    print(f"  Session reuse:           0s (pre-connected)")
+    print("\n  Daemon mode estimate:")
+    print("  IPC overhead:            ~0.001s")
+    print("  Session reuse:           0s (pre-connected)")
     print(f"  API call:                {format_time(avg_api)}")
     print(f"  Estimated total:         ~{format_time(avg_api + 0.01)}")
     print(f"  vs current stdio:        -{((avg_stdio - avg_api - 0.01) / avg_stdio * 100):.0f}%")
