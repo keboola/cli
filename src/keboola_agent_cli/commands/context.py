@@ -78,6 +78,9 @@ Then explore:
     --project can be repeated to query multiple projects.
     --component-type: extractor, writer, transformation, application
     --component-id: specific component (e.g. keboola.ex-db-snowflake)
+    Output includes: last_modified, last_modified_by, last_change_description,
+    and folder (from KBC.configuration.folderName metadata -- useful for
+    distinguishing active vs archived transformations).
     Examples:
       kbagent --json config list
       kbagent --json config list --project prod
@@ -197,6 +200,10 @@ Then explore:
       --dry-run        Preview what would happen without making changes.
       --yes / -y       Skip confirmation prompt.
       --token-description  Description prefix for created tokens (default: kbagent-cli).
+
+    Token names include owner identity resolved from the manage token:
+    "kbagent-cli [john.doe@company.com]" -- so multiple users on the same
+    project have uniquely identifiable tokens in the Keboola UI.
 
     Examples:
       kbagent org setup --org-id 123 --url https://connection.keboola.com --dry-run
@@ -628,6 +635,14 @@ Then explore:
      kbagent --json sync branch-link --project prod  # creates Keboola dev branch
      kbagent --json sync pull --project prod
      # ... edit, push, then merge via PR + Keboola UI
+
+18. Claude Code plugin -- teach Claude how to use kbagent automatically:
+     Install the kbagent skill as a Claude Code plugin:
+       claude install-plugin https://github.com/padak/keboola_agent_cli
+     After installation, Claude Code will automatically know when and how
+     to use kbagent commands (the skill triggers on Keboola-related tasks).
+     The plugin provides a decision table mapping goals to commands and
+     references for common workflows (workspace debugging, branch lifecycle).
 
 ## Exit Codes
 
