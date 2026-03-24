@@ -223,9 +223,9 @@ class OrgService:
             owner_name: Email/name of the manage token owner (for unique identification).
         """
         if owner_name:
-            description = f"{token_description} ({project_name}) [{owner_name}]"
+            description = f"{token_description} [{owner_name}]"
         else:
-            description = f"{token_description} ({project_name})"
+            description = token_description
 
         logger.info(
             "Creating token for project %d (%s) with description '%s'",
