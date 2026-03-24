@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -2548,29 +2549,37 @@ class TestHelp:
         assert "list" in result.output
         assert "detail" in result.output
 
+    @staticmethod
+    def _strip_ansi(text: str) -> str:
+        """Strip ANSI escape codes from text for assertion matching."""
+        return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
     def test_project_add_help(self) -> None:
         """project add --help shows all options including --token."""
         result = runner.invoke(app, ["project", "add", "--help"])
         assert result.exit_code == 0
-        assert "--alias" in result.output
-        assert "--url" in result.output
-        assert "--token" in result.output
+        output = self._strip_ansi(result.output)
+        assert "--alias" in output
+        assert "--url" in output
+        assert "--token" in output
 
     def test_config_list_help(self) -> None:
         """config list --help shows options."""
         result = runner.invoke(app, ["config", "list", "--help"])
         assert result.exit_code == 0
-        assert "--project" in result.output
-        assert "--component-type" in result.output
-        assert "--component-id" in result.output
+        output = self._strip_ansi(result.output)
+        assert "--project" in output
+        assert "--component-type" in output
+        assert "--component-id" in output
 
     def test_config_detail_help(self) -> None:
         """config detail --help shows required options."""
         result = runner.invoke(app, ["config", "detail", "--help"])
         assert result.exit_code == 0
-        assert "--project" in result.output
-        assert "--component-id" in result.output
-        assert "--config-id" in result.output
+        output = self._strip_ansi(result.output)
+        assert "--project" in output
+        assert "--component-id" in output
+        assert "--config-id" in output
 
     def test_job_help(self) -> None:
         """job --help shows subcommands."""
@@ -2583,11 +2592,12 @@ class TestHelp:
         """job list --help shows options."""
         result = runner.invoke(app, ["job", "list", "--help"])
         assert result.exit_code == 0
-        assert "--project" in result.output
-        assert "--component-id" in result.output
-        assert "--config-id" in result.output
-        assert "--status" in result.output
-        assert "--limit" in result.output
+        output = self._strip_ansi(result.output)
+        assert "--project" in output
+        assert "--component-id" in output
+        assert "--config-id" in output
+        assert "--status" in output
+        assert "--limit" in output
 
 
 class TestVerboseFlagBasic:
