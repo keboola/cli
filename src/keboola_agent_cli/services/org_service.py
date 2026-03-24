@@ -95,6 +95,15 @@ class OrgService:
         manage_client = self._manage_client_factory(stack_url, manage_token)
         try:
             projects = manage_client.list_organization_projects(org_id)
+
+            # Resolve token owner identity for unique token naming
+            owner_name = ""
+            try:
+                token_info = manage_client.verify_token()
+                user_info = token_info.get("user", {})
+                owner_name = user_info.get("email") or user_info.get("name", "")
+            except Exception:
+                logger.debug("Could not resolve manage token owner identity")
         finally:
             manage_client.close()
 
@@ -150,6 +159,7 @@ class OrgService:
                     project_name=project_name,
                     alias=alias,
                     token_description=token_description,
+                    owner_name=owner_name,
                 )
                 # Re-read to get masked token
                 registered = self._config_store.get_project(alias)
@@ -199,6 +209,7 @@ class OrgService:
         project_name: str,
         alias: str,
         token_description: str,
+        owner_name: str = "",
     ) -> None:
         """Create a token for a single project, verify it, and register it.
 
@@ -209,8 +220,12 @@ class OrgService:
             project_name: The project name (from Manage API).
             alias: The alias to register the project under.
             token_description: Description for the created token.
+            owner_name: Email/name of the manage token owner (for unique identification).
         """
-        description = f"{token_description} ({project_name})"
+        if owner_name:
+            description = f"{token_description} ({project_name}) [{owner_name}]"
+        else:
+            description = f"{token_description} ({project_name})"
 
         logger.info(
             "Creating token for project %d (%s) with description '%s'",

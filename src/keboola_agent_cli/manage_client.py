@@ -43,6 +43,21 @@ class ManageClient(BaseHttpClient):
     def __exit__(self, *args: Any) -> None:
         self.close()
 
+    def verify_token(self) -> dict[str, Any]:
+        """Verify the manage token and return token/user metadata.
+
+        Calls GET /manage/tokens/verify to retrieve information about
+        the manage token owner, including user name and email.
+
+        Returns:
+            Dict with token info including 'user' block (id, name, email).
+
+        Raises:
+            KeboolaApiError: On API errors.
+        """
+        response = self._do_request("GET", "/manage/tokens/verify")
+        return response.json()
+
     def list_organization_projects(self, org_id: int) -> list[dict[str, Any]]:
         """List all projects in an organization.
 
