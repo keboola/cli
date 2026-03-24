@@ -953,3 +953,371 @@ class TestSyncPushCli:
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         assert "No changes to push" in result.output
+
+
+# ===================================================================
+# sync branch-link / branch-unlink / branch-status CLI tests
+# ===================================================================
+
+
+class TestSyncBranchLinkCli:
+    """Tests for `kbagent sync branch-link` command."""
+
+    def test_sync_branch_link_help(self) -> None:
+        """sync branch-link --help shows usage text."""
+        result = runner.invoke(app, ["sync", "branch-link", "--help"])
+        assert result.exit_code == 0
+        assert "--project" in result.output
+        assert "--directory" in result.output
+        assert "--branch-id" in result.output
+        assert "--branch-name" in result.output
+
+    def test_sync_branch_link_json_output(self, tmp_path: Path) -> None:
+        """sync branch-link --json returns structured JSON."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.branch_link.return_value = {
+            "status": "linked",
+            "git_branch": "feature/auth",
+            "keboola_branch_id": "99999",
+            "keboola_branch_name": "feature/auth",
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "branch-link",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["status"] == "linked"
+        assert output["data"]["git_branch"] == "feature/auth"
+        assert output["data"]["keboola_branch_id"] == "99999"
+
+    def test_sync_branch_link_config_error(self, tmp_path: Path) -> None:
+        """sync branch-link returns exit code 5 on ConfigError."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.branch_link.side_effect = ConfigError(
+            "Git-branching mode is not enabled."
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "branch-link",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 5
+
+    def test_sync_branch_link_already_linked_human(self, tmp_path: Path) -> None:
+        """sync branch-link in human mode shows 'Already linked' for existing mapping."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.branch_link.return_value = {
+            "status": "already_linked",
+            "git_branch": "feature/auth",
+            "keboola_branch_id": "99999",
+            "keboola_branch_name": "feature/auth",
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "branch-link",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "Already linked" in result.output
+
+
+class TestSyncBranchUnlinkCli:
+    """Tests for `kbagent sync branch-unlink` command."""
+
+    def test_sync_branch_unlink_help(self) -> None:
+        """sync branch-unlink --help shows usage text."""
+        result = runner.invoke(app, ["sync", "branch-unlink", "--help"])
+        assert result.exit_code == 0
+        assert "--directory" in result.output
+
+    def test_sync_branch_unlink_json_output(self, tmp_path: Path) -> None:
+        """sync branch-unlink --json returns structured JSON."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.branch_unlink.return_value = {
+            "status": "unlinked",
+            "git_branch": "feature/auth",
+            "keboola_branch_id": "99999",
+            "keboola_branch_name": "feature/auth",
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "branch-unlink",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["status"] == "unlinked"
+
+    def test_sync_branch_unlink_not_linked_human(self, tmp_path: Path) -> None:
+        """sync branch-unlink in human mode shows 'not linked' message."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.branch_unlink.return_value = {
+            "status": "not_linked",
+            "git_branch": "feature/auth",
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "branch-unlink",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "not linked" in result.output
+
+
+class TestSyncBranchStatusCli:
+    """Tests for `kbagent sync branch-status` command."""
+
+    def test_sync_branch_status_help(self) -> None:
+        """sync branch-status --help shows usage text."""
+        result = runner.invoke(app, ["sync", "branch-status", "--help"])
+        assert result.exit_code == 0
+        assert "--directory" in result.output
+
+    def test_sync_branch_status_json_output(self, tmp_path: Path) -> None:
+        """sync branch-status --json returns structured JSON."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.branch_status.return_value = {
+            "git_branching": True,
+            "git_branch": "feature/auth",
+            "linked": True,
+            "keboola_branch_id": "99999",
+            "keboola_branch_name": "feature/auth",
+            "is_production": False,
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "branch-status",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["linked"] is True
+        assert output["data"]["keboola_branch_id"] == "99999"
+
+    def test_sync_branch_status_not_linked_human(self, tmp_path: Path) -> None:
+        """sync branch-status in human mode shows 'Not linked' and hint."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.branch_status.return_value = {
+            "git_branching": True,
+            "git_branch": "feature/auth",
+            "linked": False,
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "branch-status",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "Not linked" in result.output
+        assert "branch-link" in result.output
+
+    def test_sync_branch_status_disabled_human(self, tmp_path: Path) -> None:
+        """sync branch-status shows 'not enabled' when git branching is off."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.branch_status.return_value = {"git_branching": False}
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "branch-status",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "not enabled" in result.output

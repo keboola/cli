@@ -353,3 +353,133 @@ def sync_push(
                 f"  Error: {err['change_type']} {err['component_id']}/{err['config_id']}: "
                 f"{err['message']}"
             )
+
+
+@sync_app.command("branch-link")
+def sync_branch_link(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    directory: Path = typer.Option(Path("."), "--directory", "-d", help="Project root directory"),
+    branch_id: int | None = typer.Option(None, "--branch-id", help="Link to existing Keboola branch by ID"),
+    branch_name: str | None = typer.Option(None, "--branch-name", help="Create/find branch with this name"),
+) -> None:
+    """Link the current git branch to a Keboola development branch.
+
+    Creates a new Keboola dev branch if one doesn't exist with the same name
+    as the current git branch.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "sync_service")
+    project_root = directory.resolve()
+
+    try:
+        result = service.branch_link(
+            alias=project,
+            project_root=project_root,
+            branch_id=branch_id,
+            branch_name=branch_name,
+        )
+    except FileNotFoundError as exc:
+        formatter.error(message=str(exc), error_code="NOT_INITIALIZED")
+        raise typer.Exit(code=1) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        status = result["status"]
+        if status == "already_linked":
+            formatter.console.print(
+                f"Already linked: {result['git_branch']} -> "
+                f"Keboola branch {result['keboola_branch_id']} ({result['keboola_branch_name']})"
+            )
+        else:
+            formatter.success(
+                f"Linked {result['git_branch']} -> "
+                f"Keboola branch {result['keboola_branch_id']} ({result['keboola_branch_name']})"
+            )
+
+
+@sync_app.command("branch-unlink")
+def sync_branch_unlink(
+    ctx: typer.Context,
+    directory: Path = typer.Option(Path("."), "--directory", "-d", help="Project root directory"),
+) -> None:
+    """Remove the branch mapping for the current git branch.
+
+    Does NOT delete the Keboola branch itself.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "sync_service")
+    project_root = directory.resolve()
+
+    try:
+        result = service.branch_unlink(project_root=project_root)
+    except FileNotFoundError as exc:
+        formatter.error(message=str(exc), error_code="NOT_INITIALIZED")
+        raise typer.Exit(code=1) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        if result["status"] == "not_linked":
+            formatter.console.print(f"Branch '{result['git_branch']}' is not linked.")
+        else:
+            formatter.success(
+                f"Unlinked {result['git_branch']} from "
+                f"Keboola branch {result['keboola_branch_id']}"
+            )
+
+
+@sync_app.command("branch-status")
+def sync_branch_status(
+    ctx: typer.Context,
+    directory: Path = typer.Option(Path("."), "--directory", "-d", help="Project root directory"),
+) -> None:
+    """Show the branch mapping status for the current git branch."""
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "sync_service")
+    project_root = directory.resolve()
+
+    try:
+        result = service.branch_status(project_root=project_root)
+    except FileNotFoundError as exc:
+        formatter.error(message=str(exc), error_code="NOT_INITIALIZED")
+        raise typer.Exit(code=1) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        if not result.get("git_branching"):
+            formatter.console.print("Git-branching mode is not enabled.")
+            return
+
+        git_branch = result.get("git_branch", "unknown")
+        if result.get("linked"):
+            if result.get("is_production"):
+                formatter.console.print(
+                    f"Branch: {git_branch}\n"
+                    f"Keboola: production\n"
+                    f"Status: [green]Linked[/green]"
+                )
+            else:
+                formatter.console.print(
+                    f"Branch: {git_branch}\n"
+                    f"Keboola: {result['keboola_branch_id']} ({result['keboola_branch_name']})\n"
+                    f"Status: [green]Linked[/green]"
+                )
+        else:
+            formatter.console.print(
+                f"Branch: {git_branch}\n"
+                f"Keboola: (none)\n"
+                f"Status: [red]Not linked[/red]\n\n"
+                f"Run 'kbagent sync branch-link --project ALIAS' to link."
+            )

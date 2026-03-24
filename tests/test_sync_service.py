@@ -862,3 +862,566 @@ class TestPush:
         assert result["errors"] == []
         # Verify the client.update_config was actually called
         push_client.update_config.assert_called()
+
+
+# ===================================================================
+# branch_link tests
+# ===================================================================
+
+
+class TestBranchLink:
+    """Tests for SyncService.branch_link()."""
+
+    def _init_git_branching_project(
+        self,
+        tmp_config_dir: Path,
+        project_root: Path,
+    ) -> ConfigStore:
+        """Helper: init a project with git branching enabled."""
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        with (
+            patch(
+                "keboola_agent_cli.services.sync_service.is_git_repo",
+                return_value=True,
+            ),
+            patch(
+                "keboola_agent_cli.services.sync_service.get_default_branch",
+                return_value="main",
+            ),
+        ):
+            init_svc.init_sync(
+                alias="prod",
+                project_root=project_root,
+                git_branching=True,
+            )
+        return store
+
+    def test_branch_link_creates_branch(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_link creates a Keboola branch when none exists with the git branch name."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        # Mock client that has no existing branch matching "feature/auth",
+        # so it creates one
+        link_client = _make_sync_mock_client(
+            branches_response=[
+                {"id": 12345, "name": "Main", "isDefault": True},
+            ],
+        )
+        link_client.create_dev_branch.return_value = {"id": 99999}
+
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: link_client,
+        )
+
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="feature/auth",
+        ):
+            result = svc.branch_link(
+                alias="prod",
+                project_root=project_root,
+            )
+
+        assert result["status"] == "linked"
+        assert result["git_branch"] == "feature/auth"
+        assert result["keboola_branch_id"] == "99999"
+        assert result["keboola_branch_name"] == "feature/auth"
+        link_client.create_dev_branch.assert_called_once_with(name="feature/auth")
+
+        # Verify the mapping was saved to disk
+        from keboola_agent_cli.sync.branch_mapping import load_branch_mapping
+
+        mapping = load_branch_mapping(project_root)
+        entry = mapping.get("feature/auth")
+        assert entry is not None
+        assert entry.keboola_id == "99999"
+
+    def test_branch_link_finds_existing_branch(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_link links to an existing Keboola branch that matches the name."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        link_client = _make_sync_mock_client(
+            branches_response=SAMPLE_BRANCHES_WITH_DEV,
+        )
+
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: link_client,
+        )
+
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="feature-x",
+        ):
+            result = svc.branch_link(
+                alias="prod",
+                project_root=project_root,
+            )
+
+        assert result["status"] == "linked"
+        assert result["git_branch"] == "feature-x"
+        assert result["keboola_branch_id"] == "99999"
+        # Should not have created a new branch
+        link_client.create_dev_branch.assert_not_called()
+
+    def test_branch_link_default_branch_error(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_link raises ConfigError when on the default (main) branch."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        svc = SyncService(config_store=store)
+
+        with (
+            patch(
+                "keboola_agent_cli.sync.git_utils.get_current_branch",
+                return_value="main",
+            ),
+            pytest.raises(ConfigError, match="Cannot link the default branch"),
+        ):
+            svc.branch_link(
+                alias="prod",
+                project_root=project_root,
+            )
+
+    def test_branch_link_git_branching_not_enabled(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_link raises ConfigError when git branching is not enabled."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        # Init without git branching
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        init_svc.init_sync(alias="prod", project_root=project_root)
+
+        svc = SyncService(config_store=store)
+
+        with pytest.raises(ConfigError, match="Git-branching mode is not enabled"):
+            svc.branch_link(
+                alias="prod",
+                project_root=project_root,
+            )
+
+    def test_branch_link_already_linked(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_link returns already_linked when mapping already exists."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        link_client = _make_sync_mock_client(
+            branches_response=SAMPLE_BRANCHES_WITH_DEV,
+        )
+
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: link_client,
+        )
+
+        # First link
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="feature-x",
+        ):
+            svc.branch_link(alias="prod", project_root=project_root)
+
+            # Second link should return already_linked
+            result = svc.branch_link(alias="prod", project_root=project_root)
+
+        assert result["status"] == "already_linked"
+        assert result["git_branch"] == "feature-x"
+        assert result["keboola_branch_id"] == "99999"
+
+    def test_branch_link_with_branch_id(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_link with --branch-id links to a specific existing branch."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        link_client = _make_sync_mock_client(
+            branches_response=SAMPLE_BRANCHES_WITH_DEV,
+        )
+
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: link_client,
+        )
+
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="my-feature",
+        ):
+            result = svc.branch_link(
+                alias="prod",
+                project_root=project_root,
+                branch_id=99999,
+            )
+
+        assert result["status"] == "linked"
+        assert result["keboola_branch_id"] == "99999"
+        assert result["keboola_branch_name"] == "feature-x"
+
+    def test_branch_link_with_branch_name_creates(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_link with --branch-name creates a branch with that name."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        link_client = _make_sync_mock_client(
+            branches_response=SAMPLE_BRANCHES,  # no "custom-name" branch
+        )
+        link_client.create_dev_branch.return_value = {"id": 77777}
+
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: link_client,
+        )
+
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="my-feature",
+        ):
+            result = svc.branch_link(
+                alias="prod",
+                project_root=project_root,
+                branch_name="custom-name",
+            )
+
+        assert result["status"] == "linked"
+        assert result["keboola_branch_id"] == "77777"
+        assert result["keboola_branch_name"] == "custom-name"
+        link_client.create_dev_branch.assert_called_once_with(name="custom-name")
+
+
+# ===================================================================
+# branch_unlink tests
+# ===================================================================
+
+
+class TestBranchUnlink:
+    """Tests for SyncService.branch_unlink()."""
+
+    def _init_and_link(
+        self,
+        tmp_config_dir: Path,
+        project_root: Path,
+    ) -> ConfigStore:
+        """Helper: init with git branching, then link feature-x."""
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        with (
+            patch(
+                "keboola_agent_cli.services.sync_service.is_git_repo",
+                return_value=True,
+            ),
+            patch(
+                "keboola_agent_cli.services.sync_service.get_default_branch",
+                return_value="main",
+            ),
+        ):
+            init_svc.init_sync(
+                alias="prod",
+                project_root=project_root,
+                git_branching=True,
+            )
+
+        # Link feature-x
+        link_client = _make_sync_mock_client(
+            branches_response=SAMPLE_BRANCHES_WITH_DEV,
+        )
+        link_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: link_client,
+        )
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="feature-x",
+        ):
+            link_svc.branch_link(alias="prod", project_root=project_root)
+
+        return store
+
+    def test_branch_unlink_success(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_unlink removes the mapping for the current git branch."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_and_link(tmp_config_dir, project_root)
+
+        svc = SyncService(config_store=store)
+
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="feature-x",
+        ):
+            result = svc.branch_unlink(project_root=project_root)
+
+        assert result["status"] == "unlinked"
+        assert result["git_branch"] == "feature-x"
+        assert result["keboola_branch_id"] == "99999"
+        assert result["keboola_branch_name"] == "feature-x"
+
+        # Verify mapping was removed from disk
+        from keboola_agent_cli.sync.branch_mapping import load_branch_mapping
+
+        mapping = load_branch_mapping(project_root)
+        assert mapping.get("feature-x") is None
+
+    def test_branch_unlink_not_linked(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_unlink returns not_linked when branch has no mapping."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_and_link(tmp_config_dir, project_root)
+
+        svc = SyncService(config_store=store)
+
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="other-branch",
+        ):
+            result = svc.branch_unlink(project_root=project_root)
+
+        assert result["status"] == "not_linked"
+        assert result["git_branch"] == "other-branch"
+
+    def test_branch_unlink_default_branch_error(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_unlink raises ConfigError when on default branch."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_and_link(tmp_config_dir, project_root)
+
+        svc = SyncService(config_store=store)
+
+        with (
+            patch(
+                "keboola_agent_cli.sync.git_utils.get_current_branch",
+                return_value="main",
+            ),
+            pytest.raises(ConfigError, match="Cannot unlink the default branch"),
+        ):
+            svc.branch_unlink(project_root=project_root)
+
+
+# ===================================================================
+# branch_status tests
+# ===================================================================
+
+
+class TestBranchStatus:
+    """Tests for SyncService.branch_status()."""
+
+    def _init_git_branching_project(
+        self,
+        tmp_config_dir: Path,
+        project_root: Path,
+    ) -> ConfigStore:
+        """Helper: init a project with git branching enabled."""
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        with (
+            patch(
+                "keboola_agent_cli.services.sync_service.is_git_repo",
+                return_value=True,
+            ),
+            patch(
+                "keboola_agent_cli.services.sync_service.get_default_branch",
+                return_value="main",
+            ),
+        ):
+            init_svc.init_sync(
+                alias="prod",
+                project_root=project_root,
+                git_branching=True,
+            )
+        return store
+
+    def test_branch_status_linked(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_status shows linked status when mapping exists."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        # Link feature-x first
+        link_client = _make_sync_mock_client(
+            branches_response=SAMPLE_BRANCHES_WITH_DEV,
+        )
+        link_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: link_client,
+        )
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="feature-x",
+        ):
+            link_svc.branch_link(alias="prod", project_root=project_root)
+
+        # Now check status
+        svc = SyncService(config_store=store)
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="feature-x",
+        ):
+            result = svc.branch_status(project_root=project_root)
+
+        assert result["git_branching"] is True
+        assert result["git_branch"] == "feature-x"
+        assert result["linked"] is True
+        assert result["keboola_branch_id"] == "99999"
+        assert result["keboola_branch_name"] == "feature-x"
+        assert result["is_production"] is False
+
+    def test_branch_status_not_linked(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_status shows not linked when no mapping exists."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        svc = SyncService(config_store=store)
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="unlinked-branch",
+        ):
+            result = svc.branch_status(project_root=project_root)
+
+        assert result["git_branching"] is True
+        assert result["git_branch"] == "unlinked-branch"
+        assert result["linked"] is False
+
+    def test_branch_status_production(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_status shows is_production=True for the main branch mapping."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        svc = SyncService(config_store=store)
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="main",
+        ):
+            result = svc.branch_status(project_root=project_root)
+
+        assert result["git_branching"] is True
+        assert result["git_branch"] == "main"
+        assert result["linked"] is True
+        assert result["is_production"] is True
+        assert result["keboola_branch_id"] is None
+
+    def test_branch_status_git_branching_disabled(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_status returns git_branching=False when not enabled."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        # Init without git branching
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        init_svc.init_sync(alias="prod", project_root=project_root)
+
+        svc = SyncService(config_store=store)
+        result = svc.branch_status(project_root=project_root)
+
+        assert result == {"git_branching": False}
+
+    def test_branch_status_no_mapping_file(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch_status returns linked=False when mapping file is missing."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        # Delete the branch-mapping.json
+        mapping_path = (
+            project_root / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME
+        )
+        mapping_path.unlink()
+
+        svc = SyncService(config_store=store)
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="feature-x",
+        ):
+            result = svc.branch_status(project_root=project_root)
+
+        assert result["git_branching"] is True
+        assert result["git_branch"] == "feature-x"
+        assert result["linked"] is False
