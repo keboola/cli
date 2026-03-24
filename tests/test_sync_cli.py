@@ -6,6 +6,7 @@ in ctx.obj.
 """
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +17,12 @@ from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.project_service import ProjectService
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from text for assertion matching."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
 
 TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
 
@@ -56,26 +63,29 @@ class TestSyncHelp:
         """sync init --help shows usage text."""
         result = runner.invoke(app, ["sync", "init", "--help"])
         assert result.exit_code == 0
-        assert "Initialize" in result.output or "init" in result.output
-        assert "--project" in result.output
-        assert "--directory" in result.output
-        assert "--git-branching" in result.output
+        output = _strip_ansi(result.output)
+        assert "Initialize" in output or "init" in output
+        assert "--project" in output
+        assert "--directory" in output
+        assert "--git-branching" in output
 
     def test_sync_pull_help(self) -> None:
         """sync pull --help shows usage text."""
         result = runner.invoke(app, ["sync", "pull", "--help"])
         assert result.exit_code == 0
-        assert "Download" in result.output or "pull" in result.output
-        assert "--project" in result.output
-        assert "--directory" in result.output
-        assert "--force" in result.output
+        output = _strip_ansi(result.output)
+        assert "Download" in output or "pull" in output
+        assert "--project" in output
+        assert "--directory" in output
+        assert "--force" in output
 
     def test_sync_status_help(self) -> None:
         """sync status --help shows usage text."""
         result = runner.invoke(app, ["sync", "status", "--help"])
         assert result.exit_code == 0
-        assert "status" in result.output.lower()
-        assert "--directory" in result.output
+        output = _strip_ansi(result.output)
+        assert "status" in output.lower()
+        assert "--directory" in output
 
 
 # ===================================================================
@@ -667,8 +677,9 @@ class TestSyncDiffCli:
         """sync diff --help shows usage text."""
         result = runner.invoke(app, ["sync", "diff", "--help"])
         assert result.exit_code == 0
-        assert "--project" in result.output
-        assert "--directory" in result.output
+        output = _strip_ansi(result.output)
+        assert "--project" in output
+        assert "--directory" in output
 
     def test_sync_diff_json_output(self, tmp_path: Path) -> None:
         """sync diff --json returns structured JSON with changes and summary."""
@@ -798,10 +809,11 @@ class TestSyncPushCli:
         """sync push --help shows usage text."""
         result = runner.invoke(app, ["sync", "push", "--help"])
         assert result.exit_code == 0
-        assert "--project" in result.output
-        assert "--directory" in result.output
-        assert "--dry-run" in result.output
-        assert "--force" in result.output
+        output = _strip_ansi(result.output)
+        assert "--project" in output
+        assert "--directory" in output
+        assert "--dry-run" in output
+        assert "--force" in output
 
     def test_sync_push_json_output(self, tmp_path: Path) -> None:
         """sync push --json returns structured JSON with push results."""
@@ -967,9 +979,10 @@ class TestSyncBranchLinkCli:
         """sync branch-link --help shows usage text."""
         result = runner.invoke(app, ["sync", "branch-link", "--help"])
         assert result.exit_code == 0
-        assert "--project" in result.output
-        assert "--directory" in result.output
-        assert "--branch-id" in result.output
+        output = _strip_ansi(result.output)
+        assert "--project" in output
+        assert "--directory" in output
+        assert "--branch-id" in output
         assert "--branch-name" in result.output
 
     def test_sync_branch_link_json_output(self, tmp_path: Path) -> None:
@@ -1106,7 +1119,8 @@ class TestSyncBranchUnlinkCli:
         """sync branch-unlink --help shows usage text."""
         result = runner.invoke(app, ["sync", "branch-unlink", "--help"])
         assert result.exit_code == 0
-        assert "--directory" in result.output
+        output = _strip_ansi(result.output)
+        assert "--directory" in output
 
     def test_sync_branch_unlink_json_output(self, tmp_path: Path) -> None:
         """sync branch-unlink --json returns structured JSON."""
@@ -1197,7 +1211,8 @@ class TestSyncBranchStatusCli:
         """sync branch-status --help shows usage text."""
         result = runner.invoke(app, ["sync", "branch-status", "--help"])
         assert result.exit_code == 0
-        assert "--directory" in result.output
+        output = _strip_ansi(result.output)
+        assert "--directory" in output
 
     def test_sync_branch_status_json_output(self, tmp_path: Path) -> None:
         """sync branch-status --json returns structured JSON."""
