@@ -86,3 +86,22 @@ QUERY_JOB_MAX_WAIT: float = 120.0  # max seconds to wait for a query job
 
 # --- Workspace Defaults ---
 DEFAULT_WORKSPACE_BACKEND: str = "snowflake"
+
+# --- Sync / Git Workflow ---
+KEBOOLA_DIR_NAME: str = ".keboola"
+MANIFEST_FILENAME: str = "manifest.json"
+BRANCH_MAPPING_FILENAME: str = "branch-mapping.json"
+CONFIG_FILENAME: str = "_config.yml"
+MANIFEST_VERSION: int = 2
+DEFAULT_NAMING_BRANCH: str = "{branch_name}"
+DEFAULT_NAMING_CONFIG: str = "{component_type}/{component_id}/{config_name}"
+DEFAULT_NAMING_CONFIG_ROW: str = "rows/{config_row_name}"
+DEFAULT_NAMING_SCHEDULER: str = "schedules/{config_name}"
+DEFAULT_NAMING_SHARED_CODE: str = "_shared/{target_component_id}"
+DEFAULT_NAMING_SHARED_CODE_ROW: str = "codes/{config_row_name}"
+DEFAULT_NAMING_VARIABLES: str = "variables"
+DEFAULT_NAMING_VARIABLES_VALUES: str = "values/{config_row_name}"
+DEFAULT_NAMING_DATA_APP: str = "app/{component_id}/{config_name}"
+# Aliases used by sync subsystem
+CONFIG_YML_VERSION: int = MANIFEST_VERSION
+SANITIZE_NAME_MAX_LENGTH: int = 100

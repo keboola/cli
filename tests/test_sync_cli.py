@@ -1,0 +1,655 @@
+"""Tests for sync CLI commands via CliRunner.
+
+Tests init, pull, and status subcommands. Follows the existing CLI test
+pattern from test_cli.py and test_workspace_cli.py with patched services
+in ctx.obj.
+"""
+
+import json
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from typer.testing import CliRunner
+
+from keboola_agent_cli.cli import app
+from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.services.project_service import ProjectService
+
+TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+
+runner = CliRunner()
+
+
+def _setup_config(config_dir: Path, projects: dict[str, dict] | None = None) -> ConfigStore:
+    """Set up a ConfigStore with given projects for CLI sync tests."""
+    store = ConfigStore(config_dir=config_dir)
+    if projects:
+        for alias, info in projects.items():
+            store.add_project(
+                alias,
+                ProjectConfig(
+                    stack_url=info.get("stack_url", "https://connection.keboola.com"),
+                    token=info["token"],
+                    project_name=info.get("project_name", alias),
+                    project_id=info.get("project_id", 1234),
+                ),
+            )
+    return store
+
+
+def _make_sync_service_mock() -> MagicMock:
+    """Create a fresh MagicMock for SyncService."""
+    return MagicMock()
+
+
+# ===================================================================
+# Help text tests
+# ===================================================================
+
+
+class TestSyncHelp:
+    """Tests for sync subcommand help output."""
+
+    def test_sync_init_help(self) -> None:
+        """sync init --help shows usage text."""
+        result = runner.invoke(app, ["sync", "init", "--help"])
+        assert result.exit_code == 0
+        assert "Initialize" in result.output or "init" in result.output
+        assert "--project" in result.output
+        assert "--directory" in result.output
+        assert "--git-branching" in result.output
+
+    def test_sync_pull_help(self) -> None:
+        """sync pull --help shows usage text."""
+        result = runner.invoke(app, ["sync", "pull", "--help"])
+        assert result.exit_code == 0
+        assert "Download" in result.output or "pull" in result.output
+        assert "--project" in result.output
+        assert "--directory" in result.output
+        assert "--force" in result.output
+
+    def test_sync_status_help(self) -> None:
+        """sync status --help shows usage text."""
+        result = runner.invoke(app, ["sync", "status", "--help"])
+        assert result.exit_code == 0
+        assert "status" in result.output.lower()
+        assert "--directory" in result.output
+
+
+# ===================================================================
+# sync init CLI tests
+# ===================================================================
+
+
+class TestSyncInitCli:
+    """Tests for `kbagent sync init` command."""
+
+    def test_sync_init_json_output(self, tmp_path: Path) -> None:
+        """sync init --json returns structured JSON with init result."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN, "project_id": 258}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.init_sync.return_value = {
+            "status": "initialized",
+            "project_id": 258,
+            "project_alias": "prod",
+            "api_host": "connection.keboola.com",
+            "git_branching": False,
+            "default_branch": "main",
+            "files_created": ["/tmp/project/.keboola/manifest.json"],
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "init",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["status"] == "initialized"
+        assert output["data"]["project_id"] == 258
+        assert output["data"]["api_host"] == "connection.keboola.com"
+        assert output["data"]["git_branching"] is False
+
+    def test_sync_init_human_output(self, tmp_path: Path) -> None:
+        """sync init in human mode shows success message."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN, "project_id": 258}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.init_sync.return_value = {
+            "status": "initialized",
+            "project_id": 258,
+            "project_alias": "prod",
+            "api_host": "connection.keboola.com",
+            "git_branching": False,
+            "default_branch": "main",
+            "files_created": ["/tmp/project/.keboola/manifest.json"],
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "init",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "prod" in result.output
+        assert "258" in result.output
+
+    def test_sync_init_config_error(self, tmp_path: Path) -> None:
+        """sync init returns exit code 5 when project alias is not found."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(config_dir)
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.init_sync.side_effect = ConfigError("Project 'missing' not found.")
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "init",
+                    "--project",
+                    "missing",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 5
+
+    def test_sync_init_already_exists_error(self, tmp_path: Path) -> None:
+        """sync init returns exit code 1 when manifest already exists."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.init_sync.side_effect = FileExistsError(
+            "Manifest already exists. Use 'sync pull' to update."
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "init",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 1
+
+
+# ===================================================================
+# sync pull CLI tests
+# ===================================================================
+
+
+class TestSyncPullCli:
+    """Tests for `kbagent sync pull` command."""
+
+    def test_sync_pull_json_output(self, tmp_path: Path) -> None:
+        """sync pull --json returns structured JSON with pull stats."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.pull.return_value = {
+            "status": "pulled",
+            "project_alias": "prod",
+            "branch_id": 12345,
+            "branch_dir": "main",
+            "configs_pulled": 5,
+            "rows_pulled": 3,
+            "files_written": 8,
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "pull",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["configs_pulled"] == 5
+        assert output["data"]["rows_pulled"] == 3
+        assert output["data"]["files_written"] == 8
+
+    def test_sync_pull_human_output(self, tmp_path: Path) -> None:
+        """sync pull in human mode shows pulled summary."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.pull.return_value = {
+            "status": "pulled",
+            "project_alias": "prod",
+            "branch_id": 12345,
+            "branch_dir": "main",
+            "configs_pulled": 3,
+            "rows_pulled": 1,
+            "files_written": 4,
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "pull",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "3" in result.output  # configs_pulled
+        assert "1" in result.output  # rows_pulled
+        assert "main" in result.output  # branch_dir
+
+    def test_sync_pull_not_initialized_error(self, tmp_path: Path) -> None:
+        """sync pull returns exit code 1 when project not initialized."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.pull.side_effect = FileNotFoundError(
+            "Manifest not found. Is this a Keboola project directory?"
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "pull",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 1
+
+    def test_sync_pull_api_error(self, tmp_path: Path) -> None:
+        """sync pull returns appropriate exit code on API error."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.pull.side_effect = KeboolaApiError(
+            message="Invalid token",
+            status_code=401,
+            error_code="INVALID_TOKEN",
+            retryable=False,
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "pull",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 3  # auth error
+
+
+# ===================================================================
+# sync status CLI tests
+# ===================================================================
+
+
+class TestSyncStatusCli:
+    """Tests for `kbagent sync status` command."""
+
+    def test_sync_status_no_changes(self, tmp_path: Path) -> None:
+        """sync status shows 'No changes detected' when nothing is modified."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.status.return_value = {
+            "modified": [],
+            "added": [],
+            "deleted": [],
+            "unchanged": 5,
+            "total_tracked": 5,
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "status",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "No changes detected" in result.output
+        assert "5" in result.output  # number of tracked configs
+
+    def test_sync_status_json_output(self, tmp_path: Path) -> None:
+        """sync status --json returns structured JSON with change lists."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.status.return_value = {
+            "modified": [
+                {
+                    "component_id": "keboola.ex-http",
+                    "config_id": "cfg-001",
+                    "path": "extractor/keboola.ex-http/my-config",
+                }
+            ],
+            "added": [],
+            "deleted": [
+                {
+                    "component_id": "keboola.snowflake-transformation",
+                    "config_id": "cfg-002",
+                    "path": "transformation/keboola.snowflake-transformation/clean-data",
+                }
+            ],
+            "unchanged": 3,
+            "total_tracked": 5,
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "status",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        data = output["data"]
+        assert len(data["modified"]) == 1
+        assert len(data["deleted"]) == 1
+        assert data["unchanged"] == 3
+        assert data["total_tracked"] == 5
+
+    def test_sync_status_with_changes_human(self, tmp_path: Path) -> None:
+        """sync status in human mode shows M/A/D prefixed entries."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.status.return_value = {
+            "modified": [
+                {
+                    "component_id": "keboola.ex-http",
+                    "config_id": "cfg-001",
+                    "path": "extractor/keboola.ex-http/my-config",
+                }
+            ],
+            "added": [
+                {
+                    "component_id": "keboola.ex-db",
+                    "config_id": "cfg-new",
+                    "path": "extractor/keboola.ex-db/new-config",
+                }
+            ],
+            "deleted": [
+                {
+                    "component_id": "keboola.snowflake-transformation",
+                    "config_id": "cfg-002",
+                    "path": "transformation/keboola.snowflake-transformation/clean-data",
+                }
+            ],
+            "unchanged": 2,
+            "total_tracked": 4,
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "status",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        # Human output should show M, A, D prefixes
+        assert "M " in result.output  # Modified
+        assert "A " in result.output  # Added
+        assert "D " in result.output  # Deleted
+        # Should contain summary line
+        assert "1 modified" in result.output
+        assert "1 added" in result.output
+        assert "1 deleted" in result.output
+
+    def test_sync_status_not_initialized_error(self, tmp_path: Path) -> None:
+        """sync status returns exit code 1 when project not initialized."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(config_dir)
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.status.side_effect = FileNotFoundError(
+            "Manifest not found. Is this a Keboola project directory?"
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "status",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 1

@@ -170,6 +170,53 @@ class KeboolaClient(BaseHttpClient):
         response = self._request("GET", "/v2/storage/components", params=params)
         return response.json()
 
+    def list_components_with_configs(
+        self, branch_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        """List all components with full configuration bodies and rows.
+
+        Makes a single API call to fetch everything needed for sync pull.
+        Uses the include=configuration,rows parameter to get full config
+        bodies and config rows in one request.
+
+        Args:
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            List of component dicts, each containing a 'configurations' list
+            with full config bodies and nested 'rows'.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        resp = self._request(
+            "GET",
+            f"{prefix}/components",
+            params={"include": "configuration,rows"},
+        )
+        return resp.json()
+
+    def list_config_rows(
+        self,
+        component_id: str,
+        config_id: str,
+        branch_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List all rows for a specific configuration.
+
+        Args:
+            component_id: Component identifier (e.g. 'keboola.ex-http').
+            config_id: Configuration ID.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            List of config row dicts.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        resp = self._request(
+            "GET",
+            f"{prefix}/components/{quote(component_id)}/configs/{quote(config_id)}/rows",
+        )
+        return resp.json()
+
     def get_config_detail(self, component_id: str, config_id: str) -> dict[str, Any]:
         """Get detailed information about a specific configuration.
 

@@ -1,0 +1,437 @@
+"""Sync service - business logic for project pull/push/status operations.
+
+Handles downloading Keboola project configurations to the local filesystem
+in a dev-friendly format (YAML configs), and tracking local changes.
+"""
+
+import hashlib
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from ..constants import (
+    BRANCH_MAPPING_FILENAME,
+    CONFIG_FILENAME,
+    KEBOOLA_DIR_NAME,
+    MANIFEST_VERSION,
+)
+from ..errors import ConfigError
+from ..sync.config_format import (
+    api_config_to_local,
+    api_row_to_local,
+    classify_component_type,
+)
+from ..sync.git_utils import get_default_branch, is_git_repo
+from ..sync.manifest import (
+    Manifest,
+    ManifestBranch,
+    ManifestConfigRow,
+    ManifestConfiguration,
+    ManifestGitBranching,
+    ManifestNaming,
+    ManifestProject,
+    load_manifest,
+    save_manifest,
+)
+from ..sync.naming import config_path, config_row_path
+from .base import BaseService
+
+logger = logging.getLogger(__name__)
+
+
+class SyncService(BaseService):
+    """Business logic for project sync operations (init, pull, status).
+
+    Single-project operations only. Uses dependency injection for
+    config_store and client_factory following the BaseService pattern.
+    """
+
+    # ------------------------------------------------------------------
+    # init
+    # ------------------------------------------------------------------
+
+    def init_sync(
+        self,
+        alias: str,
+        project_root: Path,
+        git_branching: bool = False,
+    ) -> dict[str, Any]:
+        """Initialize a sync working directory for a project.
+
+        Creates the ``.keboola/`` directory with ``manifest.json``.
+        Fetches project metadata from the API to populate the manifest.
+
+        Args:
+            alias: Project alias from config store.
+            project_root: Root directory for the sync working tree.
+            git_branching: Enable git-branching mode.
+
+        Returns:
+            Dict with initialization stats and created file paths.
+
+        Raises:
+            ConfigError: If the project alias is not found.
+            FileExistsError: If manifest already exists (use pull instead).
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        keboola_dir = project_root / KEBOOLA_DIR_NAME
+        manifest_path = keboola_dir / "manifest.json"
+        if manifest_path.exists():
+            raise FileExistsError(
+                f"Manifest already exists at {manifest_path}. "
+                "Use 'sync pull' to update, or delete .keboola/ to reinitialize."
+            )
+
+        # Fetch project info from API
+        client = self._client_factory(project.stack_url, project.token)
+        with client:
+            token_info = client.verify_token()
+            branches = client.list_dev_branches()
+
+        project_id = token_info.project_id
+        api_host = project.stack_url.replace("https://", "").rstrip("/")
+        default_branch_info = next(
+            (b for b in branches if b.get("isDefault")),
+            None,
+        )
+        default_branch_id = default_branch_info["id"] if default_branch_info else None
+        default_branch_name = "main"
+
+        # Git branching setup
+        git_branching_config = ManifestGitBranching(enabled=False)
+        if git_branching:
+            if not is_git_repo(project_root):
+                raise ConfigError(
+                    "Git repository not found. "
+                    "Initialize git first: git init"
+                )
+            default_branch_name = get_default_branch(project_root)
+            git_branching_config = ManifestGitBranching(
+                enabled=True,
+                default_branch=default_branch_name,
+            )
+
+        # Build manifest
+        manifest = Manifest(
+            version=MANIFEST_VERSION,
+            project=ManifestProject(id=project_id, api_host=api_host),
+            allow_target_env=True,
+            git_branching=git_branching_config,
+            naming=ManifestNaming(),
+            branches=[
+                ManifestBranch(
+                    id=default_branch_id,
+                    path=default_branch_name,
+                )
+            ]
+            if default_branch_id
+            else [],
+            configurations=[],
+        )
+
+        # Save manifest
+        save_manifest(project_root, manifest)
+
+        created_files = [str(manifest_path)]
+
+        # Create branch mapping if git-branching mode
+        if git_branching:
+            mapping = {
+                "version": 1,
+                "mappings": {
+                    default_branch_name: {
+                        "id": None,
+                        "name": "Main",
+                    }
+                },
+            }
+            mapping_path = keboola_dir / BRANCH_MAPPING_FILENAME
+            mapping_path.write_text(
+                json.dumps(mapping, indent=4, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            created_files.append(str(mapping_path))
+
+        return {
+            "status": "initialized",
+            "project_id": project_id,
+            "project_alias": alias,
+            "api_host": api_host,
+            "git_branching": git_branching,
+            "default_branch": default_branch_name,
+            "files_created": created_files,
+        }
+
+    # ------------------------------------------------------------------
+    # pull
+    # ------------------------------------------------------------------
+
+    def pull(
+        self,
+        alias: str,
+        project_root: Path,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Download all configurations from Keboola to local filesystem.
+
+        Args:
+            alias: Project alias from config store.
+            project_root: Root directory of the sync working tree.
+            force: If True, overwrite existing local files without checking.
+
+        Returns:
+            Dict with pull statistics (configs, rows, files written).
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        # Load or verify manifest exists
+        manifest = load_manifest(project_root)
+
+        # Determine branch to pull from
+        branch_id = project.active_branch_id
+        if not branch_id and manifest.branches:
+            branch_id = manifest.branches[0].id
+
+        # Fetch all components with configs from API
+        client = self._client_factory(project.stack_url, project.token)
+        with client:
+            components = client.list_components_with_configs(branch_id=branch_id)
+
+        # Determine branch directory name
+        branch_dir_name = "main"
+        for mb in manifest.branches:
+            if mb.id == branch_id:
+                branch_dir_name = mb.path
+                break
+
+        branch_dir = project_root / branch_dir_name
+
+        # Track stats
+        configs_pulled = 0
+        rows_pulled = 0
+        files_written = 0
+        new_configurations: list[ManifestConfiguration] = []
+        used_paths: set[str] = set()  # detect naming collisions
+
+        for component in components:
+            component_id = component.get("id", "")
+            component_type = classify_component_type(component.get("type", "other"))
+            configs = component.get("configurations", [])
+
+            for cfg in configs:
+                config_id = str(cfg.get("id", ""))
+                config_name = cfg.get("name", "untitled")
+
+                # Generate filesystem path with collision detection
+                rel_path = config_path(
+                    manifest.naming.config,
+                    component_type,
+                    component_id,
+                    config_name,
+                )
+                if rel_path in used_paths:
+                    # Append short config ID suffix to resolve collision
+                    suffix = config_id[:8] if len(config_id) > 8 else config_id
+                    rel_path = f"{rel_path}-{suffix}"
+                used_paths.add(rel_path)
+                config_dir = branch_dir / rel_path
+
+                # Convert API format to local _config.yml
+                local_data = api_config_to_local(component_id, cfg, config_id)
+
+                # Write _config.yml and capture content hash
+                file_hash = self._write_config_file(config_dir, local_data)
+                files_written += 1
+                configs_pulled += 1
+
+                # Handle rows
+                row_manifests: list[ManifestConfigRow] = []
+                used_row_paths: set[str] = set()
+                for row in cfg.get("rows", []):
+                    row_id = str(row.get("id", ""))
+                    row_name = row.get("name", "untitled")
+
+                    row_rel_path = config_row_path(
+                        manifest.naming.config_row,
+                        row_name,
+                    )
+                    if row_rel_path in used_row_paths:
+                        suffix = row_id[:8] if len(row_id) > 8 else row_id
+                        row_rel_path = f"{row_rel_path}-{suffix}"
+                    used_row_paths.add(row_rel_path)
+                    row_dir = config_dir / row_rel_path
+
+                    row_local = api_row_to_local(row, component_id)
+                    self._write_config_file(row_dir, row_local)
+                    files_written += 1
+                    rows_pulled += 1
+
+                    row_manifests.append(
+                        ManifestConfigRow(id=row_id, path=row_rel_path)
+                    )
+
+                # Record in manifest (store file hash for change detection)
+                new_configurations.append(
+                    ManifestConfiguration(
+                        branch_id=branch_id or 0,
+                        component_id=component_id,
+                        id=config_id,
+                        path=rel_path,
+                        metadata={"pull_hash": file_hash},
+                        rows=row_manifests,
+                    )
+                )
+
+        # Update manifest with pulled configurations
+        manifest.configurations = new_configurations
+        save_manifest(project_root, manifest)
+
+        return {
+            "status": "pulled",
+            "project_alias": alias,
+            "branch_id": branch_id,
+            "branch_dir": branch_dir_name,
+            "configs_pulled": configs_pulled,
+            "rows_pulled": rows_pulled,
+            "files_written": files_written,
+        }
+
+    # ------------------------------------------------------------------
+    # status
+    # ------------------------------------------------------------------
+
+    def status(self, project_root: Path) -> dict[str, Any]:
+        """Compare local state against the manifest to detect changes.
+
+        Walks the local filesystem and compares against manifest entries
+        to classify configurations as modified, added, deleted, or unchanged.
+
+        Args:
+            project_root: Root directory of the sync working tree.
+
+        Returns:
+            Dict with lists of modified/added/deleted configs and count of unchanged.
+        """
+        manifest = load_manifest(project_root)
+
+        modified: list[dict[str, str]] = []
+        deleted: list[dict[str, str]] = []
+        unchanged = 0
+
+        # Check each manifest entry against local files
+        for cfg in manifest.configurations:
+            branch_path = self._find_branch_path(manifest, cfg.branch_id)
+            config_dir = project_root / branch_path / cfg.path
+            config_file = config_dir / CONFIG_FILENAME
+
+            if not config_file.exists():
+                deleted.append({
+                    "component_id": cfg.component_id,
+                    "config_id": cfg.id,
+                    "path": str(cfg.path),
+                })
+                continue
+
+            # Compare file hash against the hash stored at pull time
+            current_hash = self._file_hash(config_file)
+            pull_hash = cfg.metadata.get("pull_hash", "")
+
+            if pull_hash and current_hash == pull_hash:
+                unchanged += 1
+            else:
+                modified.append({
+                    "component_id": cfg.component_id,
+                    "config_id": cfg.id,
+                    "path": str(cfg.path),
+                })
+
+        # Scan for added configs (local files without manifest entry)
+        added = self._find_untracked_configs(project_root, manifest)
+
+        return {
+            "modified": modified,
+            "added": added,
+            "deleted": deleted,
+            "unchanged": unchanged,
+            "total_tracked": len(manifest.configurations),
+        }
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _write_config_file(self, config_dir: Path, config_data: dict[str, Any]) -> str:
+        """Write a ``_config.yml`` file and return its SHA256 hash."""
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_file = config_dir / CONFIG_FILENAME
+        content = yaml.dump(
+            config_data,
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False,
+            width=120,
+        )
+        config_file.write_text(content, encoding="utf-8")
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def _file_hash(self, file_path: Path) -> str:
+        """Return the SHA256 hex digest of a file's contents."""
+        content = file_path.read_bytes()
+        return hashlib.sha256(content).hexdigest()
+
+    def _read_config_file(self, config_dir: Path) -> dict[str, Any] | None:
+        """Read and parse a ``_config.yml`` file, returning None if missing."""
+        config_file = config_dir / CONFIG_FILENAME
+        if not config_file.exists():
+            return None
+        try:
+            return yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            logger.warning("Failed to parse %s", config_file)
+            return None
+
+    def _find_branch_path(self, manifest: Manifest, branch_id: int) -> str:
+        """Find the branch directory name for a given branch ID."""
+        for branch in manifest.branches:
+            if branch.id == branch_id:
+                return branch.path
+        return "main"
+
+    def _find_untracked_configs(
+        self, project_root: Path, manifest: Manifest
+    ) -> list[dict[str, str]]:
+        """Scan for _config.yml files that are not tracked in the manifest."""
+        tracked_paths: set[str] = set()
+        for cfg in manifest.configurations:
+            branch_path = self._find_branch_path(manifest, cfg.branch_id)
+            tracked_paths.add(str(project_root / branch_path / cfg.path))
+
+        added: list[dict[str, str]] = []
+        for branch in manifest.branches:
+            branch_dir = project_root / branch.path
+            if not branch_dir.exists():
+                continue
+            for config_file in branch_dir.rglob(CONFIG_FILENAME):
+                config_dir = config_file.parent
+                # Skip row-level configs (they're under rows/ subdirectory)
+                if "rows" in config_dir.parts:
+                    continue
+                # Skip branch-level _config.yml
+                if config_dir == branch_dir:
+                    continue
+                if str(config_dir) not in tracked_paths:
+                    local_data = self._read_config_file(config_dir)
+                    keboola_meta = local_data.get("_keboola", {}) if local_data else {}
+                    added.append({
+                        "component_id": keboola_meta.get("component_id", "unknown"),
+                        "config_id": keboola_meta.get("config_id", ""),
+                        "path": str(config_dir.relative_to(project_root / branch.path)),
+                    })
+
+        return added

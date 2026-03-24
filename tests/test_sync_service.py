@@ -1,0 +1,631 @@
+"""Tests for SyncService - init, pull, and status business logic.
+
+Tests use tmp_path for filesystem operations and MagicMock for API client.
+"""
+
+import json
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+import yaml
+
+from helpers import setup_single_project
+from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.constants import (
+    BRANCH_MAPPING_FILENAME,
+    CONFIG_FILENAME,
+    KEBOOLA_DIR_NAME,
+    MANIFEST_VERSION,
+)
+from keboola_agent_cli.errors import ConfigError
+from keboola_agent_cli.models import TokenVerifyResponse
+from keboola_agent_cli.services.sync_service import SyncService
+from keboola_agent_cli.sync.manifest import load_manifest
+
+# ---------------------------------------------------------------------------
+# Sample API data
+# ---------------------------------------------------------------------------
+
+SAMPLE_VERIFY_TOKEN = TokenVerifyResponse(
+    token_id="tok-001",
+    token_description="kbagent-cli",
+    project_id=258,
+    project_name="Production",
+    owner_name="My Org",
+)
+
+SAMPLE_BRANCHES = [
+    {"id": 12345, "name": "Main", "isDefault": True},
+]
+
+SAMPLE_BRANCHES_WITH_DEV = [
+    {"id": 12345, "name": "Main", "isDefault": True},
+    {"id": 99999, "name": "feature-x", "isDefault": False},
+]
+
+SAMPLE_COMPONENTS = [
+    {
+        "id": "keboola.ex-http",
+        "type": "extractor",
+        "configurations": [
+            {
+                "id": "cfg-001",
+                "name": "My HTTP Extractor",
+                "description": "Fetches data",
+                "configuration": {
+                    "parameters": {"baseUrl": "https://api.example.com"},
+                },
+                "rows": [
+                    {
+                        "id": "row-001",
+                        "name": "Users Endpoint",
+                        "description": "",
+                        "configuration": {
+                            "parameters": {"path": "/users"},
+                        },
+                    }
+                ],
+            }
+        ],
+    },
+    {
+        "id": "keboola.snowflake-transformation",
+        "type": "transformation",
+        "configurations": [
+            {
+                "id": "cfg-002",
+                "name": "Clean Data",
+                "description": "Cleans raw data",
+                "configuration": {
+                    "parameters": {},
+                    "storage": {
+                        "output": {
+                            "tables": [
+                                {
+                                    "source": "clean",
+                                    "destination": "out.c-main.clean",
+                                }
+                            ],
+                        },
+                    },
+                },
+                "rows": [],
+            }
+        ],
+    },
+]
+
+SAMPLE_COMPONENTS_NO_ROWS = [
+    {
+        "id": "keboola.ex-http",
+        "type": "extractor",
+        "configurations": [
+            {
+                "id": "cfg-001",
+                "name": "My HTTP Extractor",
+                "description": "Fetches data",
+                "configuration": {
+                    "parameters": {"baseUrl": "https://api.example.com"},
+                },
+                "rows": [],
+            }
+        ],
+    },
+]
+
+
+# ---------------------------------------------------------------------------
+# Mock client factory
+# ---------------------------------------------------------------------------
+
+
+def _make_sync_mock_client(
+    verify_token_response: TokenVerifyResponse | None = None,
+    components_response: list | None = None,
+    branches_response: list | None = None,
+) -> MagicMock:
+    """Create a mock KeboolaClient suitable for SyncService tests."""
+    client = MagicMock()
+    # Support context manager usage
+    client.__enter__ = MagicMock(return_value=client)
+    client.__exit__ = MagicMock(return_value=False)
+
+    if verify_token_response:
+        client.verify_token.return_value = verify_token_response
+
+    if components_response is not None:
+        client.list_components_with_configs.return_value = components_response
+
+    if branches_response is not None:
+        client.list_dev_branches.return_value = branches_response
+
+    return client
+
+
+# ===================================================================
+# init_sync tests
+# ===================================================================
+
+
+class TestInitSync:
+    """Tests for SyncService.init_sync()."""
+
+    def test_init_sync_basic(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """init_sync creates manifest.json with correct project ID, api_host, and branches."""
+        mock_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        result = svc.init_sync(alias="prod", project_root=project_root)
+
+        # Verify result dict
+        assert result["status"] == "initialized"
+        assert result["project_id"] == 258
+        assert result["project_alias"] == "prod"
+        assert result["api_host"] == "connection.keboola.com"
+        assert result["git_branching"] is False
+        assert result["default_branch"] == "main"
+        assert len(result["files_created"]) == 1
+
+        # Verify manifest.json was created
+        manifest_path = project_root / KEBOOLA_DIR_NAME / "manifest.json"
+        assert manifest_path.exists()
+
+        manifest = load_manifest(project_root)
+        assert manifest.version == MANIFEST_VERSION
+        assert manifest.project.id == 258
+        assert manifest.project.api_host == "connection.keboola.com"
+        assert len(manifest.branches) == 1
+        assert manifest.branches[0].id == 12345
+        assert manifest.branches[0].path == "main"
+        assert manifest.configurations == []
+        assert manifest.git_branching.enabled is False
+
+    def test_init_sync_git_branching(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """init_sync with git_branching=True creates branch-mapping.json."""
+        mock_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        with (
+            patch(
+                "keboola_agent_cli.services.sync_service.is_git_repo",
+                return_value=True,
+            ),
+            patch(
+                "keboola_agent_cli.services.sync_service.get_default_branch",
+                return_value="main",
+            ),
+        ):
+            result = svc.init_sync(
+                alias="prod",
+                project_root=project_root,
+                git_branching=True,
+            )
+
+        assert result["git_branching"] is True
+        assert result["default_branch"] == "main"
+        assert len(result["files_created"]) == 2
+
+        # Verify branch-mapping.json was created
+        mapping_path = project_root / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME
+        assert mapping_path.exists()
+
+        mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+        assert mapping["version"] == 1
+        assert "main" in mapping["mappings"]
+        assert mapping["mappings"]["main"]["name"] == "Main"
+
+        # Verify manifest has git branching enabled
+        manifest = load_manifest(project_root)
+        assert manifest.git_branching.enabled is True
+        assert manifest.git_branching.default_branch == "main"
+
+    def test_init_sync_already_exists(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """init_sync raises FileExistsError when manifest already exists."""
+        mock_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        # Create manifest first time
+        svc.init_sync(alias="prod", project_root=project_root)
+
+        # Second time should raise
+        with pytest.raises(FileExistsError, match="Manifest already exists"):
+            svc.init_sync(alias="prod", project_root=project_root)
+
+    def test_init_sync_project_not_found(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """init_sync raises ConfigError when alias is not configured."""
+        store = setup_single_project(tmp_config_dir)
+        svc = SyncService(config_store=store)
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        with pytest.raises(ConfigError, match="not found"):
+            svc.init_sync(alias="nonexistent", project_root=project_root)
+
+    def test_init_sync_git_branching_no_git_repo(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """init_sync with git_branching raises ConfigError when not a git repo."""
+        mock_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        with (
+            patch(
+                "keboola_agent_cli.services.sync_service.is_git_repo",
+                return_value=False,
+            ),
+            pytest.raises(ConfigError, match="Git repository not found"),
+        ):
+            svc.init_sync(
+                alias="prod",
+                project_root=project_root,
+                git_branching=True,
+            )
+
+    def test_init_sync_strips_https_prefix(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """init_sync strips https:// prefix from stack_url for api_host."""
+        mock_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        result = svc.init_sync(alias="prod", project_root=project_root)
+
+        # https://connection.keboola.com -> connection.keboola.com
+        assert result["api_host"] == "connection.keboola.com"
+        assert not result["api_host"].startswith("https://")
+
+
+# ===================================================================
+# pull tests
+# ===================================================================
+
+
+class TestPull:
+    """Tests for SyncService.pull()."""
+
+    def _init_project(
+        self,
+        tmp_config_dir: Path,
+        project_root: Path,
+        branches_response: list | None = None,
+    ) -> ConfigStore:
+        """Helper: init a project and return the ConfigStore for reuse."""
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=branches_response or SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        init_svc.init_sync(alias="prod", project_root=project_root)
+        return store
+
+    def test_pull_basic(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """pull writes _config.yml files for each configuration."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_project(tmp_config_dir, project_root)
+
+        # Create a new service with the pull client
+        pull_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS_NO_ROWS,
+        )
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+
+        result = svc.pull(alias="prod", project_root=project_root)
+
+        assert result["status"] == "pulled"
+        assert result["project_alias"] == "prod"
+        assert result["configs_pulled"] == 1
+        assert result["rows_pulled"] == 0
+        assert result["files_written"] == 1
+        assert result["branch_dir"] == "main"
+
+        # Verify _config.yml was written
+        config_files = list(project_root.rglob(CONFIG_FILENAME))
+        assert len(config_files) == 1
+
+        config_data = yaml.safe_load(config_files[0].read_text(encoding="utf-8"))
+        assert config_data["name"] == "My HTTP Extractor"
+        assert config_data["_keboola"]["component_id"] == "keboola.ex-http"
+        assert config_data["_keboola"]["config_id"] == "cfg-001"
+        assert config_data["parameters"]["baseUrl"] == "https://api.example.com"
+
+    def test_pull_with_rows(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """pull writes config rows under rows/ subdirectory."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_project(tmp_config_dir, project_root)
+
+        pull_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS,
+        )
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+
+        result = svc.pull(alias="prod", project_root=project_root)
+
+        assert result["configs_pulled"] == 2
+        assert result["rows_pulled"] == 1
+        assert result["files_written"] == 3  # 2 configs + 1 row
+
+        # Verify config files exist
+        config_files = list(project_root.rglob(CONFIG_FILENAME))
+        assert len(config_files) == 3  # 2 configs + 1 row _config.yml
+
+        # Find the row config file (under rows/ subdirectory relative to project_root)
+        row_config_files = [
+            f for f in config_files if "/rows/" in str(f.relative_to(project_root))
+        ]
+        assert len(row_config_files) == 1
+
+        row_data = yaml.safe_load(row_config_files[0].read_text(encoding="utf-8"))
+        assert row_data["name"] == "Users Endpoint"
+        assert row_data["_keboola"]["component_id"] == "keboola.ex-http"
+        assert row_data["_keboola"]["row_id"] == "row-001"
+        assert row_data["parameters"]["path"] == "/users"
+
+    def test_pull_updates_manifest(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """pull updates manifest.configurations after downloading."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_project(tmp_config_dir, project_root)
+
+        # Verify manifest starts with no configurations
+        manifest_before = load_manifest(project_root)
+        assert manifest_before.configurations == []
+
+        pull_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS,
+        )
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+
+        svc.pull(alias="prod", project_root=project_root)
+
+        # Verify manifest now has configurations
+        manifest_after = load_manifest(project_root)
+        assert len(manifest_after.configurations) == 2
+
+        # Verify first config entry
+        cfg1 = manifest_after.configurations[0]
+        assert cfg1.component_id == "keboola.ex-http"
+        assert cfg1.id == "cfg-001"
+        assert cfg1.branch_id == 12345
+        assert len(cfg1.rows) == 1
+        assert cfg1.rows[0].id == "row-001"
+
+        # Verify second config entry (no rows)
+        cfg2 = manifest_after.configurations[1]
+        assert cfg2.component_id == "keboola.snowflake-transformation"
+        assert cfg2.id == "cfg-002"
+        assert cfg2.rows == []
+
+    def test_pull_no_manifest(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """pull raises FileNotFoundError when manifest doesn't exist."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = SyncService(config_store=store)
+
+        with pytest.raises(FileNotFoundError, match="Manifest not found"):
+            svc.pull(alias="prod", project_root=project_root)
+
+    def test_pull_empty_components(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """pull with no components writes zero files and updates manifest."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_project(tmp_config_dir, project_root)
+
+        pull_client = _make_sync_mock_client(components_response=[])
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+
+        result = svc.pull(alias="prod", project_root=project_root)
+
+        assert result["configs_pulled"] == 0
+        assert result["rows_pulled"] == 0
+        assert result["files_written"] == 0
+
+        manifest = load_manifest(project_root)
+        assert manifest.configurations == []
+
+
+# ===================================================================
+# status tests
+# ===================================================================
+
+
+class TestStatus:
+    """Tests for SyncService.status()."""
+
+    def _init_and_pull(
+        self,
+        tmp_config_dir: Path,
+        project_root: Path,
+        components: list | None = None,
+    ) -> SyncService:
+        """Helper: init + pull to get a working directory with configs."""
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        init_svc.init_sync(alias="prod", project_root=project_root)
+
+        pull_client = _make_sync_mock_client(
+            components_response=components if components is not None else SAMPLE_COMPONENTS,
+        )
+        pull_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+        pull_svc.pull(alias="prod", project_root=project_root)
+        return pull_svc
+
+    def test_status_no_changes(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """status after pull shows all configs unchanged."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        svc = self._init_and_pull(tmp_config_dir, project_root)
+
+        result = svc.status(project_root=project_root)
+
+        assert result["modified"] == []
+        assert result["added"] == []
+        assert result["deleted"] == []
+        assert result["unchanged"] == 2  # 2 configs from SAMPLE_COMPONENTS
+        assert result["total_tracked"] == 2
+
+    def test_status_deleted_config(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """status shows deleted when a _config.yml is removed."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        svc = self._init_and_pull(tmp_config_dir, project_root)
+
+        # Delete one config file
+        config_files = list(project_root.rglob(CONFIG_FILENAME))
+        # Find a config file that is NOT under rows/
+        top_level_configs = [
+            f for f in config_files if "rows" not in str(f)
+        ]
+        assert len(top_level_configs) >= 1
+
+        # Delete the first top-level config
+        deleted_file = top_level_configs[0]
+        deleted_file.unlink()
+
+        result = svc.status(project_root=project_root)
+
+        assert len(result["deleted"]) == 1
+        assert result["deleted"][0]["config_id"] in ("cfg-001", "cfg-002")
+        # The other config should still be unchanged
+        assert result["unchanged"] == 1
+
+    def test_status_no_manifest(self, tmp_path: Path) -> None:
+        """status raises FileNotFoundError when manifest doesn't exist."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        # Use a minimal service (no config store needed for status)
+        store = MagicMock()
+        svc = SyncService(config_store=store)
+
+        with pytest.raises(FileNotFoundError, match="Manifest not found"):
+            svc.status(project_root=project_root)
+
+    def test_status_modified_config(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """status shows modified when _keboola.config_id is changed in a file."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        svc = self._init_and_pull(tmp_config_dir, project_root)
+
+        # Modify a config file by changing the _keboola metadata
+        config_files = list(project_root.rglob(CONFIG_FILENAME))
+        top_level_configs = [
+            f for f in config_files if "rows" not in str(f)
+        ]
+        assert len(top_level_configs) >= 1
+
+        modified_file = top_level_configs[0]
+        config_data = yaml.safe_load(modified_file.read_text(encoding="utf-8"))
+        config_data["_keboola"]["config_id"] = "changed-id"
+        modified_file.write_text(
+            yaml.dump(config_data, default_flow_style=False),
+            encoding="utf-8",
+        )
+
+        result = svc.status(project_root=project_root)
+
+        assert len(result["modified"]) == 1
+        assert result["unchanged"] == 1
+
+    def test_status_empty_project(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """status with no configurations shows all zeros."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        svc = self._init_and_pull(tmp_config_dir, project_root, components=[])
+
+        result = svc.status(project_root=project_root)
+
+        assert result["modified"] == []
+        assert result["added"] == []
+        assert result["deleted"] == []
+        assert result["unchanged"] == 0
+        assert result["total_tracked"] == 0
