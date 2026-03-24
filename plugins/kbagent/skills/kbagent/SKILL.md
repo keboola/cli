@@ -41,6 +41,7 @@ This prints all commands, flags, workflows, and tips. Read it fully before proce
 | Remove a Keboola project connection | `kbagent project remove --alias ALIAS` |
 | Edit an existing Keboola project connection | `kbagent project edit --alias ALIAS` |
 | Test connectivity to connected Keboola projects | `kbagent project status` |
+| Set up all projects from a Keboola organization | `kbagent org setup --org-id ORG-ID --url URL` |
 | List configurations from connected projects | `kbagent config list` |
 | Show detailed information about a specific configuration | `kbagent config detail --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Search through configuration bodies for a string or pattern | `kbagent config search --query QUERY` |
@@ -48,19 +49,16 @@ This prints all commands, flags, workflows, and tips. Read it fully before proce
 | Delete a configuration from a project | `kbagent config delete --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | List jobs from connected projects | `kbagent job list` |
 | Show detailed information about a specific job | `kbagent job detail --project PROJECT --job-id JOB-ID` |
+| List storage buckets with sharing/linked bucket information | `kbagent storage buckets` |
+| Show detailed bucket info including Snowflake direct access paths | `kbagent storage bucket-detail --project PROJECT --bucket-id BUCKET-ID` |
+| List storage tables from a project | `kbagent storage tables --project PROJECT` |
 | Show cross-project data lineage via bucket sharing | `kbagent lineage show` |
-| Set up all projects from a Keboola organization | `kbagent org setup --org-id ORG-ID --url URL` |
-| List available MCP tools from the keboola-mcp-server | `kbagent tool list` |
-| Call an MCP tool on keboola-mcp-server | `kbagent tool call <TOOL-NAME>` |
 | List development branches from connected projects | `kbagent branch list` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
 | Reset the active branch back to main/production | `kbagent branch reset --project PROJECT` |
 | Delete a development branch | `kbagent branch delete --project PROJECT --branch BRANCH` |
 | Get the KBC UI merge URL for a development branch | `kbagent branch merge --project PROJECT` |
-| Generate and open the KBC Explorer dashboard | `kbagent explorer` |
-| Generate a tiers.yaml template from registered projects | `kbagent explorer init-tiers` |
-| Export project to Twin Format for AI consumption | `kbagent llm export` |
 | Create a new workspace | `kbagent workspace create --project PROJECT` |
 | List workspaces from connected projects | `kbagent workspace list` |
 | Show workspace details (password NOT included) | `kbagent workspace detail --project PROJECT --workspace-id WORKSPACE-ID` |
@@ -69,9 +67,8 @@ This prints all commands, flags, workflows, and tips. Read it fully before proce
 | Load tables into a workspace | `kbagent workspace load --project PROJECT --workspace-id WORKSPACE-ID --tables TABLES` |
 | Execute SQL query in a workspace via Query Service | `kbagent workspace query --project PROJECT --workspace-id WORKSPACE-ID` |
 | Create a workspace from a transformation config | `kbagent workspace from-transformation --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
-| List storage buckets with sharing/linked bucket information | `kbagent storage buckets` |
-| Show detailed bucket info including Snowflake direct access paths | `kbagent storage bucket-detail --project PROJECT --bucket-id BUCKET-ID` |
-| List storage tables from a project | `kbagent storage tables --project PROJECT` |
+| List available MCP tools from the keboola-mcp-server | `kbagent tool list` |
+| Call an MCP tool on keboola-mcp-server | `kbagent tool call <TOOL-NAME>` |
 | Initialize a sync working directory for a Keboola project | `kbagent sync init --project PROJECT` |
 | Download all configurations from a Keboola project to local files | `kbagent sync pull --project PROJECT` |
 | Show which local configurations have been modified, added, or deleted | `kbagent sync status` |
@@ -80,6 +77,9 @@ This prints all commands, flags, workflows, and tips. Read it fully before proce
 | Link the current git branch to a Keboola development branch | `kbagent sync branch-link --project PROJECT` |
 | Remove the branch mapping for the current git branch | `kbagent sync branch-unlink` |
 | Show the branch mapping status for the current git branch | `kbagent sync branch-status` |
+| Export project to Twin Format for AI consumption | `kbagent llm export` |
+| [deprecated] KBC Explorer dashboard -- use 'sync pull' instead | `kbagent explorer` |
+| Generate a tiers.yaml template from registered projects | `kbagent explorer init-tiers` |
 <!-- END AUTO-GENERATED COMMANDS -->
 
 ## Response format
