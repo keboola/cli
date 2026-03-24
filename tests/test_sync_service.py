@@ -629,3 +629,236 @@ class TestStatus:
         assert result["deleted"] == []
         assert result["unchanged"] == 0
         assert result["total_tracked"] == 0
+
+
+# ===================================================================
+# diff tests
+# ===================================================================
+
+
+class TestDiff:
+    """Tests for SyncService.diff()."""
+
+    def _init_and_pull(
+        self,
+        tmp_config_dir: Path,
+        project_root: Path,
+        components: list | None = None,
+    ) -> tuple[ConfigStore, SyncService]:
+        """Helper: init + pull to get a working directory, return (store, svc)."""
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        init_svc.init_sync(alias="prod", project_root=project_root)
+
+        pull_client = _make_sync_mock_client(
+            components_response=components if components is not None else SAMPLE_COMPONENTS_NO_ROWS,
+        )
+        pull_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+        pull_svc.pull(alias="prod", project_root=project_root)
+        return store, pull_svc
+
+    def test_diff_no_changes(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """Pull then diff shows no changes when local matches remote."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+
+        # Create diff service with same components (no changes)
+        diff_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS_NO_ROWS,
+        )
+        diff_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: diff_client,
+        )
+
+        result = diff_svc.diff(alias="prod", project_root=project_root)
+
+        assert result["changes"] == []
+        assert result["summary"]["added"] == 0
+        assert result["summary"]["modified"] == 0
+        assert result["summary"]["deleted"] == 0
+
+    def test_diff_modified_config(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """Modify a local file, diff detects the change."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+
+        # Modify a local _config.yml file
+        config_files = list(project_root.rglob(CONFIG_FILENAME))
+        assert len(config_files) >= 1
+
+        modified_file = config_files[0]
+        config_data = yaml.safe_load(modified_file.read_text(encoding="utf-8"))
+        config_data["parameters"]["baseUrl"] = "https://changed.example.com"
+        modified_file.write_text(
+            yaml.dump(config_data, default_flow_style=False),
+            encoding="utf-8",
+        )
+
+        # Create diff service with original components (remote unchanged)
+        diff_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS_NO_ROWS,
+        )
+        diff_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: diff_client,
+        )
+
+        result = diff_svc.diff(alias="prod", project_root=project_root)
+
+        assert result["summary"]["modified"] == 1
+        assert len(result["changes"]) == 1
+        assert result["changes"][0]["change_type"] == "modified"
+
+
+# ===================================================================
+# push tests
+# ===================================================================
+
+
+class TestPush:
+    """Tests for SyncService.push()."""
+
+    def _init_and_pull(
+        self,
+        tmp_config_dir: Path,
+        project_root: Path,
+        components: list | None = None,
+    ) -> tuple[ConfigStore, SyncService]:
+        """Helper: init + pull to get a working directory, return (store, svc)."""
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        init_svc.init_sync(alias="prod", project_root=project_root)
+
+        pull_client = _make_sync_mock_client(
+            components_response=components if components is not None else SAMPLE_COMPONENTS_NO_ROWS,
+        )
+        pull_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+        pull_svc.pull(alias="prod", project_root=project_root)
+        return store, pull_svc
+
+    def test_push_no_changes(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """Push when no changes returns status 'no_changes'."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+
+        # Create push service with same components (no changes)
+        push_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS_NO_ROWS,
+        )
+        push_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client,
+        )
+
+        result = push_svc.push(alias="prod", project_root=project_root)
+
+        assert result["status"] == "no_changes"
+        assert result["created"] == 0
+        assert result["updated"] == 0
+        assert result["deleted"] == 0
+
+    def test_push_dry_run(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """Push with dry_run returns changes without executing them."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+
+        # Modify a local file to create a change
+        config_files = list(project_root.rglob(CONFIG_FILENAME))
+        assert len(config_files) >= 1
+        modified_file = config_files[0]
+        config_data = yaml.safe_load(modified_file.read_text(encoding="utf-8"))
+        config_data["parameters"]["baseUrl"] = "https://changed.example.com"
+        modified_file.write_text(
+            yaml.dump(config_data, default_flow_style=False),
+            encoding="utf-8",
+        )
+
+        # Dry run should detect changes but not call API
+        dry_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS_NO_ROWS,
+        )
+        dry_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: dry_client,
+        )
+
+        result = dry_svc.push(
+            alias="prod", project_root=project_root, dry_run=True
+        )
+
+        assert result["status"] == "dry_run"
+        assert "changes" in result
+        assert "summary" in result
+        assert result["summary"]["modified"] >= 1
+        # Client should NOT have been called for create/update/delete
+        dry_client.update_config.assert_not_called()
+        dry_client.create_config.assert_not_called()
+
+    def test_push_update(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """Modify local config, push updates via client.update_config mock."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+
+        # Modify a local file to create a change
+        config_files = list(project_root.rglob(CONFIG_FILENAME))
+        assert len(config_files) >= 1
+        modified_file = config_files[0]
+        config_data = yaml.safe_load(modified_file.read_text(encoding="utf-8"))
+        config_data["parameters"]["baseUrl"] = "https://updated.example.com"
+        modified_file.write_text(
+            yaml.dump(config_data, default_flow_style=False),
+            encoding="utf-8",
+        )
+
+        # The push service needs a client that:
+        # 1. Returns original components for diff detection
+        # 2. Accepts update_config calls
+        # 3. Returns original components again for the post-push pull
+        push_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS_NO_ROWS,
+        )
+        push_client.update_config.return_value = {"id": "cfg-001"}
+
+        push_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client,
+        )
+
+        result = push_svc.push(alias="prod", project_root=project_root)
+
+        assert result["status"] == "pushed"
+        assert result["updated"] >= 1
+        assert result["errors"] == []
+        # Verify the client.update_config was actually called
+        push_client.update_config.assert_called()

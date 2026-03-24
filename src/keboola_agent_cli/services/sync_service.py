@@ -23,7 +23,9 @@ from ..sync.config_format import (
     api_config_to_local,
     api_row_to_local,
     classify_component_type,
+    local_config_to_api,
 )
+from ..sync.diff_engine import compute_changeset
 from ..sync.git_utils import get_default_branch, is_git_repo
 from ..sync.manifest import (
     Manifest,
@@ -219,6 +221,13 @@ class SyncService(BaseService):
         new_configurations: list[ManifestConfiguration] = []
         used_paths: set[str] = set()  # detect naming collisions
 
+        # Build lookup for existing manifest paths by config ID
+        # so renames don't cause path changes (stable paths)
+        existing_paths: dict[str, str] = {
+            f"{c.component_id}/{c.id}": c.path
+            for c in manifest.configurations
+        }
+
         for component in components:
             component_id = component.get("id", "")
             component_type = classify_component_type(component.get("type", "other"))
@@ -228,13 +237,18 @@ class SyncService(BaseService):
                 config_id = str(cfg.get("id", ""))
                 config_name = cfg.get("name", "untitled")
 
-                # Generate filesystem path with collision detection
-                rel_path = config_path(
-                    manifest.naming.config,
-                    component_type,
-                    component_id,
-                    config_name,
-                )
+                # Reuse existing path if config is already tracked (stable paths)
+                lookup_key = f"{component_id}/{config_id}"
+                if lookup_key in existing_paths:
+                    rel_path = existing_paths[lookup_key]
+                else:
+                    # Generate new filesystem path with collision detection
+                    rel_path = config_path(
+                        manifest.naming.config,
+                        component_type,
+                        component_id,
+                        config_name,
+                    )
                 if rel_path in used_paths:
                     # Append short config ID suffix to resolve collision
                     suffix = config_id[:8] if len(config_id) > 8 else config_id
@@ -361,6 +375,267 @@ class SyncService(BaseService):
             "unchanged": unchanged,
             "total_tracked": len(manifest.configurations),
         }
+
+    # ------------------------------------------------------------------
+    # diff
+    # ------------------------------------------------------------------
+
+    def diff(
+        self,
+        alias: str,
+        project_root: Path,
+    ) -> dict[str, Any]:
+        """Compare local configs against the remote API state.
+
+        Fetches current state from API, reads local _config.yml files,
+        and runs the diff engine to produce a detailed changeset.
+
+        Returns:
+            Dict with 'changes' list and summary counts.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        manifest = load_manifest(project_root)
+
+        branch_id = project.active_branch_id
+        if not branch_id and manifest.branches:
+            branch_id = manifest.branches[0].id
+
+        # Fetch remote state
+        client = self._client_factory(project.stack_url, project.token)
+        with client:
+            components = client.list_components_with_configs(branch_id=branch_id)
+
+        # Build remote configs lookup: "{component_id}/{config_id}" -> API data
+        remote_configs: dict[str, dict[str, Any]] = {}
+        for component in components:
+            component_id = component.get("id", "")
+            for cfg in component.get("configurations", []):
+                config_id = str(cfg.get("id", ""))
+                key = f"{component_id}/{config_id}"
+                # Convert remote to local format for apples-to-apples comparison
+                remote_configs[key] = api_config_to_local(
+                    component_id, cfg, config_id
+                )
+
+        # Build local configs list from manifest
+        local_configs: list[dict[str, Any]] = []
+        for cfg in manifest.configurations:
+            branch_path = self._find_branch_path(manifest, cfg.branch_id)
+            config_dir = project_root / branch_path / cfg.path
+            local_data = self._read_config_file(config_dir)
+            if local_data is None:
+                continue
+            local_configs.append({
+                "component_id": cfg.component_id,
+                "config_id": cfg.id,
+                "config_name": local_data.get("name", ""),
+                "path": cfg.path,
+                "data": local_data,
+            })
+
+        # Also add untracked local configs (new files)
+        for added_cfg in self._find_untracked_configs(project_root, manifest):
+            branch_path = manifest.branches[0].path if manifest.branches else "main"
+            config_dir = project_root / branch_path / added_cfg["path"]
+            local_data = self._read_config_file(config_dir)
+            if local_data is None:
+                continue
+            local_configs.append({
+                "component_id": added_cfg.get("component_id", "unknown"),
+                "config_id": "",  # new config, no ID yet
+                "config_name": local_data.get("name", ""),
+                "path": added_cfg["path"],
+                "data": local_data,
+            })
+
+        changeset = compute_changeset(local_configs, remote_configs)
+
+        added = [c for c in changeset if c.change_type == "added"]
+        modified = [c for c in changeset if c.change_type == "modified"]
+        deleted = [c for c in changeset if c.change_type == "deleted"]
+
+        return {
+            "changes": [c.to_dict() for c in changeset],
+            "summary": {
+                "added": len(added),
+                "modified": len(modified),
+                "deleted": len(deleted),
+                "unchanged": len(local_configs) - len(added) - len(modified),
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # push
+    # ------------------------------------------------------------------
+
+    def push(
+        self,
+        alias: str,
+        project_root: Path,
+        dry_run: bool = False,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Push local changes to Keboola.
+
+        Computes diff, then creates/updates/deletes configs via API.
+        New configs get IDs assigned by the API; the manifest is updated.
+
+        Args:
+            alias: Project alias from config store.
+            project_root: Root directory of the sync working tree.
+            dry_run: If True, compute changes but don't execute them.
+            force: If True, allow deletions without extra confirmation.
+
+        Returns:
+            Dict with push results (created, updated, deleted, errors).
+        """
+        diff_result = self.diff(alias, project_root)
+        changes = diff_result["changes"]
+
+        if not changes:
+            return {
+                "status": "no_changes",
+                "created": 0,
+                "updated": 0,
+                "deleted": 0,
+                "errors": [],
+            }
+
+        if dry_run:
+            return {
+                "status": "dry_run",
+                "changes": changes,
+                "summary": diff_result["summary"],
+            }
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        manifest = load_manifest(project_root)
+
+        branch_id = project.active_branch_id
+        if not branch_id and manifest.branches:
+            branch_id = manifest.branches[0].id
+
+        client = self._client_factory(project.stack_url, project.token)
+        created = 0
+        updated = 0
+        deleted = 0
+        errors: list[dict[str, str]] = []
+
+        with client:
+            for change in changes:
+                change_type = change["change_type"]
+                component_id = change["component_id"]
+                config_id = change["config_id"]
+                config_path_str = change.get("path", "")
+
+                try:
+                    if change_type == "added":
+                        result = self._push_create(
+                            client, component_id, config_path_str,
+                            project_root, manifest, branch_id,
+                        )
+                        if result:
+                            created += 1
+
+                    elif change_type == "modified":
+                        self._push_update(
+                            client, component_id, config_id,
+                            config_path_str, project_root, manifest, branch_id,
+                        )
+                        updated += 1
+
+                    elif change_type == "deleted" and force:
+                        client.delete_config(
+                            component_id=component_id,
+                            config_id=config_id,
+                            branch_id=branch_id,
+                        )
+                        deleted += 1
+
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to push %s %s/%s: %s",
+                        change_type, component_id, config_id, exc,
+                    )
+                    errors.append({
+                        "change_type": change_type,
+                        "component_id": component_id,
+                        "config_id": config_id,
+                        "message": str(exc),
+                    })
+
+        # Re-pull to update manifest with new IDs and sync state
+        if created > 0 or updated > 0 or deleted > 0:
+            self.pull(alias, project_root, force=True)
+
+        return {
+            "status": "pushed",
+            "created": created,
+            "updated": updated,
+            "deleted": deleted,
+            "errors": errors,
+        }
+
+    def _push_create(
+        self,
+        client: Any,
+        component_id: str,
+        config_path_str: str,
+        project_root: Path,
+        manifest: Manifest,
+        branch_id: int | None,
+    ) -> dict[str, Any] | None:
+        """Create a new config from a local _config.yml file."""
+        branch_path = manifest.branches[0].path if manifest.branches else "main"
+        config_dir = project_root / branch_path / config_path_str
+        local_data = self._read_config_file(config_dir)
+        if local_data is None:
+            return None
+
+        name, description, configuration = local_config_to_api(local_data)
+        result = client.create_config(
+            component_id=component_id,
+            name=name,
+            configuration=configuration,
+            description=description,
+            branch_id=branch_id,
+        )
+        logger.info(
+            "Created config %s/%s (ID: %s)",
+            component_id, name, result.get("id"),
+        )
+        return result
+
+    def _push_update(
+        self,
+        client: Any,
+        component_id: str,
+        config_id: str,
+        config_path_str: str,
+        project_root: Path,
+        manifest: Manifest,
+        branch_id: int | None,
+    ) -> None:
+        """Update an existing config from a local _config.yml file."""
+        branch_path = manifest.branches[0].path if manifest.branches else "main"
+        config_dir = project_root / branch_path / config_path_str
+        local_data = self._read_config_file(config_dir)
+        if local_data is None:
+            return
+
+        name, description, configuration = local_config_to_api(local_data)
+        client.update_config(
+            component_id=component_id,
+            config_id=config_id,
+            name=name,
+            configuration=configuration,
+            description=description,
+            change_description="Updated via kbagent sync push",
+            branch_id=branch_id,
+        )
+        logger.info("Updated config %s/%s", component_id, config_id)
 
     # ------------------------------------------------------------------
     # Private helpers

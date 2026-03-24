@@ -653,3 +653,303 @@ class TestSyncStatusCli:
             )
 
         assert result.exit_code == 1
+
+
+# ===================================================================
+# sync diff CLI tests
+# ===================================================================
+
+
+class TestSyncDiffCli:
+    """Tests for `kbagent sync diff` command."""
+
+    def test_sync_diff_help(self) -> None:
+        """sync diff --help shows usage text."""
+        result = runner.invoke(app, ["sync", "diff", "--help"])
+        assert result.exit_code == 0
+        assert "--project" in result.output
+        assert "--directory" in result.output
+
+    def test_sync_diff_json_output(self, tmp_path: Path) -> None:
+        """sync diff --json returns structured JSON with changes and summary."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.diff.return_value = {
+            "changes": [
+                {
+                    "change_type": "modified",
+                    "component_id": "keboola.ex-http",
+                    "config_id": "cfg-001",
+                    "config_name": "My Config",
+                    "path": "extractor/keboola.ex-http/my-config",
+                    "details": ["parameters.url changed: 'old' -> 'new'"],
+                },
+                {
+                    "change_type": "added",
+                    "component_id": "keboola.wr-snowflake",
+                    "config_id": "",
+                    "config_name": "New Writer",
+                    "path": "writer/keboola.wr-snowflake/new-writer",
+                    "details": [],
+                },
+            ],
+            "summary": {
+                "added": 1,
+                "modified": 1,
+                "deleted": 0,
+                "unchanged": 3,
+            },
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "diff",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        data = output["data"]
+        assert len(data["changes"]) == 2
+        assert data["summary"]["added"] == 1
+        assert data["summary"]["modified"] == 1
+        assert data["summary"]["deleted"] == 0
+        assert data["summary"]["unchanged"] == 3
+
+    def test_sync_diff_no_changes_human(self, tmp_path: Path) -> None:
+        """sync diff in human mode shows 'No differences found' when no changes."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.diff.return_value = {
+            "changes": [],
+            "summary": {
+                "added": 0,
+                "modified": 0,
+                "deleted": 0,
+                "unchanged": 5,
+            },
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "diff",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "No differences found" in result.output
+
+
+# ===================================================================
+# sync push CLI tests
+# ===================================================================
+
+
+class TestSyncPushCli:
+    """Tests for `kbagent sync push` command."""
+
+    def test_sync_push_help(self) -> None:
+        """sync push --help shows usage text."""
+        result = runner.invoke(app, ["sync", "push", "--help"])
+        assert result.exit_code == 0
+        assert "--project" in result.output
+        assert "--directory" in result.output
+        assert "--dry-run" in result.output
+        assert "--force" in result.output
+
+    def test_sync_push_json_output(self, tmp_path: Path) -> None:
+        """sync push --json returns structured JSON with push results."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.push.return_value = {
+            "status": "pushed",
+            "created": 1,
+            "updated": 2,
+            "deleted": 0,
+            "errors": [],
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "push",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        data = output["data"]
+        assert data["status"] == "pushed"
+        assert data["created"] == 1
+        assert data["updated"] == 2
+        assert data["deleted"] == 0
+        assert data["errors"] == []
+
+    def test_sync_push_dry_run_human(self, tmp_path: Path) -> None:
+        """sync push --dry-run in human mode shows dry run output."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.push.return_value = {
+            "status": "dry_run",
+            "changes": [
+                {
+                    "change_type": "modified",
+                    "component_id": "keboola.ex-http",
+                    "config_id": "cfg-001",
+                    "config_name": "My Config",
+                    "path": "extractor/keboola.ex-http/my-config",
+                    "details": [],
+                },
+            ],
+            "summary": {
+                "added": 0,
+                "modified": 1,
+                "deleted": 0,
+                "unchanged": 4,
+            },
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "push",
+                    "--project",
+                    "prod",
+                    "--dry-run",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "Dry run" in result.output or "dry run" in result.output.lower()
+        assert "MODIFIED" in result.output
+
+    def test_sync_push_no_changes_human(self, tmp_path: Path) -> None:
+        """sync push in human mode shows 'No changes to push' when nothing changed."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.push.return_value = {
+            "status": "no_changes",
+            "created": 0,
+            "updated": 0,
+            "deleted": 0,
+            "errors": [],
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "push",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "No changes to push" in result.output

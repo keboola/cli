@@ -105,3 +105,8 @@ DEFAULT_NAMING_DATA_APP: str = "app/{component_id}/{config_name}"
 # Aliases used by sync subsystem
 CONFIG_YML_VERSION: int = MANIFEST_VERSION
 SANITIZE_NAME_MAX_LENGTH: int = 100
+
+# --- Diff Engine ---
+DIFF_MAX_DEPTH: int = 3  # max nesting depth for deep_diff detail output
+DIFF_MAX_LINES: int = 20  # max number of diff detail lines per config change
+ENCRYPTED_PLACEHOLDER: str = "<ENCRYPTED>"  # placeholder for encrypted values during comparison
