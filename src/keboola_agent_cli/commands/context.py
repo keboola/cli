@@ -78,6 +78,9 @@ Then explore:
     --project can be repeated to query multiple projects.
     --component-type: extractor, writer, transformation, application
     --component-id: specific component (e.g. keboola.ex-db-snowflake)
+    Output includes: last_modified, last_modified_by, last_change_description,
+    and folder (from KBC.configuration.folderName metadata -- useful for
+    distinguishing active vs archived transformations).
     Examples:
       kbagent --json config list
       kbagent --json config list --project prod
@@ -171,6 +174,10 @@ Then explore:
       --dry-run        Preview what would happen without making changes.
       --yes / -y       Skip confirmation prompt.
       --token-description  Description prefix for created tokens (default: kbagent-cli).
+
+    Token names include owner identity resolved from the manage token:
+    "kbagent-cli [john.doe@company.com]" -- so multiple users on the same
+    project have uniquely identifiable tokens in the Keboola UI.
 
     Examples:
       kbagent org setup --org-id 123 --url https://connection.keboola.com --dry-run
