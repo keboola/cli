@@ -25,6 +25,7 @@ make test           # run all tests
 make lint           # run ruff linter
 make format         # format code
 make check          # lint + format-check + test (CI-like)
+make hooks          # install pre-commit hook
 make clean          # remove caches and build artifacts
 ```
 
@@ -163,6 +164,8 @@ Both inherit from `BaseHttpClient` (`http_base.py`) which provides shared retry/
 12. **Manage token security**: never persisted, never passed as CLI argument, never logged. Only via `KBC_MANAGE_API_TOKEN` env var or interactive hidden prompt.
 
 13. **Idempotency**: `org setup` skips already-registered projects by matching `project_id`. Safe to re-run.
+
+14. **Pre-commit checks are mandatory.** Before every `git commit`, run `ruff check` and `ruff format --check` on changed files. A pre-commit hook (`scripts/pre-commit`, install via `make hooks`) does this automatically. **Never commit without passing lint + format.** If using sub-agents that write code, always run `make check` (or at minimum `ruff check src/ tests/ && ruff format . --check`) before committing their output.
 
 ## Claude Code Plugin (Marketplace)
 

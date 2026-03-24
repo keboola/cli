@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-mcp sync test test-unit test-integration test-file lint lint-fix format format-check skill-check skill-gen check clean
+.PHONY: help install install-mcp sync test test-unit test-integration test-file lint lint-fix format format-check skill-check skill-gen check clean hooks
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -50,6 +50,11 @@ skill-check: ## Check SKILL.md is up-to-date (fails if stale)
 		git diff plugins/kbagent/skills/kbagent/SKILL.md; \
 		exit 1; \
 	fi
+
+hooks: ## Install git pre-commit hook (lint + format on staged files)
+	cp scripts/pre-commit .git/hooks/pre-commit
+	chmod +x .git/hooks/pre-commit
+	@echo "Pre-commit hook installed."
 
 check: lint format-check skill-check test ## Run all checks (lint + format + skill + test)
 
