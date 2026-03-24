@@ -39,11 +39,8 @@ htmlcov/
 # ruff
 .ruff_cache/
 
-# Generated explorer data (regenerate with: kbagent explorer --no-open)
-kbc-explorer/catalog.json
-kbc-explorer/catalog.js
-kbc-explorer/orchestrations.json
-kbc-explorer/orchestrations.js
+# Explorer (deprecated -- use 'llm export' instead)
+kbc-explorer/
 
 # Docs (plans, reports, PDFs - local only)
 docs/
@@ -52,3 +49,4 @@ docs/
 .DS_Store
 Thumbs.db
 .kbagent/
+tmp/

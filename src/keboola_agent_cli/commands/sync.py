@@ -11,7 +11,7 @@ import typer
 from ..errors import ConfigError, KeboolaApiError
 from ._helpers import get_formatter, get_service, map_error_to_exit_code
 
-sync_app = typer.Typer(help="Sync project configurations with local filesystem")
+sync_app = typer.Typer(help="(BETA) Sync project configurations with local filesystem")
 
 
 @sync_app.command("init")

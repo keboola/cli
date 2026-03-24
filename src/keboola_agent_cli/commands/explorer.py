@@ -11,7 +11,10 @@ import typer
 from ..errors import ConfigError
 from ._helpers import emit_project_warnings, get_formatter, get_service
 
-explorer_app = typer.Typer(help="Generate and open the KBC Explorer dashboard")
+explorer_app = typer.Typer(
+    help="[deprecated] KBC Explorer dashboard -- use 'sync pull' instead",
+    deprecated=True,
+)
 
 
 @explorer_app.callback(invoke_without_command=True)

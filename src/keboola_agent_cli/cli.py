@@ -72,10 +72,10 @@ app.add_typer(workspace_app, name="workspace", rich_help_panel=_DEV)
 app.add_typer(tool_app, name="tool", rich_help_panel=_DEV)
 app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
 
-# -- Export --
-_EXPORT = "Export"
-app.add_typer(llm_app, name="llm", rich_help_panel=_EXPORT)
-app.add_typer(explorer_app, name="explorer", rich_help_panel=_EXPORT)
+# -- Deprecated --
+_DEPR = "Deprecated (use 'sync pull' instead)"
+app.add_typer(llm_app, name="llm", rich_help_panel=_DEPR)
+app.add_typer(explorer_app, name="explorer", rich_help_panel=_DEPR)
 
 
 @app.callback()

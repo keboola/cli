@@ -9,7 +9,10 @@ import typer
 from ..errors import ConfigError
 from ._helpers import get_formatter, get_service
 
-llm_app = typer.Typer(help="LLM tools - AI-optimized project export")
+llm_app = typer.Typer(
+    help="[deprecated] AI-optimized project export -- use 'sync pull' instead",
+    deprecated=True,
+)
 
 
 @llm_app.command("export")
