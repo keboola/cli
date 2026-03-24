@@ -45,23 +45,37 @@ app = typer.Typer(
     invoke_without_command=True,
 )
 
-app.add_typer(project_app, name="project")
-app.add_typer(config_app, name="config")
-app.add_typer(job_app, name="job")
-app.add_typer(lineage_app, name="lineage")
-app.add_typer(org_app, name="org")
-app.add_typer(tool_app, name="tool")
-app.add_typer(branch_app, name="branch")
-app.add_typer(explorer_app, name="explorer")
-app.add_typer(llm_app, name="llm")
-app.add_typer(workspace_app, name="workspace")
-app.add_typer(storage_app, name="storage")
-app.add_typer(sync_app, name="sync")
-app.command("context")(context_command)
-app.command("doctor")(doctor_command)
-app.command("init")(init_command)
-app.command("repl")(repl_command)
-app.command("version")(version_command)
+# -- Setup & Info --
+_SETUP = "Setup & Info"
+app.command("init", rich_help_panel=_SETUP)(init_command)
+app.command("doctor", rich_help_panel=_SETUP)(doctor_command)
+app.command("version", rich_help_panel=_SETUP)(version_command)
+app.command("context", rich_help_panel=_SETUP)(context_command)
+app.command("repl", rich_help_panel=_SETUP)(repl_command)
+
+# -- Project Management --
+_PROJ = "Project Management"
+app.add_typer(project_app, name="project", rich_help_panel=_PROJ)
+app.add_typer(org_app, name="org", rich_help_panel=_PROJ)
+
+# -- Browse & Inspect --
+_BROWSE = "Browse & Inspect"
+app.add_typer(config_app, name="config", rich_help_panel=_BROWSE)
+app.add_typer(job_app, name="job", rich_help_panel=_BROWSE)
+app.add_typer(storage_app, name="storage", rich_help_panel=_BROWSE)
+app.add_typer(lineage_app, name="lineage", rich_help_panel=_BROWSE)
+
+# -- Development --
+_DEV = "Development"
+app.add_typer(branch_app, name="branch", rich_help_panel=_DEV)
+app.add_typer(workspace_app, name="workspace", rich_help_panel=_DEV)
+app.add_typer(tool_app, name="tool", rich_help_panel=_DEV)
+app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
+
+# -- Export --
+_EXPORT = "Export"
+app.add_typer(llm_app, name="llm", rich_help_panel=_EXPORT)
+app.add_typer(explorer_app, name="explorer", rich_help_panel=_EXPORT)
 
 
 @app.callback()
