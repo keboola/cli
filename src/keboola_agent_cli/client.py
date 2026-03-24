@@ -404,26 +404,6 @@ class KeboolaClient(BaseHttpClient):
 
     # --- Workspace CRUD ---
 
-    def create_workspace(
-        self,
-        backend: str = "snowflake",
-        read_only: bool = True,
-    ) -> dict[str, Any]:
-        """Create a new workspace.
-
-        Args:
-            backend: Workspace backend (snowflake, bigquery, etc.).
-            read_only: Whether the workspace is read-only.
-
-        Returns:
-            Workspace dict including connection credentials (password only available on creation).
-        """
-        body: dict[str, Any] = {"backend": backend}
-        if read_only:
-            body["readOnlyStorageAccess"] = True
-        response = self._request("POST", "/v2/storage/workspaces", json=body)
-        return response.json()
-
     def list_workspaces(self, branch_id: int | None = None) -> list[dict[str, Any]]:
         """List all workspaces in the project."""
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
