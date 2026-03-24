@@ -222,10 +222,7 @@ class OrgService:
             token_description: Description for the created token.
             owner_name: Email/name of the manage token owner (for unique identification).
         """
-        if owner_name:
-            description = f"{token_description} [{owner_name}]"
-        else:
-            description = token_description
+        description = f"{token_description} [{owner_name}]" if owner_name else token_description
 
         logger.info(
             "Creating token for project %d (%s) with description '%s'",
