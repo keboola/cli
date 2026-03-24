@@ -584,6 +584,19 @@ Then explore:
      kbagent --json workspace load --project prod --workspace-id WS_ID --tables in.c-bucket.my-table
      kbagent --json workspace query --project prod --workspace-id WS_ID --sql "SELECT * FROM \"my-table\" LIMIT 10"
 
+     IMPORTANT -- Snowflake quoting rules for workspace queries:
+     Snowflake converts unquoted identifiers to UPPERCASE. If a database,
+     schema, or table name contains lowercase letters, dots, or hyphens,
+     you MUST double-quote it. This applies to ALL identifiers:
+       WRONG: SELECT * FROM sap_9.my_schema.my_table
+              (Snowflake reads this as SAP_9.MY_SCHEMA.MY_TABLE -- not found!)
+       RIGHT: SELECT * FROM "sap_9"."my_schema"."my_table"
+     Best practice: ALWAYS double-quote database, schema, and table names
+     in workspace queries, even if they look like they don't need it.
+     Keboola workspace database/schema names are often lowercase.
+     For shared/linked buckets, use 'kbagent storage bucket-detail' to get
+     the correct fully-qualified Snowflake path (source project DB differs).
+
 16. Setting up projects -- two approaches:
 
     a) Single project (you have a Storage API token):
