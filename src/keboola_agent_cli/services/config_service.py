@@ -197,6 +197,62 @@ class ConfigService(BaseService):
         detail["project_alias"] = alias
         return detail
 
+    def update_config(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        name: str | None = None,
+        description: str | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Update a configuration's name and/or description.
+
+        Args:
+            alias: Project alias.
+            component_id: The component ID.
+            config_id: The configuration ID to update.
+            name: New name (if None, not changed).
+            description: New description (if None, not changed).
+            branch_id: If set, update in a specific dev branch.
+                       If None, uses the project's active branch (if any).
+
+        Returns:
+            Dict with the updated configuration from the API.
+
+        Raises:
+            ConfigError: If the alias is not found.
+            KeboolaApiError: If the API call fails.
+        """
+        if name is None and description is None:
+            raise KeboolaApiError(
+                status_code=400,
+                error_code="VALIDATION_ERROR",
+                message="At least one of --name or --description must be provided.",
+            )
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        effective_branch_id = branch_id or project.active_branch_id
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            result = client.update_config(
+                component_id=component_id,
+                config_id=config_id,
+                name=name,
+                description=description,
+                change_description="Updated via kbagent config update",
+                branch_id=effective_branch_id,
+            )
+        finally:
+            client.close()
+
+        result["project_alias"] = alias
+        result["branch_id"] = effective_branch_id
+        return result
+
     def delete_config(
         self,
         alias: str,

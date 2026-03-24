@@ -90,6 +90,14 @@ Then explore:
     Example:
       kbagent --json config detail --project prod --component-id keboola.ex-db-snowflake --config-id 12345
 
+  kbagent config update --project NAME --component-id ID --config-id ID [--name NEW_NAME] [--description NEW_DESC] [--branch BRANCH_ID]
+    Update a configuration's name and/or description.
+    If a dev branch is active, update targets that branch. Use --branch to override.
+    At least one of --name or --description must be provided.
+    Examples:
+      kbagent --json config update --project prod --component-id keboola.python-transformation-v2 --config-id 12345 --name "New Name"
+      kbagent --json config update --project prod --component-id keboola.ex-http --config-id 67890 --name "Renamed" --description "Updated desc" --branch 456
+
   kbagent config delete --project NAME --component-id ID --config-id ID [--branch BRANCH_ID]
     Delete a configuration. If a dev branch is active, deletion targets that branch.
     Use --branch to override. Deleting in a branch marks the config as removed

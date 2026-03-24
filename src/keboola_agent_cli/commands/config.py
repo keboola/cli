@@ -1,4 +1,4 @@
-"""Configuration commands - list, detail, search, and delete.
+"""Configuration commands - list, detail, search, update, and delete.
 
 Thin CLI layer: parses arguments, calls ConfigService, formats output.
 No business logic belongs here.
@@ -177,6 +177,81 @@ def config_search(
     else:
         format_search_results(formatter.console, result)
         emit_project_warnings(formatter, result)
+
+
+@config_app.command("update")
+def config_update(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    component_id: str = typer.Option(
+        ...,
+        "--component-id",
+        help="Component ID (e.g. keboola.python-transformation-v2)",
+    ),
+    config_id: str = typer.Option(
+        ...,
+        "--config-id",
+        help="Configuration ID to update",
+    ),
+    name: str | None = typer.Option(
+        None,
+        "--name",
+        help="New configuration name",
+    ),
+    description: str | None = typer.Option(
+        None,
+        "--description",
+        help="New configuration description",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Update in a specific dev branch ID (defaults to active branch)",
+    ),
+) -> None:
+    """Update a configuration's name and/or description.
+
+    If a dev branch is active (via 'branch use'), the update targets
+    that branch. Use --branch to override.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "config_service")
+
+    try:
+        result = service.update_config(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            name=name,
+            description=description,
+            branch_id=branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        updated_name = result.get("name", "")
+        branch_info = ""
+        if result.get("branch_id"):
+            branch_info = f" (branch {result['branch_id']})"
+        formatter.success(
+            f"Updated config '{updated_name}' "
+            f"({result.get('component_id', component_id)}/{config_id})"
+            f"{branch_info}"
+        )
 
 
 @config_app.command("delete")
