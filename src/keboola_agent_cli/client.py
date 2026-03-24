@@ -233,19 +233,21 @@ class KeboolaClient(BaseHttpClient):
         )
         return response.json()
 
-    def list_config_folder_metadata(self, branch_id: int | None = None) -> dict[str, str]:
+    def list_config_folder_metadata(self, branch_id: int) -> dict[str, str]:
         """Fetch folder names for all configurations via metadata search.
 
         Uses the search/component-configurations endpoint to find configs
         with ``KBC.configuration.folderName`` metadata.
 
+        Note: This endpoint requires a branch ID (branch-only route).
+
         Args:
-            branch_id: If set, search in a specific dev branch.
+            branch_id: Branch ID (required — use default branch for production).
 
         Returns:
             Dict mapping ``"{component_id}/{config_id}"`` to folder name.
         """
-        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        prefix = f"/v2/storage/branch/{branch_id}"
         resp = self._request(
             "GET",
             f"{prefix}/search/component-configurations",

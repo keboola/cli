@@ -65,13 +65,26 @@ class ConfigService(BaseService):
         try:
             components = client.list_components(component_type=component_type)
 
-            # Fetch folder metadata in one call (maps "comp_id/config_id" -> folder name)
-            branch_id = project.active_branch_id
+            # Fetch folder metadata (requires branch ID — search endpoint is branch-only)
+            folder_map: dict[str, str] = {}
             try:
-                result = client.list_config_folder_metadata(branch_id=branch_id)
-                folder_map = result if isinstance(result, dict) else {}
+                # Use active branch or find the default branch ID
+                branch_id = project.active_branch_id
+                if not branch_id:
+                    default_branch = next(
+                        (c for c in components if True),  # just need any component to get branch
+                        None,
+                    )
+                    # Fetch default branch ID from dev-branches endpoint
+                    branches = client.list_dev_branches()
+                    default = next((b for b in branches if b.get("isDefault")), None)
+                    if default:
+                        branch_id = default["id"]
+                if branch_id:
+                    result = client.list_config_folder_metadata(branch_id=branch_id)
+                    folder_map = result if isinstance(result, dict) else {}
             except Exception:
-                folder_map = {}  # graceful fallback if search endpoint unavailable
+                pass  # graceful fallback if search endpoint unavailable
 
             configs: list[dict[str, Any]] = []
             for component in components:
