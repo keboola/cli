@@ -19,6 +19,7 @@ from ..constants import (
     MANIFEST_VERSION,
 )
 from ..errors import ConfigError
+from ..sync.code_extraction import extract_code_files, merge_code_files
 from ..sync.config_format import (
     api_config_to_local,
     api_row_to_local,
@@ -108,10 +109,7 @@ class SyncService(BaseService):
         git_branching_config = ManifestGitBranching(enabled=False)
         if git_branching:
             if not is_git_repo(project_root):
-                raise ConfigError(
-                    "Git repository not found. "
-                    "Initialize git first: git init"
-                )
+                raise ConfigError("Git repository not found. Initialize git first: git init")
             default_branch_name = get_default_branch(project_root)
             git_branching_config = ManifestGitBranching(
                 enabled=True,
@@ -224,8 +222,7 @@ class SyncService(BaseService):
         # Build lookup for existing manifest paths by config ID
         # so renames don't cause path changes (stable paths)
         existing_paths: dict[str, str] = {
-            f"{c.component_id}/{c.id}": c.path
-            for c in manifest.configurations
+            f"{c.component_id}/{c.id}": c.path for c in manifest.configurations
         }
 
         for component in components:
@@ -259,7 +256,12 @@ class SyncService(BaseService):
                 # Convert API format to local _config.yml
                 local_data = api_config_to_local(component_id, cfg, config_id)
 
-                # Write _config.yml and capture content hash
+                # Extract code files (SQL, Python) if applicable.
+                # This modifies local_data in place (removes blocks/code)
+                # and writes separate code files (transform.sql, transform.py, etc.)
+                extract_code_files(component_id, local_data, config_dir)
+
+                # Write _config.yml (without extracted code) and capture content hash
                 file_hash = self._write_config_file(config_dir, local_data)
                 files_written += 1
                 configs_pulled += 1
@@ -286,9 +288,7 @@ class SyncService(BaseService):
                     files_written += 1
                     rows_pulled += 1
 
-                    row_manifests.append(
-                        ManifestConfigRow(id=row_id, path=row_rel_path)
-                    )
+                    row_manifests.append(ManifestConfigRow(id=row_id, path=row_rel_path))
 
                 # Record in manifest (store file hash for change detection)
                 new_configurations.append(
@@ -345,11 +345,13 @@ class SyncService(BaseService):
             config_file = config_dir / CONFIG_FILENAME
 
             if not config_file.exists():
-                deleted.append({
-                    "component_id": cfg.component_id,
-                    "config_id": cfg.id,
-                    "path": str(cfg.path),
-                })
+                deleted.append(
+                    {
+                        "component_id": cfg.component_id,
+                        "config_id": cfg.id,
+                        "path": str(cfg.path),
+                    }
+                )
                 continue
 
             # Compare file hash against the hash stored at pull time
@@ -359,11 +361,13 @@ class SyncService(BaseService):
             if pull_hash and current_hash == pull_hash:
                 unchanged += 1
             else:
-                modified.append({
-                    "component_id": cfg.component_id,
-                    "config_id": cfg.id,
-                    "path": str(cfg.path),
-                })
+                modified.append(
+                    {
+                        "component_id": cfg.component_id,
+                        "config_id": cfg.id,
+                        "path": str(cfg.path),
+                    }
+                )
 
         # Scan for added configs (local files without manifest entry)
         added = self._find_untracked_configs(project_root, manifest)
@@ -414,11 +418,11 @@ class SyncService(BaseService):
                 config_id = str(cfg.get("id", ""))
                 key = f"{component_id}/{config_id}"
                 # Convert remote to local format for apples-to-apples comparison
-                remote_configs[key] = api_config_to_local(
-                    component_id, cfg, config_id
-                )
+                remote_configs[key] = api_config_to_local(component_id, cfg, config_id)
 
         # Build local configs list from manifest
+        # Merge code files (transform.sql, code.py, etc.) back into config
+        # data so comparison with remote is apples-to-apples
         local_configs: list[dict[str, Any]] = []
         for cfg in manifest.configurations:
             branch_path = self._find_branch_path(manifest, cfg.branch_id)
@@ -426,13 +430,16 @@ class SyncService(BaseService):
             local_data = self._read_config_file(config_dir)
             if local_data is None:
                 continue
-            local_configs.append({
-                "component_id": cfg.component_id,
-                "config_id": cfg.id,
-                "config_name": local_data.get("name", ""),
-                "path": cfg.path,
-                "data": local_data,
-            })
+            merge_code_files(cfg.component_id, local_data, config_dir)
+            local_configs.append(
+                {
+                    "component_id": cfg.component_id,
+                    "config_id": cfg.id,
+                    "config_name": local_data.get("name", ""),
+                    "path": cfg.path,
+                    "data": local_data,
+                }
+            )
 
         # Also add untracked local configs (new files)
         for added_cfg in self._find_untracked_configs(project_root, manifest):
@@ -441,13 +448,15 @@ class SyncService(BaseService):
             local_data = self._read_config_file(config_dir)
             if local_data is None:
                 continue
-            local_configs.append({
-                "component_id": added_cfg.get("component_id", "unknown"),
-                "config_id": "",  # new config, no ID yet
-                "config_name": local_data.get("name", ""),
-                "path": added_cfg["path"],
-                "data": local_data,
-            })
+            local_configs.append(
+                {
+                    "component_id": added_cfg.get("component_id", "unknown"),
+                    "config_id": "",  # new config, no ID yet
+                    "config_name": local_data.get("name", ""),
+                    "path": added_cfg["path"],
+                    "data": local_data,
+                }
+            )
 
         changeset = compute_changeset(local_configs, remote_configs)
 
@@ -533,16 +542,25 @@ class SyncService(BaseService):
                 try:
                     if change_type == "added":
                         result = self._push_create(
-                            client, component_id, config_path_str,
-                            project_root, manifest, branch_id,
+                            client,
+                            component_id,
+                            config_path_str,
+                            project_root,
+                            manifest,
+                            branch_id,
                         )
                         if result:
                             created += 1
 
                     elif change_type == "modified":
                         self._push_update(
-                            client, component_id, config_id,
-                            config_path_str, project_root, manifest, branch_id,
+                            client,
+                            component_id,
+                            config_id,
+                            config_path_str,
+                            project_root,
+                            manifest,
+                            branch_id,
                         )
                         updated += 1
 
@@ -557,14 +575,19 @@ class SyncService(BaseService):
                 except Exception as exc:
                     logger.warning(
                         "Failed to push %s %s/%s: %s",
-                        change_type, component_id, config_id, exc,
+                        change_type,
+                        component_id,
+                        config_id,
+                        exc,
                     )
-                    errors.append({
-                        "change_type": change_type,
-                        "component_id": component_id,
-                        "config_id": config_id,
-                        "message": str(exc),
-                    })
+                    errors.append(
+                        {
+                            "change_type": change_type,
+                            "component_id": component_id,
+                            "config_id": config_id,
+                            "message": str(exc),
+                        }
+                    )
 
         # Re-pull to update manifest with new IDs and sync state
         if created > 0 or updated > 0 or deleted > 0:
@@ -594,6 +617,9 @@ class SyncService(BaseService):
         if local_data is None:
             return None
 
+        # Merge code files (transform.sql, transform.py, code.py) back into config
+        merge_code_files(component_id, local_data, config_dir)
+
         name, description, configuration = local_config_to_api(local_data)
         result = client.create_config(
             component_id=component_id,
@@ -604,7 +630,9 @@ class SyncService(BaseService):
         )
         logger.info(
             "Created config %s/%s (ID: %s)",
-            component_id, name, result.get("id"),
+            component_id,
+            name,
+            result.get("id"),
         )
         return result
 
@@ -624,6 +652,9 @@ class SyncService(BaseService):
         local_data = self._read_config_file(config_dir)
         if local_data is None:
             return
+
+        # Merge code files (transform.sql, transform.py, code.py) back into config
+        merge_code_files(component_id, local_data, config_dir)
 
         name, description, configuration = local_config_to_api(local_data)
         client.update_config(
@@ -670,7 +701,9 @@ class SyncService(BaseService):
 
         manifest = load_manifest(project_root)
         if not manifest.git_branching.enabled:
-            raise ConfigError("Git-branching mode is not enabled. Run 'sync init --git-branching' first.")
+            raise ConfigError(
+                "Git-branching mode is not enabled. Run 'sync init --git-branching' first."
+            )
 
         git_branch = get_current_branch(project_root)
         if git_branch is None:
@@ -905,10 +938,12 @@ class SyncService(BaseService):
                 if str(config_dir) not in tracked_paths:
                     local_data = self._read_config_file(config_dir)
                     keboola_meta = local_data.get("_keboola", {}) if local_data else {}
-                    added.append({
-                        "component_id": keboola_meta.get("component_id", "unknown"),
-                        "config_id": keboola_meta.get("config_id", ""),
-                        "path": str(config_dir.relative_to(project_root / branch.path)),
-                    })
+                    added.append(
+                        {
+                            "component_id": keboola_meta.get("component_id", "unknown"),
+                            "config_id": keboola_meta.get("config_id", ""),
+                            "path": str(config_dir.relative_to(project_root / branch.path)),
+                        }
+                    )
 
         return added
