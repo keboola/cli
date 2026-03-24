@@ -70,7 +70,7 @@ class TestOutputFormatterJsonMode:
         assert result["data"] == []
 
     def test_error_json_output(self) -> None:
-        """JSON mode error outputs structured error envelope."""
+        """JSON mode error outputs structured error envelope with derived error_type."""
         formatter = OutputFormatter(json_mode=True, no_color=True)
         captured = StringIO()
         old_stdout = sys.stdout
@@ -88,9 +88,64 @@ class TestOutputFormatterJsonMode:
         result = json.loads(captured.getvalue())
         assert result["status"] == "error"
         assert result["error"]["code"] == "INVALID_TOKEN"
+        assert result["error"]["error_type"] == "authentication"
         assert result["error"]["message"] == "Token expired"
         assert result["error"]["project"] == "prod-aws"
         assert result["error"]["retryable"] is False
+
+    def test_error_json_output_explicit_error_type(self) -> None:
+        """JSON mode error uses explicit error_type when provided."""
+        formatter = OutputFormatter(json_mode=True, no_color=True)
+        captured = StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            formatter.error(
+                message="Something failed",
+                error_code="CUSTOM_ERROR",
+                error_type="validation",
+            )
+        finally:
+            sys.stdout = old_stdout
+
+        result = json.loads(captured.getvalue())
+        assert result["error"]["error_type"] == "validation"
+        assert result["error"]["code"] == "CUSTOM_ERROR"
+
+    def test_error_json_output_network_type(self) -> None:
+        """JSON mode error derives network type for TIMEOUT error code."""
+        formatter = OutputFormatter(json_mode=True, no_color=True)
+        captured = StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            formatter.error(
+                message="Request timed out",
+                error_code="TIMEOUT",
+                retryable=True,
+            )
+        finally:
+            sys.stdout = old_stdout
+
+        result = json.loads(captured.getvalue())
+        assert result["error"]["error_type"] == "network"
+
+    def test_error_json_output_fallback_api_type(self) -> None:
+        """JSON mode error falls back to 'api' type for unknown error codes."""
+        formatter = OutputFormatter(json_mode=True, no_color=True)
+        captured = StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            formatter.error(
+                message="Server error",
+                error_code="INTERNAL_ERROR",
+            )
+        finally:
+            sys.stdout = old_stdout
+
+        result = json.loads(captured.getvalue())
+        assert result["error"]["error_type"] == "api"
 
     def test_success_json_output(self) -> None:
         """JSON mode success outputs structured response."""

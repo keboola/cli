@@ -153,22 +153,40 @@ class TestErrorResponse:
         assert err.retryable is False
 
     def test_defaults(self) -> None:
-        """ErrorResponse has empty project and retryable=False by default."""
+        """ErrorResponse has empty project, retryable=False, and error_type='unknown' by default."""
         err = ErrorResponse(code="ERR", message="Something failed")
         assert err.project == ""
         assert err.retryable is False
+        assert err.error_type == "unknown"
+
+    def test_error_type_explicit(self) -> None:
+        """ErrorResponse accepts an explicit error_type value."""
+        err = ErrorResponse(
+            code="INVALID_TOKEN",
+            error_type="authentication",
+            message="Token expired",
+        )
+        assert err.error_type == "authentication"
 
     def test_json_serialization(self) -> None:
-        """ErrorResponse serializes to valid JSON with expected keys."""
+        """ErrorResponse serializes to valid JSON with expected keys including error_type."""
         err = ErrorResponse(
             code="NETWORK_ERROR",
+            error_type="network",
             message="Connection timed out",
             project="dev",
             retryable=True,
         )
         parsed = json.loads(err.model_dump_json())
         assert parsed["code"] == "NETWORK_ERROR"
+        assert parsed["error_type"] == "network"
         assert parsed["retryable"] is True
+
+    def test_json_serialization_default_error_type(self) -> None:
+        """ErrorResponse JSON includes error_type with default value 'unknown'."""
+        err = ErrorResponse(code="ERR", message="Something failed")
+        parsed = json.loads(err.model_dump_json())
+        assert parsed["error_type"] == "unknown"
 
 
 class TestSuccessResponse:

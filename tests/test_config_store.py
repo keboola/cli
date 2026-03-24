@@ -120,9 +120,10 @@ class TestFilePermissions:
         with patch("keboola_agent_cli.config_store.os.open", side_effect=tracking_os_open):
             store.save(AppConfig())
 
-        # The file must have been opened with 0o600 mode
-        assert len(open_modes_seen) == 1
-        assert open_modes_seen[0] == 0o600
+        # All os.open calls for config files must use 0o600 mode
+        # (lock fd + temp file = 2 calls after file locking was added)
+        assert len(open_modes_seen) >= 1
+        assert all(m == 0o600 for m in open_modes_seen)
 
     def test_temp_file_cleaned_up_after_save(self, tmp_config_dir: Path) -> None:
         """Temporary file used during atomic write is not left behind."""

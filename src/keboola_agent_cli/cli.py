@@ -16,6 +16,7 @@ from .commands.lineage import lineage_app
 from .commands.llm import llm_app
 from .commands.org import org_app
 from .commands.project import project_app
+from .commands.repl import repl_command
 from .commands.tool import tool_app
 from .commands.version import version_command
 from .commands.workspace import workspace_app
@@ -37,7 +38,7 @@ from .services.workspace_service import WorkspaceService
 app = typer.Typer(
     name="kbagent",
     help="Keboola Agent CLI -- AI-friendly interface to Keboola projects",
-    no_args_is_help=True,
+    invoke_without_command=True,
 )
 
 app.add_typer(project_app, name="project")
@@ -53,6 +54,7 @@ app.add_typer(workspace_app, name="workspace")
 app.command("context")(context_command)
 app.command("doctor")(doctor_command)
 app.command("init")(init_command)
+app.command("repl")(repl_command)
 app.command("version")(version_command)
 
 
@@ -83,6 +85,20 @@ def main(
     ),
 ) -> None:
     """Global options applied to all commands."""
+    # If no subcommand given, launch REPL on TTY or show help otherwise
+    if ctx.invoked_subcommand is None:
+        is_interactive = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+        if is_interactive and not json_output:
+            # Defer REPL launch until after context setup (below)
+            ctx.ensure_object(dict)
+            ctx.obj["_launch_repl"] = True
+        else:
+            # Non-interactive: show help
+            click_cmd = typer.main.get_command(app)
+            with click_cmd.make_context("kbagent", []) as help_ctx:
+                sys.stdout.write(click_cmd.get_help(help_ctx) + "\n")
+            raise typer.Exit()
+
     log_level = logging.DEBUG if verbose else logging.WARNING
     logging.basicConfig(
         level=log_level,
@@ -138,3 +154,15 @@ def main(
     ctx.obj["doctor_service"] = doctor_service
     ctx.obj["explorer_service"] = explorer_service
     ctx.obj["version_service"] = version_service
+
+    # Launch REPL if no subcommand was given (set above)
+    if ctx.obj.get("_launch_repl"):
+        from .commands.repl import _run_repl
+
+        _run_repl(
+            json_mode=json_output,
+            verbose=verbose,
+            no_color=effective_no_color,
+            config_dir=config_dir,
+        )
+        raise typer.Exit()

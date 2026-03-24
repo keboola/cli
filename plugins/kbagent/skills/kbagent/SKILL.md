@@ -33,19 +33,41 @@ This prints all commands, flags, workflows, and tips. Read it fully before proce
 
 ## Choosing the right approach
 
+<!-- BEGIN AUTO-GENERATED COMMANDS -->
 | Goal | Command |
 |------|---------|
-| See what projects are connected | `kbagent --json project list` |
-| Browse configs across projects | `kbagent --json config list` |
-| Find a string in configs (audit, grep) | `kbagent --json config search -q "pattern" [-i] [-r]` |
-| Check for failed jobs | `kbagent --json job list --status error` |
-| Understand data flow between projects | `kbagent --json lineage` |
-| Generate visual dashboard | `kbagent explorer` |
-| Call MCP tools (read, across all projects) | `kbagent --json tool call <tool>` |
-| Call MCP tools (write, single project) | `kbagent --json tool call <tool> --project <alias> --input '{...}'` |
-| Debug SQL from a transformation | See [workspace workflow](references/workspace-workflow.md) |
-| Work on a dev branch safely | See [branch workflow](references/branch-workflow.md) |
-| Onboard entire organization | `KBC_MANAGE_API_TOKEN=xxx kbagent --json org setup --org-id ID --url URL --yes` |
+| Add a new Keboola project connection | `kbagent project add --alias ALIAS` |
+| List all connected Keboola projects | `kbagent project list` |
+| Remove a Keboola project connection | `kbagent project remove --alias ALIAS` |
+| Edit an existing Keboola project connection | `kbagent project edit --alias ALIAS` |
+| Test connectivity to connected Keboola projects | `kbagent project status` |
+| List configurations from connected projects | `kbagent config list` |
+| Show detailed information about a specific configuration | `kbagent config detail --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Search through configuration bodies for a string or pattern | `kbagent config search --query QUERY` |
+| List jobs from connected projects | `kbagent job list` |
+| Show detailed information about a specific job | `kbagent job detail --project PROJECT --job-id JOB-ID` |
+| Show cross-project data lineage via bucket sharing | `kbagent lineage show` |
+| Set up all projects from a Keboola organization | `kbagent org setup --org-id ORG-ID --url URL` |
+| List available MCP tools from the keboola-mcp-server | `kbagent tool list` |
+| Call an MCP tool on keboola-mcp-server | `kbagent tool call <TOOL-NAME>` |
+| List development branches from connected projects | `kbagent branch list` |
+| Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
+| Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
+| Reset the active branch back to main/production | `kbagent branch reset --project PROJECT` |
+| Delete a development branch | `kbagent branch delete --project PROJECT --branch BRANCH` |
+| Get the KBC UI merge URL for a development branch | `kbagent branch merge --project PROJECT` |
+| Generate and open the KBC Explorer dashboard | `kbagent explorer` |
+| Generate a tiers.yaml template from registered projects | `kbagent explorer init-tiers` |
+| Export project to Twin Format for AI consumption | `kbagent llm export` |
+| Create a new workspace | `kbagent workspace create --project PROJECT` |
+| List workspaces from connected projects | `kbagent workspace list` |
+| Show workspace details (password NOT included) | `kbagent workspace detail --project PROJECT --workspace-id WORKSPACE-ID` |
+| Delete a workspace | `kbagent workspace delete --project PROJECT --workspace-id WORKSPACE-ID` |
+| Reset workspace password and show the new one | `kbagent workspace password --project PROJECT --workspace-id WORKSPACE-ID` |
+| Load tables into a workspace | `kbagent workspace load --project PROJECT --workspace-id WORKSPACE-ID --tables TABLES` |
+| Execute SQL query in a workspace via Query Service | `kbagent workspace query --project PROJECT --workspace-id WORKSPACE-ID` |
+| Create a workspace from a transformation config | `kbagent workspace from-transformation --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+<!-- END AUTO-GENERATED COMMANDS -->
 
 ## Response format
 

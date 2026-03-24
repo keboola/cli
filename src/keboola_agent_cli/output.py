@@ -62,7 +62,12 @@ class OutputFormatter:
                 self.console.print(data)
 
     def error(
-        self, message: str, error_code: str = "ERROR", project: str = "", retryable: bool = False
+        self,
+        message: str,
+        error_code: str = "ERROR",
+        project: str = "",
+        retryable: bool = False,
+        error_type: str = "",
     ) -> None:
         """Output an error message.
 
@@ -71,10 +76,16 @@ class OutputFormatter:
             error_code: Machine-readable error code.
             project: Project alias related to the error.
             retryable: Whether the operation can be retried.
+            error_type: Broad error category. If empty, derived from error_code.
         """
         if self.json_mode:
+            if not error_type:
+                from .commands._helpers import map_error_code_to_type
+
+                error_type = map_error_code_to_type(error_code)
             err = ErrorResponse(
                 code=error_code,
+                error_type=error_type,
                 message=message,
                 project=project,
                 retryable=retryable,

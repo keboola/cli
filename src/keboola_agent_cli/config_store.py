@@ -3,8 +3,10 @@
 Manages reading and writing of config.json with project connections.
 File permissions are set to 0600 to protect stored tokens.
 Uses atomic writes to prevent TOCTOU race conditions.
+File locking (fcntl) prevents corruption from concurrent access.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -19,6 +21,28 @@ from .models import AppConfig, ProjectConfig
 logger = logging.getLogger(__name__)
 
 CURRENT_CONFIG_VERSION = 1
+
+# File-lock constants (fcntl is POSIX-only; on Windows we skip locking).
+try:
+    import fcntl
+
+    _LOCK_SH = fcntl.LOCK_SH
+    _LOCK_EX = fcntl.LOCK_EX
+    _LOCK_UN = fcntl.LOCK_UN
+    _HAS_FCNTL = True
+except ImportError:
+    _LOCK_SH = 0
+    _LOCK_EX = 0
+    _LOCK_UN = 0
+    _HAS_FCNTL = False
+
+
+def _try_flock(fd: int, operation: int) -> None:
+    """Try to apply a file lock. Silently skip on unsupported platforms (Windows)."""
+    if not _HAS_FCNTL:
+        return
+    with contextlib.suppress(OSError):
+        fcntl.flock(fd, operation)
 
 
 def resolve_config_dir(cli_config_dir: str | None = None) -> tuple[Path, str]:
@@ -99,12 +123,19 @@ class ConfigStore:
             logger.debug("Config file does not exist, returning empty config")
             return AppConfig()
 
+        fd: int | None = None
         try:
+            fd = os.open(str(self._config_path), os.O_RDONLY)
+            _try_flock(fd, _LOCK_SH)
             raw = self._config_path.read_text(encoding="utf-8")
         except OSError as exc:
             raise ConfigError(f"Cannot read config file {self._config_path}: {exc}") from exc
         except UnicodeDecodeError as exc:
             raise ConfigError(f"Config file is not valid UTF-8 text: {exc}") from exc
+        finally:
+            if fd is not None:
+                _try_flock(fd, _LOCK_UN)
+                os.close(fd)
 
         try:
             data = json.loads(raw)
@@ -139,10 +170,18 @@ class ConfigStore:
             ConfigError: If the file cannot be written.
         """
         logger.debug("Saving config to %s", self._config_path)
+        lock_fd: int | None = None
         try:
             self._config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             json_str = config.model_dump_json(indent=2)
             data = (json_str + "\n").encode("utf-8")
+
+            # Acquire an exclusive lock on the target file before writing.
+            # The lock file is opened (or created) with 0600 permissions.
+            lock_fd = os.open(
+                str(self._config_path), os.O_RDONLY | os.O_CREAT, 0o600
+            )
+            _try_flock(lock_fd, _LOCK_EX)
 
             # Write to a temp file created with 0600 from the start,
             # then atomically rename into place. This avoids any window
@@ -156,6 +195,10 @@ class ConfigStore:
             os.replace(str(tmp_path), str(self._config_path))
         except OSError as exc:
             raise ConfigError(f"Cannot write config file {self._config_path}: {exc}") from exc
+        finally:
+            if lock_fd is not None:
+                _try_flock(lock_fd, _LOCK_UN)
+                os.close(lock_fd)
 
     def add_project(self, alias: str, project: ProjectConfig) -> None:
         """Add a project to the configuration.

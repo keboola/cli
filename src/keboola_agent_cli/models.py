@@ -63,6 +63,10 @@ class ErrorResponse(BaseModel):
     """Structured error response for JSON output mode."""
 
     code: str = Field(description="Machine-readable error code, e.g. INVALID_TOKEN")
+    error_type: str = Field(
+        default="unknown",
+        description="Broad error category: authentication, network, configuration, not_found, validation, api, unknown",
+    )
     message: str = Field(description="Human-readable error description")
     project: str = Field(default="", description="Project alias related to the error, if any")
     retryable: bool = Field(default=False, description="Whether the operation can be retried")

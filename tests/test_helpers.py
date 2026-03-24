@@ -1,6 +1,6 @@
 """Tests for commands._helpers shared command-layer utilities."""
 
-from keboola_agent_cli.commands._helpers import map_error_to_exit_code
+from keboola_agent_cli.commands._helpers import map_error_code_to_type, map_error_to_exit_code
 from keboola_agent_cli.errors import KeboolaApiError
 
 
@@ -61,3 +61,43 @@ class TestMapErrorToExitCode:
         """Default UNKNOWN_ERROR maps to exit code 1."""
         exc = KeboolaApiError(message="Unknown error")
         assert map_error_to_exit_code(exc) == 1
+
+
+class TestMapErrorCodeToType:
+    """Tests for map_error_code_to_type."""
+
+    def test_invalid_token_maps_to_authentication(self) -> None:
+        """INVALID_TOKEN maps to authentication error type."""
+        assert map_error_code_to_type("INVALID_TOKEN") == "authentication"
+
+    def test_timeout_maps_to_network(self) -> None:
+        """TIMEOUT maps to network error type."""
+        assert map_error_code_to_type("TIMEOUT") == "network"
+
+    def test_connection_error_maps_to_network(self) -> None:
+        """CONNECTION_ERROR maps to network error type."""
+        assert map_error_code_to_type("CONNECTION_ERROR") == "network"
+
+    def test_retry_exhausted_maps_to_network(self) -> None:
+        """RETRY_EXHAUSTED maps to network error type."""
+        assert map_error_code_to_type("RETRY_EXHAUSTED") == "network"
+
+    def test_not_found_maps_to_not_found(self) -> None:
+        """NOT_FOUND maps to not_found error type."""
+        assert map_error_code_to_type("NOT_FOUND") == "not_found"
+
+    def test_config_error_maps_to_configuration(self) -> None:
+        """CONFIG_ERROR maps to configuration error type."""
+        assert map_error_code_to_type("CONFIG_ERROR") == "configuration"
+
+    def test_validation_error_maps_to_validation(self) -> None:
+        """VALIDATION_ERROR maps to validation error type."""
+        assert map_error_code_to_type("VALIDATION_ERROR") == "validation"
+
+    def test_unknown_code_maps_to_api(self) -> None:
+        """Unrecognized error codes fall back to api type."""
+        assert map_error_code_to_type("INTERNAL_ERROR") == "api"
+
+    def test_generic_error_maps_to_api(self) -> None:
+        """Generic ERROR code falls back to api type."""
+        assert map_error_code_to_type("ERROR") == "api"

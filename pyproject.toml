@@ -18,6 +18,7 @@ dependencies = [
     "jsonschema>=4.20",
     "pyyaml>=6",
     "packaging>=23",
+    "prompt-toolkit>=3.0",
 ]
 
 [project.scripts]
