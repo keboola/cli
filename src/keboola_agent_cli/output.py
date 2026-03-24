@@ -163,15 +163,22 @@ def format_configs_table(console: Console, data: dict[str, Any]) -> None:
         table.add_column("Type", style="dim")
         table.add_column("Config ID", justify="right")
         table.add_column("Config Name")
-        table.add_column("Description", style="dim", max_width=40)
+        table.add_column("Last Modified", style="dim")
+        table.add_column("Modified By", style="dim")
 
         for cfg in project_configs:
+            # Format last_modified to shorter form if present
+            last_mod = cfg.get("last_modified", "")
+            if last_mod and "T" in last_mod:
+                last_mod = last_mod.split("T")[0]  # just date part
+
             table.add_row(
                 cfg["component_id"],
                 cfg["component_type"],
                 cfg["config_id"],
                 cfg["config_name"],
-                cfg.get("config_description", ""),
+                last_mod,
+                cfg.get("last_modified_by", ""),
             )
 
         console.print(table)

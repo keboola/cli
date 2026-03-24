@@ -76,6 +76,10 @@ class ConfigService(BaseService):
 
                 configurations = component.get("configurations", [])
                 for cfg in configurations:
+                    # Extract last-modified info from currentVersion
+                    current_version = cfg.get("currentVersion", {})
+                    creator_token = current_version.get("creatorToken", {})
+
                     configs.append(
                         {
                             "project_alias": alias,
@@ -85,6 +89,9 @@ class ConfigService(BaseService):
                             "config_id": str(cfg.get("id", "")),
                             "config_name": cfg.get("name", ""),
                             "config_description": cfg.get("description", ""),
+                            "last_modified": current_version.get("created", ""),
+                            "last_modified_by": creator_token.get("description", ""),
+                            "last_change_description": current_version.get("changeDescription", ""),
                         }
                     )
             return (alias, configs, True)
