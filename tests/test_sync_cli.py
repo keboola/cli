@@ -983,7 +983,7 @@ class TestSyncBranchLinkCli:
         assert "--project" in output
         assert "--directory" in output
         assert "--branch-id" in output
-        assert "--branch-name" in result.output
+        assert "--branch-name" in output
 
     def test_sync_branch_link_json_output(self, tmp_path: Path) -> None:
         """sync branch-link --json returns structured JSON."""
