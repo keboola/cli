@@ -812,6 +812,7 @@ class KeboolaClient(BaseHttpClient):
         workspace_id: int,
         tables: list[dict[str, Any]],
         branch_id: int | None = None,
+        preserve: bool = False,
     ) -> dict[str, Any]:
         """Load tables into a workspace (async operation).
 
@@ -821,6 +822,8 @@ class KeboolaClient(BaseHttpClient):
                 - source: table ID (e.g. "in.c-bucket.table")
                 - destination: target table name in workspace
             branch_id: Branch ID. Required for workspaces on dev branches.
+            preserve: If True, keep existing tables in the workspace. Default is False
+                (workspace is cleared before loading).
 
         Returns:
             Completed storage job dict (polls until done).
@@ -829,7 +832,7 @@ class KeboolaClient(BaseHttpClient):
             KeboolaApiError: If the load job fails or times out.
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
-        body: dict[str, Any] = {"input": tables}
+        body: dict[str, Any] = {"input": tables, "preserve": preserve}
         response = self._request(
             "POST",
             f"{prefix}/workspaces/{workspace_id}/load",

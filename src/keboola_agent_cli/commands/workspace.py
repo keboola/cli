@@ -252,6 +252,11 @@ def workspace_load(
         "--tables",
         help="Table ID to load (can be repeated, e.g. in.c-bucket.table-name)",
     ),
+    preserve: bool = typer.Option(
+        False,
+        "--preserve",
+        help="Keep existing tables in the workspace (default: clear before loading)",
+    ),
 ) -> None:
     """Load tables into a workspace.
 
@@ -261,7 +266,9 @@ def workspace_load(
     service = get_service(ctx, "workspace_service")
 
     try:
-        result = service.load_tables(alias=project, workspace_id=workspace_id, tables=tables)
+        result = service.load_tables(
+            alias=project, workspace_id=workspace_id, tables=tables, preserve=preserve
+        )
         formatter.output(
             result,
             lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}"),

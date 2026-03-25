@@ -410,6 +410,7 @@ class WorkspaceService(BaseService):
         alias: str,
         workspace_id: int,
         tables: list[str],
+        preserve: bool = False,
     ) -> dict[str, Any]:
         """Load tables into a workspace.
 
@@ -420,6 +421,7 @@ class WorkspaceService(BaseService):
             alias: Project alias.
             workspace_id: Workspace ID.
             tables: List of table IDs (e.g. "in.c-bucket.table-name").
+            preserve: If True, keep existing tables in the workspace.
 
         Returns:
             Dict with load job results.
@@ -443,7 +445,9 @@ class WorkspaceService(BaseService):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            job_result = client.load_workspace_tables(workspace_id, table_defs, branch_id=branch_id)
+            job_result = client.load_workspace_tables(
+                workspace_id, table_defs, branch_id=branch_id, preserve=preserve
+            )
         finally:
             client.close()
 
@@ -539,6 +543,7 @@ class WorkspaceService(BaseService):
         config_id: str,
         row_id: str | None = None,
         backend: str = "snowflake",
+        preserve: bool = False,
     ) -> dict[str, Any]:
         """Create a workspace from a transformation config.
 
@@ -551,6 +556,7 @@ class WorkspaceService(BaseService):
             config_id: Configuration ID.
             row_id: Optional row ID for row-based transformations.
             backend: Workspace backend.
+            preserve: If True, keep existing tables in the workspace during load.
 
         Returns:
             Dict with workspace details and loaded tables.
@@ -622,7 +628,9 @@ class WorkspaceService(BaseService):
 
             # Load tables into workspace
             if table_defs:
-                client.load_workspace_tables(workspace_id, table_defs, branch_id=branch_id)
+                client.load_workspace_tables(
+                    workspace_id, table_defs, branch_id=branch_id, preserve=preserve
+                )
 
             return {
                 "project_alias": alias,

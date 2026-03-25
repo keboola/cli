@@ -566,6 +566,116 @@ class TestWorkspaceLoad:
         assert output["data"]["tables_loaded"] == 2
         assert output["data"]["job_status"] == "success"
 
+    def test_workspace_load_with_preserve_flag(self, tmp_path: Path) -> None:
+        """workspace load --preserve passes preserve=True to service."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.load_tables.return_value = {
+            "project_alias": "prod",
+            "workspace_id": 42,
+            "tables_loaded": 1,
+            "table_ids": ["in.c-main.orders"],
+            "job_id": 800,
+            "job_status": "success",
+            "message": "Loaded 1 table(s) into workspace 42.",
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockWsService.return_value = mock_ws
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "workspace",
+                    "load",
+                    "--project",
+                    "prod",
+                    "--workspace-id",
+                    "42",
+                    "--tables",
+                    "in.c-main.orders",
+                    "--preserve",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["tables_loaded"] == 1
+
+        # Verify preserve=True was passed to the service
+        mock_ws.load_tables.assert_called_once_with(
+            alias="prod", workspace_id=42, tables=["in.c-main.orders"], preserve=True
+        )
+
+    def test_workspace_load_without_preserve_flag(self, tmp_path: Path) -> None:
+        """workspace load without --preserve passes preserve=False to service."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.load_tables.return_value = {
+            "project_alias": "prod",
+            "workspace_id": 42,
+            "tables_loaded": 1,
+            "table_ids": ["in.c-main.orders"],
+            "job_id": 801,
+            "job_status": "success",
+            "message": "Loaded 1 table(s) into workspace 42.",
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockWsService.return_value = mock_ws
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "workspace",
+                    "load",
+                    "--project",
+                    "prod",
+                    "--workspace-id",
+                    "42",
+                    "--tables",
+                    "in.c-main.orders",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+
+        # Verify preserve=False was passed to the service (default)
+        mock_ws.load_tables.assert_called_once_with(
+            alias="prod", workspace_id=42, tables=["in.c-main.orders"], preserve=False
+        )
+
 
 class TestWorkspaceQuery:
     """Tests for `kbagent workspace query` command."""

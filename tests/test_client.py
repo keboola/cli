@@ -1578,3 +1578,87 @@ class TestDeleteConfigBranch:
             token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
         ) as client:
             client.delete_config("keboola.sandboxes", "cfg-1", branch_id=200)
+
+
+class TestLoadWorkspaceTablesPreserve:
+    """Tests for load_workspace_tables() preserve parameter."""
+
+    def test_load_workspace_tables_preserve_false(self, httpx_mock) -> None:
+        """load_workspace_tables sends preserve=False in the request body by default."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/workspaces/42/load",
+            method="POST",
+            json={"id": 900, "status": "success"},
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.load_workspace_tables(
+                workspace_id=42,
+                tables=[{"source": "in.c-main.orders", "destination": "orders"}],
+            )
+            assert result["status"] == "success"
+
+            import json
+
+            request = httpx_mock.get_requests()[0]
+            body = json.loads(request.content)
+            assert body["preserve"] is False
+            assert len(body["input"]) == 1
+            assert body["input"][0]["source"] == "in.c-main.orders"
+
+    def test_load_workspace_tables_preserve_true(self, httpx_mock) -> None:
+        """load_workspace_tables sends preserve=True when requested."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/workspaces/42/load",
+            method="POST",
+            json={"id": 901, "status": "success"},
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.load_workspace_tables(
+                workspace_id=42,
+                tables=[{"source": "in.c-main.orders", "destination": "orders"}],
+                preserve=True,
+            )
+            assert result["status"] == "success"
+
+            import json
+
+            request = httpx_mock.get_requests()[0]
+            body = json.loads(request.content)
+            assert body["preserve"] is True
+
+    def test_load_workspace_tables_preserve_with_branch(self, httpx_mock) -> None:
+        """load_workspace_tables sends preserve in body when branch_id is set."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/200/workspaces/42/load",
+            method="POST",
+            json={"id": 902, "status": "success"},
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.load_workspace_tables(
+                workspace_id=42,
+                tables=[{"source": "in.c-main.orders", "destination": "orders"}],
+                branch_id=200,
+                preserve=True,
+            )
+            assert result["status"] == "success"
+
+            import json
+
+            request = httpx_mock.get_requests()[0]
+            body = json.loads(request.content)
+            assert body["preserve"] is True

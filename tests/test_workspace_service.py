@@ -559,9 +559,52 @@ class TestLoadTables:
         assert len(table_defs) == 2
         assert table_defs[0] == {"source": "in.c-main.orders", "destination": "orders"}
         assert table_defs[1] == {"source": "in.c-main.customers", "destination": "customers"}
-        assert call_args[1] == {"branch_id": 123}
+        assert call_args[1] == {"branch_id": 123, "preserve": False}
         # close() called twice: once in _resolve_branch_id, once in load_tables
         assert mock_client.close.call_count == 2
+
+    def test_load_tables_preserve_false(self, tmp_config_dir: Path) -> None:
+        """load_tables passes preserve=False to client by default."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.load_workspace_tables.return_value = {
+            "id": 778,
+            "status": "success",
+        }
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-main.orders"])
+
+        call_kwargs = mock_client.load_workspace_tables.call_args[1]
+        assert call_kwargs["preserve"] is False
+
+    def test_load_tables_preserve_true(self, tmp_config_dir: Path) -> None:
+        """load_tables passes preserve=True to client when requested."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.load_workspace_tables.return_value = {
+            "id": 779,
+            "status": "success",
+        }
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.load_tables(
+            alias="prod", workspace_id=42, tables=["in.c-main.orders"], preserve=True
+        )
+
+        call_kwargs = mock_client.load_workspace_tables.call_args[1]
+        assert call_kwargs["preserve"] is True
+        assert result["job_id"] == 779
 
     def test_load_tables_api_error(self, tmp_config_dir: Path) -> None:
         """load_tables propagates KeboolaApiError when job fails."""
