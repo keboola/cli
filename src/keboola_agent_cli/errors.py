@@ -49,3 +49,19 @@ class ConfigError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+_ERROR_CODE_TO_TYPE: dict[str, str] = {
+    "INVALID_TOKEN": "authentication",
+    "TIMEOUT": "network",
+    "CONNECTION_ERROR": "network",
+    "RETRY_EXHAUSTED": "network",
+    "NOT_FOUND": "not_found",
+    "CONFIG_ERROR": "configuration",
+    "VALIDATION_ERROR": "validation",
+}
+
+
+def map_error_code_to_type(error_code: str) -> str:
+    """Map a machine-readable error code to a broad error type category."""
+    return _ERROR_CODE_TO_TYPE.get(error_code, "api")

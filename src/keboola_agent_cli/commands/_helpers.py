@@ -10,7 +10,7 @@ from typing import Any
 
 import typer
 
-from ..errors import KeboolaApiError
+from ..errors import KeboolaApiError, map_error_code_to_type  # noqa: F401
 from ..output import OutputFormatter
 
 
@@ -22,22 +22,6 @@ def get_formatter(ctx: typer.Context) -> OutputFormatter:
 def get_service(ctx: typer.Context, key: str) -> Any:
     """Retrieve a service from the Typer context."""
     return ctx.obj[key]
-
-
-_ERROR_CODE_TO_TYPE: dict[str, str] = {
-    "INVALID_TOKEN": "authentication",
-    "TIMEOUT": "network",
-    "CONNECTION_ERROR": "network",
-    "RETRY_EXHAUSTED": "network",
-    "NOT_FOUND": "not_found",
-    "CONFIG_ERROR": "configuration",
-    "VALIDATION_ERROR": "validation",
-}
-
-
-def map_error_code_to_type(error_code: str) -> str:
-    """Map a machine-readable error code to a broad error type category."""
-    return _ERROR_CODE_TO_TYPE.get(error_code, "api")
 
 
 def map_error_to_exit_code(exc: KeboolaApiError) -> int:

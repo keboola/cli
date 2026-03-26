@@ -8,6 +8,7 @@ and message sanitization code.
 import logging
 import time
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -52,6 +53,24 @@ class BaseHttpClient:
             timeout=timeout or DEFAULT_TIMEOUT,
             headers=headers,
         )
+
+    @staticmethod
+    def _derive_service_url(stack_url: str, service_prefix: str) -> str:
+        """Derive a service base URL by replacing 'connection.' in the hostname.
+
+        E.g. _derive_service_url("https://connection.keboola.com", "queue")
+             -> "https://queue.keboola.com"
+        """
+        parsed = urlparse(stack_url)
+        hostname = parsed.hostname or ""
+        new_host = hostname.replace("connection.", f"{service_prefix}.", 1)
+        if new_host == hostname:
+            logger.warning(
+                "%s URL derivation did not change hostname: %s",
+                service_prefix,
+                hostname,
+            )
+        return urlunparse(parsed._replace(netloc=new_host))
 
     def close(self) -> None:
         """Close the underlying HTTP client."""

@@ -40,26 +40,30 @@ SAMPLE_SUGGEST_RESPONSE = {
 
 
 class TestDeriveAiUrl:
-    """Verify AI Service URL derivation from Storage API stack URLs."""
+    """Verify AI Service URL derivation via shared _derive_service_url."""
 
     def test_derive_ai_url_us_stack(self) -> None:
         """US stack: connection.keboola.com -> ai.keboola.com."""
-        result = AiServiceClient._derive_ai_url("https://connection.keboola.com")
+        result = AiServiceClient._derive_service_url("https://connection.keboola.com", "ai")
         assert result == "https://ai.keboola.com"
 
     def test_derive_ai_url_eu_stack(self) -> None:
         """EU stack: connection.eu-central-1.keboola.com -> ai.eu-central-1.keboola.com."""
-        result = AiServiceClient._derive_ai_url("https://connection.eu-central-1.keboola.com")
+        result = AiServiceClient._derive_service_url(
+            "https://connection.eu-central-1.keboola.com", "ai"
+        )
         assert result == "https://ai.eu-central-1.keboola.com"
 
     def test_derive_ai_url_azure_stack(self) -> None:
         """Azure stack: connection.north-europe.azure.keboola.com -> ai.north-europe.azure.keboola.com."""
-        result = AiServiceClient._derive_ai_url("https://connection.north-europe.azure.keboola.com")
+        result = AiServiceClient._derive_service_url(
+            "https://connection.north-europe.azure.keboola.com", "ai"
+        )
         assert result == "https://ai.north-europe.azure.keboola.com"
 
     def test_derive_ai_url_trailing_slash(self) -> None:
         """Trailing slash in input URL is preserved in derivation."""
-        result = AiServiceClient._derive_ai_url("https://connection.keboola.com/")
+        result = AiServiceClient._derive_service_url("https://connection.keboola.com/", "ai")
         assert result == "https://ai.keboola.com/"
 
 

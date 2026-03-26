@@ -80,7 +80,7 @@ class OutputFormatter:
         """
         if self.json_mode:
             if not error_type:
-                from .commands._helpers import map_error_code_to_type
+                from .errors import map_error_code_to_type
 
                 error_type = map_error_code_to_type(error_code)
             err = ErrorResponse(

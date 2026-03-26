@@ -272,6 +272,7 @@ def config_update(
         formatter.error(
             message=exc.message,
             error_code=exc.error_code,
+            retryable=exc.retryable,
         )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
@@ -336,6 +337,7 @@ def config_delete(
         formatter.error(
             message=exc.message,
             error_code=exc.error_code,
+            retryable=exc.retryable,
         )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 

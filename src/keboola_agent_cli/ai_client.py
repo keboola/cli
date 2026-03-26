@@ -10,7 +10,7 @@ Inherits shared retry/error logic from BaseHttpClient.
 
 import logging
 from typing import Any
-from urllib.parse import quote, urlparse, urlunparse
+from urllib.parse import quote
 
 from . import __version__
 from .constants import AI_SERVICE_TIMEOUT
@@ -31,7 +31,7 @@ class AiServiceClient(BaseHttpClient):
 
     def __init__(self, stack_url: str, token: str) -> None:
         self._stack_url = stack_url.rstrip("/")
-        ai_base_url = self._derive_ai_url(self._stack_url)
+        ai_base_url = self._derive_service_url(self._stack_url, "ai")
         headers = {
             "X-StorageApi-Token": token,
             "User-Agent": f"keboola-agent-cli/{__version__}",
@@ -48,27 +48,6 @@ class AiServiceClient(BaseHttpClient):
 
     def __exit__(self, *args: Any) -> None:
         self.close()
-
-    @staticmethod
-    def _derive_ai_url(stack_url: str) -> str:
-        """Derive AI Service base URL from the Storage API URL.
-
-        Replaces 'connection.' with 'ai.' in the hostname.
-        E.g. https://connection.keboola.com -> https://ai.keboola.com
-             https://connection.eu-central-1.keboola.com -> https://ai.eu-central-1.keboola.com
-
-        Args:
-            stack_url: The Keboola Storage API stack URL.
-
-        Returns:
-            The AI Service base URL.
-        """
-        parsed = urlparse(stack_url)
-        hostname = parsed.hostname or ""
-        ai_host = hostname.replace("connection.", "ai.", 1)
-        if ai_host == hostname:
-            logger.warning("AI Service URL derivation did not change hostname: %s", hostname)
-        return urlunparse(parsed._replace(netloc=ai_host))
 
     def get_component_detail(self, component_id: str) -> dict[str, Any]:
         """Fetch detailed documentation for a specific component.

@@ -1375,7 +1375,7 @@ class TestQueueUrlWarning:
     def test_non_standard_url_warns(self) -> None:
         """Non-standard URL without 'connection.' in hostname logs warning."""
 
-        with patch("keboola_agent_cli.client.logger") as mock_logger:
+        with patch("keboola_agent_cli.http_base.logger") as mock_logger:
             client = KeboolaClient(
                 stack_url="https://custom.keboola.com",
                 token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
@@ -1388,7 +1388,7 @@ class TestQueueUrlWarning:
 
     def test_standard_url_no_warning(self) -> None:
         """Standard URL with 'connection.' in hostname does not log warning."""
-        with patch("keboola_agent_cli.client.logger") as mock_logger:
+        with patch("keboola_agent_cli.http_base.logger") as mock_logger:
             client = KeboolaClient(
                 stack_url="https://connection.keboola.com",
                 token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",

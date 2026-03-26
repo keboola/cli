@@ -11,7 +11,7 @@ import json
 import logging
 import time
 from typing import Any
-from urllib.parse import quote, urlparse, urlunparse
+from urllib.parse import quote
 
 import httpx
 
@@ -61,45 +61,15 @@ class KeboolaClient(BaseHttpClient):
 
     @property
     def _queue_base_url(self) -> str:
-        """Derive Queue API base URL from the Storage API URL.
-
-        Replaces 'connection.' with 'queue.' in the hostname.
-        E.g. https://connection.keboola.com -> https://queue.keboola.com
-        """
-        parsed = urlparse(self._stack_url)
-        hostname = parsed.hostname or ""
-        queue_host = hostname.replace("connection.", "queue.", 1)
-        if queue_host == hostname:
-            logger.warning("Queue URL derivation did not change hostname: %s", hostname)
-        return urlunparse(parsed._replace(netloc=queue_host))
+        return self._derive_service_url(self._stack_url, "queue")
 
     @property
     def _query_base_url(self) -> str:
-        """Derive Query Service base URL from the Storage API URL.
-
-        Replaces 'connection.' with 'query.' in the hostname.
-        E.g. https://connection.keboola.com -> https://query.keboola.com
-        """
-        parsed = urlparse(self._stack_url)
-        hostname = parsed.hostname or ""
-        query_host = hostname.replace("connection.", "query.", 1)
-        if query_host == hostname:
-            logger.warning("Query URL derivation did not change hostname: %s", hostname)
-        return urlunparse(parsed._replace(netloc=query_host))
+        return self._derive_service_url(self._stack_url, "query")
 
     @property
     def _encrypt_base_url(self) -> str:
-        """Derive Encryption API base URL from the Storage API URL.
-
-        Replaces 'connection.' with 'encryption.' in the hostname.
-        E.g. https://connection.keboola.com -> https://encryption.keboola.com
-        """
-        parsed = urlparse(self._stack_url)
-        hostname = parsed.hostname or ""
-        encrypt_host = hostname.replace("connection.", "encryption.", 1)
-        if encrypt_host == hostname:
-            logger.warning("Encrypt URL derivation did not change hostname: %s", hostname)
-        return urlunparse(parsed._replace(netloc=encrypt_host))
+        return self._derive_service_url(self._stack_url, "encryption")
 
     def close(self) -> None:
         """Close the underlying HTTP clients."""
@@ -121,52 +91,50 @@ class KeboolaClient(BaseHttpClient):
         """Execute a Storage API request with retry."""
         return self._do_request(method, path, **kwargs)
 
-    def _queue_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Execute a Queue API request with retry. Lazily creates the queue client."""
-        if self._queue_client is None:
-            self._queue_client = httpx.Client(
-                base_url=self._queue_base_url,
+    def _get_or_create_sub_client(
+        self,
+        attr: str,
+        base_url: str,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Client:
+        """Return an existing sub-client or lazily create one.
+
+        Args:
+            attr: Instance attribute name (e.g. "_queue_client").
+            base_url: Base URL for the sub-client.
+            headers: Custom headers; defaults to the main client's headers.
+        """
+        client = getattr(self, attr)
+        if client is None:
+            client = httpx.Client(
+                base_url=base_url,
                 timeout=DEFAULT_TIMEOUT,
-                headers=self._client._headers.copy(),
+                headers=headers or self._client._headers.copy(),
             )
+            setattr(self, attr, client)
+        return client
+
+    def _queue_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """Execute a Queue API request with retry."""
+        client = self._get_or_create_sub_client("_queue_client", self._queue_base_url)
         return self._do_request(
-            method,
-            path,
-            client=self._queue_client,
-            base_url=self._queue_base_url,
-            **kwargs,
+            method, path, client=client, base_url=self._queue_base_url, **kwargs
         )
 
     def _query_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Execute a Query Service request with retry. Lazily creates the query client."""
-        if self._query_client is None:
-            self._query_client = httpx.Client(
-                base_url=self._query_base_url,
-                timeout=DEFAULT_TIMEOUT,
-                headers=self._client._headers.copy(),
-            )
+        """Execute a Query Service request with retry."""
+        client = self._get_or_create_sub_client("_query_client", self._query_base_url)
         return self._do_request(
-            method,
-            path,
-            client=self._query_client,
-            base_url=self._query_base_url,
-            **kwargs,
+            method, path, client=client, base_url=self._query_base_url, **kwargs
         )
 
     def _encrypt_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Execute an Encryption API request with retry. Lazily creates the encrypt client."""
-        if self._encrypt_client is None:
-            self._encrypt_client = httpx.Client(
-                base_url=self._encrypt_base_url,
-                timeout=DEFAULT_TIMEOUT,
-                headers={"Content-Type": "application/json"},
-            )
+        """Execute an Encryption API request with retry."""
+        client = self._get_or_create_sub_client(
+            "_encrypt_client", self._encrypt_base_url, headers={"Content-Type": "application/json"}
+        )
         return self._do_request(
-            method,
-            path,
-            client=self._encrypt_client,
-            base_url=self._encrypt_base_url,
-            **kwargs,
+            method, path, client=client, base_url=self._encrypt_base_url, **kwargs
         )
 
     def encrypt_values(
