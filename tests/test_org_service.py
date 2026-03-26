@@ -385,6 +385,73 @@ class TestSetupOrganization:
         ) or "my-custom-prefix" in str(call_args)
 
 
+class TestTokenExpiration:
+    """Tests for token expiration (expiresIn) parameter."""
+
+    def test_expires_in_passed_to_manage_client(self, tmp_path: Path) -> None:
+        """When token_expires_in is set, it is forwarded to create_project_token."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+
+        projects = [{"id": 100, "name": "Alpha"}]
+
+        manage_mock = MagicMock()
+        manage_mock.list_organization_projects.return_value = projects
+        manage_mock.create_project_token.return_value = {
+            "id": "tok-1",
+            "token": "901-99999-generatedToken1234567890ab",
+            "description": "kbagent-cli",
+        }
+
+        service = OrgService(
+            config_store=store,
+            manage_client_factory=lambda url, token: manage_mock,
+            storage_client_factory=_make_storage_client(),
+        )
+
+        service.setup_organization(
+            stack_url="https://connection.keboola.com",
+            manage_token="manage-token-123456789012345678",
+            org_id=42,
+            token_expires_in=3600,
+        )
+
+        call_kwargs = manage_mock.create_project_token.call_args[1]
+        assert call_kwargs["expires_in"] == 3600
+
+    def test_expires_in_none_by_default(self, tmp_path: Path) -> None:
+        """When token_expires_in is not set, expires_in is None."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+
+        projects = [{"id": 100, "name": "Alpha"}]
+
+        manage_mock = MagicMock()
+        manage_mock.list_organization_projects.return_value = projects
+        manage_mock.create_project_token.return_value = {
+            "id": "tok-1",
+            "token": "901-99999-generatedToken1234567890ab",
+            "description": "kbagent-cli",
+        }
+
+        service = OrgService(
+            config_store=store,
+            manage_client_factory=lambda url, token: manage_mock,
+            storage_client_factory=_make_storage_client(),
+        )
+
+        service.setup_organization(
+            stack_url="https://connection.keboola.com",
+            manage_token="manage-token-123456789012345678",
+            org_id=42,
+        )
+
+        call_kwargs = manage_mock.create_project_token.call_args[1]
+        assert call_kwargs["expires_in"] is None
+
+
 class TestExistingProjectIdNone:
     """Tests for existing projects with project_id=None not polluting the set."""
 

@@ -76,6 +76,7 @@ class OrgService:
         org_id: int,
         token_description: str = DEFAULT_TOKEN_DESCRIPTION,
         dry_run: bool = False,
+        token_expires_in: int | None = None,
     ) -> dict[str, Any]:
         """Set up all projects from a Keboola organization.
 
@@ -160,6 +161,7 @@ class OrgService:
                     alias=alias,
                     token_description=token_description,
                     owner_name=owner_name,
+                    token_expires_in=token_expires_in,
                 )
                 # Re-read to get masked token
                 registered = self._config_store.get_project(alias)
@@ -210,6 +212,7 @@ class OrgService:
         alias: str,
         token_description: str,
         owner_name: str = "",
+        token_expires_in: int | None = None,
     ) -> None:
         """Create a token for a single project, verify it, and register it.
 
@@ -221,6 +224,7 @@ class OrgService:
             alias: The alias to register the project under.
             token_description: Description for the created token.
             owner_name: Email/name of the manage token owner (for unique identification).
+            token_expires_in: Token lifetime in seconds. None means no expiration.
         """
         description = f"{token_description} [{owner_name}]" if owner_name else token_description
 
@@ -237,6 +241,7 @@ class OrgService:
             token_data = manage_client.create_project_token(
                 project_id=project_id,
                 description=description,
+                expires_in=token_expires_in,
             )
         finally:
             manage_client.close()

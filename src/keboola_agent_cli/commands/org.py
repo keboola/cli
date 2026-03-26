@@ -150,6 +150,11 @@ def org_setup(
         "--token-description",
         help="Description prefix for created Storage API tokens",
     ),
+    token_expires_in: int | None = typer.Option(
+        None,
+        "--token-expires-in",
+        help="Token lifetime in seconds (e.g. 3600 for 1 hour). If not set, tokens never expire.",
+    ),
 ) -> None:
     """Set up all projects from a Keboola organization.
 
@@ -176,6 +181,7 @@ def org_setup(
                 org_id=org_id,
                 token_description=token_description,
                 dry_run=True,
+                token_expires_in=token_expires_in,
             )
         except KeboolaApiError as exc:
             _handle_api_error(formatter, exc)
@@ -201,6 +207,7 @@ def org_setup(
             org_id=org_id,
             token_description=token_description,
             dry_run=dry_run,
+            token_expires_in=token_expires_in,
         )
     except KeboolaApiError as exc:
         _handle_api_error(formatter, exc)

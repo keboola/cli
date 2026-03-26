@@ -79,6 +79,7 @@ class ManageClient(BaseHttpClient):
         description: str,
         can_manage_buckets: bool = True,
         can_read_all_file_uploads: bool = True,
+        expires_in: int | None = None,
     ) -> dict[str, Any]:
         """Create a new Storage API token for a project.
 
@@ -87,6 +88,7 @@ class ManageClient(BaseHttpClient):
             description: Token description.
             can_manage_buckets: Whether the token can manage buckets.
             can_read_all_file_uploads: Whether the token can read all file uploads.
+            expires_in: Token lifetime in seconds. None means the token never expires.
 
         Returns:
             Token dict including the 'token' field (shown only once).
@@ -94,10 +96,12 @@ class ManageClient(BaseHttpClient):
         Raises:
             KeboolaApiError: On API errors.
         """
-        payload = {
+        payload: dict[str, Any] = {
             "description": description,
             "canManageBuckets": can_manage_buckets,
             "canReadAllFileUploads": can_read_all_file_uploads,
         }
+        if expires_in is not None:
+            payload["expiresIn"] = expires_in
         response = self._do_request("POST", f"/manage/projects/{project_id}/tokens", json=payload)
         return response.json()
