@@ -428,10 +428,6 @@ class TestTokenExpiration:
 
         projects = [{"id": 100, "name": "Alpha"}]
 
-        # Use a real-ish mock that captures the payload
-        payloads_sent: list[dict] = []
-        original_create = None
-
         manage_mock = MagicMock()
         manage_mock.list_organization_projects.return_value = projects
         manage_mock.create_project_token.return_value = {
