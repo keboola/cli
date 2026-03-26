@@ -102,6 +102,7 @@ def sync_init(
         formatter.error(
             message=exc.message,
             error_code=exc.error_code,
+            retryable=exc.retryable,
         )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
@@ -477,6 +478,7 @@ def sync_pull(
         formatter.error(
             message=exc.message,
             error_code=exc.error_code,
+            retryable=exc.retryable,
         )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
@@ -612,7 +614,7 @@ def sync_diff(
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if formatter.json_mode:
@@ -788,7 +790,7 @@ def sync_push(
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if formatter.json_mode:
@@ -866,7 +868,7 @@ def sync_branch_link(
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if formatter.json_mode:

@@ -1,7 +1,7 @@
 """Tests for commands._helpers shared command-layer utilities."""
 
-from keboola_agent_cli.commands._helpers import map_error_code_to_type, map_error_to_exit_code
-from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.commands._helpers import map_error_to_exit_code
+from keboola_agent_cli.errors import KeboolaApiError, map_error_code_to_type
 
 
 class TestMapErrorToExitCode:

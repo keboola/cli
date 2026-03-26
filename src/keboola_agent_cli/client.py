@@ -109,7 +109,7 @@ class KeboolaClient(BaseHttpClient):
             client = httpx.Client(
                 base_url=base_url,
                 timeout=DEFAULT_TIMEOUT,
-                headers=headers or self._client._headers.copy(),
+                headers=self._client._headers.copy() if headers is None else headers,
             )
             setattr(self, attr, client)
         return client

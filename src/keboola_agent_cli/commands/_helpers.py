@@ -10,7 +10,7 @@ from typing import Any
 
 import typer
 
-from ..errors import KeboolaApiError, map_error_code_to_type  # noqa: F401
+from ..errors import KeboolaApiError
 from ..output import OutputFormatter
 
 

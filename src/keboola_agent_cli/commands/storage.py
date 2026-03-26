@@ -105,7 +105,7 @@ def storage_bucket_detail(
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if formatter.json_mode:
@@ -174,7 +174,7 @@ def storage_tables(
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if formatter.json_mode:
