@@ -58,10 +58,14 @@ def _format_setup_result(console: Console, data: dict) -> None:
     skipped = data.get("projects_skipped", [])
     failed = data.get("projects_failed", [])
 
+    token_expires_in = data.get("token_expires_in")
     mode_label = "[bold yellow]DRY RUN[/bold yellow] " if dry_run else ""
+    expiry_label = (
+        f", token expiration: [bold]{token_expires_in}s[/bold]" if token_expires_in else ""
+    )
     console.print(
         f"\n{mode_label}Organization [bold]{org_id}[/bold] on {stack_url} "
-        f"-- {projects_found} project(s) found\n"
+        f"-- {projects_found} project(s) found{expiry_label}\n"
     )
 
     # Added / would-add table
@@ -153,6 +157,7 @@ def org_setup(
     token_expires_in: int | None = typer.Option(
         None,
         "--token-expires-in",
+        min=1,
         help="Token lifetime in seconds (e.g. 3600 for 1 hour). If not set, tokens never expire.",
     ),
 ) -> None:

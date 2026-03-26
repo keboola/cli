@@ -226,6 +226,50 @@ class TestCreateProjectToken:
         client.close()
 
 
+    def test_expires_in_included_in_payload(self, httpx_mock) -> None:
+        """When expires_in is set, expiresIn is sent in the request payload."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/100/tokens",
+            json=TOKEN_RESPONSE,
+            status_code=201,
+        )
+
+        client = ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN)
+        client.create_project_token(
+            project_id=100,
+            description="kbagent-cli",
+            expires_in=3600,
+        )
+
+        request = httpx_mock.get_request()
+        import json
+
+        body = json.loads(request.content)
+        assert body["expiresIn"] == 3600
+        client.close()
+
+    def test_expires_in_none_excluded_from_payload(self, httpx_mock) -> None:
+        """When expires_in is None, expiresIn key is absent from the request payload."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/100/tokens",
+            json=TOKEN_RESPONSE,
+            status_code=201,
+        )
+
+        client = ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN)
+        client.create_project_token(
+            project_id=100,
+            description="kbagent-cli",
+        )
+
+        request = httpx_mock.get_request()
+        import json
+
+        body = json.loads(request.content)
+        assert "expiresIn" not in body
+        client.close()
+
+
 class TestManageClientContextManager:
     """Test context manager protocol."""
 

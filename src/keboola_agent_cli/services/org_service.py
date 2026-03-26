@@ -201,6 +201,7 @@ class OrgService:
             "projects_skipped": skipped,
             "projects_failed": failed,
             "dry_run": dry_run,
+            "token_expires_in": token_expires_in,
         }
 
     def _setup_single_project(

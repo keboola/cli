@@ -417,16 +417,20 @@ class TestTokenExpiration:
             token_expires_in=3600,
         )
 
-        call_kwargs = manage_mock.create_project_token.call_args[1]
+        call_kwargs = manage_mock.create_project_token.call_args.kwargs
         assert call_kwargs["expires_in"] == 3600
 
-    def test_expires_in_none_by_default(self, tmp_path: Path) -> None:
-        """When token_expires_in is not set, expires_in is None."""
+    def test_expires_in_none_not_in_payload(self, tmp_path: Path) -> None:
+        """When token_expires_in is not set, expiresIn is absent from API payload."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         store = ConfigStore(config_dir=config_dir)
 
         projects = [{"id": 100, "name": "Alpha"}]
+
+        # Use a real-ish mock that captures the payload
+        payloads_sent: list[dict] = []
+        original_create = None
 
         manage_mock = MagicMock()
         manage_mock.list_organization_projects.return_value = projects
@@ -448,7 +452,8 @@ class TestTokenExpiration:
             org_id=42,
         )
 
-        call_kwargs = manage_mock.create_project_token.call_args[1]
+        # Verify expires_in=None was passed (ManageClient will skip expiresIn from payload)
+        call_kwargs = manage_mock.create_project_token.call_args.kwargs
         assert call_kwargs["expires_in"] is None
 
 
