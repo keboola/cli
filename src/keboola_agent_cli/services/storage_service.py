@@ -102,7 +102,13 @@ class StorageService(BaseService):
             "is_linked": source is not None,
         }
 
-        # Resolve Snowflake paths
+        # Resolve Snowflake paths using backendPath from API (preserves correct case).
+        # backendPath is an array like ["SAPI_4254", "out.c-account-movements"].
+        # We must NOT construct the DB name ourselves (f"sapi_{id}") because
+        # Snowflake databases may be uppercase or lowercase depending on how
+        # they were created, and double-quoted identifiers are case-sensitive.
+        backend_path = bucket.get("backendPath", [])
+
         if source:
             src_project = source.get("project", {})
             src_project_id = src_project.get("id")
@@ -110,12 +116,18 @@ class StorageService(BaseService):
             result["source_project_id"] = src_project_id
             result["source_project_name"] = src_project.get("name", "")
             result["source_bucket_id"] = src_bucket_id
-            result["snowflake_database"] = f"sapi_{src_project_id}"
-            result["snowflake_schema"] = src_bucket_id
         else:
             result["source_project_id"] = None
             result["source_project_name"] = ""
             result["source_bucket_id"] = ""
+
+        if len(backend_path) >= 2:
+            result["snowflake_database"] = backend_path[0]
+            result["snowflake_schema"] = backend_path[1]
+        elif source:
+            result["snowflake_database"] = f"sapi_{src_project_id}"
+            result["snowflake_schema"] = src_bucket_id
+        else:
             result["snowflake_database"] = f"sapi_{project_id}"
             result["snowflake_schema"] = bucket.get("id", "")
 
