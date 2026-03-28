@@ -5,6 +5,8 @@ No business logic belongs here.
 """
 
 import json
+import sys
+from pathlib import Path
 
 import typer
 
@@ -14,6 +16,30 @@ from ..output import OutputFormatter, format_tool_result, format_tools_table
 from ._helpers import emit_project_warnings, get_formatter, get_service
 
 tool_app = typer.Typer(help="MCP tools - interact with Keboola via MCP server")
+
+
+def _read_input(value: str, formatter: OutputFormatter) -> str:
+    """Read tool input from a string, file (@path), or stdin (-).
+
+    Supports:
+    - Inline JSON string: '{"key": "value"}'
+    - File reference: @payload.json or @/absolute/path.json
+    - Stdin: -
+    """
+    if value == "-":
+        return sys.stdin.read()
+
+    if value.startswith("@"):
+        file_path = Path(value[1:])
+        if not file_path.is_file():
+            formatter.error(
+                message=f"Input file not found: {file_path}",
+                error_code="INVALID_ARGUMENT",
+            )
+            raise typer.Exit(code=2) from None
+        return file_path.read_text(encoding="utf-8")
+
+    return value
 
 
 def _validate_branch_requires_project(
@@ -153,7 +179,7 @@ def tool_call(
     tool_input: str | None = typer.Option(
         None,
         "--input",
-        help='Tool input as JSON string (e.g. \'{"query": "test"}\')',
+        help="Tool input as JSON string, @file.json, or - for stdin",
     ),
     branch: int | None = typer.Option(
         None,
@@ -188,11 +214,12 @@ def tool_call(
         )
         raise typer.Exit(code=2) from None
 
-    # Parse tool input JSON
+    # Parse tool input JSON (supports inline JSON, @file.json, or - for stdin)
     parsed_input: dict = {}
     if tool_input:
+        raw_json = _read_input(tool_input, formatter)
         try:
-            parsed_input = json.loads(tool_input)
+            parsed_input = json.loads(raw_json)
         except json.JSONDecodeError as exc:
             formatter.error(
                 message=f"Invalid JSON in --input: {exc}",

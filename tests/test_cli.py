@@ -3360,6 +3360,137 @@ class TestToolCall:
         assert "Invalid JSON" in output["error"]["message"]
         mock_mcp.validate_and_call_tool.assert_not_called()
 
+    def test_tool_call_input_from_file(self, tmp_path: Path) -> None:
+        """tool call with --input @file.json reads JSON from file."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        payload_file = tmp_path / "payload.json"
+        payload_file.write_text('{"name": "From File", "component_id": "keboola.ex-db-snowflake"}')
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.McpService") as MockMcpService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+
+            mock_mcp = MagicMock()
+            mock_mcp.validate_and_call_tool.return_value = SAMPLE_TOOL_RESULT
+            MockMcpService.return_value = mock_mcp
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "tool",
+                    "call",
+                    "create_config",
+                    "--project",
+                    "prod",
+                    "--input",
+                    f"@{payload_file}",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        mock_mcp.validate_and_call_tool.assert_called_once_with(
+            tool_name="create_config",
+            tool_input={"name": "From File", "component_id": "keboola.ex-db-snowflake"},
+            alias="prod",
+            branch_id=None,
+        )
+
+    def test_tool_call_input_from_stdin(self, tmp_path: Path) -> None:
+        """tool call with --input - reads JSON from stdin."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.McpService") as MockMcpService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+
+            mock_mcp = MagicMock()
+            mock_mcp.validate_and_call_tool.return_value = SAMPLE_TOOL_RESULT
+            MockMcpService.return_value = mock_mcp
+
+            result = runner.invoke(
+                app,
+                ["--json", "tool", "call", "create_config", "--project", "prod", "--input", "-"],
+                input='{"name": "From Stdin"}',
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        mock_mcp.validate_and_call_tool.assert_called_once_with(
+            tool_name="create_config",
+            tool_input={"name": "From Stdin"},
+            alias="prod",
+            branch_id=None,
+        )
+
+    def test_tool_call_input_file_not_found(self, tmp_path: Path) -> None:
+        """tool call with --input @nonexistent.json returns exit code 2."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.McpService") as MockMcpService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockMcpService.return_value = MagicMock()
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "tool",
+                    "call",
+                    "list_configs",
+                    "--input",
+                    "@/tmp/no_such_file_xyz.json",
+                ],
+            )
+
+        assert result.exit_code == 2
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert "not found" in output["error"]["message"]
+
     def test_tool_call_config_error(self, tmp_path: Path) -> None:
         """tool call when no projects configured returns exit code 5."""
         config_dir = tmp_path / "config"
