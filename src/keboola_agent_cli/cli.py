@@ -16,6 +16,7 @@ from .commands.lineage import lineage_app
 from .commands.org import org_app
 from .commands.project import project_app
 from .commands.repl import repl_command
+from .commands.sharing import sharing_app
 from .commands.storage import storage_app
 from .commands.sync import sync_app
 from .commands.tool import tool_app
@@ -32,6 +33,7 @@ from .services.lineage_service import LineageService
 from .services.mcp_service import McpService
 from .services.org_service import OrgService
 from .services.project_service import ProjectService
+from .services.sharing_service import SharingService
 from .services.storage_service import StorageService
 from .services.sync_service import SyncService
 from .services.version_service import VersionService
@@ -62,6 +64,7 @@ app.add_typer(component_app, name="component", rich_help_panel=_BROWSE)
 app.add_typer(config_app, name="config", rich_help_panel=_BROWSE)
 app.add_typer(job_app, name="job", rich_help_panel=_BROWSE)
 app.add_typer(storage_app, name="storage", rich_help_panel=_BROWSE)
+app.add_typer(sharing_app, name="sharing", rich_help_panel=_BROWSE)
 app.add_typer(lineage_app, name="lineage", rich_help_panel=_BROWSE)
 
 # -- Development --
@@ -140,6 +143,7 @@ def main(
     org_service = OrgService(config_store=config_store)
     mcp_service = McpService(config_store=config_store)
     branch_service = BranchService(config_store=config_store)
+    sharing_service = SharingService(config_store=config_store)
     storage_service = StorageService(config_store=config_store)
     sync_service = SyncService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
@@ -160,6 +164,7 @@ def main(
     ctx.obj["org_service"] = org_service
     ctx.obj["mcp_service"] = mcp_service
     ctx.obj["branch_service"] = branch_service
+    ctx.obj["sharing_service"] = sharing_service
     ctx.obj["storage_service"] = storage_service
     ctx.obj["sync_service"] = sync_service
     ctx.obj["workspace_service"] = workspace_service

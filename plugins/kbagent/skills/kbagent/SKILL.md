@@ -7,10 +7,12 @@ description: >
   across multiple projects, managing development branches, debugging SQL in
   temporary workspaces, bulk-onboarding organizations, syncing project configs
   as local files (GitOps), git-branching with Keboola dev branch isolation,
+  sharing buckets across projects, linking shared data,
   and syncing storage metadata and job history. Triggers: kbagent, Keboola project,
   keboola configs, keboola jobs, keboola lineage, keboola transformations,
   keboola MCP tools, keboola workspace, SQL debugging, keboola branches,
-  keboola organization, keboola sync, keboola git,
+  keboola organization, keboola sharing, bucket sharing, link bucket,
+  keboola sync, keboola git,
   keboola gitops, sync pull, sync push, sync diff, branch-link,
   search configs, find in configurations, audit configurations.
 ---
@@ -57,6 +59,11 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 | List storage buckets with sharing/linked bucket information | `kbagent storage buckets` |
 | Show detailed bucket info including Snowflake direct access paths | `kbagent storage bucket-detail --project PROJECT --bucket-id BUCKET-ID` |
 | List storage tables from a project | `kbagent storage tables --project PROJECT` |
+| List shared buckets available for linking | `kbagent sharing list` |
+| Enable sharing on a bucket | `kbagent sharing share --project PROJECT --bucket-id BUCKET-ID --type SHARING-TYPE` |
+| Disable sharing on a bucket | `kbagent sharing unshare --project PROJECT --bucket-id BUCKET-ID` |
+| Link a shared bucket into a project | `kbagent sharing link --project PROJECT --source-project-id SOURCE-PROJECT-ID --bucket-id BUCKET-ID` |
+| Remove a linked bucket from a project | `kbagent sharing unlink --project PROJECT --bucket-id BUCKET-ID` |
 | Show cross-project data lineage via bucket sharing | `kbagent lineage show` |
 | List development branches from connected projects | `kbagent branch list` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
@@ -121,6 +128,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Creating new configurations | [scaffold-workflow](references/scaffold-workflow.md) |
 | MCP tools (multi-project read/write) | [mcp-workflow](references/mcp-workflow.md) |
 | Workspace SQL debugging | [workspace-workflow](references/workspace-workflow.md) |
+| Bucket sharing & linking | [sharing-workflow](references/sharing-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
 | Reading synced data | [reading-synced-data](references/reading-synced-data.md) |

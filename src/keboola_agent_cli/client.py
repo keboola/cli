@@ -626,6 +626,173 @@ class KeboolaClient(BaseHttpClient):
             response = self._request("GET", f"{prefix}/tables", params=params)
         return response.json()
 
+    # ------------------------------------------------------------------
+    # Bucket sharing & linking
+    # ------------------------------------------------------------------
+
+    def list_shared_buckets(self, include: str | None = None) -> list[dict[str, Any]]:
+        """List buckets shared into the current project's organization.
+
+        GET /v2/storage/shared-buckets
+
+        Args:
+            include: Optional include parameter (e.g. "metadata").
+
+        Returns:
+            List of shared bucket dicts.
+        """
+        params: dict[str, str] = {}
+        if include:
+            params["include"] = include
+        response = self._request("GET", "/v2/storage/shared-buckets", params=params)
+        return response.json()
+
+    def share_bucket(
+        self,
+        bucket_id: str,
+        sharing_type: str,
+        target_project_ids: list[int] | None = None,
+        target_users: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Enable sharing on a bucket (async, waits for completion).
+
+        Args:
+            bucket_id: Bucket ID to share (e.g. "out.c-data").
+            sharing_type: One of "organization", "organization-project",
+                          "selected-projects", "selected-users".
+            target_project_ids: Required for "selected-projects" type.
+            target_users: Required for "selected-users" type (email addresses).
+
+        Returns:
+            Completed storage job dict.
+
+        Raises:
+            KeboolaApiError: If the share operation fails (e.g. 403 for non-master token).
+        """
+        safe_id = quote(bucket_id, safe="")
+
+        endpoint_map = {
+            "organization": f"/v2/storage/buckets/{safe_id}/share-organization",
+            "organization-project": f"/v2/storage/buckets/{safe_id}/share-organization-project",
+            "selected-projects": f"/v2/storage/buckets/{safe_id}/share-to-projects",
+            "selected-users": f"/v2/storage/buckets/{safe_id}/share-to-users",
+        }
+
+        endpoint = endpoint_map.get(sharing_type)
+        if not endpoint:
+            raise KeboolaApiError(
+                message=f"Invalid sharing type: '{sharing_type}'. "
+                f"Valid types: {', '.join(endpoint_map.keys())}",
+                status_code=400,
+                error_code="INVALID_SHARING_TYPE",
+                retryable=False,
+            )
+
+        data: dict[str, Any] = {}
+        if sharing_type == "selected-projects" and target_project_ids:
+            data["targetProjectIds"] = [str(pid) for pid in target_project_ids]
+        elif sharing_type == "selected-users" and target_users:
+            data["targetUsers"] = target_users
+
+        response = self._request("POST", endpoint, params={"async": "true"}, data=data)
+        return self._wait_for_storage_job(response.json())
+
+    def change_sharing_type(
+        self,
+        bucket_id: str,
+        sharing_type: str,
+    ) -> dict[str, Any]:
+        """Change the sharing type of an already-shared bucket (async).
+
+        PUT /v2/storage/buckets/{bucket_id}/share
+
+        Args:
+            bucket_id: Bucket ID.
+            sharing_type: "organization" or "organization-project".
+
+        Returns:
+            Completed storage job dict.
+        """
+        safe_id = quote(bucket_id, safe="")
+        response = self._request(
+            "PUT",
+            f"/v2/storage/buckets/{safe_id}/share",
+            json={"sharing": sharing_type},
+            params={"async": "true"},
+        )
+        return self._wait_for_storage_job(response.json())
+
+    def unshare_bucket(self, bucket_id: str) -> dict[str, Any]:
+        """Disable sharing on a bucket (async, waits for completion).
+
+        DELETE /v2/storage/buckets/{bucket_id}/share
+
+        Prerequisite: no linked buckets exist in other projects.
+
+        Returns:
+            Completed storage job dict.
+        """
+        safe_id = quote(bucket_id, safe="")
+        response = self._request(
+            "DELETE",
+            f"/v2/storage/buckets/{safe_id}/share",
+            params={"async": "true"},
+        )
+        return self._wait_for_storage_job(response.json())
+
+    def link_bucket(
+        self,
+        source_project_id: int,
+        source_bucket_id: str,
+        name: str,
+        stage: str = "in",
+    ) -> dict[str, Any]:
+        """Link a shared bucket from another project (async, waits for completion).
+
+        POST /v2/storage/buckets (with sourceProjectId + sourceBucketId)
+
+        Args:
+            source_project_id: Project ID that owns the shared bucket.
+            source_bucket_id: Bucket ID in the source project.
+            name: Display name for the linked bucket in this project.
+            stage: Bucket stage ("in" or "out"). Defaults to "in".
+
+        Returns:
+            Completed storage job dict with linked bucket info in results.
+        """
+        response = self._request(
+            "POST",
+            "/v2/storage/buckets",
+            params={"async": "true"},
+            data={
+                "stage": stage,
+                "name": name,
+                "displayName": name,
+                "sourceProjectId": source_project_id,
+                "sourceBucketId": source_bucket_id,
+            },
+        )
+        return self._wait_for_storage_job(response.json())
+
+    def delete_bucket(self, bucket_id: str, force: bool = False) -> dict[str, Any]:
+        """Delete a bucket (async, waits for completion).
+
+        Used for unlinking shared buckets or deleting regular buckets.
+
+        Args:
+            bucket_id: Bucket ID to delete.
+            force: If True, delete even if bucket contains tables.
+
+        Returns:
+            Completed storage job dict.
+        """
+        safe_id = quote(bucket_id, safe="")
+        params: dict[str, str] = {"async": "true"}
+        if force:
+            params["force"] = "true"
+        response = self._request("DELETE", f"/v2/storage/buckets/{safe_id}", params=params)
+        return self._wait_for_storage_job(response.json())
+
     def list_tables_with_metadata(self) -> list[dict[str, Any]]:
         """List all storage tables with columns and metadata.
 

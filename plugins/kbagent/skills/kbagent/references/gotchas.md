@@ -51,6 +51,7 @@ One project failing does not block others. Check the `errors` array:
 - Tokens are always masked in output (e.g. `901-...pt0k`) -- this is normal
 - Token can be passed via `--token`, `KBC_TOKEN` env var, or interactive prompt
 - Manage API token: only via `KBC_MANAGE_API_TOKEN` env var or interactive prompt (never as CLI argument)
+- Master token for sharing: `KBC_MASTER_TOKEN_{ALIAS}` (e.g. `KBC_MASTER_TOKEN_PROD`) or `KBC_MASTER_TOKEN` as global fallback. Alias is uppercased, hyphens become underscores. Required for `sharing share` and `sharing unshare`; `sharing list/link/unlink` use regular project tokens.
 
 ## MCP tool call gotchas
 

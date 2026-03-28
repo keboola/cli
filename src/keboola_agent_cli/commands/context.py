@@ -108,6 +108,24 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent storage tables --project NAME [--bucket-id BUCKET_ID]
     List storage tables, optionally filtered by bucket.
 
+### Sharing (Cross-Project)
+
+  kbagent sharing list [--project NAME]
+    List shared buckets available for linking. Multi-project, uses regular token.
+
+  kbagent sharing share --project ALIAS --bucket-id ID --type TYPE [--target-project-ids IDs] [--target-users EMAILS]
+    Enable sharing on a bucket. Requires master token (KBC_MASTER_TOKEN_{{ALIAS}} or KBC_MASTER_TOKEN).
+    Types: organization, organization-project, selected-projects, selected-users.
+
+  kbagent sharing unshare --project ALIAS --bucket-id ID
+    Disable sharing. Fails if linked buckets exist. Requires master token.
+
+  kbagent sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME]
+    Link a shared bucket into a project (read-only). Uses regular token.
+
+  kbagent sharing unlink --project ALIAS --bucket-id ID
+    Remove a linked bucket from a project. Uses regular token.
+
 ### Data Lineage
 
   kbagent lineage [--project NAME]
@@ -249,6 +267,8 @@ Use `kbagent <command> --help` for full flag details and examples.
      KBC_TOKEN             Storage API token (fallback for --token)
      KBC_STORAGE_API_URL   Default stack URL (fallback for --url)
      KBC_MANAGE_API_TOKEN  Manage API token (for org setup)
+     KBC_MASTER_TOKEN      Master token for sharing ops (global fallback)
+     KBC_MASTER_TOKEN_*    Per-project master token (e.g. KBC_MASTER_TOKEN_PROD)
      KBAGENT_CONFIG_DIR    Override config directory
 
 8. Config resolution order:

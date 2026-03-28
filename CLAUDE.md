@@ -170,7 +170,9 @@ All three inherit from `BaseHttpClient` (`http_base.py`) which provides shared r
 
 13. **Idempotency**: `org setup` skips already-registered projects by matching `project_id`. Safe to re-run.
 
-14. **Pre-commit checks are mandatory.** Before every `git commit`, run `ruff check` and `ruff format --check` on changed files. A pre-commit hook (`scripts/pre-commit`, install via `make hooks`) does this automatically. **Never commit without passing lint + format.** If using sub-agents that write code, always run `make check` (or at minimum `ruff check src/ tests/ && ruff format . --check`) before committing their output.
+14. **Protected main branch**: direct pushes to `main` are blocked. Always create a feature branch, commit there, push, create a PR via `gh pr create`, merge via `gh pr merge`, then switch back to main and pull.
+
+15. **Pre-commit checks are mandatory.** Before every `git commit`, run `ruff check` and `ruff format --check` on changed files. A pre-commit hook (`scripts/pre-commit`, install via `make hooks`) does this automatically. **Never commit without passing lint + format.** If using sub-agents that write code, always run `make check` (or at minimum `ruff check src/ tests/ && ruff format . --check`) before committing their output.
 
 ## Claude Code Plugin (Marketplace)
 
@@ -216,6 +218,12 @@ kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit
 kbagent job detail --project NAME --job-id ID
 
 kbagent lineage show [--project NAME]   # also works as just: kbagent lineage
+
+kbagent sharing list [--project NAME]
+kbagent sharing share --project ALIAS --bucket-id ID --type TYPE [--target-project-ids IDs] [--target-users EMAILS]
+kbagent sharing unshare --project ALIAS --bucket-id ID
+kbagent sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME]
+kbagent sharing unlink --project ALIAS --bucket-id ID
 
 kbagent org setup --org-id ID --url URL [--dry-run] [--yes] [--token-description PREFIX]
 kbagent org setup --project-ids 1,2,3 --url URL [--dry-run] [--yes] [--token-description PREFIX]
