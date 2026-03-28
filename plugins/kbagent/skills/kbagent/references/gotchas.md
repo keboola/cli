@@ -58,7 +58,12 @@ One project failing does not block others. Check the `errors` array:
 - **Write tools** (multi_project=false): require `--project` to specify the target.
 - **Auto-expand**: tools like `list_tables` that need `bucket_id` auto-resolve it by calling `list_buckets` first.
 - **Input validation**: tool input is validated against the tool's `inputSchema` before dispatch.
+  Only pass parameters defined in the schema. Unexpected parameters cause Pydantic validation errors.
 - **Branch scope**: when active branch is set, MCP tools automatically scope to that branch.
+  `branch_id` is a **CLI flag** (`--branch`), NOT a tool input parameter -- do not pass it inside `--input`.
+- **Schema discovery**: use `kbagent --json tool list` to inspect each tool's `inputSchema` and find
+  accepted parameters. For example, `get_configs` takes `configs` (a list of `{component_id, configuration_id}`
+  objects), not a flat `config_id` string.
 
 ## Config resolution order
 

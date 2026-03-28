@@ -28,10 +28,23 @@ kbagent --json tool call list_configs --project prod
 kbagent --json tool call create_config --project prod \
   --input '{"component_id": "keboola.ex-db-snowflake", "name": "My Extract"}'
 
-# Get config details with parameters
-kbagent --json tool call get_config \
-  --input '{"configuration_id": "12345"}'
+# Get specific config details (note: configs takes a list of {component_id, configuration_id})
+kbagent --json tool call get_configs \
+  --input '{"configs": [{"component_id": "keboola.snowflake-transformation", "configuration_id": "12345"}]}'
 ```
+
+## Discovering tool parameters
+
+Each MCP tool has an `inputSchema` that defines accepted parameters. To see
+the schema for a specific tool, use `tool list` with `--json`:
+
+```bash
+# List all tools with their input schemas
+kbagent --json tool list | jq '.data.tools[] | select(.name == "get_configs") | .inputSchema'
+```
+
+**Important**: Only pass parameters defined in the tool's `inputSchema` via `--input`.
+Unexpected parameters cause Pydantic validation errors on the MCP server side.
 
 ## Input format
 
@@ -54,16 +67,19 @@ Input is validated against the tool's `inputSchema` before execution.
 
 ## Branch support
 
-Use `--branch ID` to scope tool calls to a development branch:
+Use the CLI flag `--branch ID` to scope tool calls to a development branch:
 
 ```bash
 # List tools available on a branch
 kbagent --json tool list --project prod --branch 456
 
 # Call a tool on a branch
-kbagent --json tool call list_configs --project prod --branch 456
+kbagent --json tool call get_configs --project prod --branch 456 \
+  --input '{"configs": [{"component_id": "keboola.snowflake-transformation", "configuration_id": "12345"}]}'
 ```
 
+- `--branch` is a **CLI flag**, not a tool input parameter. Do NOT pass `branch_id`
+  inside `--input` JSON -- it will be rejected as an unexpected keyword argument.
 - `--branch` requires `--project` (forces single-project mode)
 - If a branch is active via `kbagent branch use`, it is applied automatically --
   no need to pass `--branch` manually

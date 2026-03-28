@@ -198,11 +198,12 @@ Use `kbagent <command> --help` for full flag details and examples.
 ### MCP Tools (Multi-Project)
 
   kbagent tool list [--project NAME] [--branch ID]
-    List MCP tools. multi_project=true: reads all projects. false: single project.
+    List MCP tools with inputSchema. Use --json to inspect accepted parameters.
 
   kbagent tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]
     Call an MCP tool. Read tools auto-query all projects. Write tools need --project.
     --input accepts: inline JSON, @file.json (from file), or - (from stdin).
+    --branch is a CLI flag (NOT a tool input param). Do not pass branch_id in --input.
 
 ### Utility Commands
 
@@ -252,6 +253,13 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 8. Config resolution order:
      --config-dir flag > KBAGENT_CONFIG_DIR env > .kbagent/ in CWD/parents > ~/.config/keboola-agent-cli/
+
+9. MCP tool parameters -- discover with `kbagent --json tool list`:
+     - Only pass parameters defined in the tool's inputSchema via --input
+     - branch_id is a CLI flag (--branch), NOT a tool input parameter
+     - Example: get_configs uses "configs" (list of objects), not flat "config_id"
+       kbagent --json tool call get_configs --project prod --branch 456 \\
+         --input '{{"configs": [{{"component_id": "keboola.snowflake-transformation", "configuration_id": "12345"}}]}}'
 
 ## Exit Codes
 
