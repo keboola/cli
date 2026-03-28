@@ -221,7 +221,7 @@ kbagent org setup --org-id ID --url URL [--dry-run] [--yes] [--token-description
 kbagent org setup --project-ids 1,2,3 --url URL [--dry-run] [--yes] [--token-description PREFIX]
 
 kbagent tool list [--project NAME] [--branch ID]
-kbagent tool call TOOL_NAME [--project NAME] [--input JSON] [--branch ID]
+kbagent tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]
 
 kbagent branch list [--project NAME]
 kbagent branch create --project ALIAS --name "..." [--description "..."]

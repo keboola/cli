@@ -57,7 +57,7 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 
 ## MCP Tools
 - `tool list [--project NAME] [--branch ID]` -- list available MCP tools (multi_project annotation)
-- `tool call TOOL_NAME [--project NAME] [--input JSON] [--branch ID]` -- call MCP tool (read = all projects, write = single)
+- `tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]` -- call MCP tool (read = all projects, write = single). `--input` accepts inline JSON, `@file.json`, or `-` (stdin)
 
 ## Sync (GitOps)
 - `sync init --project ALIAS [--directory DIR] [--git-branching]` -- initialize sync working directory

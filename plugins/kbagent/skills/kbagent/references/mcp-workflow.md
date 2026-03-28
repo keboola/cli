@@ -35,11 +35,19 @@ kbagent --json tool call get_config \
 
 ## Input format
 
-Pass tool parameters as a JSON object via `--input`:
+Pass tool parameters as a JSON object via `--input`. Three formats are supported:
 
 ```bash
+# Inline JSON
 kbagent --json tool call update_configuration --project prod \
   --input '{"component_id": "keboola.snowflake-transformation", "configuration_id": "123", "configuration": {"parameters": {...}}}'
+
+# From file (for large payloads that exceed shell argument limits)
+kbagent --json tool call update_sql_transformation --project prod \
+  --input @payload.json
+
+# From stdin (pipe-friendly)
+cat payload.json | kbagent --json tool call update_sql_transformation --project prod --input -
 ```
 
 Input is validated against the tool's `inputSchema` before execution.

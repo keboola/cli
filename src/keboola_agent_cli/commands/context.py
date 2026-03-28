@@ -200,8 +200,9 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent tool list [--project NAME] [--branch ID]
     List MCP tools. multi_project=true: reads all projects. false: single project.
 
-  kbagent tool call TOOL_NAME [--project NAME] [--input JSON] [--branch ID]
+  kbagent tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]
     Call an MCP tool. Read tools auto-query all projects. Write tools need --project.
+    --input accepts: inline JSON, @file.json (from file), or - (from stdin).
 
 ### Utility Commands
 
