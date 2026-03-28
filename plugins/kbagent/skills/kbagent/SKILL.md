@@ -40,6 +40,7 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 <!-- BEGIN AUTO-GENERATED COMMANDS -->
 | Goal | Command |
 |------|---------|
+| Update kbagent to the latest version | `kbagent update` |
 | Add a new Keboola project connection | `kbagent project add --project ALIAS` |
 | List all connected Keboola projects | `kbagent project list` |
 | Remove a Keboola project connection | `kbagent project remove --project ALIAS` |

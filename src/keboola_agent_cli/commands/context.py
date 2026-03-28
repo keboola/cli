@@ -235,7 +235,10 @@ Use `kbagent <command> --help` for full flag details and examples.
     Health checks. --fix auto-installs MCP server binary.
 
   kbagent version
-    Version info and MCP server update check.
+    Version info, update check for kbagent and MCP server.
+
+  kbagent update
+    Self-update kbagent to latest version (via uv tool install --upgrade).
 
 ## Tips for AI Agents
 

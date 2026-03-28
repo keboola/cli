@@ -75,6 +75,8 @@ ENV_MCP_MAX_SESSIONS: str = "KBAGENT_MCP_MAX_SESSIONS"
 # --- Version Check ---
 VERSION_CHECK_TIMEOUT: float = 4.0  # seconds for fetching latest version from remote
 MCP_PYPI_URL: str = "https://pypi.org/pypi/keboola-mcp-server/json"
+KBAGENT_GITHUB_REPO: str = "padak/keboola_agent_cli"
+KBAGENT_INSTALL_SOURCE: str = "git+https://github.com/padak/keboola_agent_cli"
 
 # --- AI Service ---
 AI_SERVICE_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)

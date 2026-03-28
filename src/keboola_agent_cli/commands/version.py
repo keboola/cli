@@ -66,7 +66,15 @@ def _format_dep_auto_update(text: Text, dep: dict) -> None:
 def _format_version_panel(console: Console, data: dict) -> None:
     """Render version information as a Rich panel."""
     text = Text()
-    text.append(f"kbagent v{data['kbagent']['version']}", style="bold")
+    kbagent = data["kbagent"]
+    text.append(f"kbagent v{kbagent['version']}", style="bold")
+
+    if kbagent.get("up_to_date") is False and kbagent.get("latest_version"):
+        text.append(f"    -> v{kbagent['latest_version']} available", style="yellow")
+        text.append("  (run: kbagent update)", style="dim")
+    elif kbagent.get("up_to_date") is True:
+        text.append("    up to date", style="green")
+
     text.append("\n\nDependencies:\n")
 
     for dep in data["dependencies"]:
@@ -84,3 +92,22 @@ def version_command(ctx: typer.Context) -> None:
     version_service = get_service(ctx, "version_service")
     result = version_service.get_versions()
     formatter.output(result, _format_version_panel)
+
+
+def update_command(ctx: typer.Context) -> None:
+    """Update kbagent to the latest version.
+
+    Uses 'uv tool install --upgrade' (preferred) or 'pip install --upgrade'
+    to install the latest version from the GitHub repository.
+    """
+    formatter = get_formatter(ctx)
+    version_service = get_service(ctx, "version_service")
+    result = version_service.self_update()
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        if result["updated"]:
+            formatter.success(result["message"])
+        else:
+            formatter.console.print(result["message"])

@@ -20,7 +20,7 @@ from .commands.sharing import sharing_app
 from .commands.storage import storage_app
 from .commands.sync import sync_app
 from .commands.tool import tool_app
-from .commands.version import version_command
+from .commands.version import update_command, version_command
 from .commands.workspace import workspace_app
 from .config_store import ConfigStore, resolve_config_dir
 from .output import OutputFormatter
@@ -50,6 +50,7 @@ _SETUP = "Setup & Info"
 app.command("init", rich_help_panel=_SETUP)(init_command)
 app.command("doctor", rich_help_panel=_SETUP)(doctor_command)
 app.command("version", rich_help_panel=_SETUP)(version_command)
+app.command("update", rich_help_panel=_SETUP)(update_command)
 app.command("context", rich_help_panel=_SETUP)(context_command)
 app.command("repl", rich_help_panel=_SETUP)(repl_command)
 

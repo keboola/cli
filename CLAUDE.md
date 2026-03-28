@@ -256,4 +256,5 @@ kbagent context
 kbagent init [--from-global]
 kbagent doctor [--fix]
 kbagent version
+kbagent update
 ```
