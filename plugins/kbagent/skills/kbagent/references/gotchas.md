@@ -75,6 +75,20 @@ kbagent looks for configuration in this order:
 
 Use `kbagent init` to create a local `.kbagent/` workspace for per-directory isolation.
 
+## Batch size limits for update_sql_transformation
+
+When using `update_sql_transformation` with `str_replace` operations, **limit batches
+to 50 operations maximum**. Larger batches (150+) may trigger a Storage Events API
+size limit: the replacements are applied and a new version is created, but the MCP
+server fails to log the change event and returns `isError: true` with
+`400 Bad Request: Request too large`. This creates a confusing state where changes
+were saved but the tool reports failure.
+
+Workaround for large refactors (e.g. removing `AS` from 200 table aliases):
+1. Split operations into batches of 50
+2. Call `update_sql_transformation` once per batch
+3. Verify each batch succeeded before sending the next
+
 ## Common mistakes
 
 - **Forgetting `--json`**: without it, output is human-formatted Rich text, not parseable
