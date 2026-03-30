@@ -14,6 +14,7 @@ from keboola_agent_cli.services.mcp_service import (
     McpService,
     _build_server_params,
     _extract_ids,
+    _extract_ids_from_toon,
     _get_max_sessions,
     _is_write_tool,
     _semaphored,
@@ -981,6 +982,67 @@ class TestExtractIdsDeduplication:
         ]
         result = _extract_ids(content, "id")
         assert result == ["x", "y"]
+
+
+# ---------------------------------------------------------------------------
+# TestExtractIdsFromToon
+# ---------------------------------------------------------------------------
+
+
+class TestExtractIdsFromToon:
+    """Tests for _extract_ids_from_toon() TOON format parsing."""
+
+    def test_parse_bucket_ids(self) -> None:
+        """Extracts bucket IDs from a real TOON get_buckets response."""
+        toon = (
+            "buckets[3]{id,name,display_name,stage,created,data_size_bytes,source_project}:\n"
+            '  in.c-STG_Telemetry,c-STG_Telemetry,STG_Telemetry,in,"2026-03-24T13:41:37+0100",0,"Source (ID: 2741)"\n'
+            '  in.c-STG_Ownership,c-STG_Ownership,STG_Ownership,in,"2026-03-24T13:41:32+0100",0,"Source (ID: 2741)"\n'
+            '  out.c-OUT_Report,c-OUT_Report,OUT_Report,out,"2026-03-19T17:49:02+0100",1376477583,null\n'
+            "links[1]{type,title,url}:\n"
+            '  ui-dashboard,Buckets in the project,"https://example.com/storage"'
+        )
+        result = _extract_ids_from_toon(toon, "id")
+        assert result == ["in.c-STG_Telemetry", "in.c-STG_Ownership", "out.c-OUT_Report"]
+
+    def test_parse_different_key(self) -> None:
+        """Extracts values from a non-first column."""
+        toon = "items[2]{id,name,status}:\n  abc,My Item,active\n  def,Other Item,disabled\n"
+        assert _extract_ids_from_toon(toon, "name") == ["My Item", "Other Item"]
+        assert _extract_ids_from_toon(toon, "status") == ["active", "disabled"]
+
+    def test_key_not_in_header(self) -> None:
+        """Returns empty list when key is not in the TOON header."""
+        toon = "items[1]{id,name}:\n  x,foo\n"
+        assert _extract_ids_from_toon(toon, "missing") == []
+
+    def test_empty_array(self) -> None:
+        """Handles TOON with zero items."""
+        toon = "tables[0]:\nlinks[1]{type,title,url}:\n  ui-dashboard,Dashboard,https://x.com\n"
+        assert _extract_ids_from_toon(toon, "id") == []
+
+    def test_quoted_values_with_commas(self) -> None:
+        """Handles CSV-quoted values that contain commas."""
+        toon = 'items[1]{id,description}:\n  bucket-1,"Has commas, inside quotes"\n'
+        result = _extract_ids_from_toon(toon, "id")
+        assert result == ["bucket-1"]
+        desc = _extract_ids_from_toon(toon, "description")
+        assert desc == ["Has commas, inside quotes"]
+
+    def test_extract_ids_delegates_to_toon(self) -> None:
+        """_extract_ids handles string items by delegating to TOON parser."""
+        toon = "buckets[2]{id,name}:\n  b1,Bucket One\n  b2,Bucket Two\n"
+        result = _extract_ids([toon], "id")
+        assert result == ["b1", "b2"]
+
+    def test_extract_ids_mixed_formats(self) -> None:
+        """_extract_ids handles mix of TOON strings and JSON dicts."""
+        items: list = [
+            "items[1]{id,name}:\n  toon-id,TOON Item\n",
+            {"id": "dict-id", "name": "Dict Item"},
+        ]
+        result = _extract_ids(items, "id")
+        assert result == ["toon-id", "dict-id"]
 
 
 # ---------------------------------------------------------------------------

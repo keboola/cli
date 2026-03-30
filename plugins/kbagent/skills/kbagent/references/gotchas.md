@@ -57,7 +57,7 @@ One project failing does not block others. Check the `errors` array:
 
 - **Read tools** (multi_project=true): automatically query all projects. No `--project` needed.
 - **Write tools** (multi_project=false): require `--project` to specify the target.
-- **Auto-expand**: tools like `list_tables` that need `bucket_id` auto-resolve it by calling `list_buckets` first.
+- **Auto-expand**: tools like `get_tables` that need `bucket_ids` auto-resolve them by calling `get_buckets` first.
 - **Input validation**: tool input is validated against the tool's `inputSchema` before dispatch.
   Only pass parameters defined in the schema. Unexpected parameters cause Pydantic validation errors.
 - **Branch scope**: when active branch is set, MCP tools automatically scope to that branch.

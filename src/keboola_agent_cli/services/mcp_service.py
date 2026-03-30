@@ -71,13 +71,13 @@ WRITE_PREFIXES = (
 )
 
 # Tools that auto-expand when a required param is missing.
-# Maps tool_name -> (missing_param, resolve_tool) pairs.
-# When the param is not provided, the resolve_tool is called first,
-# then the target tool is called once per result item.
+# Maps tool_name -> config dict. When the param is absent from user input,
+# the resolve_tool is called first to collect IDs, then the target tool
+# is called once with all resolved IDs as an array.
 AUTO_EXPAND_TOOLS = {
-    "list_tables": {
-        "param": "bucket_id",
-        "resolve_tool": "list_buckets",
+    "get_tables": {
+        "param": "bucket_ids",
+        "resolve_tool": "get_buckets",
         "resolve_key": "id",
     },
 }
@@ -650,23 +650,17 @@ async def _http_auto_expand(
             if not item_ids:
                 return {"content": [], "isError": False}
 
-            # Step 2: Call target tool for each resolved ID
-            all_content: list[Any] = []
-            has_error = False
+            # Step 2: Call target tool with all resolved IDs as array
+            call_input = {**tool_input, param_name: list(item_ids)}
+            result = await asyncio.wait_for(
+                session.call_tool(tool_name, call_input),
+                timeout=_get_tool_timeout(),
+            )
 
-            for item_id in item_ids:
-                call_input = {**tool_input, param_name: item_id}
-                result = await asyncio.wait_for(
-                    session.call_tool(tool_name, call_input),
-                    timeout=_get_tool_timeout(),
-                )
-
-                content = _parse_content(result)
-                if result.isError:
-                    has_error = True
-                all_content.extend(content)
-
-            return {"content": all_content, "isError": has_error}
+            return {
+                "content": _parse_content(result),
+                "isError": bool(result.isError),
+            }
 
 
 async def _connect_and_auto_expand(
@@ -683,7 +677,7 @@ async def _connect_and_auto_expand(
 
     Args:
         project: Project config.
-        tool_name: Target tool name (e.g. "list_tables").
+        tool_name: Target tool name (e.g. "get_tables").
         tool_input: Base input for the target tool (without the auto-expanded param).
         expand_config: Dict with "param", "resolve_tool", "resolve_key".
         branch_id: Optional development branch ID.
@@ -700,7 +694,7 @@ async def _connect_and_auto_expand(
     try:
         session = await _open_session(project, exit_stack, branch_id=branch_id)
 
-        # Step 1: Call resolve tool (e.g. list_buckets)
+        # Step 1: Call resolve tool (e.g. get_buckets)
         resolve_result = await asyncio.wait_for(
             session.call_tool(resolve_tool, {}),
             timeout=_get_tool_timeout(),
@@ -719,36 +713,70 @@ async def _connect_and_auto_expand(
         if not item_ids:
             return {"content": [], "isError": False}
 
-        # Step 2: Call target tool for each resolved ID
-        all_content: list[Any] = []
-        has_error = False
+        # Step 2: Call target tool with all resolved IDs as array
+        call_input = {**tool_input, param_name: list(item_ids)}
+        result = await asyncio.wait_for(
+            session.call_tool(tool_name, call_input),
+            timeout=_get_tool_timeout(),
+        )
 
-        for item_id in item_ids:
-            call_input = {**tool_input, param_name: item_id}
-            result = await asyncio.wait_for(
-                session.call_tool(tool_name, call_input),
-                timeout=_get_tool_timeout(),
-            )
-
-            content = _parse_content(result)
-            if result.isError:
-                has_error = True
-            all_content.extend(content)
-
-        return {"content": all_content, "isError": has_error}
+        return {
+            "content": _parse_content(result),
+            "isError": bool(result.isError),
+        }
     finally:
         await exit_stack.aclose()
+
+
+def _extract_ids_from_toon(text: str, key: str) -> list[str]:
+    """Extract ID values from a TOON-formatted string.
+
+    Parses TOON array headers like ``items[N]{field1,field2,...}:`` to find
+    the column position of *key*, then reads each indented data line using
+    CSV parsing (handles quoted values with commas).
+    """
+    import csv
+    import io
+    import re
+
+    ids: list[str] = []
+    header_re = re.compile(r"\w+\[\d+\]\{([^}]+)\}:")
+    field_index: int | None = None
+
+    for line in text.split("\n"):
+        m = header_re.search(line)
+        if m:
+            fields = [f.strip() for f in m.group(1).split(",")]
+            try:
+                field_index = fields.index(key)
+            except ValueError:
+                field_index = None
+            continue
+
+        if field_index is not None and line.startswith("  "):
+            stripped = line.strip()
+            if stripped:
+                try:
+                    values = next(csv.reader(io.StringIO(stripped)))
+                    if len(values) > field_index:
+                        ids.append(values[field_index])
+                except Exception:
+                    pass
+
+    return ids
 
 
 def _extract_ids(content_items: list[Any], key: str) -> list[str]:
     """Extract unique ID values from parsed MCP tool content.
 
-    Handles both list-of-dicts format and single-dict-with-list format.
+    Handles JSON dicts/lists **and** TOON-formatted text strings.
     Deduplicates while preserving insertion order.
     """
-    ids = []
+    ids: list[str] = []
     for item in content_items:
-        if isinstance(item, list):
+        if isinstance(item, str):
+            ids.extend(_extract_ids_from_toon(item, key))
+        elif isinstance(item, list):
             for sub in item:
                 if isinstance(sub, dict) and key in sub:
                     ids.append(str(sub[key]))

@@ -8,7 +8,7 @@ running components, fetching schemas -- through the keboola-mcp-server.
 Every tool has a `multi_project` flag (visible in `tool list` output):
 
 - **multi_project=true** (read tools): Runs across ALL connected projects in parallel.
-  No `--project` needed. Examples: `list_configs`, `list_buckets`, `list_tables`.
+  No `--project` needed. Examples: `get_configs`, `get_buckets`, `get_tables`.
 - **multi_project=false** (write tools): Targets a single project. Requires `--project`
   (or a default project). Examples: `create_config`, `update_configuration`, `run_component`.
 
