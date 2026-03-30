@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-mcp sync test test-unit test-integration test-file lint lint-fix format format-check skill-check skill-gen check clean hooks
+.PHONY: help install install-mcp sync test test-unit test-integration test-file lint lint-fix format format-check skill-check skill-gen version-sync version-check check clean hooks
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -51,12 +51,25 @@ skill-check: ## Check SKILL.md is up-to-date (fails if stale)
 		exit 1; \
 	fi
 
+version-sync: ## Sync version from pyproject.toml to plugin.json
+	uv run python scripts/sync_version.py
+
+version-check: ## Check plugin.json version matches pyproject.toml (fails if mismatched)
+	@uv run python scripts/sync_version.py > /dev/null 2>&1
+	@if git diff --quiet plugins/kbagent/.claude-plugin/plugin.json; then \
+		echo "plugin.json version is in sync"; \
+	else \
+		echo "ERROR: plugin.json version mismatch. Run 'make version-sync' and commit."; \
+		git diff plugins/kbagent/.claude-plugin/plugin.json; \
+		exit 1; \
+	fi
+
 hooks: ## Install git pre-commit hook (lint + format on staged files)
 	cp scripts/pre-commit .git/hooks/pre-commit
 	chmod +x .git/hooks/pre-commit
 	@echo "Pre-commit hook installed."
 
-check: lint format-check skill-check test ## Run all checks (lint + format + skill + test)
+check: lint format-check skill-check version-check test ## Run all checks (lint + format + skill + version + test)
 
 clean: ## Remove build artifacts and caches
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

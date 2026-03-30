@@ -137,10 +137,20 @@ All three inherit from `BaseHttpClient` (`http_base.py`) which provides shared r
 `McpService` wraps `keboola-mcp-server` as a subprocess via MCP SDK (`mcp` package).
 - Read tools run across ALL projects in parallel (one MCP session per project)
 - Write tools target a single project (default or `--project`)
-- **Auto-expand**: tools like `list_tables` that require `bucket_id` automatically
-  resolve it by calling `list_buckets` first (configured in `AUTO_EXPAND_TOOLS` dict)
+- **Auto-expand**: tools like `get_tables` that require `bucket_ids` automatically
+  resolve them by calling `get_buckets` first (configured in `AUTO_EXPAND_TOOLS` dict)
 - Upfront parameter validation against tool's `inputSchema` before multi-project dispatch
 - **Branch support**: `--branch ID` passes `KBC_BRANCH_ID` env var to MCP subprocess, forces single-project mode
+
+## Versioning
+
+**Single source of truth: `pyproject.toml`** (`version = "X.Y.Z"`).
+
+- `src/keboola_agent_cli/__init__.py` reads the version at runtime via `importlib.metadata.version("keboola-agent-cli")`. **Never hardcode a version string in `__init__.py`.**
+- `plugins/kbagent/.claude-plugin/plugin.json` must match. Run `make version-sync` (or `python scripts/sync_version.py`) to update it.
+- The pre-commit hook and CI automatically check version consistency.
+
+**When bumping the version**: only edit `pyproject.toml`, then run `make version-sync`. That's it. Do not edit `__init__.py` or `plugin.json` manually.
 
 ## Coding Conventions
 

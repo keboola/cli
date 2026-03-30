@@ -38,5 +38,14 @@ jobs:
             exit 1
           fi
 
+      - name: Version consistency check
+        run: |
+          uv run python scripts/sync_version.py > /dev/null 2>&1
+          if ! git diff --quiet plugins/kbagent/.claude-plugin/plugin.json; then
+            echo "::error::plugin.json version mismatch with pyproject.toml. Run 'make version-sync' and commit."
+            git diff plugins/kbagent/.claude-plugin/plugin.json
+            exit 1
+          fi
+
       - name: Tests
         run: uv run pytest tests/ -v -m "not integration"

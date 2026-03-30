@@ -1,3 +1,8 @@
 """Keboola Agent CLI - AI-friendly interface to Keboola projects."""
 
-__version__ = "0.16.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("keboola-agent-cli")
+except PackageNotFoundError:
+    __version__ = "0.0.0-dev"

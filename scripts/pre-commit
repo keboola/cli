@@ -34,3 +34,13 @@ if [ -f "scripts/generate_skill.py" ]; then
         echo "pre-commit: auto-updated $SKILL_FILE"
     fi
 fi
+
+# Auto-sync plugin.json version from pyproject.toml
+PLUGIN_JSON="plugins/kbagent/.claude-plugin/plugin.json"
+if [ -f "scripts/sync_version.py" ]; then
+    uv run python scripts/sync_version.py > /dev/null 2>&1
+    if ! git diff --quiet "$PLUGIN_JSON" 2>/dev/null; then
+        git add "$PLUGIN_JSON"
+        echo "pre-commit: auto-synced $PLUGIN_JSON version"
+    fi
+fi
