@@ -20,8 +20,11 @@ def _normalize_scripts(parameters: Any) -> Any:
     - ``["line1", "line2", ...]`` (per-line array)
     - ``["full\\ncode\\nwith\\nnewlines"]`` (single multiline string)
 
-    This normalizes to per-line format so that local merge (which always
-    produces per-line) and remote data compare identically.
+    This normalizes to single-string-per-code-block format so that local
+    merge (which produces single-string via ``_lines_to_script``) and
+    remote data compare identically.  The Keboola transformation runner
+    treats each array element as a separate executable statement, so each
+    CODE block must be a single joined string.
     """
     if not isinstance(parameters, dict):
         return parameters
@@ -34,18 +37,20 @@ def _normalize_scripts(parameters: Any) -> Any:
                 continue
             scripts = code.get("script")
             if isinstance(scripts, list) and scripts:
-                normalized: list[str] = []
+                # Flatten everything into individual lines first.
+                all_lines: list[str] = []
                 for s in scripts:
                     if isinstance(s, str) and "\n" in s:
-                        normalized.extend(s.split("\n"))
+                        all_lines.extend(s.split("\n"))
                     else:
-                        normalized.append(s)
+                        all_lines.append(s)
                 # Strip trailing whitespace per line (YAML roundtrip
                 # strips it) and remove trailing empty lines.
-                normalized = [line.rstrip() for line in normalized]
-                while normalized and normalized[-1] == "":
-                    normalized.pop()
-                code["script"] = normalized
+                all_lines = [line.rstrip() for line in all_lines]
+                while all_lines and all_lines[-1] == "":
+                    all_lines.pop()
+                # Join into a single string per code block.
+                code["script"] = ["\n".join(all_lines)] if all_lines else []
     return params
 
 

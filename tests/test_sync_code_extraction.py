@@ -225,7 +225,110 @@ class TestSqlExtraction:
         assert len(blocks) == 1
         assert blocks[0]["name"] == "Block 1"
         assert blocks[0]["codes"][0]["name"] == "Code 1"
-        assert "SELECT 1;" in blocks[0]["codes"][0]["script"][0]
+        script = blocks[0]["codes"][0]["script"]
+        # Must be a single joined string, not per-line
+        assert len(script) == 1
+        assert "SELECT 1;" in script[0]
+        assert "SELECT 2;" in script[0]
+
+    def test_multiline_sql_produces_single_string(self, tmp_path: Path) -> None:
+        """Multi-line SQL statement is joined into a single script element."""
+        config_dir = tmp_path / "sql-multiline"
+        config_dir.mkdir(parents=True)
+
+        sql_content = (
+            "/* ===== BLOCK: ETL ===== */\n"
+            "\n"
+            "/* ===== CODE: Create table ===== */\n"
+            "CREATE TABLE foo AS\n"
+            "    SELECT col1,\n"
+            "           col2\n"
+            "    FROM bar\n"
+            "    WHERE active = true;\n"
+        )
+        (config_dir / "transform.sql").write_text(sql_content, encoding="utf-8")
+
+        config_data: dict = {"parameters": {}}
+        result = merge_code_files("keboola.snowflake-transformation", config_data, config_dir)
+
+        blocks = result["parameters"]["blocks"]
+        script = blocks[0]["codes"][0]["script"]
+        # Must be exactly one element (not one per line)
+        assert len(script) == 1
+        # Must contain newlines (multi-line preserved)
+        assert "\n" in script[0]
+        # Must contain the full statement
+        assert "CREATE TABLE foo AS" in script[0]
+        assert "FROM bar" in script[0]
+        assert "WHERE active = true;" in script[0]
+
+    def test_multiline_sql_round_trip(self, tmp_path: Path) -> None:
+        """Round-trip with multi-line statements preserves SQL integrity."""
+        config_data = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "ETL",
+                        "codes": [
+                            {
+                                "name": "Create",
+                                "script": ["CREATE TABLE foo AS\n    SELECT col1\n    FROM bar;"],
+                            },
+                        ],
+                    },
+                ],
+            },
+        }
+        config_dir = tmp_path / "sql-multiline-rt"
+
+        extract_code_files("keboola.snowflake-transformation", config_data, config_dir)
+        assert "blocks" not in config_data["parameters"]
+
+        merge_code_files("keboola.snowflake-transformation", config_data, config_dir)
+
+        script = config_data["parameters"]["blocks"][0]["codes"][0]["script"]
+        assert len(script) == 1
+        assert script[0] == "CREATE TABLE foo AS\n    SELECT col1\n    FROM bar;"
+
+    def test_empty_code_block(self, tmp_path: Path) -> None:
+        """Empty CODE block produces an empty script list."""
+        config_dir = tmp_path / "sql-empty-code"
+        config_dir.mkdir(parents=True)
+
+        sql_content = (
+            "/* ===== BLOCK: ETL ===== */\n"
+            "\n"
+            "/* ===== CODE: Empty ===== */\n"
+            "\n"
+            "/* ===== CODE: Has content ===== */\n"
+            "SELECT 1;\n"
+        )
+        (config_dir / "transform.sql").write_text(sql_content, encoding="utf-8")
+
+        config_data: dict = {"parameters": {}}
+        result = merge_code_files("keboola.snowflake-transformation", config_data, config_dir)
+
+        codes = result["parameters"]["blocks"][0]["codes"]
+        assert len(codes) == 2
+        assert codes[0]["name"] == "Empty"
+        assert codes[0]["script"] == []
+        assert codes[1]["name"] == "Has content"
+        assert codes[1]["script"] == ["SELECT 1;"]
+
+    def test_whitespace_only_code_block(self, tmp_path: Path) -> None:
+        """Whitespace-only CODE block produces an empty script list."""
+        config_dir = tmp_path / "sql-ws-code"
+        config_dir.mkdir(parents=True)
+
+        sql_content = "/* ===== BLOCK: ETL ===== */\n\n/* ===== CODE: Spaces ===== */\n   \n  \n\n"
+        (config_dir / "transform.sql").write_text(sql_content, encoding="utf-8")
+
+        config_data: dict = {"parameters": {}}
+        result = merge_code_files("keboola.snowflake-transformation", config_data, config_dir)
+
+        codes = result["parameters"]["blocks"][0]["codes"]
+        assert codes[0]["name"] == "Spaces"
+        assert codes[0]["script"] == []
 
 
 # ===================================================================
@@ -318,6 +421,32 @@ class TestPythonTransformExtraction:
         result = merge_code_files("keboola.python-transformation-v2", config_data, config_dir)
 
         assert result["parameters"]["packages"] == ["pandas==2.1.0", "numpy>=1.24"]
+
+    def test_multiline_python_produces_single_string(self, tmp_path: Path) -> None:
+        """Multi-line Python code is joined into a single script element."""
+        config_dir = tmp_path / "py-multiline"
+        config_dir.mkdir(parents=True)
+
+        py_content = (
+            "# ===== BLOCK: Analysis =====\n"
+            "\n"
+            "# ===== CODE: Process =====\n"
+            "import pandas as pd\n"
+            "\n"
+            "df = pd.read_csv('data.csv')\n"
+            "result = df.groupby('category').sum()\n"
+        )
+        (config_dir / "transform.py").write_text(py_content, encoding="utf-8")
+
+        config_data: dict = {"parameters": {}}
+        result = merge_code_files("keboola.python-transformation-v2", config_data, config_dir)
+
+        blocks = result["parameters"]["blocks"]
+        script = blocks[0]["codes"][0]["script"]
+        assert len(script) == 1
+        assert "import pandas as pd" in script[0]
+        assert "result = df.groupby" in script[0]
+        assert "\n" in script[0]
 
     def test_python_transform_round_trip(self, tmp_path: Path) -> None:
         """Extract then merge produces equivalent blocks and packages."""

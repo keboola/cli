@@ -63,6 +63,63 @@ This automatically:
 - Creates the configuration in Keboola and gets a config_id
 - Writes back encrypted values + config_id to local `_config.yml`
 
+## SQL transformation file structure
+
+SQL transformations use a two-file layout. **SQL code lives ONLY in `transform.sql`,
+never in `_config.yml`.**
+
+```
+my-transformation/
+  _config.yml      # metadata + parameters: {} (empty! no blocks here)
+  transform.sql    # all SQL code with block/code markers
+```
+
+### _config.yml for SQL transformations
+
+```yaml
+version: 2
+name: My Transformation
+description: ''
+parameters: {}          # MUST be empty -- blocks are in transform.sql
+output:
+  tables:
+  - source: out_table
+    destination: out.c-bucket.table
+_keboola:
+  component_id: keboola.snowflake-transformation
+```
+
+### transform.sql format
+
+SQL is organized into blocks and codes using marker comments:
+
+```sql
+/* ===== BLOCK: Staging ===== */
+
+/* ===== CODE: Create staging table ===== */
+CREATE TABLE "staging" AS
+    SELECT *
+    FROM "raw_data"
+    WHERE "active" = true;
+
+/* ===== BLOCK: Output ===== */
+
+/* ===== CODE: Final output ===== */
+CREATE TABLE "out_result" AS
+    SELECT
+        "id",
+        "name",
+        SUM("amount") AS "total"
+    FROM "staging"
+    GROUP BY "id", "name";
+```
+
+Rules:
+- Each `/* ===== BLOCK: Name ===== */` starts a new block
+- Each `/* ===== CODE: Name ===== */` starts a new code section within the current block
+- Multi-line SQL is fine -- the entire code section is sent as one statement
+- If no markers are present, the whole file is treated as a single block/code
+
 ## Important notes
 
 - `_config.yml` format follows the kbc CLI dev-friendly YAML structure

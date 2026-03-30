@@ -4,6 +4,7 @@ Handles downloading Keboola project configurations to the local filesystem
 in a dev-friendly format (YAML configs), and tracking local changes.
 """
 
+import copy
 import hashlib
 import json
 import logging
@@ -1004,6 +1005,11 @@ class SyncService(BaseService):
         if local_data is None:
             return None
 
+        # Preserve pristine data for writeback (merge_code_files mutates
+        # local_data by injecting parameters.blocks which should not end
+        # up in _config.yml).
+        pristine_data = copy.deepcopy(local_data)
+
         # Merge code files (transform.sql, transform.py, code.py) back into config
         merge_code_files(component_id, local_data, config_dir)
 
@@ -1030,8 +1036,9 @@ class SyncService(BaseService):
             new_config_id,
         )
 
-        # Write back: update local file with config_id + encrypted secrets
-        self._writeback_after_push(local_data, config_dir, new_config_id, configuration)
+        # Write back: update local file with config_id + encrypted secrets.
+        # Use pristine_data so blocks/code stay only in their code files.
+        self._writeback_after_push(pristine_data, config_dir, new_config_id, configuration)
 
         return result
 
@@ -1051,6 +1058,11 @@ class SyncService(BaseService):
         local_data = self._read_config_file(config_dir)
         if local_data is None:
             raise FileNotFoundError(f"Config file not found: {config_dir / CONFIG_FILENAME}")
+
+        # Preserve pristine data for writeback (merge_code_files mutates
+        # local_data by injecting parameters.blocks which should not end
+        # up in _config.yml).
+        pristine_data = copy.deepcopy(local_data)
 
         # Merge code files (transform.sql, transform.py, code.py) back into config
         merge_code_files(component_id, local_data, config_dir)
@@ -1074,8 +1086,9 @@ class SyncService(BaseService):
         )
         logger.info("Updated config %s/%s", component_id, config_id)
 
-        # Write back: update local file with encrypted secrets
-        self._writeback_after_push(local_data, config_dir, config_id, configuration)
+        # Write back: update local file with encrypted secrets.
+        # Use pristine_data so blocks/code stay only in their code files.
+        self._writeback_after_push(pristine_data, config_dir, config_id, configuration)
 
     def _writeback_after_push(
         self,

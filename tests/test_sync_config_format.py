@@ -3,6 +3,7 @@
 import pytest
 
 from keboola_agent_cli.sync.config_format import (
+    _normalize_scripts,
     api_config_to_local,
     api_row_to_local,
     classify_component_type,
@@ -165,6 +166,68 @@ class TestLocalConfigToApiRoundTrip:
 
         assert configuration["runtime"] == {"imageTag": "latest"}
         assert configuration["parameters"] == {"key": "val"}
+
+
+class TestNormalizeScripts:
+    """Tests for _normalize_scripts() -- script array normalization."""
+
+    def test_per_line_array_joined_to_single_string(self) -> None:
+        """Per-line script array is joined into a single string."""
+        params = {
+            "blocks": [
+                {"codes": [{"script": ["CREATE TABLE foo AS", "    SELECT col1", "    FROM bar;"]}]}
+            ]
+        }
+        result = _normalize_scripts(params)
+        script = result["blocks"][0]["codes"][0]["script"]
+        assert len(script) == 1
+        assert script[0] == "CREATE TABLE foo AS\n    SELECT col1\n    FROM bar;"
+
+    def test_single_multiline_string_preserved(self) -> None:
+        """A script that is already a single multiline string stays as one element."""
+        params = {
+            "blocks": [
+                {"codes": [{"script": ["CREATE TABLE foo AS\n    SELECT col1\n    FROM bar;"]}]}
+            ]
+        }
+        result = _normalize_scripts(params)
+        script = result["blocks"][0]["codes"][0]["script"]
+        assert len(script) == 1
+        assert script[0] == "CREATE TABLE foo AS\n    SELECT col1\n    FROM bar;"
+
+    def test_trailing_whitespace_stripped(self) -> None:
+        """Trailing whitespace per line is stripped during normalization."""
+        params = {"blocks": [{"codes": [{"script": ["SELECT 1  ", "FROM bar   "]}]}]}
+        result = _normalize_scripts(params)
+        script = result["blocks"][0]["codes"][0]["script"]
+        assert len(script) == 1
+        assert script[0] == "SELECT 1\nFROM bar"
+
+    def test_empty_script_preserved(self) -> None:
+        """Empty script array stays empty."""
+        params = {"blocks": [{"codes": [{"script": []}]}]}
+        result = _normalize_scripts(params)
+        assert result["blocks"][0]["codes"][0]["script"] == []
+
+    def test_no_blocks_passthrough(self) -> None:
+        """Parameters without blocks are returned unchanged."""
+        params = {"key": "value"}
+        result = _normalize_scripts(params)
+        assert result == {"key": "value"}
+
+    def test_non_dict_passthrough(self) -> None:
+        """Non-dict input is returned as-is."""
+        assert _normalize_scripts("not a dict") == "not a dict"
+        assert _normalize_scripts(42) == 42
+
+    def test_does_not_mutate_input(self) -> None:
+        """Original parameters are not mutated."""
+        params = {"blocks": [{"codes": [{"script": ["line1", "line2"]}]}]}
+        import copy
+
+        original = copy.deepcopy(params)
+        _normalize_scripts(params)
+        assert params == original
 
 
 class TestRowConversion:

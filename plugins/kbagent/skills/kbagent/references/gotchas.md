@@ -90,6 +90,43 @@ Workaround for large refactors (e.g. removing `AS` from 200 table aliases):
 2. Call `update_sql_transformation` once per batch
 3. Verify each batch succeeded before sending the next
 
+## SQL transformation file layout
+
+When creating or editing SQL transformations via sync, SQL code must go in
+`transform.sql`, NOT in `_config.yml`. The `_config.yml` for transformations
+should have `parameters: {}` (empty).
+
+**Wrong** -- putting SQL in `_config.yml` parameters:
+```yaml
+# DO NOT DO THIS -- SQL will be split per line and each line executed separately
+parameters:
+  blocks:
+    - name: Block 1
+      codes:
+        - name: Code 1
+          script:
+            - CREATE TABLE foo AS
+            - "    SELECT col1"
+            - "    FROM bar;"
+```
+
+**Correct** -- SQL in `transform.sql`, config has empty parameters:
+```yaml
+# _config.yml
+parameters: {}
+```
+```sql
+-- transform.sql
+/* ===== BLOCK: Block 1 ===== */
+
+/* ===== CODE: Code 1 ===== */
+CREATE TABLE foo AS
+    SELECT col1
+    FROM bar;
+```
+
+See `scaffold-workflow.md` for the complete file structure reference.
+
 ## Common mistakes
 
 - **Forgetting `--json`**: without it, output is human-formatted Rich text, not parseable
@@ -97,3 +134,4 @@ Workaround for large refactors (e.g. removing `AS` from 200 table aliases):
 - **Passing manage token as argument**: use env var `KBC_MANAGE_API_TOKEN` instead
 - **Polling after branch create**: kbagent already waits for async completion
 - **Not saving workspace password**: only returned once on creation
+- **Putting SQL in _config.yml**: SQL transformations must use `transform.sql` with block markers (see above)
