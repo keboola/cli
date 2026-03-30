@@ -11,7 +11,7 @@ kbagent --json branch create --project ALIAS --name "fix-transform-x"
 # Returns: branch_id, name, and confirms activation
 
 # 2. All subsequent commands on this project auto-use the active branch
-kbagent --json tool call list_configs --project ALIAS
+kbagent --json tool call get_configs --project ALIAS
 kbagent --json tool call update_configuration --project ALIAS --input '{...}'
 kbagent --json workspace create --project ALIAS --name "branch-debug"
 

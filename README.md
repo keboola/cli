@@ -169,7 +169,7 @@ Work on Keboola dev branches without passing `--branch` to every command:
 kbagent branch create --project prod --name "fix-transform-x"
 
 # All subsequent tool calls use the active branch automatically
-kbagent tool call list_configs --project prod
+kbagent tool call get_configs --project prod
 kbagent tool call update_sql_transformation --project prod --input '{...}'
 
 # When done, get the merge URL (opens KBC UI for safe review)

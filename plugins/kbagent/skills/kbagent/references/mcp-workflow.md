@@ -19,10 +19,10 @@ Every tool has a `multi_project` flag (visible in `tool list` output):
 kbagent --json tool list
 
 # Read tool -- queries ALL projects automatically
-kbagent --json tool call list_configs
+kbagent --json tool call get_configs
 
 # Read tool -- scope to one project
-kbagent --json tool call list_configs --project prod
+kbagent --json tool call get_configs --project prod
 
 # Write tool -- must specify project
 kbagent --json tool call create_config --project prod \
