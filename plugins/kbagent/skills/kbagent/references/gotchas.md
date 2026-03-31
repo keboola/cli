@@ -67,6 +67,12 @@ One project failing does not block others. Check the `errors` array:
   accepted parameters. For example, `get_configs` takes `configs` (a list of `{component_id, configuration_id}`
   objects), not a flat `config_id` string.
 
+## Conversation ID
+
+Set `KBAGENT_CONVERSATION_ID` env var before running kbagent commands. All API
+requests include it as `X-Conversation-ID` header for platform observability.
+If unset, the header is omitted.
+
 ## Config resolution order
 
 kbagent looks for configuration in this order:

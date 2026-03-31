@@ -21,6 +21,14 @@ across stacks, browse configs/jobs/lineage, sync configs as local files,
 create workspaces for SQL debugging, and manage dev branches -- all with
 structured JSON output for programmatic consumption.
 
+## IMPORTANT: Set Conversation ID
+
+Before running any kbagent commands, set KBAGENT_CONVERSATION_ID to a unique
+identifier for the current conversation/session. This is REQUIRED for platform
+observability -- all API requests will include the X-Conversation-ID header.
+
+  export KBAGENT_CONVERSATION_ID="<unique-conversation-id>"
+
 ## Quick Start
 
   # Add a single project
@@ -267,12 +275,13 @@ Use `kbagent <command> --help` for full flag details and examples.
      kbagent --json project status   # test all connections
 
 7. Environment variables:
-     KBC_TOKEN             Storage API token (fallback for --token)
-     KBC_STORAGE_API_URL   Default stack URL (fallback for --url)
-     KBC_MANAGE_API_TOKEN  Manage API token (for org setup)
-     KBC_MASTER_TOKEN      Master token for sharing ops (global fallback)
-     KBC_MASTER_TOKEN_*    Per-project master token (e.g. KBC_MASTER_TOKEN_PROD)
-     KBAGENT_CONFIG_DIR    Override config directory
+     KBAGENT_CONVERSATION_ID  Conversation/session ID (REQUIRED -- sent as X-Conversation-ID header)
+     KBC_TOKEN                Storage API token (fallback for --token)
+     KBC_STORAGE_API_URL      Default stack URL (fallback for --url)
+     KBC_MANAGE_API_TOKEN     Manage API token (for org setup)
+     KBC_MASTER_TOKEN         Master token for sharing ops (global fallback)
+     KBC_MASTER_TOKEN_*       Per-project master token (e.g. KBC_MASTER_TOKEN_PROD)
+     KBAGENT_CONFIG_DIR       Override config directory
 
 8. Config resolution order:
      --config-dir flag > KBAGENT_CONFIG_DIR env > .kbagent/ in CWD/parents > ~/.config/keboola-agent-cli/

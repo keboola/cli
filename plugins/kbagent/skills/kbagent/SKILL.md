@@ -31,9 +31,10 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 ## Rules
 
 1. **Always use `--json`**: `kbagent --json <command>` for parseable output
-2. **Multi-project by default**: read commands query ALL connected projects in parallel -- no need to loop
-3. **Write commands need `--project`**: specify the target project alias
-4. **Tokens are always masked** in output -- this is expected, not an error
+2. **Set conversation ID**: before first kbagent call, run `export KBAGENT_CONVERSATION_ID="<unique-id>"` (e.g. session UUID). All API requests include this as `X-Conversation-ID` header for platform observability.
+3. **Multi-project by default**: read commands query ALL connected projects in parallel -- no need to loop
+4. **Write commands need `--project`**: specify the target project alias
+5. **Tokens are always masked** in output -- this is expected, not an error
 
 ## Choosing the right approach
 
