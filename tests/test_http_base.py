@@ -417,6 +417,73 @@ class TestBaseHttpClientErrorSanitization:
         client.close()
 
 
+class TestConversationIdHeader:
+    """Test X-Conversation-ID header propagation from env var."""
+
+    def test_conversation_id_header_set_when_env_present(self, httpx_mock, monkeypatch) -> None:
+        """X-Conversation-ID header is sent when KBAGENT_CONVERSATION_ID is set."""
+        monkeypatch.setenv("KBAGENT_CONVERSATION_ID", "conv-abc-123")
+
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            json={"ok": True},
+            status_code=200,
+        )
+
+        client = BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        client._do_request("GET", "/test-path")
+        client.close()
+
+        request = httpx_mock.get_request()
+        assert request.headers["X-Conversation-ID"] == "conv-abc-123"
+
+    def test_conversation_id_header_absent_when_env_not_set(self, httpx_mock, monkeypatch) -> None:
+        """X-Conversation-ID header is NOT sent when env var is unset."""
+        monkeypatch.delenv("KBAGENT_CONVERSATION_ID", raising=False)
+
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            json={"ok": True},
+            status_code=200,
+        )
+
+        client = BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        client._do_request("GET", "/test-path")
+        client.close()
+
+        request = httpx_mock.get_request()
+        assert "X-Conversation-ID" not in request.headers
+
+    def test_conversation_id_header_absent_when_env_empty(self, httpx_mock, monkeypatch) -> None:
+        """X-Conversation-ID header is NOT sent when env var is empty string."""
+        monkeypatch.setenv("KBAGENT_CONVERSATION_ID", "")
+
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            json={"ok": True},
+            status_code=200,
+        )
+
+        client = BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        client._do_request("GET", "/test-path")
+        client.close()
+
+        request = httpx_mock.get_request()
+        assert "X-Conversation-ID" not in request.headers
+
+
 class TestBaseHttpClientContextManager:
     """Test context manager protocol on BaseHttpClient."""
 

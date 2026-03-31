@@ -223,6 +223,32 @@ class TestHttpTransportFunctions:
         headers = _build_http_headers(project, branch_id="123")
         assert headers["X-Branch-ID"] == "123"
 
+    def test_build_http_headers_with_conversation_id(self, monkeypatch) -> None:
+        """Headers include X-Conversation-ID when env var is set."""
+        from keboola_agent_cli.models import ProjectConfig
+        from keboola_agent_cli.services.mcp_service import _build_http_headers
+
+        monkeypatch.setenv("KBAGENT_CONVERSATION_ID", "conv-xyz-789")
+        project = ProjectConfig(
+            stack_url="https://connection.keboola.com",
+            token="test-token",
+        )
+        headers = _build_http_headers(project)
+        assert headers["X-Conversation-ID"] == "conv-xyz-789"
+
+    def test_build_http_headers_no_conversation_id_when_unset(self, monkeypatch) -> None:
+        """Headers omit X-Conversation-ID when env var is not set."""
+        from keboola_agent_cli.models import ProjectConfig
+        from keboola_agent_cli.services.mcp_service import _build_http_headers
+
+        monkeypatch.delenv("KBAGENT_CONVERSATION_ID", raising=False)
+        project = ProjectConfig(
+            stack_url="https://connection.keboola.com",
+            token="test-token",
+        )
+        headers = _build_http_headers(project)
+        assert "X-Conversation-ID" not in headers
+
 
 class TestMcpServiceTransportSelection:
     """Tests for McpService._get_server_url() transport selection."""

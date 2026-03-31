@@ -6,6 +6,7 @@ and message sanitization code.
 """
 
 import logging
+import os
 import time
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -14,6 +15,7 @@ import httpx
 
 from .constants import (
     BACKOFF_BASE,
+    ENV_CONVERSATION_ID,
     MAX_API_ERROR_LENGTH,
     MAX_RETRIES,
     MAX_RETRY_AFTER_SECONDS,
@@ -48,6 +50,9 @@ class BaseHttpClient:
         self._base_url = base_url.rstrip("/")
         self._token = token
         self._masked_token = mask_token(token)
+        conversation_id = os.environ.get(ENV_CONVERSATION_ID, "")
+        if conversation_id:
+            headers["X-Conversation-ID"] = conversation_id
         self._client = httpx.Client(
             base_url=self._base_url,
             timeout=timeout or DEFAULT_TIMEOUT,

@@ -27,6 +27,7 @@ from ..constants import (
     DEFAULT_MCP_MAX_SESSIONS,
     DEFAULT_MCP_TOOL_TIMEOUT,
     DEFAULT_MCP_TRANSPORT,
+    ENV_CONVERSATION_ID,
     ENV_MCP_INIT_TIMEOUT,
     ENV_MCP_MAX_SESSIONS,
     ENV_MCP_TOOL_TIMEOUT,
@@ -437,6 +438,9 @@ def _build_http_headers(
     }
     if branch_id:
         headers["X-Branch-ID"] = branch_id
+    conversation_id = os.environ.get(ENV_CONVERSATION_ID, "")
+    if conversation_id:
+        headers["X-Conversation-ID"] = conversation_id
     return headers
 
 
