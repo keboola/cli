@@ -354,6 +354,34 @@ class TestDoctorServiceCheckVersion:
         assert "kbagent v" in result["message"]
 
 
+class TestDoctorServiceCheckConversationId:
+    """Tests for DoctorService._check_conversation_id()."""
+
+    def test_conversation_id_warn_when_not_set(self, tmp_config_dir: Path, monkeypatch) -> None:
+        """Warns when KBAGENT_CONVERSATION_ID is not set."""
+        monkeypatch.delenv("KBAGENT_CONVERSATION_ID", raising=False)
+        store = ConfigStore(config_dir=tmp_config_dir)
+        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+
+        result = service._check_conversation_id()
+
+        assert result["check"] == "conversation_id"
+        assert result["status"] == "warn"
+        assert "not set" in result["message"]
+
+    def test_conversation_id_pass_when_set(self, tmp_config_dir: Path, monkeypatch) -> None:
+        """Passes when KBAGENT_CONVERSATION_ID is set."""
+        monkeypatch.setenv("KBAGENT_CONVERSATION_ID", "test-conv-123")
+        store = ConfigStore(config_dir=tmp_config_dir)
+        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+
+        result = service._check_conversation_id()
+
+        assert result["check"] == "conversation_id"
+        assert result["status"] == "pass"
+        assert "test-conv-123" in result["message"]
+
+
 class TestDoctorServiceRunChecks:
     """Tests for DoctorService.run_checks() - full health check orchestration."""
 

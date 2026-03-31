@@ -18,6 +18,7 @@ from typing import Any
 
 from .. import __version__
 from ..config_store import ConfigStore
+from ..constants import ENV_CONVERSATION_ID
 from ..errors import KeboolaApiError
 from ..models import AppConfig
 from .base import ClientFactory, default_client_factory
@@ -72,6 +73,10 @@ class DoctorService:
         # Check 5: MCP server availability
         mcp_check = self._mcp_service.check_server_available()
         all_checks.append(mcp_check)
+
+        # Check 6: Conversation ID
+        conversation_check = self._check_conversation_id()
+        all_checks.append(conversation_check)
 
         # Build summary
         total = len(all_checks)
@@ -263,6 +268,31 @@ class DoctorService:
             "name": "CLI version",
             "status": "pass",
             "message": f"kbagent v{__version__}",
+        }
+
+    @staticmethod
+    def _check_conversation_id() -> dict[str, Any]:
+        """Check 6: Conversation ID env var is set.
+
+        Returns:
+            Check result dict with warn if not set, pass if set.
+        """
+        conversation_id = os.environ.get(ENV_CONVERSATION_ID, "")
+        if not conversation_id:
+            return {
+                "check": "conversation_id",
+                "name": "Conversation ID",
+                "status": "warn",
+                "message": (
+                    f"{ENV_CONVERSATION_ID} not set. "
+                    "API requests will not include X-Conversation-ID header."
+                ),
+            }
+        return {
+            "check": "conversation_id",
+            "name": "Conversation ID",
+            "status": "pass",
+            "message": f"X-Conversation-ID: {conversation_id}",
         }
 
     @staticmethod
