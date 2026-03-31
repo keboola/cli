@@ -53,6 +53,7 @@ class ConfigService(BaseService):
         project: ProjectConfig,
         component_type: str | None = None,
         component_id: str | None = None,
+        branch_id: int | None = None,
     ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, str]]:
         """Fetch configurations for a single project (runs in a worker thread).
 
@@ -63,21 +64,25 @@ class ConfigService(BaseService):
         """
         client = self._client_factory(project.stack_url, project.token)
         try:
-            components = client.list_components(component_type=component_type)
+            effective_branch_id = branch_id or project.active_branch_id
+            components = client.list_components(
+                component_type=component_type,
+                branch_id=effective_branch_id,
+            )
 
             # Fetch folder metadata (requires branch ID — search endpoint is branch-only)
             folder_map: dict[str, str] = {}
             try:
-                # Use active branch or find the default branch ID
-                branch_id = project.active_branch_id
-                if not branch_id:
+                # Use effective branch, active branch, or find the default branch ID
+                folder_branch_id = effective_branch_id
+                if not folder_branch_id:
                     # Fetch default branch ID from dev-branches endpoint
                     branches = client.list_dev_branches()
                     default = next((b for b in branches if b.get("isDefault")), None)
                     if default:
-                        branch_id = default["id"]
-                if branch_id:
-                    result = client.list_config_folder_metadata(branch_id=branch_id)
+                        folder_branch_id = default["id"]
+                if folder_branch_id:
+                    result = client.list_config_folder_metadata(branch_id=folder_branch_id)
                     folder_map = result if isinstance(result, dict) else {}
             except Exception:
                 pass  # graceful fallback if search endpoint unavailable
@@ -141,6 +146,7 @@ class ConfigService(BaseService):
         aliases: list[str] | None = None,
         component_type: str | None = None,
         component_id: str | None = None,
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """List configurations across one or multiple projects.
 
@@ -154,6 +160,8 @@ class ConfigService(BaseService):
                 (extractor, writer, transformation, application).
             component_id: Optional filter by specific component ID
                 (e.g. keboola.ex-db-snowflake).
+            branch_id: If set, list configs from a specific dev branch.
+                       If None, uses each project's active branch (if any).
 
         Returns:
             Dict with keys:
@@ -169,7 +177,9 @@ class ConfigService(BaseService):
         projects = self.resolve_projects(aliases)
 
         def worker(alias: str, project: ProjectConfig) -> tuple[Any, ...]:
-            return self._fetch_project_configs(alias, project, component_type, component_id)
+            return self._fetch_project_configs(
+                alias, project, component_type, component_id, branch_id=branch_id
+            )
 
         successes, errors = self._run_parallel(projects, worker)
 
@@ -189,6 +199,7 @@ class ConfigService(BaseService):
         alias: str,
         component_id: str,
         config_id: str,
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Get detailed information about a specific configuration.
 
@@ -196,6 +207,8 @@ class ConfigService(BaseService):
             alias: Project alias to query.
             component_id: The component ID (e.g. keboola.ex-db-snowflake).
             config_id: The configuration ID.
+            branch_id: If set, get detail from a specific dev branch.
+                       If None, uses the project's active branch (if any).
 
         Returns:
             Dict with the full configuration detail from the API,
@@ -208,13 +221,18 @@ class ConfigService(BaseService):
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
+        effective_branch_id = branch_id or project.active_branch_id
+
         client = self._client_factory(project.stack_url, project.token)
         try:
-            detail = client.get_config_detail(component_id, config_id)
+            detail = client.get_config_detail(
+                component_id, config_id, branch_id=effective_branch_id
+            )
         finally:
             client.close()
 
         detail["project_alias"] = alias
+        detail["branch_id"] = effective_branch_id
         return detail
 
     def update_config(
@@ -328,6 +346,7 @@ class ConfigService(BaseService):
         component_id: str | None = None,
         ignore_case: bool = False,
         use_regex: bool = False,
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Search through configuration bodies across projects.
 
@@ -342,6 +361,8 @@ class ConfigService(BaseService):
             component_id: Optional filter by specific component ID.
             ignore_case: If True, match case-insensitively.
             use_regex: If True, interpret query as a regular expression.
+            branch_id: If set, search configs from a specific dev branch.
+                       If None, uses each project's active branch (if any).
 
         Returns:
             Dict with "matches", "errors", and "stats" keys.
@@ -363,7 +384,7 @@ class ConfigService(BaseService):
             alias: str, project: ProjectConfig
         ) -> tuple[str, dict[str, Any], bool] | tuple[str, dict[str, str]]:
             return self._search_project_configs(
-                alias, project, match_fn, component_type, component_id
+                alias, project, match_fn, component_type, component_id, branch_id=branch_id
             )
 
         successes, errors = self._run_parallel(projects, worker)
@@ -394,11 +415,16 @@ class ConfigService(BaseService):
         match_fn: Any,
         component_type: str | None = None,
         component_id: str | None = None,
+        branch_id: int | None = None,
     ) -> tuple[str, dict[str, Any], bool] | tuple[str, dict[str, str]]:
         """Search configs in a single project (worker thread)."""
         client = self._client_factory(project.stack_url, project.token)
         try:
-            components = client.list_components(component_type=component_type)
+            effective_branch_id = branch_id or project.active_branch_id
+            components = client.list_components(
+                component_type=component_type,
+                branch_id=effective_branch_id,
+            )
             matches: list[dict[str, Any]] = []
             configs_searched = 0
 

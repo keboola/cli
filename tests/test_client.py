@@ -415,6 +415,25 @@ class TestListComponents:
             result = client.list_components(component_type="extractor")
             assert result == []
 
+    def test_list_components_with_branch_id(self, httpx_mock) -> None:
+        """list_components(branch_id) uses branch prefix in URL."""
+        components = [
+            {"id": "keboola.ex-db-snowflake", "type": "extractor", "name": "Snowflake"},
+        ]
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/123/components?include=configuration",
+            json=components,
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.list_components(branch_id=123)
+            assert len(result) == 1
+            assert result[0]["id"] == "keboola.ex-db-snowflake"
+
 
 class TestGetConfigDetail:
     """Tests for get_config_detail()."""
@@ -433,6 +452,23 @@ class TestGetConfigDetail:
             token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
         ) as client:
             result = client.get_config_detail("keboola.ex-db-snowflake", "42")
+            assert result["id"] == "42"
+            assert result["name"] == "My Config"
+
+    def test_get_config_detail_with_branch_id(self, httpx_mock) -> None:
+        """get_config_detail(branch_id) uses branch prefix in URL."""
+        config_data = {"id": "42", "name": "My Config", "configuration": {}}
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/123/components/keboola.ex-db-snowflake/configs/42",
+            json=config_data,
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.get_config_detail("keboola.ex-db-snowflake", "42", branch_id=123)
             assert result["id"] == "42"
             assert result["name"] == "My Config"
 

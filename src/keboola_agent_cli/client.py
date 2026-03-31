@@ -186,20 +186,26 @@ class KeboolaClient(BaseHttpClient):
             default_backend=owner.get("defaultBackend", "snowflake"),
         )
 
-    def list_components(self, component_type: str | None = None) -> list[dict[str, Any]]:
+    def list_components(
+        self,
+        component_type: str | None = None,
+        branch_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         """List components with their configurations.
 
         Args:
             component_type: Optional filter (extractor, writer, transformation, application).
+            branch_id: If set, list components from a specific dev branch.
 
         Returns:
             List of component dicts from the API.
         """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         params: dict[str, str] = {"include": "configuration"}
         if component_type:
             params["componentType"] = component_type
 
-        response = self._request("GET", "/v2/storage/components", params=params)
+        response = self._request("GET", f"{prefix}/components", params=params)
         return response.json()
 
     def list_components_with_configs(self, branch_id: int | None = None) -> list[dict[str, Any]]:
@@ -268,21 +274,28 @@ class KeboolaClient(BaseHttpClient):
         )
         return resp.json()
 
-    def get_config_detail(self, component_id: str, config_id: str) -> dict[str, Any]:
+    def get_config_detail(
+        self,
+        component_id: str,
+        config_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
         """Get detailed information about a specific configuration.
 
         Args:
             component_id: The component ID (e.g. keboola.ex-db-snowflake).
             config_id: The configuration ID.
+            branch_id: If set, get detail from a specific dev branch.
 
         Returns:
             Configuration detail dict from the API.
         """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         safe_component_id = quote(component_id, safe="")
         safe_config_id = quote(config_id, safe="")
         response = self._request(
             "GET",
-            f"/v2/storage/components/{safe_component_id}/configs/{safe_config_id}",
+            f"{prefix}/components/{safe_component_id}/configs/{safe_config_id}",
         )
         return response.json()
 

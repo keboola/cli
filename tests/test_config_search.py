@@ -343,4 +343,6 @@ class TestSearchConfigs:
             assert m["component_type"] == "extractor"
 
         # The client was called with the component_type filter
-        mock_client.list_components.assert_called_once_with(component_type="extractor")
+        mock_client.list_components.assert_called_once_with(
+            component_type="extractor", branch_id=None
+        )

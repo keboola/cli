@@ -633,7 +633,9 @@ class TestConfigServiceListConfigs:
         assert all(c["component_type"] == "extractor" for c in configs)
 
         # Verify the type filter was passed to the client
-        mock_client.list_components.assert_called_once_with(component_type="extractor")
+        mock_client.list_components.assert_called_once_with(
+            component_type="extractor", branch_id=None
+        )
 
     def test_list_configs_filter_by_component_id(self, tmp_config_dir: Path) -> None:
         """list_configs filters configs to only the specified component_id."""
@@ -863,7 +865,9 @@ class TestConfigServiceListConfigs:
         assert all(c["component_id"] == "keboola.ex-db-snowflake" for c in configs)
 
         # component_type was passed to client
-        mock_client.list_components.assert_called_once_with(component_type="extractor")
+        mock_client.list_components.assert_called_once_with(
+            component_type="extractor", branch_id=None
+        )
 
     def test_list_configs_multiple_aliases(self, tmp_config_dir: Path) -> None:
         """list_configs with multiple aliases queries exactly those projects."""
@@ -916,6 +920,53 @@ class TestConfigServiceListConfigs:
         # proj-c should not have been queried
         client_c.list_components.assert_not_called()
 
+    def test_list_configs_with_branch_id(self, tmp_config_dir: Path) -> None:
+        """list_configs passes explicit branch_id to client.list_components."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.list_configs(branch_id=42)
+        configs = result["configs"]
+
+        assert len(configs) == 3
+        mock_client.list_components.assert_called_once_with(component_type=None, branch_id=42)
+
+    def test_list_configs_uses_active_branch(self, tmp_config_dir: Path) -> None:
+        """list_configs uses project.active_branch_id when no explicit branch_id."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                active_branch_id=99,
+            ),
+        )
+
+        mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.list_configs()
+        configs = result["configs"]
+
+        assert len(configs) == 3
+        mock_client.list_components.assert_called_once_with(component_type=None, branch_id=99)
+
 
 class TestConfigServiceGetConfigDetail:
     """Tests for ConfigService.get_config_detail()."""
@@ -958,7 +1009,9 @@ class TestConfigServiceGetConfigDetail:
         assert result["name"] == "Production Load"
         assert result["project_alias"] == "prod"
         assert result["configuration"] == {"parameters": {"db": "prod"}}
-        mock_client.get_config_detail.assert_called_once_with("keboola.ex-db-snowflake", "101")
+        mock_client.get_config_detail.assert_called_once_with(
+            "keboola.ex-db-snowflake", "101", branch_id=None
+        )
         mock_client.close.assert_called_once()
 
     def test_get_config_detail_unknown_alias(self, tmp_config_dir: Path) -> None:
@@ -1034,6 +1087,144 @@ class TestConfigServiceGetConfigDetail:
         with pytest.raises(KeboolaApiError):
             service.get_config_detail("prod", "comp-x", "cfg-y")
 
+        mock_client.close.assert_called_once()
+
+    def test_get_config_detail_with_branch_id(self, tmp_config_dir: Path) -> None:
+        """get_config_detail passes branch_id to client and includes it in result."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        detail_response = {
+            "id": "101",
+            "name": "Branch Config",
+            "description": "Config on a dev branch",
+            "componentId": "keboola.ex-db-snowflake",
+            "configuration": {"parameters": {"db": "branch_db"}},
+            "rows": [],
+        }
+
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = detail_response
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="101",
+            branch_id=55,
+        )
+
+        assert result["id"] == "101"
+        assert result["name"] == "Branch Config"
+        assert result["project_alias"] == "prod"
+        assert result["branch_id"] == 55
+        mock_client.get_config_detail.assert_called_once_with(
+            "keboola.ex-db-snowflake", "101", branch_id=55
+        )
+        mock_client.close.assert_called_once()
+
+    def test_get_config_detail_uses_active_branch(self, tmp_config_dir: Path) -> None:
+        """get_config_detail uses project.active_branch_id when no explicit branch_id."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                active_branch_id=77,
+            ),
+        )
+
+        detail_response = {
+            "id": "101",
+            "name": "Active Branch Config",
+            "componentId": "keboola.ex-db-snowflake",
+            "configuration": {},
+            "rows": [],
+        }
+
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = detail_response
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="101",
+        )
+
+        assert result["branch_id"] == 77
+        mock_client.get_config_detail.assert_called_once_with(
+            "keboola.ex-db-snowflake", "101", branch_id=77
+        )
+        mock_client.close.assert_called_once()
+
+
+class TestConfigServiceSearchConfigs:
+    """Tests for ConfigService.search_configs() with branch_id support."""
+
+    def test_search_configs_with_branch_id(self, tmp_config_dir: Path) -> None:
+        """search_configs passes branch_id to client.list_components."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.search_configs(query="Production", branch_id=123)
+        matches = result["matches"]
+
+        # "Production Load" config name matches the query
+        assert len(matches) == 1
+        assert matches[0]["config_name"] == "Production Load"
+
+        mock_client.list_components.assert_called_once_with(component_type=None, branch_id=123)
+        mock_client.close.assert_called_once()
+
+    def test_search_configs_uses_active_branch(self, tmp_config_dir: Path) -> None:
+        """search_configs uses project.active_branch_id when no explicit branch_id."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                active_branch_id=88,
+            ),
+        )
+
+        mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        service.search_configs(query="nonexistent-query")
+
+        mock_client.list_components.assert_called_once_with(component_type=None, branch_id=88)
         mock_client.close.assert_called_once()
 
 

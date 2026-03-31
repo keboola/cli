@@ -1143,6 +1143,90 @@ class TestConfigList:
         assert output["status"] == "error"
         assert "INVALID_ARGUMENT" in output["error"]["code"]
 
+    def test_config_list_with_branch_flag(self, tmp_path: Path) -> None:
+        """config list --branch 123 --project prod passes branch_id to service."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+
+            config_service = MagicMock()
+            config_service.list_configs.return_value = {
+                "configs": [],
+                "errors": [],
+            }
+            MockCfgService.return_value = config_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "list",
+                    "--project",
+                    "prod",
+                    "--branch",
+                    "123",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        config_service.list_configs.assert_called_once()
+        call_kwargs = config_service.list_configs.call_args
+        assert call_kwargs.kwargs.get("branch_id") == 123 or (
+            call_kwargs[1].get("branch_id") == 123 if call_kwargs[1] else call_kwargs[0][-1] == 123
+        )
+
+    def test_config_list_branch_requires_project(self, tmp_path: Path) -> None:
+        """config list --branch 123 without --project returns exit code 2."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "list",
+                    "--branch",
+                    "123",
+                ],
+            )
+
+        assert result.exit_code == 2
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert "INVALID_ARGUMENT" in output["error"]["code"]
+
 
 class TestConfigDetail:
     """Tests for `kbagent config detail` command."""
@@ -1408,6 +1492,62 @@ class TestConfigDetail:
         output = json.loads(result.output)
         assert output["status"] == "error"
         assert output["error"]["code"] == "INVALID_TOKEN"
+
+    def test_config_detail_with_branch_flag(self, tmp_path: Path) -> None:
+        """config detail --branch 123 passes branch_id to service."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+            },
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+
+            config_service = MagicMock()
+            config_service.get_config_detail.return_value = {
+                "id": "101",
+                "name": "Production Load",
+                "description": "Loads production data",
+                "component_id": "keboola.ex-db-snowflake",
+                "project_alias": "prod",
+                "configuration": {"parameters": {"db": "prod"}},
+                "rows": [],
+            }
+            MockCfgService.return_value = config_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "101",
+                    "--branch",
+                    "123",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        config_service.get_config_detail.assert_called_once()
+        call_kwargs = config_service.get_config_detail.call_args
+        assert call_kwargs.kwargs.get("branch_id") == 123 or (
+            call_kwargs[1].get("branch_id") == 123 if call_kwargs[1] else call_kwargs[0][-1] == 123
+        )
 
 
 # ---------------------------------------------------------------------------

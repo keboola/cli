@@ -12,10 +12,17 @@ from pathlib import Path
 import typer
 from rich.syntax import Syntax
 
+from ..config_store import ConfigStore
 from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME, VALID_COMPONENT_TYPES
 from ..errors import ConfigError, KeboolaApiError
 from ..output import format_config_detail, format_configs_table, format_search_results
-from ._helpers import emit_project_warnings, get_formatter, get_service, map_error_to_exit_code
+from ._helpers import (
+    emit_project_warnings,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+    resolve_branch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,10 +76,35 @@ def config_list(
         "--component-id",
         help="Filter by specific component ID (e.g. keboola.ex-db-snowflake)",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="List configs from a specific dev branch ID (defaults to active branch)",
+    ),
 ) -> None:
-    """List configurations from connected projects."""
+    """List configurations from connected projects.
+
+    If a dev branch is active (via 'branch use'), configs from that branch
+    are listed. Use --branch to override.
+    """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+
+    # --branch requires --project (branch ID is per-project)
+    # For list with multiple projects, only validate if explicit --branch given
+    if branch is not None and (not project or len(project) != 1):
+        formatter.error(
+            message="--branch requires exactly one --project (branch ID is per-project)",
+            error_code="INVALID_ARGUMENT",
+        )
+        raise typer.Exit(code=2)
+
+    # Resolve active branch (only for single-project queries)
+    effective_branch: int | None = branch
+    effective_project = project
+    if branch is None and project and len(project) == 1:
+        _, effective_branch = resolve_branch(config_store, formatter, project[0], None)
 
     # Validate component_type if provided
     if component_type and component_type not in VALID_COMPONENT_TYPES:
@@ -85,9 +117,10 @@ def config_list(
 
     try:
         result = service.list_configs(
-            aliases=project,
+            aliases=effective_project,
             component_type=component_type,
             component_id=component_id,
+            branch_id=effective_branch,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
@@ -108,16 +141,29 @@ def config_detail(
     project: str = typer.Option(..., "--project", help="Project alias"),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Get detail from a specific dev branch ID (defaults to active branch)",
+    ),
 ) -> None:
-    """Show detailed information about a specific configuration."""
+    """Show detailed information about a specific configuration.
+
+    If a dev branch is active (via 'branch use'), the detail is fetched
+    from that branch. Use --branch to override.
+    """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
 
     try:
         result = service.get_config_detail(
             alias=project,
             component_id=component_id,
             config_id=config_id,
+            branch_id=effective_branch,
         )
         formatter.output(result, format_config_detail)
     except ConfigError as exc:
@@ -165,14 +211,36 @@ def config_search(
         "-r",
         help="Interpret query as a regular expression",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Search configs in a specific dev branch ID (defaults to active branch)",
+    ),
 ) -> None:
     """Search through configuration bodies for a string or pattern.
 
     Searches config names, descriptions, parameters, and row definitions.
     Reports which configurations match and where in the JSON tree.
+
+    If a dev branch is active (via 'branch use'), configs from that branch
+    are searched. Use --branch to override.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+
+    # --branch requires exactly one --project
+    if branch is not None and (not project or len(project) != 1):
+        formatter.error(
+            message="--branch requires exactly one --project (branch ID is per-project)",
+            error_code="INVALID_ARGUMENT",
+        )
+        raise typer.Exit(code=2)
+
+    # Resolve active branch (only for single-project queries)
+    effective_branch: int | None = branch
+    if branch is None and project and len(project) == 1:
+        _, effective_branch = resolve_branch(config_store, formatter, project[0], None)
 
     # Validate component_type
     if component_type and component_type not in VALID_COMPONENT_TYPES:
@@ -202,6 +270,7 @@ def config_search(
             component_id=component_id,
             ignore_case=ignore_case,
             use_regex=use_regex,
+            branch_id=effective_branch,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")

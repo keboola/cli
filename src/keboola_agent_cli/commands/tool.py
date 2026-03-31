@@ -13,7 +13,13 @@ import typer
 from ..config_store import ConfigStore
 from ..errors import ConfigError
 from ..output import OutputFormatter, format_tool_result, format_tools_table
-from ._helpers import emit_project_warnings, get_formatter, get_service
+from ._helpers import (
+    emit_project_warnings,
+    get_formatter,
+    get_service,
+    resolve_branch,
+    validate_branch_requires_project,
+)
 
 tool_app = typer.Typer(help="MCP tools - interact with Keboola via MCP server")
 
@@ -42,83 +48,15 @@ def _read_input(value: str, formatter: OutputFormatter) -> str:
     return value
 
 
-def _validate_branch_requires_project(
-    formatter: OutputFormatter,
-    branch: int | None,
-    project: str | None,
-) -> None:
-    """Validate that --branch is always accompanied by --project.
-
-    Raises:
-        typer.Exit: With code 2 if branch is set but project is not.
-    """
-    if branch is not None and not project:
-        formatter.error(
-            message="--branch requires --project (branch ID is per-project)",
-            error_code="INVALID_ARGUMENT",
-        )
-        raise typer.Exit(code=2) from None
-
-
-def _resolve_branch(
+def _resolve_branch_str(
     config_store: ConfigStore,
     formatter: OutputFormatter,
     project: str | None,
     branch: int | None,
 ) -> tuple[str | None, str | None]:
-    """Resolve the effective branch and project for tool commands.
-
-    Resolution order:
-    1. Explicit --branch always wins (no change)
-    2. If no --branch, check active_branch_id from config for the resolved project
-    3. If active branch found, use it and print info message in human mode
-
-    When an active branch is resolved from config, --project is also set
-    to the project alias (branch is per-project).
-
-    Args:
-        config_store: Config store for looking up project configs.
-        formatter: Output formatter for info messages.
-        project: Explicit --project alias or None.
-        branch: Explicit --branch integer or None.
-
-    Returns:
-        Tuple of (effective_project, effective_branch_as_str).
-    """
-    if branch is not None:
-        return project, str(branch)
-
-    if project is not None:
-        # Specific project requested - check its active branch
-        proj_config = config_store.get_project(project)
-        if proj_config and proj_config.active_branch_id is not None:
-            branch_id_str = str(proj_config.active_branch_id)
-            if not formatter.json_mode:
-                formatter.err_console.print(
-                    f"[bold blue]Info:[/bold blue] Using active branch "
-                    f"(ID: {proj_config.active_branch_id}) for project '{project}'"
-                )
-            return project, branch_id_str
-    else:
-        # No project specified - check all projects for an active branch.
-        # If exactly one project has an active branch, use it to avoid ambiguity.
-        config = config_store.load()
-        active_projects = [
-            (alias, proj)
-            for alias, proj in config.projects.items()
-            if proj.active_branch_id is not None
-        ]
-        if len(active_projects) == 1:
-            alias, proj = active_projects[0]
-            branch_id_str = str(proj.active_branch_id)
-            if not formatter.json_mode:
-                formatter.err_console.print(
-                    f"[bold blue]Info:[/bold blue] Using active branch "
-                    f"(ID: {proj.active_branch_id}) for project '{alias}'"
-                )
-            return alias, branch_id_str
-
-    return project, None
+    """Resolve branch and return branch_id as string (for MCP service compatibility)."""
+    proj, branch_id = resolve_branch(config_store, formatter, project, branch)
+    return proj, str(branch_id) if branch_id is not None else None
 
 
 @tool_app.command("list")
@@ -140,10 +78,10 @@ def tool_list(
     service = get_service(ctx, "mcp_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
-    _validate_branch_requires_project(formatter, branch, project)
+    validate_branch_requires_project(formatter, branch, project)
 
     # Auto-resolve active branch from config
-    project, branch_str = _resolve_branch(config_store, formatter, project, branch)
+    project, branch_str = _resolve_branch_str(config_store, formatter, project, branch)
 
     if branch_str and not project:
         formatter.error(
@@ -202,10 +140,10 @@ def tool_call(
     service = get_service(ctx, "mcp_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
-    _validate_branch_requires_project(formatter, branch, project)
+    validate_branch_requires_project(formatter, branch, project)
 
     # Auto-resolve active branch from config
-    project, branch_str = _resolve_branch(config_store, formatter, project, branch)
+    project, branch_str = _resolve_branch_str(config_store, formatter, project, branch)
 
     if branch_str and not project:
         formatter.error(
