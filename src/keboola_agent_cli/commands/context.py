@@ -71,11 +71,11 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Configuration Browsing
 
-  kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID]
-    List configs from one/many/all projects. --project repeatable.
+  kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID]
+    List configs from one/many/all projects. --project repeatable. Branch-aware.
 
-  kbagent config detail --project NAME --component-id ID --config-id ID
-    Full config detail including parameters and rows.
+  kbagent config detail --project NAME --component-id ID --config-id ID [--branch ID]
+    Full config detail including parameters and rows. Branch-aware.
 
   kbagent config update --project NAME --component-id ID --config-id ID [--name N] [--description D] [--branch ID]
     Update config name/description. Targets active dev branch if set.
@@ -86,8 +86,8 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR]
     Generate boilerplate config from component schema. Use --output-dir to write files.
 
-  kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [-i] [-r]
-    Search config bodies for string/regex. Reports match location in JSON tree.
+  kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [-i] [-r] [--branch ID]
+    Search config bodies for string/regex. Reports match location in JSON tree. Branch-aware.
 
 ### Job History
 

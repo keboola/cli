@@ -18,9 +18,9 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `component detail --component-id ID [--project NAME]` -- show component schema, docs URL, examples
 
 ## Configuration Browsing
-- `config list [--project NAME] [--component-type TYPE] [--component-id ID]` -- list configs across projects
-- `config detail --project NAME --component-id ID --config-id ID` -- full config with parameters and rows
-- `config search --query PATTERN [--project NAME] [-i] [-r]` -- search config bodies for string/regex
+- `config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID]` -- list configs across projects (branch-aware)
+- `config detail --project NAME --component-id ID --config-id ID [--branch ID]` -- full config with parameters and rows (branch-aware)
+- `config search --query PATTERN [--project NAME] [-i] [-r] [--branch ID]` -- search config bodies for string/regex (branch-aware)
 - `config update --project NAME --component-id ID --config-id ID [--name N] [--description D]` -- update name/description
 - `config delete --project NAME --component-id ID --config-id ID [--branch ID]` -- delete a configuration
 - `config new --component-id ID [--project NAME] [--name NAME] [--output-dir DIR]` -- scaffold new config from component schema

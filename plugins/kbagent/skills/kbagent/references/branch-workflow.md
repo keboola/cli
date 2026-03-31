@@ -38,4 +38,5 @@ kbagent --json branch merge --project ALIAS
 - **Merge is manual**: `branch merge` returns a URL for the Keboola UI. It does NOT merge via API. This is intentional for safe review.
 - **Active branch persistence**: stored in kbagent config. Survives between sessions.
 - **MCP tools respect active branch**: tool calls automatically use the active branch without extra flags.
+- **Config commands respect active branch**: `config list`, `config detail`, and `config search` auto-scope to the active branch. Use `--branch ID` to override.
 - **Workspaces respect active branch**: `workspace create` and `workspace delete` operate in the active branch context.

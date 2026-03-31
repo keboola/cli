@@ -220,9 +220,9 @@ kbagent project remove --project NAME
 kbagent project edit --project NAME [--url URL] [--token TOKEN]
 kbagent project status [--project NAME]
 
-kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID]
-kbagent config detail --project NAME --component-id ID --config-id ID
-kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [--ignore-case] [--regex]
+kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID]
+kbagent config detail --project NAME --component-id ID --config-id ID [--branch ID]
+kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [--ignore-case] [--regex] [--branch ID]
 
 kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
 kbagent job detail --project NAME --job-id ID
