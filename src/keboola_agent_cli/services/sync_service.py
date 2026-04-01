@@ -8,6 +8,7 @@ import copy
 import hashlib
 import json
 import logging
+import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -482,6 +483,24 @@ class SyncService(BaseService):
                         "path": old_cfg.path,
                     }
                 )
+
+        # Delete orphaned directories for removed configurations
+        if not dry_run:
+            for detail in pull_details:
+                if detail["action"] == "removed" and detail.get("path"):
+                    orphan_dir = branch_dir / detail["path"]
+                    if orphan_dir.exists() and orphan_dir.is_dir():
+                        shutil.rmtree(orphan_dir)
+                        logger.info("Removed orphaned directory: %s", orphan_dir)
+                        # Clean up empty parent dirs up to (but not including) branch_dir
+                        parent = orphan_dir.parent
+                        while parent != branch_dir and parent.exists():
+                            if not any(parent.iterdir()):
+                                parent.rmdir()
+                                logger.info("Removed empty parent directory: %s", parent)
+                                parent = parent.parent
+                            else:
+                                break
 
         # -- Storage metadata (read-only, not tracked in manifest) --
         storage_stats: dict[str, int] = {"buckets": 0, "tables": 0, "samples": 0}

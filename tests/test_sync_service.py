@@ -494,6 +494,126 @@ class TestPull:
         manifest = load_manifest(project_root)
         assert manifest.configurations == []
 
+    def test_pull_removes_orphaned_directories(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """pull deletes directories for configs removed from remote (issue #90)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_project(tmp_config_dir, project_root)
+
+        # First pull: download 2 configs (extractor + transformation)
+        pull_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS,
+        )
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+        result = svc.pull(alias="prod", project_root=project_root)
+        assert result["configs_pulled"] == 2
+
+        # Verify both config dirs exist on disk
+        config_dirs = list(project_root.rglob(CONFIG_FILENAME))
+        snowflake_dirs = [d for d in config_dirs if "keboola.snowflake-transformation" in str(d)]
+        assert len(snowflake_dirs) == 1
+        orphan_dir = snowflake_dirs[0].parent
+        assert orphan_dir.exists()
+
+        # Second pull: only the extractor remains (transformation deleted remotely)
+        pull_client2 = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS_NO_ROWS,
+        )
+        svc2 = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client2,
+        )
+        result2 = svc2.pull(alias="prod", project_root=project_root, force=True)
+
+        # Verify transformation was detected as removed
+        removed = [d for d in result2["details"] if d["action"] == "removed"]
+        assert len(removed) == 1
+        assert removed[0]["component_id"] == "keboola.snowflake-transformation"
+
+        # Verify the orphan directory no longer exists on disk
+        assert not orphan_dir.exists(), "Orphaned config directory should be deleted"
+
+        # Verify the manifest no longer has the removed config
+        manifest = load_manifest(project_root)
+        assert len(manifest.configurations) == 1
+        assert manifest.configurations[0].component_id == "keboola.ex-http"
+
+    def test_pull_removes_empty_parent_directories(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """pull cleans up empty component-type dirs after removing last config."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_project(tmp_config_dir, project_root)
+
+        # Pull only the snowflake transformation
+        snowflake_only = [
+            c for c in SAMPLE_COMPONENTS if c["id"] == "keboola.snowflake-transformation"
+        ]
+        pull_client = _make_sync_mock_client(components_response=snowflake_only)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+        svc.pull(alias="prod", project_root=project_root)
+
+        # Verify component dir exists
+        component_dir = (
+            project_root / "main" / "transformation" / "keboola.snowflake-transformation"
+        )
+        assert component_dir.exists()
+
+        # Second pull: no components at all (everything deleted)
+        pull_client2 = _make_sync_mock_client(components_response=[])
+        svc2 = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client2,
+        )
+        svc2.pull(alias="prod", project_root=project_root, force=True)
+
+        # The component dir AND the type dir should be cleaned up
+        assert not component_dir.exists()
+        # Parent type dir should also be removed if empty
+        type_dir = component_dir.parent
+        assert not type_dir.exists(), "Empty component-type directory should be cleaned up"
+
+    def test_pull_dry_run_preserves_directories(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """pull --dry-run reports removed configs but does NOT delete directories."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = self._init_project(tmp_config_dir, project_root)
+
+        # First pull: 2 configs
+        pull_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+        svc.pull(alias="prod", project_root=project_root)
+
+        # Capture the snowflake dir path
+        snowflake_configs = list(project_root.rglob("keboola.snowflake-transformation"))
+        assert len(snowflake_configs) >= 1
+        snowflake_dir = snowflake_configs[0]
+
+        # Dry-run pull with only extractor (transformation gone)
+        pull_client2 = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_NO_ROWS)
+        svc2 = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client2,
+        )
+        result = svc2.pull(alias="prod", project_root=project_root, dry_run=True)
+
+        assert result["status"] == "dry_run"
+        # Directory must still exist after dry-run
+        assert snowflake_dir.exists(), "Dry-run should NOT delete directories"
+
 
 # ===================================================================
 # status tests
