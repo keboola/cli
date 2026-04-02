@@ -1025,3 +1025,248 @@ class TestPullWithNewParams:
         assert result["jobs_written"] == 0
         assert result["storage"]["buckets"] == 0
         assert result["storage"]["tables"] == 0
+
+
+# ===================================================================
+# 8. Per-config job fetching fallback
+# ===================================================================
+
+
+def _make_many_configs(n: int) -> list[dict[str, Any]]:
+    """Generate n components each with 1 config, to simulate a large project."""
+    return [
+        {
+            "id": f"keboola.component-{i}",
+            "type": "extractor",
+            "configurations": [
+                {
+                    "id": f"cfg-{i:04d}",
+                    "name": f"Config {i}",
+                    "description": "",
+                    "configuration": {"parameters": {}},
+                    "rows": [],
+                }
+            ],
+        }
+        for i in range(n)
+    ]
+
+
+class TestFetchJobsPerConfig:
+    """Tests for SyncService._fetch_jobs_per_config() fallback method."""
+
+    def test_returns_grouped_format(self, tmp_config_dir: Path) -> None:
+        """_fetch_jobs_per_config returns data in same format as list_jobs_grouped."""
+        store = setup_single_project(tmp_config_dir)
+        client = MagicMock()
+        # list_jobs returns different results per config
+        client.list_jobs.return_value = [
+            {"id": 1001, "status": "success", "startTime": "2026-03-21T10:00:00Z"},
+        ]
+
+        svc = SyncService(config_store=store, client_factory=lambda u, t: client)
+        result = svc._fetch_jobs_per_config(client, SAMPLE_COMPONENTS_SIMPLE, job_limit=5)
+
+        assert len(result) == 2  # 2 configs in SAMPLE_COMPONENTS_SIMPLE
+        for group in result:
+            assert "group" in group
+            assert "componentId" in group["group"]
+            assert "configId" in group["group"]
+            assert "jobs" in group
+            assert len(group["jobs"]) == 1
+
+    def test_skips_configs_without_jobs(self, tmp_config_dir: Path) -> None:
+        """Configs with no jobs are not included in the result."""
+        store = setup_single_project(tmp_config_dir)
+        client = MagicMock()
+
+        # First config has jobs, second has none
+        call_count = 0
+
+        def _side_effect(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if kwargs.get("component_id") == "keboola.ex-http":
+                return [{"id": 1001, "status": "success"}]
+            return []
+
+        client.list_jobs.side_effect = _side_effect
+
+        svc = SyncService(config_store=store, client_factory=lambda u, t: client)
+        result = svc._fetch_jobs_per_config(client, SAMPLE_COMPONENTS_SIMPLE, job_limit=5)
+
+        assert len(result) == 1
+        assert result[0]["group"]["componentId"] == "keboola.ex-http"
+
+    def test_handles_api_errors_gracefully(self, tmp_config_dir: Path) -> None:
+        """Individual config failures are logged but don't break the whole fetch."""
+        store = setup_single_project(tmp_config_dir)
+        client = MagicMock()
+
+        def _side_effect(**kwargs):
+            if kwargs.get("component_id") == "keboola.ex-http":
+                raise RuntimeError("Connection failed")
+            return [{"id": 2001, "status": "success"}]
+
+        client.list_jobs.side_effect = _side_effect
+
+        svc = SyncService(config_store=store, client_factory=lambda u, t: client)
+        result = svc._fetch_jobs_per_config(client, SAMPLE_COMPONENTS_SIMPLE, job_limit=5)
+
+        # Only the successful config should be in results
+        assert len(result) == 1
+        assert result[0]["group"]["componentId"] == "keboola.snowflake-transformation"
+
+    def test_empty_components(self, tmp_config_dir: Path) -> None:
+        """Empty components list returns empty results."""
+        store = setup_single_project(tmp_config_dir)
+        client = MagicMock()
+
+        svc = SyncService(config_store=store, client_factory=lambda u, t: client)
+        result = svc._fetch_jobs_per_config(client, [], job_limit=5)
+
+        assert result == []
+        client.list_jobs.assert_not_called()
+
+    def test_passes_job_limit_to_client(self, tmp_config_dir: Path) -> None:
+        """The job_limit parameter is forwarded as limit to client.list_jobs."""
+        store = setup_single_project(tmp_config_dir)
+        client = MagicMock()
+        client.list_jobs.return_value = []
+
+        components = [
+            {
+                "id": "keboola.ex-http",
+                "type": "extractor",
+                "configurations": [
+                    {
+                        "id": "cfg-001",
+                        "name": "Test",
+                        "description": "",
+                        "configuration": {},
+                        "rows": [],
+                    }
+                ],
+            }
+        ]
+
+        svc = SyncService(config_store=store, client_factory=lambda u, t: client)
+        svc._fetch_jobs_per_config(client, components, job_limit=10)
+
+        client.list_jobs.assert_called_once_with(
+            component_id="keboola.ex-http",
+            config_id="cfg-001",
+            limit=10,
+        )
+
+
+class TestPullJobsFallback:
+    """Tests for pull() switching to per-config fetching when grouped-jobs limit is insufficient."""
+
+    def test_uses_grouped_when_limit_sufficient(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """pull() uses grouped-jobs when group_limit >= total configs."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = _init_project(tmp_config_dir, project_root)
+
+        # 2 configs, job_limit=1 -> group_limit=500 >> 2
+        pull_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS_SIMPLE,
+            jobs_grouped_response=SAMPLE_GROUPED_JOBS,
+        )
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+
+        result = svc.pull(alias="prod", project_root=project_root, job_limit=1)
+
+        pull_client.list_jobs_grouped.assert_called_once()
+        pull_client.list_jobs.assert_not_called()
+        assert result["jobs_written"] == 2
+
+    def test_falls_back_to_per_config_when_limit_insufficient(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """pull() falls back to per-config fetching when group_limit < total configs."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = _init_project(tmp_config_dir, project_root)
+
+        # 200 configs, job_limit=10 -> group_limit=50 < 200 -> fallback
+        many_components = _make_many_configs(200)
+        pull_client = _make_sync_mock_client(
+            components_response=many_components,
+        )
+        pull_client.list_jobs.return_value = [
+            {
+                "id": 9001,
+                "status": "success",
+                "startTime": "2026-03-21T10:00:00Z",
+                "endTime": "2026-03-21T10:05:00Z",
+                "durationSeconds": 300,
+                "mode": "run",
+            },
+        ]
+
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+
+        result = svc.pull(alias="prod", project_root=project_root, job_limit=10)
+
+        # Should NOT use grouped-jobs, SHOULD use list_jobs per config
+        pull_client.list_jobs_grouped.assert_not_called()
+        assert pull_client.list_jobs.call_count == 200
+        assert result["jobs_written"] == 200
+
+    def test_boundary_exact_limit(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """pull() uses grouped-jobs when group_limit == total configs (boundary case)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = _init_project(tmp_config_dir, project_root)
+
+        # 100 configs, job_limit=5 -> group_limit=100 == 100 -> grouped path
+        components_100 = _make_many_configs(100)
+        pull_client = _make_sync_mock_client(
+            components_response=components_100,
+            jobs_grouped_response=[],
+        )
+
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+
+        svc.pull(alias="prod", project_root=project_root, job_limit=5)
+
+        pull_client.list_jobs_grouped.assert_called_once()
+        pull_client.list_jobs.assert_not_called()
+
+    def test_boundary_one_over_limit(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """pull() falls back when group_limit < total configs by just 1."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = _init_project(tmp_config_dir, project_root)
+
+        # 101 configs, job_limit=5 -> group_limit=100 < 101 -> fallback
+        components_101 = _make_many_configs(101)
+        pull_client = _make_sync_mock_client(
+            components_response=components_101,
+        )
+        pull_client.list_jobs.return_value = []
+
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+
+        svc.pull(alias="prod", project_root=project_root, job_limit=5)
+
+        pull_client.list_jobs_grouped.assert_not_called()
+        assert pull_client.list_jobs.call_count == 101

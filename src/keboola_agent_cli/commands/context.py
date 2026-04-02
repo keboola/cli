@@ -200,8 +200,10 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent sync init --project ALIAS [--directory DIR] [--git-branching]
     Initialize sync working directory. --git-branching enables git-to-Keboola branch mapping.
 
-  kbagent sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs]
+  kbagent sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N]
     Download configs as local files. Idempotent, protects local modifications.
+    --job-limit controls max recent jobs per config (default 5). For large projects,
+    automatically falls back to per-config job fetching to ensure all configs get job history.
 
   kbagent sync status [--directory DIR]
     Show local changes since last pull (SHA256-based).

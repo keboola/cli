@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import shutil
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -243,12 +244,27 @@ class SyncService(BaseService):
                 try:
                     # API constraint: jobsPerGroup * limit <= 500
                     group_limit = min(500 // max(job_limit, 1), 500)
-                    jobs_grouped = client.list_jobs_grouped(
-                        jobs_per_group=job_limit,
-                        limit=group_limit,
-                    )
+                    total_configs = sum(len(comp.get("configurations", [])) for comp in components)
+
+                    if group_limit >= total_configs:
+                        # Fast path: one grouped API call covers all configs
+                        jobs_grouped = client.list_jobs_grouped(
+                            jobs_per_group=job_limit,
+                            limit=group_limit,
+                        )
+                    else:
+                        # Slow path: too many configs for grouped-jobs limit,
+                        # fetch per-config via /search/jobs in parallel
+                        logger.info(
+                            "Project has %d configs but grouped-jobs limit is %d "
+                            "(job_limit=%d); falling back to per-config fetching",
+                            total_configs,
+                            group_limit,
+                            job_limit,
+                        )
+                        jobs_grouped = self._fetch_jobs_per_config(client, components, job_limit)
                 except Exception:
-                    logger.warning("Failed to fetch grouped jobs", exc_info=True)
+                    logger.warning("Failed to fetch jobs", exc_info=True)
 
             if with_samples and tables_data:
                 samples_data = self._fetch_samples(client, tables_data, sample_limit, max_samples)
@@ -1712,6 +1728,61 @@ class SyncService(BaseService):
             "tables": tables_written,
             "samples": samples_written,
         }
+
+    def _fetch_jobs_per_config(
+        self,
+        client: Any,
+        components: list[dict[str, Any]],
+        job_limit: int,
+    ) -> list[dict[str, Any]]:
+        """Fetch jobs per config via /search/jobs in parallel.
+
+        Used as fallback when the grouped-jobs API cannot return all configs
+        in a single call (jobsPerGroup * limit <= 500 constraint).
+
+        Returns data in the same format as list_jobs_grouped() so that
+        _write_per_config_jobs() works unchanged.
+        """
+        config_pairs: list[tuple[str, str]] = []
+        for comp in components:
+            comp_id = comp.get("id", "")
+            for cfg in comp.get("configurations", []):
+                cfg_id = str(cfg.get("id", ""))
+                if comp_id and cfg_id:
+                    config_pairs.append((comp_id, cfg_id))
+
+        if not config_pairs:
+            return []
+
+        results: list[dict[str, Any]] = []
+        lock = threading.Lock()
+        max_workers = min(len(config_pairs), self._resolve_max_workers())
+
+        def _fetch_one(pair: tuple[str, str]) -> None:
+            comp_id, cfg_id = pair
+            try:
+                jobs = client.list_jobs(
+                    component_id=comp_id,
+                    config_id=cfg_id,
+                    limit=job_limit,
+                )
+                if jobs:
+                    with lock:
+                        results.append(
+                            {
+                                "group": {"componentId": comp_id, "configId": cfg_id},
+                                "jobs": jobs,
+                            }
+                        )
+            except Exception:
+                logger.debug("Failed to fetch jobs for %s/%s", comp_id, cfg_id, exc_info=True)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_fetch_one, pair) for pair in config_pairs]
+            for future in as_completed(futures):
+                future.result()  # propagate unexpected errors
+
+        return results
 
     def _write_per_config_jobs(
         self,
