@@ -14,6 +14,7 @@ from ..config_store import ConfigStore
 from ..errors import ConfigError
 from ..output import OutputFormatter, format_tool_result, format_tools_table
 from ._helpers import (
+    check_cli_permission,
     emit_project_warnings,
     get_formatter,
     get_service,
@@ -22,6 +23,11 @@ from ._helpers import (
 )
 
 tool_app = typer.Typer(help="MCP tools - interact with Keboola via MCP server")
+
+
+@tool_app.callback(invoke_without_command=True)
+def _tool_permission_check(ctx: typer.Context) -> None:
+    check_cli_permission(ctx, "tool")
 
 
 def _read_input(value: str, formatter: OutputFormatter) -> str:

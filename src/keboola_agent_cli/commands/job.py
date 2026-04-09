@@ -9,9 +9,20 @@ import typer
 from ..constants import DEFAULT_JOB_LIMIT, MAX_JOB_LIMIT, VALID_STATUSES
 from ..errors import ConfigError, KeboolaApiError
 from ..output import format_job_detail, format_jobs_table
-from ._helpers import emit_project_warnings, get_formatter, get_service, map_error_to_exit_code
+from ._helpers import (
+    check_cli_permission,
+    emit_project_warnings,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+)
 
 job_app = typer.Typer(help="Browse job history")
+
+
+@job_app.callback(invoke_without_command=True)
+def _job_permission_check(ctx: typer.Context) -> None:
+    check_cli_permission(ctx, "job")
 
 
 @job_app.command("list")

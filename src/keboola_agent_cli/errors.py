@@ -51,6 +51,17 @@ class ConfigError(Exception):
         self.message = message
 
 
+class PermissionDeniedError(Exception):
+    """Raised when an operation is blocked by the permission policy."""
+
+    def __init__(self, operation: str, message: str = "") -> None:
+        if not message:
+            message = f"Operation '{operation}' is blocked by the active permission policy."
+        super().__init__(message)
+        self.operation = operation
+        self.message = message
+
+
 _ERROR_CODE_TO_TYPE: dict[str, str] = {
     "INVALID_TOKEN": "authentication",
     "TIMEOUT": "network",
@@ -59,6 +70,7 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     "NOT_FOUND": "not_found",
     "CONFIG_ERROR": "configuration",
     "VALIDATION_ERROR": "validation",
+    "PERMISSION_DENIED": "authorization",
 }
 
 

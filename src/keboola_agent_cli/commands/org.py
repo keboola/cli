@@ -13,9 +13,14 @@ from rich.table import Table
 
 from ..constants import DEFAULT_TOKEN_DESCRIPTION, ENV_KBC_MANAGE_API_TOKEN, ENV_KBC_STORAGE_API_URL
 from ..errors import KeboolaApiError
-from ._helpers import get_formatter, get_service, map_error_to_exit_code
+from ._helpers import check_cli_permission, get_formatter, get_service, map_error_to_exit_code
 
 org_app = typer.Typer(help="Organization management")
+
+
+@org_app.callback(invoke_without_command=True)
+def _org_permission_check(ctx: typer.Context) -> None:
+    check_cli_permission(ctx, "org")
 
 
 def _resolve_manage_token() -> str:

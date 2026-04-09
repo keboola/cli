@@ -6,7 +6,7 @@ import typer
 
 from ..config_store import ConfigStore
 from ..constants import LOCAL_CONFIG_DIR_NAME
-from ..models import AppConfig
+from ..models import AppConfig, PermissionPolicy
 from ._helpers import get_formatter, get_service
 
 
@@ -16,6 +16,11 @@ def init_command(
         False,
         "--from-global",
         help="Copy projects from the global config into the new local workspace.",
+    ),
+    read_only: bool = typer.Option(
+        False,
+        "--read-only",
+        help="Set read-only permission policy (blocks all write CLI commands and MCP tools).",
     ),
 ) -> None:
     """Initialize a local .kbagent/ workspace in the current directory."""
@@ -46,6 +51,12 @@ def init_command(
             raise typer.Exit(code=5)
         config = global_store.load()
 
+    if read_only:
+        config.permissions = PermissionPolicy(
+            mode="allow",
+            deny=["cli:write", "tool:write"],
+        )
+
     local_store = ConfigStore(config_dir=local_dir, source="local")
     local_store.save(config)
 
@@ -55,6 +66,8 @@ def init_command(
     message = f"Initialized local workspace at {local_dir}"
     if from_global and project_count > 0:
         message += f" (copied {project_count} project(s) from global config)"
+    if read_only:
+        message += " [read-only mode]"
 
     formatter.output(
         {
@@ -62,6 +75,7 @@ def init_command(
             "path": str(local_dir),
             "created": True,
             "projects_copied": project_count if from_global else 0,
+            "read_only": read_only,
         }
     )
 

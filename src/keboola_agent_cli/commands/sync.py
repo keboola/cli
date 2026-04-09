@@ -10,9 +10,15 @@ from typing import Any
 import typer
 
 from ..errors import ConfigError, KeboolaApiError
-from ._helpers import get_formatter, get_service, map_error_to_exit_code
+from ._helpers import check_cli_permission, get_formatter, get_service, map_error_to_exit_code
 
 sync_app = typer.Typer(help="(BETA) Sync project configurations with local filesystem")
+
+
+@sync_app.callback(invoke_without_command=True)
+def _sync_permission_check(ctx: typer.Context) -> None:
+    check_cli_permission(ctx, "sync")
+
 
 KEBOOLA_DIR = ".keboola"
 MANIFEST_FILE = "manifest.json"

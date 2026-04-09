@@ -10,9 +10,20 @@ import typer
 
 from ..errors import ConfigError, KeboolaApiError
 from ..output import format_query_results, format_workspaces_table
-from ._helpers import emit_project_warnings, get_formatter, get_service, map_error_to_exit_code
+from ._helpers import (
+    check_cli_permission,
+    emit_project_warnings,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+)
 
 workspace_app = typer.Typer(help="Workspace lifecycle for SQL debugging")
+
+
+@workspace_app.callback(invoke_without_command=True)
+def _workspace_permission_check(ctx: typer.Context) -> None:
+    check_cli_permission(ctx, "workspace")
 
 
 @workspace_app.command("create")

@@ -11,9 +11,20 @@ from rich.table import Table
 
 from ..constants import VALID_COMPONENT_TYPES
 from ..errors import ConfigError, KeboolaApiError
-from ._helpers import emit_project_warnings, get_formatter, get_service, map_error_to_exit_code
+from ._helpers import (
+    check_cli_permission,
+    emit_project_warnings,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+)
 
 component_app = typer.Typer(help="Discover and inspect Keboola components")
+
+
+@component_app.callback(invoke_without_command=True)
+def _component_permission_check(ctx: typer.Context) -> None:
+    check_cli_permission(ctx, "component")
 
 
 def _format_components_table(console: Console, data: dict) -> None:

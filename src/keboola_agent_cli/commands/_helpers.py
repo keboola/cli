@@ -12,7 +12,8 @@ from typing import Any
 import typer
 
 from ..config_store import ConfigStore
-from ..errors import KeboolaApiError
+from ..constants import EXIT_PERMISSION_DENIED
+from ..errors import KeboolaApiError, PermissionDeniedError
 from ..output import OutputFormatter
 
 
@@ -51,6 +52,54 @@ def emit_project_warnings(formatter: OutputFormatter, result: dict) -> None:
         alias = err.get("project_alias", "unknown")
         message = err.get("message", "Unknown error")
         formatter.warning(f"Project '{alias}': {message}")
+
+
+def _is_help_request(ctx: typer.Context) -> bool:
+    """Check if the current invocation is a --help request.
+
+    The group callback fires before Click parses subcommand arguments,
+    so --help for a subcommand (e.g. 'branch delete --help') is still
+    in sys.argv at this point. We allow help through even for blocked commands.
+
+    Also respects Click's resilient_parsing mode (tab completions).
+    """
+    import sys
+
+    if "--help" in sys.argv or "-h" in sys.argv:
+        return True
+    return bool(ctx.resilient_parsing)
+
+
+def check_cli_permission(ctx: typer.Context, group_name: str) -> None:
+    """Check CLI command permissions using the active policy.
+
+    Called from sub-app callbacks. Constructs operation name as
+    '{group_name}.{subcommand}' and checks against the permission engine.
+    Always allows --help through so users can read docs for blocked commands.
+
+    Args:
+        ctx: Typer context (must have permission_engine in obj).
+        group_name: The sub-app name (e.g., 'branch', 'config').
+    """
+    if _is_help_request(ctx):
+        return
+
+    engine = ctx.obj.get("permission_engine")
+    if engine is None or not engine.active:
+        return
+
+    subcommand = ctx.invoked_subcommand
+    if subcommand is None:
+        return
+
+    operation = f"{group_name}.{subcommand}"
+
+    try:
+        engine.check_or_raise(operation)
+    except PermissionDeniedError as exc:
+        formatter = get_formatter(ctx)
+        formatter.error(message=exc.message, error_code="PERMISSION_DENIED")
+        raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
 
 
 def validate_branch_requires_project(

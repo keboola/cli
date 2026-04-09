@@ -8,9 +8,14 @@ import typer
 
 from ..errors import ConfigError
 from ..output import format_lineage_table
-from ._helpers import emit_project_warnings, get_formatter, get_service
+from ._helpers import check_cli_permission, emit_project_warnings, get_formatter, get_service
 
 lineage_app = typer.Typer(help="Analyze cross-project data lineage via bucket sharing")
+
+
+@lineage_app.callback(invoke_without_command=True)
+def _lineage_permission_check(ctx: typer.Context) -> None:
+    check_cli_permission(ctx, "lineage")
 
 
 @lineage_app.command("show")

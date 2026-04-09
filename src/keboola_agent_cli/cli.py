@@ -14,6 +14,7 @@ from .commands.init import init_command
 from .commands.job import job_app
 from .commands.lineage import lineage_app
 from .commands.org import org_app
+from .commands.permissions import permissions_app
 from .commands.project import project_app
 from .commands.repl import repl_command
 from .commands.sharing import sharing_app
@@ -23,7 +24,10 @@ from .commands.tool import tool_app
 from .commands.version import update_command, version_command
 from .commands.workspace import workspace_app
 from .config_store import ConfigStore, resolve_config_dir
+from .constants import EXIT_PERMISSION_DENIED
+from .errors import PermissionDeniedError
 from .output import OutputFormatter
+from .permissions import PermissionEngine
 from .services.branch_service import BranchService
 from .services.component_service import ComponentService
 from .services.config_service import ConfigService
@@ -53,6 +57,7 @@ app.command("version", rich_help_panel=_SETUP)(version_command)
 app.command("update", rich_help_panel=_SETUP)(update_command)
 app.command("context", rich_help_panel=_SETUP)(context_command)
 app.command("repl", rich_help_panel=_SETUP)(repl_command)
+app.add_typer(permissions_app, name="permissions", rich_help_panel=_SETUP)
 
 # -- Project Management --
 _PROJ = "Project Management"
@@ -151,9 +156,17 @@ def main(
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
     version_service = VersionService()
 
+    try:
+        config = config_store.load()
+        permission_engine = PermissionEngine(config.permissions)
+    except Exception:
+        # Config may be invalid (e.g. corrupted JSON) -- skip permission check
+        permission_engine = PermissionEngine(None)
+
     ctx.ensure_object(dict)
     ctx.obj["formatter"] = formatter
     ctx.obj["json_output"] = json_output
+    ctx.obj["permission_engine"] = permission_engine
     ctx.obj["verbose"] = verbose
     ctx.obj["no_color"] = effective_no_color
     ctx.obj["config_store"] = config_store
@@ -171,6 +184,16 @@ def main(
     ctx.obj["workspace_service"] = workspace_service
     ctx.obj["doctor_service"] = doctor_service
     ctx.obj["version_service"] = version_service
+
+    # Enforce permissions for top-level commands (sub-app commands use callbacks)
+    _top_level_commands = {"init", "doctor", "version", "update", "context", "repl"}
+    _is_help = "--help" in sys.argv or "-h" in sys.argv
+    if ctx.invoked_subcommand in _top_level_commands and not _is_help:
+        try:
+            permission_engine.check_or_raise(ctx.invoked_subcommand)
+        except PermissionDeniedError as exc:
+            formatter.error(message=exc.message, error_code="PERMISSION_DENIED")
+            raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
 
     # Launch REPL if no subcommand was given (set above)
     if ctx.obj.get("_launch_repl"):

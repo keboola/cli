@@ -33,6 +33,41 @@ class ProjectConfig(BaseModel):
         return v
 
 
+class PermissionPolicy(BaseModel):
+    """Firewall-style permission policy for CLI and MCP operations.
+
+    Controls which operations are allowed/blocked:
+    - mode='allow' (default-allow): everything allowed unless in deny list
+    - mode='deny' (default-deny): everything denied unless in allow list
+
+    Patterns support exact names, globs, and categories:
+    - Exact: 'branch.delete', 'tool:create_config'
+    - Glob: 'sync.*', 'tool:create_*'
+    - Category: 'cli:write', 'cli:read', 'tool:write', 'tool:read'
+    """
+
+    mode: str = Field(
+        default="allow",
+        description="Base mode: 'allow' (default-allow) or 'deny' (default-deny)",
+    )
+    allow: list[str] = Field(
+        default_factory=list,
+        description="Allowed operation patterns (used when mode='deny')",
+    )
+    deny: list[str] = Field(
+        default_factory=list,
+        description="Denied operation patterns (used when mode='allow')",
+    )
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v: str) -> str:
+        """Enforce valid mode values."""
+        if v not in ("allow", "deny"):
+            raise ValueError(f"Permission mode must be 'allow' or 'deny', got: {v!r}")
+        return v
+
+
 class AppConfig(BaseModel):
     """Top-level application configuration persisted to config.json."""
 
@@ -42,6 +77,10 @@ class AppConfig(BaseModel):
         default=10,
         le=100,
         description="Max concurrent threads for multi-project operations (env: KBAGENT_MAX_PARALLEL_WORKERS)",
+    )
+    permissions: PermissionPolicy | None = Field(
+        default=None,
+        description="Firewall-style permission policy (None = no restrictions)",
     )
     projects: dict[str, ProjectConfig] = Field(
         default_factory=dict,

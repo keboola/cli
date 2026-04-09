@@ -13,9 +13,14 @@ from rich.table import Table
 
 from ..constants import DEFAULT_STACK_URL, ENV_KBC_STORAGE_API_URL, ENV_KBC_TOKEN
 from ..errors import ConfigError, KeboolaApiError
-from ._helpers import get_formatter, get_service, map_error_to_exit_code
+from ._helpers import check_cli_permission, get_formatter, get_service, map_error_to_exit_code
 
 project_app = typer.Typer(help="Manage connected Keboola projects")
+
+
+@project_app.callback(invoke_without_command=True)
+def _project_permission_check(ctx: typer.Context) -> None:
+    check_cli_permission(ctx, "project")
 
 
 def _format_project_table(console: Console, projects: list[dict[str, Any]]) -> None:

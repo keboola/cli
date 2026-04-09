@@ -35,6 +35,7 @@ from ..constants import (
 )
 from ..errors import ConfigError
 from ..models import ProjectConfig
+from ..permissions import PermissionEngine
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
@@ -983,6 +984,18 @@ class McpService(BaseService):
 
         return missing, known_tools
 
+    def _check_tool_permission(self, tool_name: str) -> None:
+        """Check if the MCP tool is allowed by the active permission policy.
+
+        Raises:
+            PermissionDeniedError: If the tool is blocked by the policy.
+        """
+        config = self._config_store.load()
+        if config.permissions is None:
+            return
+        engine = PermissionEngine(config.permissions)
+        engine.check_or_raise(f"tool:{tool_name}")
+
     def call_tool(
         self,
         tool_name: str,
@@ -1017,6 +1030,8 @@ class McpService(BaseService):
         Raises:
             ConfigError: If tool_name is not found in the available tool list.
         """
+        self._check_tool_permission(tool_name)
+
         if tool_input is None:
             tool_input = {}
 
@@ -1073,6 +1088,8 @@ class McpService(BaseService):
         Raises:
             ConfigError: If tool_name not found or required params missing.
         """
+        self._check_tool_permission(tool_name)
+
         if tool_input is None:
             tool_input = {}
 

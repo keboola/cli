@@ -71,6 +71,7 @@ kbagent branch    list | create | use | reset | delete | merge
 kbagent workspace create | list | detail | delete | password | load | query | from-transformation
 kbagent tool      list | call
 kbagent sync      init | pull | status | diff | push | branch-link | branch-unlink | branch-status
+kbagent permissions list | show | set | reset | check
 kbagent           init | context | doctor | version | update
 ```
 
@@ -87,6 +88,52 @@ Tokens are always masked in output.
 For per-directory isolation (e.g. separate clients), run `kbagent init` to create a local `.kbagent/` workspace. Resolution: `--config-dir` flag > `KBAGENT_CONFIG_DIR` env > `.kbagent/` in CWD/parents > global default.
 
 Run `kbagent doctor` to verify your setup.
+
+## Permissions (AI agent sandboxing)
+
+Control which commands and MCP tools your AI agent can use -- like a firewall with allow/deny rules.
+
+**Quick start -- read-only mode:**
+
+```bash
+# New workspace: read-only from the start
+kbagent init --from-global --read-only
+
+# Existing setup: switch to read-only
+kbagent permissions set --mode allow --deny "cli:write" --deny "tool:write"
+```
+
+The agent can browse configs, list jobs, trace lineage, and read MCP tools -- but cannot create branches, delete workspaces, modify configs, or call write MCP tools. Any blocked command returns exit code 6 with a clear error message.
+
+**How it works:**
+
+| Mode | Meaning |
+|------|---------|
+| `--mode allow --deny "..."` | Everything allowed except denied patterns |
+| `--mode deny --allow "..."` | Everything blocked except allowed patterns |
+
+**Pattern examples:**
+
+| Pattern | Matches |
+|---------|---------|
+| `cli:write` | All write/delete/admin CLI commands |
+| `cli:read` | All read-only CLI commands |
+| `tool:write` | All MCP write tools (create_\*, update_\*, delete_\*) |
+| `tool:read` | All MCP read tools (get_\*, list_\*) |
+| `branch.delete` | Exact command |
+| `sync.*` | All sync subcommands |
+| `tool:create_*` | MCP tools matching glob |
+
+**Management commands:**
+
+```bash
+kbagent permissions list             # See all operations with risk categories
+kbagent permissions show             # Show current policy
+kbagent permissions check "branch.delete"  # Test if operation is allowed (exit 0 or 6)
+kbagent permissions reset            # Remove restrictions (requires confirmation code)
+```
+
+Changing or removing the policy requires typing a random confirmation code -- an AI agent cannot bypass this programmatically.
 
 ## Development
 

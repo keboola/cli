@@ -17,6 +17,7 @@ from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME, VALID_COMPONENT_TYP
 from ..errors import ConfigError, KeboolaApiError
 from ..output import format_config_detail, format_configs_table, format_search_results
 from ._helpers import (
+    check_cli_permission,
     emit_project_warnings,
     get_formatter,
     get_service,
@@ -56,6 +57,11 @@ def _detect_branch_prefix(output_dir: Path) -> str | None:
 
 
 config_app = typer.Typer(help="Browse and inspect configurations")
+
+
+@config_app.callback(invoke_without_command=True)
+def _config_permission_check(ctx: typer.Context) -> None:
+    check_cli_permission(ctx, "config")
 
 
 @config_app.command("list")

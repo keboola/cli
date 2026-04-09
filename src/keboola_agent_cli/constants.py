@@ -83,6 +83,9 @@ KBAGENT_INSTALL_SOURCE: str = "git+https://github.com/padak/keboola_agent_cli"
 AI_SERVICE_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 SECRET_PLACEHOLDER: str = "<YOUR_SECRET>"
 
+# --- Permission Exit Code ---
+EXIT_PERMISSION_DENIED: int = 6
+
 # --- Domain Validation Constants ---
 VALID_COMPONENT_TYPES: list[str] = ["extractor", "writer", "transformation", "application"]
 VALID_STATUSES: list[str] = ["processing", "terminated", "cancelled", "success", "error"]

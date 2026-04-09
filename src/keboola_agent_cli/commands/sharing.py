@@ -9,7 +9,13 @@ Enable data sharing between Keboola projects:
 import typer
 
 from ..errors import ConfigError, KeboolaApiError
-from ._helpers import emit_project_warnings, get_formatter, get_service, map_error_to_exit_code
+from ._helpers import (
+    check_cli_permission,
+    emit_project_warnings,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+)
 
 sharing_app = typer.Typer(
     help=(
@@ -19,6 +25,11 @@ sharing_app = typer.Typer(
         "list/link/unlink work with the regular project token."
     )
 )
+
+
+@sharing_app.callback(invoke_without_command=True)
+def _sharing_permission_check(ctx: typer.Context) -> None:
+    check_cli_permission(ctx, "sharing")
 
 
 @sharing_app.command("list")

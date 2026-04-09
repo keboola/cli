@@ -8,9 +8,20 @@ import typer
 
 from ..errors import ConfigError, KeboolaApiError
 from ..output import format_branches_table
-from ._helpers import emit_project_warnings, get_formatter, get_service, map_error_to_exit_code
+from ._helpers import (
+    check_cli_permission,
+    emit_project_warnings,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+)
 
 branch_app = typer.Typer(help="Manage development branches")
+
+
+@branch_app.callback(invoke_without_command=True)
+def _branch_permission_check(ctx: typer.Context) -> None:
+    check_cli_permission(ctx, "branch")
 
 
 @branch_app.command("list")
