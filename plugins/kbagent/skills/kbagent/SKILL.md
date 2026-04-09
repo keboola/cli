@@ -14,7 +14,9 @@ description: >
   keboola organization, keboola sharing, bucket sharing, link bucket,
   keboola sync, keboola git,
   keboola gitops, sync pull, sync push, sync diff, branch-link,
-  search configs, find in configurations, audit configurations.
+  search configs, find in configurations, audit configurations,
+  input mapping migration, remove input mapping, Snowflake paths,
+  MULTI_STATEMENT_COUNT, statement count error, SQL transformation migration.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -134,6 +136,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
 | Reading synced data | [reading-synced-data](references/reading-synced-data.md) |
+| SQL migration (input mapping removal) | [sql-migration-workflow](references/sql-migration-workflow.md) |
 | Response parsing gotchas | [gotchas](references/gotchas.md) |
 
 ## First-time setup

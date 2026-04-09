@@ -134,6 +134,103 @@ CREATE TABLE foo AS
 
 See `scaffold-workflow.md` for the complete file structure reference.
 
+## Snowflake: MULTI_STATEMENT_COUNT
+
+Keboola sends each code block to Snowflake as a single query batch via the ODBC
+driver. Snowflake's default `MULTI_STATEMENT_COUNT = 1` means **only one SQL
+statement per batch**. If a code block contains multiple statements (e.g.
+`SET` + `CREATE TABLE` + `CREATE TABLE`), the job fails with:
+
+```
+Actual statement count N did not match the desired statement count 1
+```
+
+**Fix:** Add this as the **first code block** in your transformation:
+
+```sql
+ALTER SESSION SET MULTI_STATEMENT_COUNT = 0;
+```
+
+This allows unlimited statements per code block. The setting persists for the
+entire transformation session. Many existing transformations already have this
+-- check before adding a duplicate.
+
+**Note:** This is NOT a Keboola bug. It is a Snowflake ODBC driver default.
+Semicolons between statements are required and are NOT the problem -- the
+session parameter is.
+
+## Snowflake: identifier quoting (case sensitivity)
+
+Snowflake converts **unquoted identifiers to UPPERCASE**. This means:
+- `sapi_226` without quotes → Snowflake looks for `SAPI_226` → **not found**
+- `"sapi_226"` with quotes → Snowflake uses `sapi_226` as-is → **works**
+
+**Rule:** Always double-quote ALL parts of Snowflake direct-access paths:
+
+```sql
+-- CORRECT: all three parts quoted
+SELECT * FROM "sapi_1507"."in.c-keboola-ex-db-mysql"."orders"
+
+-- WRONG: database name unquoted → becomes SAPI_1507
+SELECT * FROM sapi_1507."in.c-keboola-ex-db-mysql"."orders"
+```
+
+This applies to linked bucket paths (`sapi_NNNN`), native bucket paths, and
+any identifier containing dots, hyphens, or lowercase letters.
+
+## SQL migration: do NOT use global text replace
+
+When migrating SQL transformations (e.g. removing input mapping and replacing
+aliases with direct Snowflake paths), **never use global find & replace**.
+A table name like `"orders"` also appears as a **column name** in many places.
+
+Global replace will corrupt:
+
+```sql
+-- BEFORE: "orders" is a column name in SELECT
+SUM(a."orders") AS "orders"
+
+-- AFTER global replace: column becomes a table path (WRONG!)
+SUM(a."tmp.orders") AS "tmp.orders"  -- no such column
+```
+
+```sql
+-- BEFORE: "country_locality" is a FK column in JOIN ON
+ON pcl."country_locality" = cl."id"
+
+-- AFTER global replace: FK column becomes full path (WRONG!)
+ON pcl."sapi_1507"."in.c-keboola-ex-db-mysql"."country_locality" = cl."id"
+```
+
+**Safe migration approach:**
+1. Build a complete destination→source map from `storage.input.tables`
+2. Replace ONLY in `FROM` and `JOIN` table-reference positions (not columns)
+3. After migration, verify with these regex checks:
+   - `alias\."sapi_\d+"` → FK column incorrectly expanded (e.g. `a."sapi_1507"...`)
+   - `ON.*=\s*"sapi_\d+"` → bare FK in JOIN ON replaced with path
+   - `"tmp\.\w+"` used as column name (not after FROM/JOIN)
+4. Verify ALL destination aliases were replaced (none should remain in SQL)
+5. Workspace tables created by earlier code blocks (e.g. `"tmp.orders"`) must
+   NOT be replaced -- they are runtime artifacts, not input mapping aliases
+
+See [sql-migration-workflow](sql-migration-workflow.md) for the complete
+step-by-step procedure.
+
+## Workspace table name conflicts
+
+When multiple code blocks in a transformation create a workspace table with
+the **same name** but different schemas, downstream code blocks may fail
+because they expect columns from the original version.
+
+**Example:** Code 0 (Setup) creates `"tmp.carts"` with all MySQL columns.
+Code 23 later creates `"tmp.carts"` with only 3 columns. Code 25 then fails
+because it needs column `"user"` which Code 23's version doesn't have.
+
+**Rule:** When a conflict exists, rename the **secondary** table by adding a
+numeric postfix (`"tmp.carts2"`). Keep the original name for the "source"
+table (typically the Setup/materialization code that creates the full copy).
+Update all references in the code that creates and uses the renamed table.
+
 ## Common mistakes
 
 - **Forgetting `--json`**: without it, output is human-formatted Rich text, not parseable
@@ -142,3 +239,4 @@ See `scaffold-workflow.md` for the complete file structure reference.
 - **Polling after branch create**: kbagent already waits for async completion
 - **Not saving workspace password**: only returned once on creation
 - **Putting SQL in _config.yml**: SQL transformations must use `transform.sql` with block markers (see above)
+- **Auto-running jobs after config update**: never start a job automatically after pushing config changes -- let the user decide when to run

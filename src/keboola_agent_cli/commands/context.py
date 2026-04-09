@@ -305,6 +305,23 @@ Use `kbagent <command> --help` for full flag details and examples.
   5  Configuration error (corrupt config, missing alias)
 
 When you receive a non-zero exit code, use --json to get structured error details.
+
+## Claude Code Plugin
+
+If you are using Claude Code, install the kbagent plugin for richer guidance:
+
+  /plugin marketplace add padak/keboola_agent_cli
+  /plugin install kbagent@keboola-agent-cli
+
+The plugin provides a skill with detailed workflow references including:
+- SQL transformation migration (input mapping removal, Snowflake paths)
+- Workspace SQL debugging
+- Development branch lifecycle
+- Configuration scaffolding and sync (GitOps)
+- Common Snowflake gotchas (MULTI_STATEMENT_COUNT, quoting, etc.)
+
+The skill triggers automatically when you mention Keboola-related tasks.
+Without the plugin, this `kbagent context` output is your standalone reference.
 """
 
 
