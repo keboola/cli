@@ -63,8 +63,9 @@ def init_command(
     local_store.save(config)
 
     if read_only:
-        # Make config.json read-only on filesystem so agents can't bypass via direct file edit
-        config_path.chmod(stat.S_IRUSR | stat.S_IRGRP)  # 0440
+        # Make config.json owner-read-only so other users (agent) can't read or write it.
+        # kbagent itself runs as the owner and can still read it.
+        config_path.chmod(stat.S_IRUSR)  # 0400
         # Create .claude/settings.json to prevent Claude Code from touching the config
         _create_claude_settings(cwd, local_dir)
 
@@ -112,14 +113,24 @@ def _create_claude_settings(project_dir: Path, kbagent_dir: Path) -> None:
     permissions = settings.setdefault("permissions", {})
     deny_list: list[str] = permissions.get("deny", [])
 
-    # Rules to add: block editing config.json and running permission-changing commands
+    # Rules to add:
+    # 1. Block direct file operations on config.json
+    # 2. Block any Bash command that mentions the config file (chmod, cat >, python, sed, etc.)
+    # 3. Block permission-changing CLI commands
+    # 4. Block --config-dir bypass (pointing to global config without policy)
+    # 5. Block reading the config (agent doesn't need to -- kbagent reads it internally)
     new_rules = [
+        f"Read({config_rel})",
         f"Edit({config_rel})",
         f"Write({config_rel})",
+        f"Bash(*{config_rel}*)",
+        f"Bash(*chmod*{kbagent_dir.name}*)",
         "Bash(kbagent permissions set*)",
         "Bash(kbagent permissions reset*)",
         "Bash(*permissions set*)",
         "Bash(*permissions reset*)",
+        "Bash(*--config-dir*)",
+        "Bash(*KBAGENT_CONFIG_DIR*)",
     ]
     for rule in new_rules:
         if rule not in deny_list:

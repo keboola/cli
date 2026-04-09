@@ -109,8 +109,10 @@ kbagent --json permissions list
 | Layer | What it does | Who it stops |
 |-------|-------------|-------------|
 | kbagent policy | Blocks write CLI commands and MCP tools | Any agent using kbagent |
-| Filesystem `chmod 0440` | config.json is read-only on disk | Any process trying to overwrite the file |
-| `.claude/settings.json` | Deny rules for Edit/Write config + Bash permission commands | Claude Code specifically |
+| Filesystem `chmod 0400` | config.json owner-read-only | Other users/processes; run agent as separate OS user for full isolation |
+| `.claude/settings.json` | Deny rules block: Read/Edit/Write config, any Bash mentioning config path, chmod, --config-dir, KBAGENT_CONFIG_DIR, permissions set/reset | Claude Code specifically |
+
+For production: run the agent as a separate OS user so it cannot even read config.json (tokens stay invisible to the agent process).
 
 To unlock (human only):
 ```bash

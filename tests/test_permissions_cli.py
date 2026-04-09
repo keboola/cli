@@ -397,20 +397,29 @@ class TestInitReadOnly:
         assert "cli:write" in config_data["permissions"]["deny"]
         assert "tool:write" in config_data["permissions"]["deny"]
 
-        # Verify config.json is read-only on filesystem
+        # Verify config.json is owner-read-only (0400)
         import stat
 
         file_mode = local_config_path.stat().st_mode
         assert not (file_mode & stat.S_IWUSR), "config.json should not be user-writable"
+        assert not (file_mode & stat.S_IRGRP), "config.json should not be group-readable"
+        assert file_mode & stat.S_IRUSR, "config.json should be owner-readable"
 
-        # Verify .claude/settings.json was created with deny rules
+        # Verify .claude/settings.json was created with comprehensive deny rules
         claude_settings_path = work_dir / ".claude" / "settings.json"
         assert claude_settings_path.is_file()
         claude_settings = json.loads(claude_settings_path.read_text())
         deny_rules = claude_settings["permissions"]["deny"]
+        # File operation blocks
+        assert "Read(.kbagent/config.json)" in deny_rules
         assert "Edit(.kbagent/config.json)" in deny_rules
         assert "Write(.kbagent/config.json)" in deny_rules
+        # Bash blocks: any command mentioning config, chmod, permissions, config-dir
+        assert "Bash(*.kbagent/config.json*)" in deny_rules
+        assert "Bash(*chmod*.kbagent*)" in deny_rules
         assert "Bash(kbagent permissions set*)" in deny_rules
+        assert "Bash(*--config-dir*)" in deny_rules
+        assert "Bash(*KBAGENT_CONFIG_DIR*)" in deny_rules
         assert "Bash(kbagent permissions reset*)" in deny_rules
 
     def test_init_read_only_with_from_global(self, tmp_path: Path) -> None:

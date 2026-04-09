@@ -135,49 +135,47 @@ kbagent permissions reset            # Remove restrictions (requires confirmatio
 
 ### Layered security
 
-`kbagent init --read-only` applies three independent protection layers. Each layer stops a different bypass vector -- an agent would have to defeat all three simultaneously:
+`kbagent init --read-only` applies three independent protection layers. Each stops a different bypass vector:
 
 | Layer | What it does | What it stops |
 |-------|-------------|---------------|
-| **kbagent policy** | Deny rules in `config.json` block write commands and MCP tools at the CLI level | Agent running `kbagent branch create`, `kbagent tool call create_config`, etc. |
-| **Filesystem `chmod 0440`** | `config.json` set to read-only on disk | Agent editing `config.json` directly (via `Write`, `Edit`, or `cat >`) to remove the policy |
-| **`.claude/settings.json`** | Auto-generated deny rules block Claude Code from editing the config file or running `permissions set/reset` via Bash | Claude Code specifically -- the deny rules are evaluated before any tool executes |
+| **kbagent policy** | Deny rules in `config.json` block write commands and MCP tools | Agent running `kbagent branch create`, `tool call create_config`, etc. |
+| **Filesystem `chmod 0400`** | `config.json` owner-read-only | Agent editing the file directly; ideally, run the agent as a different OS user so it can't even read the config |
+| **`.claude/settings.json`** | Deny rules block Claude Code from touching the config, running `chmod`, `permissions set/reset`, or using `--config-dir` | Claude Code specifically -- deny rules are evaluated before any tool executes |
 
-**Why each layer alone is not enough:**
-- Policy alone: agent could edit `config.json` directly and remove the policy
-- `chmod` alone: agent could run `chmod u+w` and then edit the file
-- `.claude/settings.json` alone: only works for Claude Code, not other AI agents
+**Recommended setup for production:**
+
+Run the AI agent as a separate OS user (or in a container/sandbox). The human sets up the workspace:
+```bash
+kbagent init --from-global --read-only   # creates config (0400) + .claude/settings.json
+```
+The agent can run `kbagent --json config list` etc. but cannot read, modify, or bypass the config.
 
 **How `.claude/settings.json` works:**
 
-Claude Code loads project settings from `.claude/settings.json` in the working directory (project root). Deny rules always take precedence over allow rules, regardless of where they're defined. The generated file contains:
+Claude Code loads settings from `.claude/settings.json` in the project root. Deny rules always win over allow rules. The generated file blocks:
 
 ```json
 {
   "permissions": {
     "deny": [
+      "Read(.kbagent/config.json)",
       "Edit(.kbagent/config.json)",
       "Write(.kbagent/config.json)",
+      "Bash(*.kbagent/config.json*)",
+      "Bash(*chmod*.kbagent*)",
       "Bash(kbagent permissions set*)",
       "Bash(kbagent permissions reset*)",
       "Bash(*permissions set*)",
-      "Bash(*permissions reset*)"
+      "Bash(*permissions reset*)",
+      "Bash(*--config-dir*)",
+      "Bash(*KBAGENT_CONFIG_DIR*)"
     ]
   }
 }
 ```
 
-Claude Code settings are loaded in this precedence order (highest wins):
-
-| Priority | Source | Scope |
-|----------|--------|-------|
-| 5 (highest) | Managed policy | Enterprise/organization |
-| 4 | CLI flags | Session |
-| 3 | `.claude/settings.local.json` | Personal (gitignored) |
-| 2 | `.claude/settings.json` | **Project (committable, shared with team)** |
-| 1 (lowest) | `~/.claude/settings.json` | Global user default |
-
-Commit `.claude/settings.json` to git so the protection applies for everyone who clones the repo.
+Settings precedence (highest wins): Managed policy > CLI flags > `.claude/settings.local.json` > **`.claude/settings.json`** > `~/.claude/settings.json`. Commit it to git so the protection applies for everyone.
 
 **To unlock (human only):**
 
@@ -186,8 +184,6 @@ chmod u+w .kbagent/config.json          # 1. restore write permission
 kbagent permissions reset               # 2. type random confirmation code
 # optionally: edit .claude/settings.json to remove deny rules
 ```
-
-An AI agent cannot perform step 1 (blocked by `.claude/settings.json` Bash deny rules) or step 2 (cannot type the unpredictable confirmation code, and non-interactive stdin fails immediately).
 
 ## Development
 
