@@ -116,6 +116,12 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent storage tables --project NAME [--bucket-id BUCKET_ID]
     List storage tables, optionally filtered by bucket.
 
+  kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes]
+    Delete one or more tables. Batch: repeat --table-id. --dry-run to preview.
+
+  kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes]
+    Delete one or more buckets. --force cascade-deletes tables. Linked/shared buckets protected.
+
 ### Sharing (Cross-Project)
 
   kbagent sharing list [--project NAME]

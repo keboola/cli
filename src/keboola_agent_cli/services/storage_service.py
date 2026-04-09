@@ -191,6 +191,147 @@ class StorageService(BaseService):
         return {"tables": tables, "project_alias": alias}
 
     # ------------------------------------------------------------------
+    # Delete operations
+    # ------------------------------------------------------------------
+
+    def delete_tables(
+        self,
+        alias: str,
+        table_ids: list[str],
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Delete one or more storage tables.
+
+        Batch-tolerant: accumulates errors per table, one failure does not
+        stop other deletes.
+
+        Returns:
+            Dict with 'deleted', 'failed', 'dry_run', 'project_alias',
+            and optionally 'would_delete'.
+        """
+        from ..errors import KeboolaApiError
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        if dry_run:
+            return {
+                "deleted": [],
+                "failed": [],
+                "would_delete": list(table_ids),
+                "dry_run": True,
+                "project_alias": alias,
+            }
+
+        deleted: list[str] = []
+        failed: list[dict[str, str]] = []
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            for tid in table_ids:
+                try:
+                    client.delete_table(tid)
+                    deleted.append(tid)
+                except KeboolaApiError as exc:
+                    failed.append({"id": tid, "error": exc.message})
+        finally:
+            client.close()
+
+        return {
+            "deleted": deleted,
+            "failed": failed,
+            "dry_run": False,
+            "project_alias": alias,
+        }
+
+    def delete_buckets(
+        self,
+        alias: str,
+        bucket_ids: list[str],
+        force: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Delete one or more storage buckets.
+
+        Protections:
+        - Linked buckets (sourceBucket set) are blocked with a helpful message.
+        - Shared buckets (sharing field set) are blocked unless --force is used.
+        - Without force, non-empty buckets fail at the API level.
+
+        Batch-tolerant: accumulates errors per bucket.
+
+        Returns:
+            Dict with 'deleted', 'failed', 'dry_run', 'project_alias',
+            and optionally 'would_delete'.
+        """
+        from ..errors import KeboolaApiError
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        deleted: list[str] = []
+        failed: list[dict[str, str]] = []
+        would_delete: list[str] = []
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            for bid in bucket_ids:
+                # Check bucket metadata for linked/shared protections
+                try:
+                    bucket = client.get_bucket_detail(bid)
+                except KeboolaApiError as exc:
+                    failed.append({"id": bid, "error": exc.message})
+                    continue
+
+                # Linked bucket protection
+                if bucket.get("sourceBucket"):
+                    failed.append(
+                        {
+                            "id": bid,
+                            "error": (
+                                f"Bucket '{bid}' is a linked bucket. "
+                                "Use 'kbagent sharing unlink' to remove it."
+                            ),
+                        }
+                    )
+                    continue
+
+                # Shared bucket protection (unless force)
+                if bucket.get("sharing") and not force:
+                    failed.append(
+                        {
+                            "id": bid,
+                            "error": (
+                                f"Bucket '{bid}' is shared to other projects. "
+                                "Use --force to delete anyway, or 'kbagent sharing unshare' first."
+                            ),
+                        }
+                    )
+                    continue
+
+                if dry_run:
+                    would_delete.append(bid)
+                    continue
+
+                try:
+                    client.delete_bucket(bid, force=force)
+                    deleted.append(bid)
+                except KeboolaApiError as exc:
+                    failed.append({"id": bid, "error": exc.message})
+        finally:
+            client.close()
+
+        result: dict[str, Any] = {
+            "deleted": deleted,
+            "failed": failed,
+            "dry_run": dry_run,
+            "project_alias": alias,
+        }
+        if dry_run:
+            result["would_delete"] = would_delete
+        return result
+
+    # ------------------------------------------------------------------
     # Parallel workers
     # ------------------------------------------------------------------
 

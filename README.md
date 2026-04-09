@@ -64,7 +64,7 @@ kbagent org       setup
 kbagent component list | detail
 kbagent config    list | detail | search | update | delete | new
 kbagent job       list | detail
-kbagent storage   buckets | bucket-detail | tables
+kbagent storage   buckets | bucket-detail | tables | delete-table | delete-bucket
 kbagent sharing   list | share | unshare | link | unlink
 kbagent lineage   show
 kbagent branch    list | create | use | reset | delete | merge

@@ -15,7 +15,7 @@ from ._helpers import (
     map_error_to_exit_code,
 )
 
-storage_app = typer.Typer(help="Browse storage buckets and tables")
+storage_app = typer.Typer(help="Browse and manage storage buckets and tables")
 
 
 @storage_app.callback(invoke_without_command=True)
@@ -217,3 +217,140 @@ def storage_tables(
             )
 
         formatter.console.print(table)
+
+
+@storage_app.command("delete-table")
+def storage_delete_table(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    table_id: list[str] = typer.Option(
+        ...,
+        "--table-id",
+        help="Table ID to delete (e.g. 'in.c-bucket.table'). Can be repeated.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be deleted without executing",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompt",
+    ),
+) -> None:
+    """Delete one or more storage tables.
+
+    Supports batch deletion with multiple --table-id flags.
+    All deletes are async and wait for completion.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+
+    if dry_run:
+        try:
+            result = service.delete_tables(alias=project, table_ids=table_id, dry_run=True)
+        except ConfigError as exc:
+            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            raise typer.Exit(code=5) from None
+
+        if formatter.json_mode:
+            formatter.output(result)
+        else:
+            for tid in result.get("would_delete", []):
+                formatter.console.print(f"[bold blue]Would delete:[/bold blue] {tid}")
+        return
+
+    if (
+        not yes
+        and not formatter.json_mode
+        and not typer.confirm(f"Delete {len(table_id)} table(s) from project '{project}'?")
+    ):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+
+    try:
+        result = service.delete_tables(alias=project, table_ids=table_id)
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        for tid in result["deleted"]:
+            formatter.console.print(f"[bold green]Deleted:[/bold green] {tid}")
+        for f in result["failed"]:
+            formatter.console.print(f"[bold red]Failed:[/bold red] {f['id']}: {f['error']}")
+
+    if result["failed"]:
+        raise typer.Exit(code=1)
+
+
+@storage_app.command("delete-bucket")
+def storage_delete_bucket(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    bucket_id: list[str] = typer.Option(
+        ...,
+        "--bucket-id",
+        help="Bucket ID to delete (e.g. 'in.c-my-bucket'). Can be repeated.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Force delete even if bucket contains tables (cascade)",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be deleted without executing",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompt",
+    ),
+) -> None:
+    """Delete one or more storage buckets.
+
+    Without --force, fails if a bucket contains tables.
+    With --force, cascade-deletes all tables in the bucket.
+    Linked and shared buckets are protected (use sharing unlink/unshare).
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+
+    try:
+        result = service.delete_buckets(
+            alias=project, bucket_ids=bucket_id, force=force, dry_run=dry_run
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        if dry_run:
+            for bid in result.get("would_delete", []):
+                force_hint = " [force]" if force else ""
+                formatter.console.print(f"[bold blue]Would delete:[/bold blue] {bid}{force_hint}")
+        else:
+            for bid in result["deleted"]:
+                formatter.console.print(f"[bold green]Deleted:[/bold green] {bid}")
+        for f in result["failed"]:
+            formatter.console.print(f"[bold red]Failed:[/bold red] {f['id']}: {f['error']}")
+
+    if result["failed"]:
+        raise typer.Exit(code=1)

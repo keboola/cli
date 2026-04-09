@@ -65,6 +65,8 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.buckets": "read",
     "storage.bucket-detail": "read",
     "storage.tables": "read",
+    "storage.delete-table": "destructive",
+    "storage.delete-bucket": "destructive",
     # Sync / git workflow
     "sync.init": "write",
     "sync.pull": "write",

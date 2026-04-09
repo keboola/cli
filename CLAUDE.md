@@ -227,6 +227,12 @@ kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [
 kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
 kbagent job detail --project NAME --job-id ID
 
+kbagent storage buckets [--project NAME]
+kbagent storage bucket-detail --project NAME --bucket-id ID
+kbagent storage tables --project NAME [--bucket-id ID]
+kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes]
+kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes]
+
 kbagent lineage show [--project NAME]   # also works as just: kbagent lineage
 
 kbagent sharing list [--project NAME]

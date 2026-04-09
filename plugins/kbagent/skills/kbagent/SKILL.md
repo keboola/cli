@@ -68,6 +68,8 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 | List storage buckets with sharing/linked bucket information | `kbagent storage buckets` |
 | Show detailed bucket info including Snowflake direct access paths | `kbagent storage bucket-detail --project PROJECT --bucket-id BUCKET-ID` |
 | List storage tables from a project | `kbagent storage tables --project PROJECT` |
+| Delete one or more storage tables | `kbagent storage delete-table --project PROJECT --table-id TABLE-ID` |
+| Delete one or more storage buckets | `kbagent storage delete-bucket --project PROJECT --bucket-id BUCKET-ID` |
 | List shared buckets available for linking | `kbagent sharing list` |
 | Enable sharing on a bucket | `kbagent sharing share --project PROJECT --bucket-id BUCKET-ID --type SHARING-TYPE` |
 | Disable sharing on a bucket | `kbagent sharing unshare --project PROJECT --bucket-id BUCKET-ID` |

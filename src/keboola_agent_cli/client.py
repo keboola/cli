@@ -806,6 +806,21 @@ class KeboolaClient(BaseHttpClient):
         response = self._request("DELETE", f"/v2/storage/buckets/{safe_id}", params=params)
         return self._wait_for_storage_job(response.json())
 
+    def delete_table(self, table_id: str) -> dict[str, Any]:
+        """Delete a storage table (async, waits for completion).
+
+        Args:
+            table_id: Full table ID (e.g. "in.c-bucket.table").
+
+        Returns:
+            Completed storage job dict.
+        """
+        safe_id = quote(table_id, safe="")
+        response = self._request(
+            "DELETE", f"/v2/storage/tables/{safe_id}", params={"async": "true"}
+        )
+        return self._wait_for_storage_job(response.json())
+
     def list_tables_with_metadata(self) -> list[dict[str, Any]]:
         """List all storage tables with columns and metadata.
 
