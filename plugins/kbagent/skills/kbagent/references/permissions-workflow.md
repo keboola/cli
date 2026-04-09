@@ -23,6 +23,62 @@ The agent CANNOT:
 - Call write MCP tools (create_*, update_*, delete_*)
 - Modify or remove the permission policy (requires confirmation code)
 
+## Common restriction recipes
+
+### Block all writes (read-only agent)
+```bash
+kbagent permissions set --mode allow --deny "cli:write" --deny "tool:write"
+```
+
+### Block all MCP tool calls (CLI only, no MCP)
+```bash
+kbagent permissions set --mode allow --deny "tool.call" --deny "tool:*"
+```
+Blocks both the `tool call` CLI command and any MCP tool execution via the service layer.
+
+### Block config deletion
+```bash
+kbagent permissions set --mode allow --deny "config.delete" --deny "tool:delete_configuration"
+```
+Blocks both the CLI command and the MCP tool. The agent can still create and update configs.
+
+### Block storage operations
+```bash
+kbagent permissions set --mode allow --deny "storage.*"
+```
+Blocks `storage buckets`, `storage bucket-detail`, and `storage tables`. Note: MCP tools like `get_buckets` are separate -- add `--deny "tool:*bucket*"` to block those too.
+
+### Block workspace SQL queries
+```bash
+kbagent permissions set --mode allow --deny "workspace.query"
+```
+The agent can still create/list/delete workspaces and load tables, but cannot execute SQL. To block all workspace writes:
+```bash
+kbagent permissions set --mode allow --deny "workspace.create" --deny "workspace.delete" --deny "workspace.load" --deny "workspace.query" --deny "workspace.from-transformation"
+```
+
+### Block sync push (prevent pushing changes to Keboola)
+```bash
+kbagent permissions set --mode allow --deny "sync.push"
+```
+The agent can still pull configs and view diffs, but cannot push changes back. Note: `sync.push` pushes to whatever branch is active (main or dev). There is no way to block "push to main only" -- use `branch.create` + `branch.use` workflow to ensure the agent works on a dev branch, then block `branch.reset` to prevent switching back to main.
+
+### Block destructive operations only (allow creates/updates)
+```bash
+kbagent permissions set --mode allow --deny "cli:destructive" --deny "tool:destructive"
+```
+Blocks `branch.delete`, `workspace.delete`, `config.delete` and MCP tools like `delete_*`, `remove_*`. The agent can still create and modify resources.
+
+### Allow only specific commands (strict allowlist)
+```bash
+kbagent permissions set --mode deny \
+  --allow "project.list" --allow "project.status" \
+  --allow "config.list" --allow "config.detail" --allow "config.search" \
+  --allow "job.list" --allow "job.detail" \
+  --allow "tool.list" --allow "tool:read"
+```
+Everything else is blocked. This is the most restrictive approach.
+
 ## Checking permissions before acting
 
 ```bash
