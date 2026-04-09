@@ -191,6 +191,12 @@ class ConfigStore:
                 os.write(fd, data)
             finally:
                 os.close(fd)
+            # On Windows (no fcntl), close the lock fd before os.replace —
+            # Windows cannot atomically replace a file that is currently open.
+            # On POSIX the fd stays open (flock is still held) until the finally block.
+            if not _HAS_FCNTL and lock_fd is not None:
+                os.close(lock_fd)
+                lock_fd = None
             os.replace(str(tmp_path), str(self._config_path))
         except OSError as exc:
             raise ConfigError(f"Cannot write config file {self._config_path}: {exc}") from exc

@@ -191,6 +191,127 @@ class StorageService(BaseService):
         return {"tables": tables, "project_alias": alias}
 
     # ------------------------------------------------------------------
+    # Write operations
+    # ------------------------------------------------------------------
+
+    def create_bucket(
+        self,
+        alias: str,
+        stage: str,
+        name: str,
+        description: str | None = None,
+        backend: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a new storage bucket.
+
+        Returns:
+            Dict with created bucket details.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            bucket = client.create_bucket(
+                stage=stage, name=name, description=description, backend=backend
+            )
+        finally:
+            client.close()
+
+        return {
+            "project_alias": alias,
+            "id": bucket.get("id", ""),
+            "display_name": bucket.get("displayName", bucket.get("name", "")),
+            "stage": bucket.get("stage", ""),
+            "backend": bucket.get("backend", ""),
+            "description": bucket.get("description", ""),
+        }
+
+    def create_table(
+        self,
+        alias: str,
+        bucket_id: str,
+        name: str,
+        columns: list[str],
+        primary_key: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new table with typed columns.
+
+        Args:
+            columns: List of "name:TYPE" strings (e.g. ["id:INTEGER", "name:STRING"]).
+
+        Returns:
+            Dict with created table details.
+        """
+        parsed_columns = []
+        for col_spec in columns:
+            if ":" in col_spec:
+                col_name, col_type = col_spec.split(":", 1)
+            else:
+                col_name, col_type = col_spec, "STRING"
+            parsed_columns.append({"name": col_name, "definition": {"type": col_type.upper()}})
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            results = client.create_table(
+                bucket_id=bucket_id,
+                name=name,
+                columns=parsed_columns,
+                primary_key=primary_key,
+            )
+        finally:
+            client.close()
+
+        return {
+            "project_alias": alias,
+            "table_id": results.get("id", f"{bucket_id}.{name}"),
+            "name": name,
+            "bucket_id": bucket_id,
+            "primary_key": primary_key or [],
+            "columns": [c["name"] for c in parsed_columns],
+        }
+
+    def upload_table(
+        self,
+        alias: str,
+        table_id: str,
+        file_path: str,
+        incremental: bool = False,
+        delimiter: str = ",",
+        enclosure: str = '"',
+    ) -> dict[str, Any]:
+        """Upload a CSV file into an existing table.
+
+        Returns:
+            Dict with import job results.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            results = client.upload_table(
+                table_id=table_id,
+                file_path=file_path,
+                incremental=incremental,
+                delimiter=delimiter,
+                enclosure=enclosure,
+            )
+        finally:
+            client.close()
+
+        return {
+            "project_alias": alias,
+            "table_id": table_id,
+            "incremental": incremental,
+            "imported_rows": results.get("importedRowsCount"),
+            "warnings": results.get("warnings", []),
+        }
+
+    # ------------------------------------------------------------------
     # Delete operations
     # ------------------------------------------------------------------
 

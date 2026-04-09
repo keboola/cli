@@ -9,6 +9,7 @@ Inherits shared retry/error logic from BaseHttpClient.
 
 import json
 import logging
+import os
 import time
 from typing import Any
 from urllib.parse import quote
@@ -805,6 +806,99 @@ class KeboolaClient(BaseHttpClient):
             params["force"] = "true"
         response = self._request("DELETE", f"/v2/storage/buckets/{safe_id}", params=params)
         return self._wait_for_storage_job(response.json())
+
+    def create_bucket(
+        self,
+        stage: str,
+        name: str,
+        description: str | None = None,
+        backend: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a new storage bucket (sync).
+
+        Args:
+            stage: Bucket stage — "in" or "out".
+            name: Bucket name slug (e.g. "my-bucket").
+            description: Optional description.
+            backend: Optional backend type (e.g. "snowflake", "bigquery").
+
+        Returns:
+            New bucket dict from the API.
+        """
+        body: dict[str, str] = {"stage": stage, "name": name}
+        if description is not None:
+            body["description"] = description
+        if backend is not None:
+            body["backend"] = backend
+        response = self._request("POST", "/v2/storage/buckets", json=body)
+        return response.json()
+
+    def create_table(
+        self,
+        bucket_id: str,
+        name: str,
+        columns: list[dict[str, Any]],
+        primary_key: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new table with typed columns (async, waits for completion).
+
+        Args:
+            bucket_id: Target bucket ID (e.g. "in.c-my-bucket").
+            name: Table name.
+            columns: List of column dicts with "name" and "definition.type" keys,
+                     e.g. [{"name": "id", "definition": {"type": "INTEGER"}}].
+            primary_key: Optional list of column names for the primary key.
+
+        Returns:
+            Completed storage job results dict.
+        """
+        safe_id = quote(bucket_id, safe="")
+        body: dict[str, Any] = {
+            "name": name,
+            "primaryKeysNames": primary_key or [],
+            "columns": columns,
+        }
+        response = self._request(
+            "POST", f"/v2/storage/buckets/{safe_id}/tables-definition", json=body
+        )
+        job = self._wait_for_storage_job(response.json())
+        return job.get("results", {})
+
+    def upload_table(
+        self,
+        table_id: str,
+        file_path: str,
+        incremental: bool = False,
+        delimiter: str = ",",
+        enclosure: str = '"',
+    ) -> dict[str, Any]:
+        """Upload a CSV file into an existing table (async, waits for completion).
+
+        Args:
+            table_id: Target table ID (e.g. "in.c-my-bucket.my-table").
+            file_path: Local path to the CSV file.
+            incremental: If True, append rows; if False (default), full load.
+            delimiter: CSV column delimiter (default ",").
+            enclosure: CSV value enclosure character (default '"').
+
+        Returns:
+            Import results dict with importedRowsCount, warnings, etc.
+        """
+        safe_id = quote(table_id, safe="")
+        form: dict[str, str] = {
+            "incremental": "1" if incremental else "0",
+            "delimiter": delimiter,
+            "enclosure": enclosure,
+        }
+        filename = os.path.basename(file_path)
+        with open(file_path, "rb") as fh:
+            response = self._request(
+                "POST",
+                f"/v2/storage/tables/{safe_id}/import",
+                data=form,
+                files={"data": (filename, fh, "text/csv")},
+            )
+        return response.json()
 
     def delete_table(self, table_id: str) -> dict[str, Any]:
         """Delete a storage table (async, waits for completion).
