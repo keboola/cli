@@ -397,6 +397,22 @@ class TestInitReadOnly:
         assert "cli:write" in config_data["permissions"]["deny"]
         assert "tool:write" in config_data["permissions"]["deny"]
 
+        # Verify config.json is read-only on filesystem
+        import stat
+
+        file_mode = local_config_path.stat().st_mode
+        assert not (file_mode & stat.S_IWUSR), "config.json should not be user-writable"
+
+        # Verify .claude/settings.json was created with deny rules
+        claude_settings_path = work_dir / ".claude" / "settings.json"
+        assert claude_settings_path.is_file()
+        claude_settings = json.loads(claude_settings_path.read_text())
+        deny_rules = claude_settings["permissions"]["deny"]
+        assert "Edit(.kbagent/config.json)" in deny_rules
+        assert "Write(.kbagent/config.json)" in deny_rules
+        assert "Bash(kbagent permissions set*)" in deny_rules
+        assert "Bash(kbagent permissions reset*)" in deny_rules
+
     def test_init_read_only_with_from_global(self, tmp_path: Path) -> None:
         """init --read-only --from-global should copy projects AND set read-only."""
         work_dir = tmp_path / "project"

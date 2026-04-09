@@ -1,5 +1,7 @@
 """Init command - initialize a local .kbagent/ workspace in the current directory."""
 
+import json
+import stat
 from pathlib import Path
 
 import typer
@@ -60,6 +62,12 @@ def init_command(
     local_store = ConfigStore(config_dir=local_dir, source="local")
     local_store.save(config)
 
+    if read_only:
+        # Make config.json read-only on filesystem so agents can't bypass via direct file edit
+        config_path.chmod(stat.S_IRUSR | stat.S_IRGRP)  # 0440
+        # Create .claude/settings.json to prevent Claude Code from touching the config
+        _create_claude_settings(cwd, local_dir)
+
     _update_gitignore(cwd)
 
     project_count = len(config.projects)
@@ -77,6 +85,52 @@ def init_command(
             "projects_copied": project_count if from_global else 0,
             "read_only": read_only,
         }
+    )
+
+
+def _create_claude_settings(project_dir: Path, kbagent_dir: Path) -> None:
+    """Create .claude/settings.json to prevent Claude Code from modifying the config.
+
+    This is a defense-in-depth measure: even if Claude Code somehow bypasses
+    the permission policy, it cannot edit the config file or run commands
+    that would change the policy.
+    """
+    claude_dir = project_dir / ".claude"
+    claude_dir.mkdir(exist_ok=True)
+    settings_path = claude_dir / "settings.json"
+
+    # Relative path from project root to kbagent config
+    config_rel = f"{kbagent_dir.name}/config.json"
+
+    settings: dict = {}
+    if settings_path.is_file():
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            settings = {}
+
+    permissions = settings.setdefault("permissions", {})
+    deny_list: list[str] = permissions.get("deny", [])
+
+    # Rules to add: block editing config.json and running permission-changing commands
+    new_rules = [
+        f"Edit({config_rel})",
+        f"Write({config_rel})",
+        "Bash(kbagent permissions set*)",
+        "Bash(kbagent permissions reset*)",
+        "Bash(*permissions set*)",
+        "Bash(*permissions reset*)",
+    ]
+    for rule in new_rules:
+        if rule not in deny_list:
+            deny_list.append(rule)
+
+    permissions["deny"] = deny_list
+    settings["permissions"] = permissions
+
+    settings_path.write_text(
+        json.dumps(settings, indent=2) + "\n",
+        encoding="utf-8",
     )
 
 

@@ -133,7 +133,12 @@ kbagent permissions check "branch.delete"  # Test if operation is allowed (exit 
 kbagent permissions reset            # Remove restrictions (requires confirmation code)
 ```
 
-Changing or removing the policy requires typing a random confirmation code -- an AI agent cannot bypass this programmatically.
+**Defense in depth:** `--read-only` applies three layers of protection:
+1. **kbagent policy** -- blocks write commands and MCP tools at the CLI level
+2. **Filesystem permissions** -- `config.json` set to read-only (`0440`), agent can't overwrite it
+3. **Claude Code settings** -- auto-creates `.claude/settings.json` with deny rules that prevent Claude from editing the config or running `permissions set/reset`
+
+Changing or removing the policy requires typing a random confirmation code and `chmod u+w` on the config file -- an AI agent cannot do either.
 
 ## Development
 

@@ -102,6 +102,23 @@ kbagent --json permissions list
 | `sync.*` | All sync subcommands (glob) |
 | `tool:create_*` | MCP tools matching glob pattern |
 
+## Defense in depth (`--read-only`)
+
+`kbagent init --read-only` applies three layers of protection:
+
+| Layer | What it does | Who it stops |
+|-------|-------------|-------------|
+| kbagent policy | Blocks write CLI commands and MCP tools | Any agent using kbagent |
+| Filesystem `chmod 0440` | config.json is read-only on disk | Any process trying to overwrite the file |
+| `.claude/settings.json` | Deny rules for Edit/Write config + Bash permission commands | Claude Code specifically |
+
+To unlock (human only):
+```bash
+chmod u+w .kbagent/config.json          # restore write permission
+kbagent permissions reset               # type confirmation code
+# optionally remove .claude/settings.json deny rules
+```
+
 ## Key details
 
 - **Exit code 6** = operation blocked by permission policy
