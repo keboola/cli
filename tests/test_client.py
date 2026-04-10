@@ -1768,8 +1768,47 @@ class TestUploadToCloud:
 
         assert any(r.url.host == "s3.amazonaws.com" for r in httpx_mock.get_requests())
 
-    def test_success_200(self, httpx_mock, tmp_path) -> None:
-        """_upload_to_cloud succeeds when cloud storage returns 200 (GCS)."""
+    def test_success_gcp_bearer_token(self, httpx_mock, tmp_path) -> None:
+        """_upload_to_cloud uses GCS JSON API PUT with bearer token when gcsUploadParams present."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_bytes(b"id\n1\n")
+        gcs_url = "https://storage.googleapis.com/kbc-bucket/exp-15/2000/files/data.csv"
+        httpx_mock.add_response(url=gcs_url, method="PUT", status_code=200)
+        upload_info = {
+            "url": "https://storage.googleapis.com/kbc-bucket/data.csv?response-content-disposition=attachment",
+            "uploadParams": None,
+            "gcsUploadParams": {
+                "bucket": "kbc-bucket",
+                "key": "exp-15/2000/files/data.csv",
+                "access_token": "ya29.test-token",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+            },
+        }
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client._upload_to_cloud(upload_info, str(csv_file))
+
+        put_req = next(r for r in httpx_mock.get_requests() if r.method == "PUT")
+        assert "Bearer ya29.test-token" in put_req.headers.get("authorization", "")
+
+    def test_success_200_gcs_signed_url(self, httpx_mock, tmp_path) -> None:
+        """_upload_to_cloud uses PUT when uploadParams is empty (GCS/ABS signed URL)."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_bytes(b"id\n1\n")
+        gcs_url = "https://storage.googleapis.com/kbc-bucket/path/file.csv?X-Goog-Signature=abc"
+        httpx_mock.add_response(
+            url=gcs_url,
+            method="PUT",
+            status_code=200,
+        )
+        upload_info = {"url": gcs_url, "uploadParams": {}}
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client._upload_to_cloud(upload_info, str(csv_file))
+
+        assert any(r.method == "PUT" for r in httpx_mock.get_requests())
+
+    def test_success_200_gcs_post(self, httpx_mock, tmp_path) -> None:
+        """_upload_to_cloud uses POST when uploadParams is non-empty (S3-style GCS POST)."""
         csv_file = tmp_path / "data.csv"
         csv_file.write_bytes(b"id\n1\n")
         httpx_mock.add_response(
@@ -1785,15 +1824,16 @@ class TestUploadToCloud:
             client._upload_to_cloud(upload_info, str(csv_file))
 
     def test_non_success_raises(self, httpx_mock, tmp_path) -> None:
-        """_upload_to_cloud raises KeboolaApiError when cloud storage returns error."""
+        """_upload_to_cloud raises KeboolaApiError when cloud storage PUT returns error."""
         csv_file = tmp_path / "data.csv"
         csv_file.write_bytes(b"id\n1\n")
+        gcs_url = "https://storage.googleapis.com/kbc-bucket/path/file.csv?X-Goog-Signature=abc"
         httpx_mock.add_response(
-            url="https://s3.amazonaws.com/kbc-test/",
-            method="POST",
+            url=gcs_url,
+            method="PUT",
             status_code=403,
         )
-        upload_info = {"url": "https://s3.amazonaws.com/kbc-test/", "uploadParams": {}}
+        upload_info = {"url": gcs_url, "uploadParams": {}}
         with (
             KeboolaClient(stack_url=_BASE, token=_TOKEN) as client,
             pytest.raises(KeboolaApiError) as exc_info,
@@ -1898,19 +1938,20 @@ class TestUploadTableClient:
         assert result.get("importedRowsCount") == 2
 
     def test_cloud_upload_failure_raises(self, httpx_mock, tmp_path) -> None:
-        """upload_table raises KeboolaApiError if cloud upload returns error."""
+        """upload_table raises KeboolaApiError if cloud upload (signed URL PUT) returns error."""
         csv_file = tmp_path / "data.csv"
         csv_file.write_bytes(b"id\n1\n")
+        signed_url = "https://storage.googleapis.com/kbc/file.csv?X-Goog-Signature=abc"
 
         httpx_mock.add_response(
             url=f"{_BASE}/v2/storage/files/prepare",
             method="POST",
-            json={"id": 101, "url": "https://s3.amazonaws.com/kbc/", "uploadParams": {}},
+            json={"id": 101, "url": signed_url, "uploadParams": {}},
             status_code=200,
         )
         httpx_mock.add_response(
-            url="https://s3.amazonaws.com/kbc/",
-            method="POST",
+            url=signed_url,
+            method="PUT",
             status_code=403,
         )
 

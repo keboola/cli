@@ -897,29 +897,63 @@ class KeboolaClient(BaseHttpClient):
         upload_info: dict[str, Any],
         file_path: str,
     ) -> None:
-        """Upload a file to cloud storage using the presigned URL from files/prepare.
+        """Upload a file to cloud storage using credentials from files/prepare.
 
-        Handles S3 and GCS presigned POST uploads. The uploadParams fields are
-        posted as multipart form data with the file appended last (S3 requires
-        the file to be the last part). Azure Blob Storage (ABS) backends use a
-        different upload mechanism (PUT to a SAS URL) and are not yet supported.
+        Three upload paths based on what the API returns:
+
+        GCP stack (``gcsUploadParams`` present):
+            PUT to ``https://storage.googleapis.com/{bucket}/{key}`` with an
+            OAuth2 ``Authorization: Bearer`` header. The ``url`` field in the
+            response is a download URL and is NOT used for upload.
+
+        S3 stack (``uploadParams`` non-empty):
+            Multipart form POST to ``url``. All ``uploadParams`` fields are
+            included as form fields first; the file field is appended last
+            (S3 policy requires the file to be the final part).
+
+        ABS/other signed URL (``uploadParams`` empty/null):
+            Raw PUT of the file bytes directly to ``url``.
 
         Args:
-            upload_info: Response from prepare_file_upload().
+            upload_info: Full response dict from prepare_file_upload().
             file_path: Local path to the file.
         """
-        url = upload_info["url"]
-        upload_params = upload_info.get("uploadParams", {})
-
-        # Build ordered fields: uploadParams first, file last (S3 requires file last)
-        form_fields: list[tuple[str, Any]] = [(k, (None, str(v))) for k, v in upload_params.items()]
         p = Path(file_path)
-        with p.open("rb") as fh:
-            form_fields.append(("file", (p.name, fh, "text/csv")))
-            with httpx.Client(timeout=FILE_UPLOAD_TIMEOUT) as client:
-                response = client.post(url, files=form_fields)
 
-        if response.status_code not in (200, 204):
+        gcs_params = upload_info.get("gcsUploadParams")
+        if gcs_params:
+            # GCP: PUT via GCS JSON API with short-lived OAuth2 bearer token
+            bucket = gcs_params["bucket"]
+            key = gcs_params["key"]
+            access_token = gcs_params["access_token"]
+            upload_url = f"https://storage.googleapis.com/{bucket}/{key}"
+            with p.open("rb") as fh, httpx.Client(timeout=FILE_UPLOAD_TIMEOUT) as http:
+                response = http.put(
+                    upload_url,
+                    content=fh,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+            success_codes = (200,)
+        else:
+            url = upload_info["url"]
+            upload_params = upload_info.get("uploadParams") or {}
+            with httpx.Client(timeout=FILE_UPLOAD_TIMEOUT) as http:
+                if upload_params:
+                    # S3 presigned POST: multipart form — uploadParams first, file last
+                    form_fields: list[tuple[str, Any]] = [
+                        (k, (None, str(v))) for k, v in upload_params.items()
+                    ]
+                    with p.open("rb") as fh:
+                        form_fields.append(("file", (p.name, fh, "application/octet-stream")))
+                        response = http.post(url, files=form_fields)
+                    success_codes = (200, 204)
+                else:
+                    # ABS or other signed URL: raw PUT
+                    with p.open("rb") as fh:
+                        response = http.put(url, content=fh)
+                    success_codes = (200,)
+
+        if response.status_code not in success_codes:
             raise KeboolaApiError(
                 message=f"Cloud storage upload failed (HTTP {response.status_code})",
                 status_code=response.status_code,
