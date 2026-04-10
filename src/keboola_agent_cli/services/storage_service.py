@@ -43,17 +43,26 @@ class StorageService(BaseService):
     def list_buckets(
         self,
         aliases: list[str] | None = None,
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """List storage buckets from one or more projects.
 
         Includes sharing/linked bucket metadata (sourceBucket, sourceProject)
         that is not available via MCP tools.
 
+        Args:
+            aliases: Project aliases to query. If None, queries all.
+            branch_id: If set, list buckets from a specific dev branch.
+
         Returns:
             Dict with 'buckets' list and 'errors' list.
         """
         projects = self.resolve_projects(aliases)
-        successes, errors = self._run_parallel(projects, self._fetch_buckets)
+
+        def _worker(alias: str, project: ProjectConfig) -> tuple[str, list[dict[str, Any]], bool]:
+            return self._fetch_buckets(alias, project, branch_id=branch_id)
+
+        successes, errors = self._run_parallel(projects, _worker)
 
         buckets: list[dict[str, Any]] = []
         for result in successes:
@@ -91,10 +100,16 @@ class StorageService(BaseService):
         self,
         alias: str,
         bucket_id: str,
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Get detailed bucket info including tables and sharing metadata.
 
         For linked buckets, includes the Snowflake direct access path.
+
+        Args:
+            alias: Project alias.
+            bucket_id: Bucket ID (e.g. 'in.c-db').
+            branch_id: If set, target a specific dev branch.
 
         Returns:
             Dict with bucket detail, tables, and resolved Snowflake paths.
@@ -105,7 +120,7 @@ class StorageService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             token_info = client.verify_token()
-            bucket = client.get_bucket_detail(bucket_id)
+            bucket = client.get_bucket_detail(bucket_id, branch_id=branch_id)
         finally:
             client.close()
 
@@ -177,8 +192,14 @@ class StorageService(BaseService):
         self,
         alias: str,
         bucket_id: str | None = None,
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """List tables from a project, optionally filtered by bucket.
+
+        Args:
+            alias: Project alias.
+            bucket_id: Optional bucket ID filter.
+            branch_id: If set, target a specific dev branch.
 
         Returns:
             Dict with 'tables' list.
@@ -188,7 +209,7 @@ class StorageService(BaseService):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            raw_tables = client.list_tables(bucket_id=bucket_id)
+            raw_tables = client.list_tables(bucket_id=bucket_id, branch_id=branch_id)
         finally:
             client.close()
 
@@ -222,11 +243,16 @@ class StorageService(BaseService):
         name: str,
         description: str | None = None,
         backend: str | None = None,
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Create a new storage bucket.
 
         Args:
+            alias: Project alias.
             stage: Bucket stage — must be "in" or "out".
+            description: Optional bucket description.
+            backend: Optional backend type.
+            branch_id: If set, create bucket in a specific dev branch.
 
         Returns:
             Dict with created bucket details.
@@ -244,7 +270,11 @@ class StorageService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             bucket = client.create_bucket(
-                stage=stage, name=name, description=description, backend=backend
+                stage=stage,
+                name=name,
+                description=description,
+                backend=backend,
+                branch_id=branch_id,
             )
         finally:
             client.close()
@@ -265,11 +295,17 @@ class StorageService(BaseService):
         name: str,
         columns: list[str],
         primary_key: list[str] | None = None,
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Create a new table with typed columns.
 
         Args:
+            alias: Project alias.
+            bucket_id: Target bucket ID.
+            name: Table name.
             columns: List of "name:TYPE" strings (e.g. ["id:INTEGER", "name:STRING"]).
+            primary_key: Optional list of primary key column names.
+            branch_id: If set, create table in a specific dev branch.
 
         Returns:
             Dict with created table details.
@@ -298,6 +334,7 @@ class StorageService(BaseService):
                 name=name,
                 columns=parsed_columns,
                 primary_key=primary_key,
+                branch_id=branch_id,
             )
         finally:
             client.close()
@@ -320,12 +357,23 @@ class StorageService(BaseService):
         delimiter: str = ",",
         enclosure: str = '"',
         auto_create: bool = True,
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Upload a CSV file into a storage table.
 
         When auto_create is True (default), auto-creates the bucket and/or
         table if they don't exist. Columns are inferred as STRING from the CSV
         header row. Pass auto_create=False to require the table to exist.
+
+        Args:
+            alias: Project alias.
+            table_id: Target table ID.
+            file_path: Local path to the CSV file.
+            incremental: Append rows (True) or full load (False).
+            delimiter: CSV column delimiter.
+            enclosure: CSV value enclosure character.
+            auto_create: Auto-create bucket and table if missing.
+            branch_id: If set, target a specific dev branch.
 
         Returns:
             Dict with import results plus auto_created_bucket / auto_created_table flags.
@@ -351,17 +399,24 @@ class StorageService(BaseService):
 
                     # Ensure bucket exists
                     try:
-                        client.get_bucket_detail(bucket_id)
+                        client.get_bucket_detail(bucket_id, branch_id=branch_id)
                     except KeboolaApiError as exc:
                         if exc.status_code == 404:
-                            client.create_bucket(stage=stage, name=bucket_name)
+                            client.create_bucket(
+                                stage=stage,
+                                name=bucket_name,
+                                branch_id=branch_id,
+                            )
                             auto_created_bucket = True
                             logger.info("Auto-created bucket %s", bucket_id)
                         else:
                             raise
 
                     # Ensure table exists
-                    existing = client.list_tables(bucket_id=bucket_id)
+                    existing = client.list_tables(
+                        bucket_id=bucket_id,
+                        branch_id=branch_id,
+                    )
                     if not any(t.get("name") == table_name for t in existing):
                         columns = _read_csv_header(file_path, delimiter=delimiter)
                         client.create_table(
@@ -371,6 +426,7 @@ class StorageService(BaseService):
                                 {"name": col, "definition": {"type": "STRING"}} for col in columns
                             ],
                             primary_key=None,
+                            branch_id=branch_id,
                         )
                         auto_created_table = True
                         logger.info("Auto-created table %s (%d columns)", table_id, len(columns))
@@ -381,6 +437,7 @@ class StorageService(BaseService):
                 incremental=incremental,
                 delimiter=delimiter,
                 enclosure=enclosure,
+                branch_id=branch_id,
             )
         finally:
             client.close()
@@ -405,11 +462,18 @@ class StorageService(BaseService):
         alias: str,
         table_ids: list[str],
         dry_run: bool = False,
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Delete one or more storage tables.
 
         Batch-tolerant: accumulates errors per table, one failure does not
         stop other deletes.
+
+        Args:
+            alias: Project alias.
+            table_ids: List of table IDs to delete.
+            dry_run: If True, only report what would be deleted.
+            branch_id: If set, target a specific dev branch.
 
         Returns:
             Dict with 'deleted', 'failed', 'dry_run', 'project_alias',
@@ -436,7 +500,7 @@ class StorageService(BaseService):
         try:
             for tid in table_ids:
                 try:
-                    client.delete_table(tid)
+                    client.delete_table(tid, branch_id=branch_id)
                     deleted.append(tid)
                 except KeboolaApiError as exc:
                     failed.append({"id": tid, "error": exc.message})
@@ -456,6 +520,7 @@ class StorageService(BaseService):
         bucket_ids: list[str],
         force: bool = False,
         dry_run: bool = False,
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Delete one or more storage buckets.
 
@@ -465,6 +530,13 @@ class StorageService(BaseService):
         - Without force, non-empty buckets fail at the API level.
 
         Batch-tolerant: accumulates errors per bucket.
+
+        Args:
+            alias: Project alias.
+            bucket_ids: List of bucket IDs to delete.
+            force: Force delete even if bucket has tables or is shared.
+            dry_run: If True, only report what would be deleted.
+            branch_id: If set, target a specific dev branch.
 
         Returns:
             Dict with 'deleted', 'failed', 'dry_run', 'project_alias',
@@ -484,7 +556,7 @@ class StorageService(BaseService):
             for bid in bucket_ids:
                 # Check bucket metadata for linked/shared protections
                 try:
-                    bucket = client.get_bucket_detail(bid)
+                    bucket = client.get_bucket_detail(bid, branch_id=branch_id)
                 except KeboolaApiError as exc:
                     failed.append({"id": bid, "error": exc.message})
                     continue
@@ -520,7 +592,7 @@ class StorageService(BaseService):
                     continue
 
                 try:
-                    client.delete_bucket(bid, force=force)
+                    client.delete_bucket(bid, force=force, branch_id=branch_id)
                     deleted.append(bid)
                 except KeboolaApiError as exc:
                     failed.append({"id": bid, "error": exc.message})
@@ -542,14 +614,17 @@ class StorageService(BaseService):
     # ------------------------------------------------------------------
 
     def _fetch_buckets(
-        self, alias: str, project: ProjectConfig
+        self,
+        alias: str,
+        project: ProjectConfig,
+        branch_id: int | None = None,
     ) -> tuple[str, list[dict[str, Any]], bool]:
         """Fetch buckets for a single project (worker for _run_parallel)."""
         from ..errors import KeboolaApiError
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            buckets = client.list_buckets(include="linkedBuckets")
+            buckets = client.list_buckets(include="linkedBuckets", branch_id=branch_id)
             return (alias, buckets, True)
         except KeboolaApiError as exc:
             return (

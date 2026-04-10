@@ -69,7 +69,11 @@ class TestCreateBucketService:
         assert result["stage"] == "in"
         assert result["project_alias"] == "test"
         mock_client.create_bucket.assert_called_once_with(
-            stage="in", name="my-bucket", description="Test bucket", backend=None
+            stage="in",
+            name="my-bucket",
+            description="Test bucket",
+            backend=None,
+            branch_id=None,
         )
         mock_client.close.assert_called_once()
 
@@ -87,7 +91,11 @@ class TestCreateBucketService:
         service.create_bucket(alias="test", stage="out", name="result", backend="bigquery")
 
         mock_client.create_bucket.assert_called_once_with(
-            stage="out", name="result", description=None, backend="bigquery"
+            stage="out",
+            name="result",
+            description=None,
+            backend="bigquery",
+            branch_id=None,
         )
 
     def test_api_error_propagates(self, tmp_path: Path) -> None:
@@ -154,6 +162,7 @@ class TestCreateTableService:
                 {"name": "name", "definition": {"type": "STRING"}},
             ],
             primary_key=["id"],
+            branch_id=None,
         )
         mock_client.close.assert_called_once()
 
@@ -195,6 +204,7 @@ class TestCreateTableService:
             name="t",
             columns=[{"name": "x", "definition": {"type": "STRING"}}],
             primary_key=None,
+            branch_id=None,
         )
 
     def test_invalid_column_type_raises(self, tmp_path: Path) -> None:
@@ -253,6 +263,7 @@ class TestUploadTableService:
             incremental=False,
             delimiter=",",
             enclosure='"',
+            branch_id=None,
         )
         mock_client.close.assert_called_once()
 
@@ -279,6 +290,7 @@ class TestUploadTableService:
             incremental=True,
             delimiter=",",
             enclosure='"',
+            branch_id=None,
         )
 
     def test_custom_delimiter_and_enclosure(self, tmp_path: Path) -> None:
@@ -304,6 +316,7 @@ class TestUploadTableService:
             incremental=False,
             delimiter=";",
             enclosure="'",
+            branch_id=None,
         )
 
     def test_warnings_passed_through(self, tmp_path: Path) -> None:
@@ -369,7 +382,11 @@ class TestUploadTableAutoCreate:
             file_path=str(csv_file),
         )
 
-        mock_client.create_bucket.assert_called_once_with(stage="in", name="users")
+        mock_client.create_bucket.assert_called_once_with(
+            stage="in",
+            name="users",
+            branch_id=None,
+        )
         mock_client.create_table.assert_called_once_with(
             bucket_id="in.c-users",
             name="users",
@@ -379,6 +396,7 @@ class TestUploadTableAutoCreate:
                 {"name": "email", "definition": {"type": "STRING"}},
             ],
             primary_key=None,
+            branch_id=None,
         )
         assert result["auto_created_bucket"] is True
         assert result["auto_created_table"] is True
@@ -409,6 +427,7 @@ class TestUploadTableAutoCreate:
                 {"name": "payload", "definition": {"type": "STRING"}},
             ],
             primary_key=None,
+            branch_id=None,
         )
         assert result["auto_created_bucket"] is False
         assert result["auto_created_table"] is True
@@ -575,6 +594,7 @@ class TestCreateBucketCLI:
             name="result",
             description="My output",
             backend="bigquery",
+            branch_id=None,
         )
 
     def test_create_bucket_invalid_stage(self, tmp_path: Path) -> None:
@@ -682,6 +702,7 @@ class TestCreateTableCLI:
             name="users",
             columns=["id:INTEGER", "name:STRING"],
             primary_key=["id"],
+            branch_id=None,
         )
 
     def test_create_table_no_primary_key(self, tmp_path: Path) -> None:
@@ -831,6 +852,7 @@ class TestUploadTableCLI:
             delimiter=",",
             enclosure='"',
             auto_create=True,
+            branch_id=None,
         )
 
     def test_upload_table_incremental(self, tmp_path: Path) -> None:
@@ -874,6 +896,7 @@ class TestUploadTableCLI:
             delimiter=",",
             enclosure='"',
             auto_create=True,
+            branch_id=None,
         )
 
     def test_upload_table_file_not_found(self, tmp_path: Path) -> None:
@@ -972,4 +995,211 @@ class TestUploadTableCLI:
             delimiter=",",
             enclosure='"',
             auto_create=False,
+            branch_id=None,
         )
+
+
+# ---------------------------------------------------------------------------
+# Branch support tests
+# ---------------------------------------------------------------------------
+
+
+class TestCreateBucketBranch:
+    """Tests for --branch support in create-bucket."""
+
+    def test_service_passes_branch_id(self, tmp_path: Path) -> None:
+        """create_bucket passes branch_id to client."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_bucket.return_value = {
+            "id": "in.c-my-bucket",
+            "displayName": "my-bucket",
+            "stage": "in",
+            "backend": "snowflake",
+            "description": "",
+        }
+        service = _make_service(store, mock_client)
+
+        service.create_bucket(alias="test", stage="in", name="my-bucket", branch_id=55)
+
+        mock_client.create_bucket.assert_called_once_with(
+            stage="in",
+            name="my-bucket",
+            description=None,
+            backend=None,
+            branch_id=55,
+        )
+
+    def test_cli_branch_flag(self, tmp_path: Path) -> None:
+        """storage create-bucket --branch 55 passes branch_id to service."""
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.create_bucket.return_value = {
+                "project_alias": "test",
+                "id": "in.c-my-bucket",
+                "display_name": "my-bucket",
+                "stage": "in",
+                "backend": "snowflake",
+                "description": "",
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "create-bucket",
+                    "--project",
+                    "test",
+                    "--stage",
+                    "in",
+                    "--name",
+                    "my-bucket",
+                    "--branch",
+                    "55",
+                ],
+            )
+        assert result.exit_code == 0
+        call_kwargs = svc.create_bucket.call_args.kwargs
+        assert call_kwargs["branch_id"] == 55
+
+
+class TestCreateTableBranch:
+    """Tests for --branch support in create-table."""
+
+    def test_service_passes_branch_id(self, tmp_path: Path) -> None:
+        """create_table passes branch_id to client."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.return_value = {"id": "in.c-b.users"}
+        service = _make_service(store, mock_client)
+
+        service.create_table(
+            alias="test",
+            bucket_id="in.c-b",
+            name="users",
+            columns=["id:INTEGER"],
+            branch_id=77,
+        )
+
+        mock_client.create_table.assert_called_once_with(
+            bucket_id="in.c-b",
+            name="users",
+            columns=[{"name": "id", "definition": {"type": "INTEGER"}}],
+            primary_key=None,
+            branch_id=77,
+        )
+
+    def test_cli_branch_flag(self, tmp_path: Path) -> None:
+        """storage create-table --branch 77 passes branch_id to service."""
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.create_table.return_value = {
+                "project_alias": "test",
+                "table_id": "in.c-b.users",
+                "name": "users",
+                "bucket_id": "in.c-b",
+                "primary_key": [],
+                "columns": ["id"],
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "create-table",
+                    "--project",
+                    "test",
+                    "--bucket-id",
+                    "in.c-b",
+                    "--name",
+                    "users",
+                    "--column",
+                    "id:INTEGER",
+                    "--branch",
+                    "77",
+                ],
+            )
+        assert result.exit_code == 0
+        call_kwargs = svc.create_table.call_args.kwargs
+        assert call_kwargs["branch_id"] == 77
+
+
+class TestUploadTableBranch:
+    """Tests for --branch support in upload-table."""
+
+    def test_service_passes_branch_id(self, tmp_path: Path) -> None:
+        """upload_table passes branch_id to client."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_text("id\n1\n")
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.upload_table.return_value = {"importedRowsCount": 1, "warnings": []}
+        service = _make_service(store, mock_client)
+
+        service.upload_table(
+            alias="test",
+            table_id="in.c-b.data",
+            file_path=str(csv_file),
+            auto_create=False,
+            branch_id=33,
+        )
+
+        mock_client.upload_table.assert_called_once_with(
+            table_id="in.c-b.data",
+            file_path=str(csv_file),
+            incremental=False,
+            delimiter=",",
+            enclosure='"',
+            branch_id=33,
+        )
+
+    def test_cli_branch_flag(self, tmp_path: Path) -> None:
+        """storage upload-table --branch 33 passes branch_id to service."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_text("id\n1\n")
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.upload_table.return_value = {
+                "project_alias": "test",
+                "table_id": "in.c-b.data",
+                "incremental": False,
+                "imported_rows": 1,
+                "file_size_bytes": 5,
+                "warnings": [],
+                "auto_created_bucket": False,
+                "auto_created_table": False,
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "upload-table",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-b.data",
+                    "--file",
+                    str(csv_file),
+                    "--branch",
+                    "33",
+                ],
+            )
+        assert result.exit_code == 0
+        call_kwargs = svc.upload_table.call_args.kwargs
+        assert call_kwargs["branch_id"] == 33

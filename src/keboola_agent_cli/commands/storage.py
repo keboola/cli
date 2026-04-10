@@ -8,6 +8,7 @@ from pathlib import Path
 
 import typer
 
+from ..config_store import ConfigStore
 from ..errors import ConfigError, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
@@ -15,6 +16,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    resolve_branch,
 )
 
 storage_app = typer.Typer(help="Browse and manage storage buckets and tables")
@@ -33,6 +35,11 @@ def storage_buckets(
         "--project",
         help="Project alias (can be repeated for multiple projects)",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
 ) -> None:
     """List storage buckets with sharing/linked bucket information.
 
@@ -42,9 +49,23 @@ def storage_buckets(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+
+    # --branch requires exactly one --project
+    if branch is not None and (not project or len(project) != 1):
+        formatter.error(
+            message="--branch requires exactly one --project (branch ID is per-project)",
+            error_code="INVALID_ARGUMENT",
+        )
+        raise typer.Exit(code=2)
+
+    # Resolve active branch for single-project queries
+    effective_branch: int | None = branch
+    if branch is None and project and len(project) == 1:
+        _, effective_branch = resolve_branch(config_store, formatter, project[0], None)
 
     try:
-        result = service.list_buckets(aliases=project)
+        result = service.list_buckets(aliases=project, branch_id=effective_branch)
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
@@ -102,6 +123,11 @@ def storage_bucket_detail(
         "--bucket-id",
         help="Bucket ID (e.g. in.c-db)",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
 ) -> None:
     """Show detailed bucket info including Snowflake direct access paths.
 
@@ -111,9 +137,15 @@ def storage_bucket_detail(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
 
     try:
-        result = service.get_bucket_detail(alias=project, bucket_id=bucket_id)
+        result = service.get_bucket_detail(
+            alias=project,
+            bucket_id=bucket_id,
+            branch_id=effective_branch,
+        )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
@@ -191,14 +223,26 @@ def storage_create_bucket(
         "--backend",
         help="Optional backend type (e.g. 'snowflake', 'bigquery')",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
 ) -> None:
     """Create a new storage bucket."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
 
     try:
         result = service.create_bucket(
-            alias=project, stage=stage, name=name, description=description, backend=backend
+            alias=project,
+            stage=stage,
+            name=name,
+            description=description,
+            backend=backend,
+            branch_id=effective_branch,
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
@@ -248,6 +292,11 @@ def storage_create_table(
         "--primary-key",
         help="Primary key column name. Can be repeated.",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
 ) -> None:
     """Create a new storage table with typed columns.
 
@@ -255,6 +304,8 @@ def storage_create_table(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
 
     try:
         result = service.create_table(
@@ -263,6 +314,7 @@ def storage_create_table(
             name=name,
             columns=column,
             primary_key=primary_key,
+            branch_id=effective_branch,
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
@@ -322,6 +374,11 @@ def storage_upload_table(
         help="Auto-create bucket and table if they don't exist (default: on). "
         "Columns are inferred as STRING from the CSV header row.",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
 ) -> None:
     """Upload a CSV file into a storage table.
 
@@ -331,6 +388,8 @@ def storage_upload_table(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
 
     p = Path(file)
     if not p.is_file():
@@ -352,6 +411,7 @@ def storage_upload_table(
             delimiter=delimiter,
             enclosure=enclosure,
             auto_create=auto_create,
+            branch_id=effective_branch,
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
@@ -398,13 +458,24 @@ def storage_tables(
         "--bucket-id",
         help="Filter tables by bucket ID",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
 ) -> None:
     """List storage tables from a project."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
 
     try:
-        result = service.list_tables(alias=project, bucket_id=bucket_id)
+        result = service.list_tables(
+            alias=project,
+            bucket_id=bucket_id,
+            branch_id=effective_branch,
+        )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
@@ -467,6 +538,11 @@ def storage_delete_table(
         "-y",
         help="Skip confirmation prompt",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
 ) -> None:
     """Delete one or more storage tables.
 
@@ -475,10 +551,17 @@ def storage_delete_table(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
 
     if dry_run:
         try:
-            result = service.delete_tables(alias=project, table_ids=table_id, dry_run=True)
+            result = service.delete_tables(
+                alias=project,
+                table_ids=table_id,
+                dry_run=True,
+                branch_id=effective_branch,
+            )
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code="CONFIG_ERROR")
             raise typer.Exit(code=5) from None
@@ -499,7 +582,11 @@ def storage_delete_table(
         raise typer.Exit(code=0)
 
     try:
-        result = service.delete_tables(alias=project, table_ids=table_id)
+        result = service.delete_tables(
+            alias=project,
+            table_ids=table_id,
+            branch_id=effective_branch,
+        )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
@@ -545,6 +632,11 @@ def storage_delete_bucket(
         "-y",
         help="Skip confirmation prompt",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
 ) -> None:
     """Delete one or more storage buckets.
 
@@ -554,10 +646,16 @@ def storage_delete_bucket(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
 
     try:
         result = service.delete_buckets(
-            alias=project, bucket_ids=bucket_id, force=force, dry_run=dry_run
+            alias=project,
+            bucket_ids=bucket_id,
+            force=force,
+            dry_run=dry_run,
+            branch_id=effective_branch,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")

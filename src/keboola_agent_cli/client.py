@@ -572,19 +572,23 @@ class KeboolaClient(BaseHttpClient):
         response = self._request("GET", "/v2/storage/dev-branches")
         return response.json()
 
-    def list_buckets(self, include: str | None = None) -> list[dict[str, Any]]:
+    def list_buckets(
+        self, include: str | None = None, branch_id: int | None = None
+    ) -> list[dict[str, Any]]:
         """List storage buckets with optional extended information.
 
         Args:
             include: Optional include parameter (e.g. "linkedBuckets" for sharing info).
+            branch_id: If set, list buckets from a specific dev branch.
 
         Returns:
             List of bucket dicts from the API.
         """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         params: dict[str, str] = {}
         if include:
             params["include"] = include
-        response = self._request("GET", "/v2/storage/buckets", params=params)
+        response = self._request("GET", f"{prefix}/buckets", params=params)
         return response.json()
 
     def list_buckets_with_metadata(self) -> list[dict[str, Any]]:
@@ -792,7 +796,9 @@ class KeboolaClient(BaseHttpClient):
         )
         return self._wait_for_storage_job(response.json())
 
-    def delete_bucket(self, bucket_id: str, force: bool = False) -> dict[str, Any]:
+    def delete_bucket(
+        self, bucket_id: str, force: bool = False, branch_id: int | None = None
+    ) -> dict[str, Any]:
         """Delete a bucket (async, waits for completion).
 
         Used for unlinking shared buckets or deleting regular buckets.
@@ -800,15 +806,17 @@ class KeboolaClient(BaseHttpClient):
         Args:
             bucket_id: Bucket ID to delete.
             force: If True, delete even if bucket contains tables.
+            branch_id: If set, target a specific dev branch.
 
         Returns:
             Completed storage job dict.
         """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         safe_id = quote(bucket_id, safe="")
         params: dict[str, str] = {"async": "true"}
         if force:
             params["force"] = "true"
-        response = self._request("DELETE", f"/v2/storage/buckets/{safe_id}", params=params)
+        response = self._request("DELETE", f"{prefix}/buckets/{safe_id}", params=params)
         return self._wait_for_storage_job(response.json())
 
     def create_bucket(
@@ -817,6 +825,7 @@ class KeboolaClient(BaseHttpClient):
         name: str,
         description: str | None = None,
         backend: str | None = None,
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Create a new storage bucket (sync).
 
@@ -825,16 +834,18 @@ class KeboolaClient(BaseHttpClient):
             name: Bucket name slug (e.g. "my-bucket").
             description: Optional description.
             backend: Optional backend type (e.g. "snowflake", "bigquery").
+            branch_id: If set, create bucket in a specific dev branch.
 
         Returns:
             New bucket dict from the API.
         """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         body: dict[str, str] = {"stage": stage, "name": name}
         if description is not None:
             body["description"] = description
         if backend is not None:
             body["backend"] = backend
-        response = self._request("POST", "/v2/storage/buckets", json=body)
+        response = self._request("POST", f"{prefix}/buckets", json=body)
         return response.json()
 
     def create_table(
@@ -843,6 +854,7 @@ class KeboolaClient(BaseHttpClient):
         name: str,
         columns: list[dict[str, Any]],
         primary_key: list[str] | None = None,
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Create a new table with typed columns (async, waits for completion).
 
@@ -852,19 +864,19 @@ class KeboolaClient(BaseHttpClient):
             columns: List of column dicts with "name" and "definition.type" keys,
                      e.g. [{"name": "id", "definition": {"type": "INTEGER"}}].
             primary_key: Optional list of column names for the primary key.
+            branch_id: If set, create table in a specific dev branch.
 
         Returns:
             Completed storage job results dict.
         """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         safe_id = quote(bucket_id, safe="")
         body: dict[str, Any] = {
             "name": name,
             "primaryKeysNames": primary_key or [],
             "columns": columns,
         }
-        response = self._request(
-            "POST", f"/v2/storage/buckets/{safe_id}/tables-definition", json=body
-        )
+        response = self._request("POST", f"{prefix}/buckets/{safe_id}/tables-definition", json=body)
         job = self._wait_for_storage_job(response.json())
         return job.get("results", {})
 
@@ -970,6 +982,7 @@ class KeboolaClient(BaseHttpClient):
         incremental: bool = False,
         delimiter: str = ",",
         enclosure: str = '"',
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Trigger async import of a pre-uploaded file into a table (step 3).
 
@@ -981,10 +994,12 @@ class KeboolaClient(BaseHttpClient):
             incremental: If True, append rows; if False, full load.
             delimiter: CSV column delimiter.
             enclosure: CSV value enclosure character.
+            branch_id: If set, target a specific dev branch.
 
         Returns:
             Completed import job dict.
         """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         safe_id = quote(table_id, safe="")
         body: dict[str, str] = {
             "dataFileId": str(file_id),
@@ -992,7 +1007,7 @@ class KeboolaClient(BaseHttpClient):
             "delimiter": delimiter,
             "enclosure": enclosure,
         }
-        response = self._request("POST", f"/v2/storage/tables/{safe_id}/import-async", data=body)
+        response = self._request("POST", f"{prefix}/tables/{safe_id}/import-async", data=body)
         return self._wait_for_storage_job(response.json(), max_wait=IMPORT_JOB_MAX_WAIT)
 
     def upload_table(
@@ -1002,6 +1017,7 @@ class KeboolaClient(BaseHttpClient):
         incremental: bool = False,
         delimiter: str = ",",
         enclosure: str = '"',
+        branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Upload a CSV file into an existing table (async, waits for completion).
 
@@ -1016,6 +1032,7 @@ class KeboolaClient(BaseHttpClient):
             incremental: If True, append rows; if False (default), full load.
             delimiter: CSV column delimiter (default ",").
             enclosure: CSV value enclosure character (default '"').
+            branch_id: If set, target a specific dev branch.
 
         Returns:
             Import results dict with importedRowsCount, warnings, etc.
@@ -1031,22 +1048,23 @@ class KeboolaClient(BaseHttpClient):
             incremental=incremental,
             delimiter=delimiter,
             enclosure=enclosure,
+            branch_id=branch_id,
         )
         return job.get("results", {})
 
-    def delete_table(self, table_id: str) -> dict[str, Any]:
+    def delete_table(self, table_id: str, branch_id: int | None = None) -> dict[str, Any]:
         """Delete a storage table (async, waits for completion).
 
         Args:
             table_id: Full table ID (e.g. "in.c-bucket.table").
+            branch_id: If set, target a specific dev branch.
 
         Returns:
             Completed storage job dict.
         """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         safe_id = quote(table_id, safe="")
-        response = self._request(
-            "DELETE", f"/v2/storage/tables/{safe_id}", params={"async": "true"}
-        )
+        response = self._request("DELETE", f"{prefix}/tables/{safe_id}", params={"async": "true"})
         return self._wait_for_storage_job(response.json())
 
     def list_tables_with_metadata(self) -> list[dict[str, Any]]:

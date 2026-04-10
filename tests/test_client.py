@@ -1100,6 +1100,37 @@ class TestListBuckets:
             result = client.list_buckets()
             assert result == []
 
+    def test_list_buckets_with_branch_id(self, httpx_mock) -> None:
+        """list_buckets(branch_id=123) uses branch-prefixed URL."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/123/buckets",
+            json=SAMPLE_BUCKETS,
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.list_buckets(branch_id=123)
+            assert len(result) == 2
+            assert result[0]["id"] == "in.c-data"
+
+    def test_list_buckets_with_branch_id_and_include(self, httpx_mock) -> None:
+        """list_buckets(branch_id=123, include=) combines branch prefix with params."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/123/buckets?include=linkedBuckets",
+            json=SAMPLE_BUCKETS_WITH_SHARING,
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.list_buckets(include="linkedBuckets", branch_id=123)
+            assert len(result) == 1
+
 
 class TestApiErrorMessageTruncation:
     """Tests for S4: API error message truncation to 500 characters."""
