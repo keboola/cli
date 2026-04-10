@@ -7,13 +7,35 @@ kbagent is the bridge between your AI and Keboola. It respects real engineering 
 ```bash
 # Install
 uv tool install git+https://github.com/padak/keboola_agent_cli
-
-# Connect a project
-kbagent project add --project prod --url https://connection.keboola.com --token YOUR_TOKEN
-
-# Or onboard an entire organization at once
-KBC_MANAGE_API_TOKEN=xxx kbagent org setup --org-id 123 --url https://connection.keboola.com --yes
 ```
+
+### Quick start -- pick your path
+
+**Org admin** (registers all projects in one shot):
+```bash
+KBC_MANAGE_API_TOKEN=your-manage-token \
+  kbagent org setup --org-id 123 --url https://connection.keboola.com --yes
+```
+
+**Project member** (no org-admin rights needed -- uses a Personal Access Token):
+```bash
+KBC_MANAGE_API_TOKEN=your-personal-access-token \
+  kbagent org setup --project-ids 123,456 --url https://connection.keboola.com --yes
+```
+PAT is available in Keboola UI under *Account Settings > Personal Access Tokens*.
+
+Both variants auto-create Storage API tokens with minimal scope and register the projects in kbagent.
+
+<details>
+<summary>Manual single-project setup (advanced)</summary>
+
+If you already have a Storage API token and want to add one project manually:
+
+```bash
+kbagent project add --project prod --url https://connection.keboola.com --token YOUR_TOKEN
+```
+
+</details>
 
 ## For AI agents (Claude Code, Codex, Gemini)
 
@@ -64,7 +86,7 @@ kbagent org       setup
 kbagent component list | detail
 kbagent config    list | detail | search | update | delete | new
 kbagent job       list | detail
-kbagent storage   buckets | bucket-detail | tables | delete-table | delete-bucket
+kbagent storage   buckets | bucket-detail | tables | create-bucket | create-table | upload-table | delete-table | delete-bucket
 kbagent sharing   list | share | unshare | link | unlink
 kbagent lineage   show
 kbagent branch    list | create | use | reset | delete | merge
