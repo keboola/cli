@@ -42,7 +42,6 @@ markers = [
 target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
-exclude = ["tests/_test_upload_client_append.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B", "SIM", "RUF"]
