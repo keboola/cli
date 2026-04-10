@@ -971,7 +971,7 @@ class KeboolaClient(BaseHttpClient):
 
         Uses the file-first async flow to support files up to 5 GB:
         1. Register file with Storage API → get presigned cloud upload URL
-        2. Upload file bytes directly to cloud storage (S3/GCS/ABS)
+        2. Upload file bytes directly to cloud storage (S3/GCS; ABS not yet supported)
         3. Trigger import-async job → poll until complete
 
         Args:

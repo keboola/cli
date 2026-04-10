@@ -1698,3 +1698,225 @@ class TestLoadWorkspaceTablesPreserve:
             request = httpx_mock.get_requests()[0]
             body = json.loads(request.content)
             assert body["preserve"] is True
+
+
+"""Client tests for async table upload: prepare_file_upload, _upload_to_cloud,
+import_table_async, upload_table -- appended to test_client.py via script."""
+
+_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+_BASE = "https://connection.keboola.com"
+
+
+class TestPrepareFileUpload:
+    """Tests for KeboolaClient.prepare_file_upload()."""
+
+    def test_sends_only_name_and_size(self, httpx_mock) -> None:
+        """prepare_file_upload sends name and sizeBytes but NOT isPermanent/isPublic."""
+        from urllib.parse import parse_qs
+
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/files/prepare",
+            method="POST",
+            json={"id": 999, "url": "https://s3.example.com/", "uploadParams": {}},
+            status_code=200,
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            result = client.prepare_file_upload(name="data.csv", size_bytes=1234)
+
+        assert result["id"] == 999
+        request = httpx_mock.get_requests()[0]
+        body = parse_qs(request.content.decode())
+        assert body["name"] == ["data.csv"]
+        assert body["sizeBytes"] == ["1234"]
+        assert "isPermanent" not in body
+        assert "isPublic" not in body
+
+    def test_api_error_propagates(self, httpx_mock) -> None:
+        """prepare_file_upload raises KeboolaApiError on API failure."""
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/files/prepare",
+            method="POST",
+            json={"error": "Unauthorized"},
+            status_code=401,
+        )
+        with (
+            KeboolaClient(stack_url=_BASE, token=_TOKEN) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.prepare_file_upload(name="data.csv", size_bytes=100)
+        assert exc_info.value.status_code == 401
+
+
+class TestUploadToCloud:
+    """Tests for KeboolaClient._upload_to_cloud()."""
+
+    def test_success_204(self, httpx_mock, tmp_path) -> None:
+        """_upload_to_cloud succeeds when cloud storage returns 204 (S3)."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_bytes(b"id,name\n1,Alice\n")
+        httpx_mock.add_response(
+            url="https://s3.amazonaws.com/kbc-test/",
+            method="POST",
+            status_code=204,
+        )
+        upload_info = {
+            "url": "https://s3.amazonaws.com/kbc-test/",
+            "uploadParams": {"key": "exp/data.csv", "AWSAccessKeyId": "AKID"},
+        }
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client._upload_to_cloud(upload_info, str(csv_file))
+
+        assert any(r.url.host == "s3.amazonaws.com" for r in httpx_mock.get_requests())
+
+    def test_success_200(self, httpx_mock, tmp_path) -> None:
+        """_upload_to_cloud succeeds when cloud storage returns 200 (GCS)."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_bytes(b"id\n1\n")
+        httpx_mock.add_response(
+            url="https://storage.googleapis.com/kbc-test/",
+            method="POST",
+            status_code=200,
+        )
+        upload_info = {
+            "url": "https://storage.googleapis.com/kbc-test/",
+            "uploadParams": {"GoogleAccessId": "sa@project.iam.gserviceaccount.com"},
+        }
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client._upload_to_cloud(upload_info, str(csv_file))
+
+    def test_non_success_raises(self, httpx_mock, tmp_path) -> None:
+        """_upload_to_cloud raises KeboolaApiError when cloud storage returns error."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_bytes(b"id\n1\n")
+        httpx_mock.add_response(
+            url="https://s3.amazonaws.com/kbc-test/",
+            method="POST",
+            status_code=403,
+        )
+        upload_info = {"url": "https://s3.amazonaws.com/kbc-test/", "uploadParams": {}}
+        with (
+            KeboolaClient(stack_url=_BASE, token=_TOKEN) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client._upload_to_cloud(upload_info, str(csv_file))
+        assert exc_info.value.error_code == "UPLOAD_FAILED"
+        assert exc_info.value.status_code == 403
+
+
+class TestImportTableAsync:
+    """Tests for KeboolaClient.import_table_async()."""
+
+    def test_polls_until_success(self, httpx_mock) -> None:
+        """import_table_async POSTs to import-async and polls until job succeeds."""
+        from urllib.parse import parse_qs
+
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/tables/in.c-b.users/import-async",
+            method="POST",
+            json={"id": 42, "status": "waiting"},
+            status_code=201,
+        )
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/jobs/42",
+            method="GET",
+            json={"id": 42, "status": "success", "results": {"importedRowsCount": 5}},
+            status_code=200,
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            job = client.import_table_async(table_id="in.c-b.users", file_id=999, incremental=True)
+
+        assert job["status"] == "success"
+        post_req = next(r for r in httpx_mock.get_requests() if r.method == "POST")
+        body = parse_qs(post_req.content.decode())
+        assert body["dataFileId"] == ["999"]
+        assert body["incremental"] == ["1"]
+
+    def test_job_failure_raises(self, httpx_mock) -> None:
+        """import_table_async raises KeboolaApiError when import job fails."""
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/tables/in.c-b.users/import-async",
+            method="POST",
+            json={"id": 77, "status": "waiting"},
+            status_code=201,
+        )
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/jobs/77",
+            method="GET",
+            json={"id": 77, "status": "error", "error": {"message": "Import failed"}},
+            status_code=200,
+        )
+        with (
+            KeboolaClient(stack_url=_BASE, token=_TOKEN) as client,
+            pytest.raises(KeboolaApiError, match="Import failed"),
+        ):
+            client.import_table_async(table_id="in.c-b.users", file_id=999)
+
+
+class TestUploadTableClient:
+    """Tests for KeboolaClient.upload_table() -- full 3-step async flow."""
+
+    def test_full_flow(self, httpx_mock, tmp_path) -> None:
+        """upload_table orchestrates prepare -> cloud upload -> import-async -> poll."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_bytes(b"id,name\n1,Alice\n2,Bob\n")
+
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/files/prepare",
+            method="POST",
+            json={
+                "id": 100,
+                "url": "https://s3.amazonaws.com/kbc-test/",
+                "uploadParams": {"key": "exp/data.csv"},
+            },
+            status_code=200,
+        )
+        httpx_mock.add_response(
+            url="https://s3.amazonaws.com/kbc-test/",
+            method="POST",
+            status_code=204,
+        )
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/tables/in.c-b.users/import-async",
+            method="POST",
+            json={"id": 55, "status": "waiting"},
+            status_code=201,
+        )
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/jobs/55",
+            method="GET",
+            json={
+                "id": 55,
+                "status": "success",
+                "results": {"importedRowsCount": 2, "warnings": []},
+            },
+            status_code=200,
+        )
+
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            result = client.upload_table(table_id="in.c-b.users", file_path=str(csv_file))
+
+        assert result.get("importedRowsCount") == 2
+
+    def test_cloud_upload_failure_raises(self, httpx_mock, tmp_path) -> None:
+        """upload_table raises KeboolaApiError if cloud upload returns error."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_bytes(b"id\n1\n")
+
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/files/prepare",
+            method="POST",
+            json={"id": 101, "url": "https://s3.amazonaws.com/kbc/", "uploadParams": {}},
+            status_code=200,
+        )
+        httpx_mock.add_response(
+            url="https://s3.amazonaws.com/kbc/",
+            method="POST",
+            status_code=403,
+        )
+
+        with (
+            KeboolaClient(stack_url=_BASE, token=_TOKEN) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.upload_table(table_id="in.c-b.users", file_path=str(csv_file))
+        assert exc_info.value.error_code == "UPLOAD_FAILED"
