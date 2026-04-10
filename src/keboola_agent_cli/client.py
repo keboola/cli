@@ -884,12 +884,11 @@ class KeboolaClient(BaseHttpClient):
         Returns:
             File resource dict including 'id' (fileId), 'url', and 'uploadParams'.
         """
-        body: dict[str, Any] = {
-            "name": name,
-            "sizeBytes": size_bytes,
-            "isPermanent": False,
-            "isPublic": False,
-        }
+        # Only send the two required fields. Omit optional booleans (isPermanent,
+        # isPublic) so Python's False doesn't serialize to the string "False" in
+        # form-data — which some backends treat as truthy, potentially making
+        # files permanent or publicly accessible.
+        body: dict[str, Any] = {"name": name, "sizeBytes": size_bytes}
         response = self._request("POST", "/v2/storage/files/prepare", data=body)
         return response.json()
 
@@ -901,7 +900,9 @@ class KeboolaClient(BaseHttpClient):
         """Upload a file to cloud storage using the presigned URL from files/prepare.
 
         Handles S3 and GCS presigned POST uploads. The uploadParams fields are
-        posted as form data with the file appended last (required by S3).
+        posted as multipart form data with the file appended last (S3 requires
+        the file to be the last part). Azure Blob Storage (ABS) backends use a
+        different upload mechanism (PUT to a SAS URL) and are not yet supported.
 
         Args:
             upload_info: Response from prepare_file_upload().
@@ -984,7 +985,8 @@ class KeboolaClient(BaseHttpClient):
             Import results dict with importedRowsCount, warnings, etc.
         """
         p = Path(file_path)
-        upload_info = self.prepare_file_upload(name=p.name, size_bytes=p.stat().st_size)
+        size_bytes = p.stat().st_size
+        upload_info = self.prepare_file_upload(name=p.name, size_bytes=size_bytes)
         file_id = upload_info["id"]
         self._upload_to_cloud(upload_info, file_path)
         job = self.import_table_async(
