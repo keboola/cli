@@ -316,8 +316,19 @@ def storage_upload_table(
         "--enclosure",
         help="CSV value enclosure character (default: '\"')'",
     ),
+    auto_create: bool = typer.Option(
+        True,
+        "--auto-create/--no-auto-create",
+        help="Auto-create bucket and table if they don't exist (default: on). "
+        "Columns are inferred as STRING from the CSV header row.",
+    ),
 ) -> None:
-    """Upload a CSV file into an existing storage table."""
+    """Upload a CSV file into a storage table.
+
+    Auto-creates the bucket and table if they don't exist (columns inferred as
+    STRING from the CSV header). Use --no-auto-create to require the table to
+    already exist.
+    """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
 
@@ -333,7 +344,11 @@ def storage_upload_table(
             incremental=incremental,
             delimiter=delimiter,
             enclosure=enclosure,
+            auto_create=auto_create,
         )
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        raise typer.Exit(code=2) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
@@ -344,6 +359,12 @@ def storage_upload_table(
     if formatter.json_mode:
         formatter.output(result)
     else:
+        parts = result["table_id"].split(".")
+        bucket_id = ".".join(parts[:2]) if len(parts) == 3 else ""
+        if result.get("auto_created_bucket") and bucket_id:
+            formatter.console.print(f"[dim]Created bucket: {bucket_id}[/dim]")
+        if result.get("auto_created_table"):
+            formatter.console.print(f"[dim]Created table: {result['table_id']}[/dim]")
         load_type = "incremental" if result["incremental"] else "full"
         size_mb = result.get("file_size_bytes", 0) / (1024 * 1024)
         formatter.console.print(

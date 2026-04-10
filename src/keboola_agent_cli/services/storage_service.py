@@ -4,6 +4,7 @@ Provides direct access to Storage API data including sharing/linked bucket
 metadata that MCP tools strip from responses.
 """
 
+import csv
 import logging
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,24 @@ from ..models import ProjectConfig
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
+
+
+def _read_csv_header(file_path: str, delimiter: str = ",") -> list[str]:
+    """Return column names from the first row of a CSV file.
+
+    Strips leading/trailing whitespace and skips empty fields. Handles
+    UTF-8 BOM automatically (utf-8-sig encoding).
+
+    Raises:
+        ValueError: If the first row is empty or contains no non-empty fields.
+    """
+    with open(file_path, newline="", encoding="utf-8-sig") as fh:
+        reader = csv.reader(fh, delimiter=delimiter)
+        header = next(reader, [])
+    columns = [col.strip() for col in header if col.strip()]
+    if not columns:
+        raise ValueError("CSV file has no column headers in the first row.")
+    return columns
 
 
 class StorageService(BaseService):
@@ -300,19 +319,62 @@ class StorageService(BaseService):
         incremental: bool = False,
         delimiter: str = ",",
         enclosure: str = '"',
+        auto_create: bool = True,
     ) -> dict[str, Any]:
-        """Upload a CSV file into an existing table.
+        """Upload a CSV file into a storage table.
+
+        When auto_create is True (default), auto-creates the bucket and/or
+        table if they don't exist. Columns are inferred as STRING from the CSV
+        header row. Pass auto_create=False to require the table to exist.
 
         Returns:
-            Dict with import job results.
+            Dict with import results plus auto_created_bucket / auto_created_table flags.
         """
+        from ..errors import KeboolaApiError
+
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
         file_size_bytes = Path(file_path).stat().st_size
 
+        auto_created_bucket = False
+        auto_created_table = False
+
         client = self._client_factory(project.stack_url, project.token)
         try:
+            if auto_create:
+                parts = table_id.split(".")
+                if len(parts) == 3:
+                    stage, bucket_slug, table_name = parts
+                    bucket_id = f"{stage}.{bucket_slug}"
+                    bucket_name = bucket_slug[2:] if bucket_slug.startswith("c-") else bucket_slug
+
+                    # Ensure bucket exists
+                    try:
+                        client.get_bucket_detail(bucket_id)
+                    except KeboolaApiError as exc:
+                        if exc.status_code == 404:
+                            client.create_bucket(stage=stage, name=bucket_name)
+                            auto_created_bucket = True
+                            logger.info("Auto-created bucket %s", bucket_id)
+                        else:
+                            raise
+
+                    # Ensure table exists
+                    existing = client.list_tables(bucket_id=bucket_id)
+                    if not any(t.get("name") == table_name for t in existing):
+                        columns = _read_csv_header(file_path, delimiter=delimiter)
+                        client.create_table(
+                            bucket_id=bucket_id,
+                            name=table_name,
+                            columns=[
+                                {"name": col, "definition": {"type": "STRING"}} for col in columns
+                            ],
+                            primary_key=None,
+                        )
+                        auto_created_table = True
+                        logger.info("Auto-created table %s (%d columns)", table_id, len(columns))
+
             results = client.upload_table(
                 table_id=table_id,
                 file_path=file_path,
@@ -330,6 +392,8 @@ class StorageService(BaseService):
             "file_size_bytes": file_size_bytes,
             "imported_rows": results.get("importedRowsCount"),
             "warnings": results.get("warnings", []),
+            "auto_created_bucket": auto_created_bucket,
+            "auto_created_table": auto_created_table,
         }
 
     # ------------------------------------------------------------------

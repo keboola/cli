@@ -238,6 +238,7 @@ class TestUploadTableService:
             alias="test",
             table_id="in.c-b.users",
             file_path=str(csv_file),
+            auto_create=False,
         )
 
         assert result["table_id"] == "in.c-b.users"
@@ -268,6 +269,7 @@ class TestUploadTableService:
             table_id="in.c-b.events",
             file_path=str(csv_file),
             incremental=True,
+            auto_create=False,
         )
 
         assert result["incremental"] is True
@@ -293,6 +295,7 @@ class TestUploadTableService:
             file_path=str(csv_file),
             delimiter=";",
             enclosure="'",
+            auto_create=False,
         )
 
         mock_client.upload_table.assert_called_once_with(
@@ -314,7 +317,9 @@ class TestUploadTableService:
         }
         service = _make_service(store, mock_client)
 
-        result = service.upload_table(alias="test", table_id="in.c-b.t", file_path=str(csv_file))
+        result = service.upload_table(
+            alias="test", table_id="in.c-b.t", file_path=str(csv_file), auto_create=False
+        )
 
         assert result["warnings"] == ["Duplicate rows skipped"]
 
@@ -329,9 +334,162 @@ class TestUploadTableService:
         service = _make_service(store, mock_client)
 
         with pytest.raises(KeboolaApiError):
-            service.upload_table(alias="test", table_id="in.c-b.t", file_path=str(csv_file))
+            service.upload_table(
+                alias="test", table_id="in.c-b.t", file_path=str(csv_file), auto_create=False
+            )
 
         mock_client.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Service tests: upload_table auto-create
+# ---------------------------------------------------------------------------
+
+
+class TestUploadTableAutoCreate:
+    """Tests for StorageService.upload_table() auto-create behaviour."""
+
+    def test_auto_creates_bucket_and_table(self, tmp_path: Path) -> None:
+        """When bucket and table are missing, both are created before upload."""
+        csv_file = tmp_path / "users.csv"
+        csv_file.write_text("id,name,email\n1,Alice,a@b.com\n")
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        # Bucket does not exist → 404
+        mock_client.get_bucket_detail.side_effect = KeboolaApiError(
+            "Bucket not found", status_code=404, error_code="storage.buckets.notFound"
+        )
+        mock_client.list_tables.return_value = []  # table also absent after bucket create
+        mock_client.upload_table.return_value = {"importedRowsCount": 1, "warnings": []}
+        service = _make_service(store, mock_client)
+
+        result = service.upload_table(
+            alias="test",
+            table_id="in.c-users.users",
+            file_path=str(csv_file),
+        )
+
+        mock_client.create_bucket.assert_called_once_with(stage="in", name="users")
+        mock_client.create_table.assert_called_once_with(
+            bucket_id="in.c-users",
+            name="users",
+            columns=[
+                {"name": "id", "definition": {"type": "STRING"}},
+                {"name": "name", "definition": {"type": "STRING"}},
+                {"name": "email", "definition": {"type": "STRING"}},
+            ],
+            primary_key=None,
+        )
+        assert result["auto_created_bucket"] is True
+        assert result["auto_created_table"] is True
+
+    def test_auto_creates_table_only_when_bucket_exists(self, tmp_path: Path) -> None:
+        """When bucket exists but table is missing, only the table is created."""
+        csv_file = tmp_path / "events.csv"
+        csv_file.write_text("ts,payload\n2024-01-01,hello\n")
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_bucket_detail.return_value = {"id": "in.c-logs"}  # bucket exists
+        mock_client.list_tables.return_value = []  # table absent
+        mock_client.upload_table.return_value = {"importedRowsCount": 1, "warnings": []}
+        service = _make_service(store, mock_client)
+
+        result = service.upload_table(
+            alias="test",
+            table_id="in.c-logs.events",
+            file_path=str(csv_file),
+        )
+
+        mock_client.create_bucket.assert_not_called()
+        mock_client.create_table.assert_called_once_with(
+            bucket_id="in.c-logs",
+            name="events",
+            columns=[
+                {"name": "ts", "definition": {"type": "STRING"}},
+                {"name": "payload", "definition": {"type": "STRING"}},
+            ],
+            primary_key=None,
+        )
+        assert result["auto_created_bucket"] is False
+        assert result["auto_created_table"] is True
+
+    def test_no_auto_create_when_both_exist(self, tmp_path: Path) -> None:
+        """When bucket and table both exist, nothing is created."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_text("x\n1\n")
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_bucket_detail.return_value = {"id": "in.c-b"}
+        mock_client.list_tables.return_value = [{"name": "data"}]
+        mock_client.upload_table.return_value = {"importedRowsCount": 1, "warnings": []}
+        service = _make_service(store, mock_client)
+
+        result = service.upload_table(
+            alias="test",
+            table_id="in.c-b.data",
+            file_path=str(csv_file),
+        )
+
+        mock_client.create_bucket.assert_not_called()
+        mock_client.create_table.assert_not_called()
+        assert result["auto_created_bucket"] is False
+        assert result["auto_created_table"] is False
+
+    def test_auto_create_false_skips_all_checks(self, tmp_path: Path) -> None:
+        """With auto_create=False, no existence checks or creates are made."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_text("x\n1\n")
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.upload_table.return_value = {"importedRowsCount": 1, "warnings": []}
+        service = _make_service(store, mock_client)
+
+        service.upload_table(
+            alias="test",
+            table_id="in.c-b.data",
+            file_path=str(csv_file),
+            auto_create=False,
+        )
+
+        mock_client.get_bucket_detail.assert_not_called()
+        mock_client.list_tables.assert_not_called()
+        mock_client.create_bucket.assert_not_called()
+        mock_client.create_table.assert_not_called()
+
+    def test_bucket_404_non_404_api_error_propagates(self, tmp_path: Path) -> None:
+        """A non-404 error from get_bucket_detail is re-raised."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_text("x\n1\n")
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_bucket_detail.side_effect = KeboolaApiError(
+            "Forbidden", status_code=403, error_code="FORBIDDEN"
+        )
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError, match="Forbidden"):
+            service.upload_table(
+                alias="test",
+                table_id="in.c-b.t",
+                file_path=str(csv_file),
+            )
+
+    def test_empty_csv_header_raises_value_error(self, tmp_path: Path) -> None:
+        """If the CSV has an empty header row, a ValueError is raised."""
+        csv_file = tmp_path / "empty.csv"
+        csv_file.write_text("\n1,2\n")
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_bucket_detail.return_value = {"id": "in.c-b"}
+        mock_client.list_tables.return_value = []  # table missing → will try to read header
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(ValueError, match="no column headers"):
+            service.upload_table(
+                alias="test",
+                table_id="in.c-b.t",
+                file_path=str(csv_file),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -669,6 +827,7 @@ class TestUploadTableCLI:
             incremental=False,
             delimiter=",",
             enclosure='"',
+            auto_create=True,
         )
 
     def test_upload_table_incremental(self, tmp_path: Path) -> None:
@@ -711,6 +870,7 @@ class TestUploadTableCLI:
             incremental=True,
             delimiter=",",
             enclosure='"',
+            auto_create=True,
         )
 
     def test_upload_table_file_not_found(self, tmp_path: Path) -> None:
@@ -764,3 +924,49 @@ class TestUploadTableCLI:
                 ],
             )
         assert result.exit_code != 0
+
+    def test_upload_table_no_auto_create_flag(self, tmp_path: Path) -> None:
+        """--no-auto-create passes auto_create=False to the service."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_text("id\n1\n")
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.upload_table.return_value = {
+                "project_alias": "test",
+                "table_id": "in.c-b.users",
+                "incremental": False,
+                "imported_rows": 1,
+                "warnings": [],
+                "auto_created_bucket": False,
+                "auto_created_table": False,
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "upload-table",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-b.users",
+                    "--file",
+                    str(csv_file),
+                    "--no-auto-create",
+                ],
+            )
+        assert result.exit_code == 0
+        svc.upload_table.assert_called_once_with(
+            alias="test",
+            table_id="in.c-b.users",
+            file_path=str(csv_file),
+            incremental=False,
+            delimiter=",",
+            enclosure='"',
+            auto_create=False,
+        )

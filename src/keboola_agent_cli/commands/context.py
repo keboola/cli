@@ -123,9 +123,10 @@ Use `kbagent <command> --help` for full flag details and examples.
     Create a typed table. --column repeatable. Types: STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP.
     Column type defaults to STRING if omitted (e.g. --column name is equivalent to --column name:STRING).
 
-  kbagent storage upload-table --project NAME --table-id TABLE_ID --file PATH [--incremental] [--delimiter D] [--enclosure E]
-    Upload CSV into an existing table. Full load by default; --incremental to append rows.
-    Supports files up to 5 GB via async file-first upload flow.
+  kbagent storage upload-table --project NAME --table-id TABLE_ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create]
+    Upload CSV into a table. Auto-creates bucket and table if missing (columns inferred as STRING from CSV header).
+    Use --no-auto-create to require the table to already exist.
+    Full load by default; --incremental to append rows. Supports files up to 5 GB via async file-first upload flow.
 
   kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes]
     Delete one or more tables. Batch: repeat --table-id. --dry-run to preview.
