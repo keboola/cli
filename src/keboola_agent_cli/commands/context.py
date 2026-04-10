@@ -111,32 +111,32 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Storage
 
-  kbagent storage buckets [--project NAME]
-    List buckets with sharing/linked info. Shows source project for linked buckets.
+  kbagent storage buckets [--project NAME] [--branch ID]
+    List buckets with sharing/linked info. Shows source project for linked buckets. Branch-aware.
 
-  kbagent storage bucket-detail --project NAME --bucket-id BUCKET_ID
-    Bucket detail with Snowflake direct access paths. Resolves linked bucket source DB.
+  kbagent storage bucket-detail --project NAME --bucket-id BUCKET_ID [--branch ID]
+    Bucket detail with Snowflake direct access paths. Resolves linked bucket source DB. Branch-aware.
 
-  kbagent storage tables --project NAME [--bucket-id BUCKET_ID]
-    List storage tables, optionally filtered by bucket.
+  kbagent storage tables --project NAME [--bucket-id BUCKET_ID] [--branch ID]
+    List storage tables, optionally filtered by bucket. Branch-aware.
 
-  kbagent storage create-bucket --project NAME --stage STAGE --name BUCKET_NAME [--description D] [--backend B]
-    Create a new storage bucket. Stage must be "in" or "out".
+  kbagent storage create-bucket --project NAME --stage STAGE --name BUCKET_NAME [--description D] [--backend B] [--branch ID]
+    Create a new storage bucket. Stage must be "in" or "out". Branch-aware.
 
-  kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME --column col:TYPE [...] [--primary-key COL]
+  kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME --column col:TYPE [...] [--primary-key COL] [--branch ID]
     Create a typed table. --column repeatable. Types: STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP.
-    Column type defaults to STRING if omitted (e.g. --column name is equivalent to --column name:STRING).
+    Column type defaults to STRING if omitted (e.g. --column name is equivalent to --column name:STRING). Branch-aware.
 
-  kbagent storage upload-table --project NAME --table-id TABLE_ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create]
+  kbagent storage upload-table --project NAME --table-id TABLE_ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--branch ID]
     Upload CSV into a table. Auto-creates bucket and table if missing (columns inferred as STRING from CSV header).
     Use --no-auto-create to require the table to already exist.
-    Full load by default; --incremental to append rows. Supports files up to 5 GB via async file-first upload flow.
+    Full load by default; --incremental to append rows. Supports files up to 5 GB via async file-first upload flow. Branch-aware.
 
-  kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes]
-    Delete one or more tables. Batch: repeat --table-id. --dry-run to preview.
+  kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes] [--branch ID]
+    Delete one or more tables. Batch: repeat --table-id. --dry-run to preview. Branch-aware.
 
-  kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes]
-    Delete one or more buckets. --force cascade-deletes tables. Linked/shared buckets protected.
+  kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
+    Delete one or more buckets. --force cascade-deletes tables. Linked/shared buckets protected. Branch-aware.
 
 ### Sharing (Cross-Project)
 

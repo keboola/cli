@@ -233,11 +233,14 @@ kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [
 kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
 kbagent job detail --project NAME --job-id ID
 
-kbagent storage buckets [--project NAME]
-kbagent storage bucket-detail --project NAME --bucket-id ID
-kbagent storage tables --project NAME [--bucket-id ID]
-kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes]
-kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes]
+kbagent storage buckets [--project NAME] [--branch ID]
+kbagent storage bucket-detail --project NAME --bucket-id ID [--branch ID]
+kbagent storage tables --project NAME [--bucket-id ID] [--branch ID]
+kbagent storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
+kbagent storage create-table --project NAME --bucket-id ID --name NAME --column COL:TYPE [...] [--primary-key COL] [--branch ID]
+kbagent storage upload-table --project NAME --table-id ID --file PATH [--incremental] [--branch ID]
+kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes] [--branch ID]
+kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
 
 kbagent lineage show [--project NAME]   # also works as just: kbagent lineage
 

@@ -30,9 +30,14 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `job detail --project NAME --job-id ID` -- full job detail with timing and result message
 
 ## Storage
-- `storage buckets [--project NAME]` -- list buckets with sharing/linked info
-- `storage bucket-detail --project NAME --bucket-id ID` -- bucket detail with Snowflake paths
-- `storage tables --project NAME [--bucket-id ID]` -- list tables, optionally by bucket
+- `storage buckets [--project NAME] [--branch ID]` -- list buckets with sharing/linked info (branch-aware)
+- `storage bucket-detail --project NAME --bucket-id ID [--branch ID]` -- bucket detail with Snowflake paths (branch-aware)
+- `storage tables --project NAME [--bucket-id ID] [--branch ID]` -- list tables, optionally by bucket (branch-aware)
+- `storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]` -- create bucket (branch-aware)
+- `storage create-table --project NAME --bucket-id ID --name NAME --column COL:TYPE [...] [--primary-key COL] [--branch ID]` -- create typed table (branch-aware)
+- `storage upload-table --project NAME --table-id ID --file PATH [--incremental] [--branch ID]` -- upload CSV (branch-aware)
+- `storage delete-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes] [--branch ID]` -- delete tables (branch-aware)
+- `storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]` -- delete buckets (branch-aware)
 
 ## Data Lineage
 - `lineage [--project NAME]` -- cross-project data flow via bucket sharing
