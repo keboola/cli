@@ -1,5 +1,9 @@
 # CLAUDE.md - Development Context for Claude Code
 
+> **Contributors**: Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a PR.
+> It covers coding style, security principles, Keboola API best practices,
+> and the full checklist for adding new CLI commands.
+
 ## Build and Run
 
 ```bash
