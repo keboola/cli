@@ -5,8 +5,10 @@ metadata that MCP tools strip from responses.
 """
 
 import logging
+from pathlib import Path
 from typing import Any
 
+from ..constants import VALID_COLUMN_TYPES
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -204,9 +206,19 @@ class StorageService(BaseService):
     ) -> dict[str, Any]:
         """Create a new storage bucket.
 
+        Args:
+            stage: Bucket stage — must be "in" or "out".
+
         Returns:
             Dict with created bucket details.
+
+        Raises:
+            ValueError: If stage is not "in" or "out".
         """
+        stage = stage.lower()
+        if stage not in ("in", "out"):
+            raise ValueError(f"Invalid stage '{stage}'. Must be 'in' or 'out'.")
+
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -247,9 +259,15 @@ class StorageService(BaseService):
         for col_spec in columns:
             if ":" in col_spec:
                 col_name, col_type = col_spec.split(":", 1)
+                col_type = col_type.upper()
             else:
                 col_name, col_type = col_spec, "STRING"
-            parsed_columns.append({"name": col_name, "definition": {"type": col_type.upper()}})
+            if col_type not in VALID_COLUMN_TYPES:
+                raise ValueError(
+                    f"Invalid column type '{col_type}' for column '{col_name}'. "
+                    f"Valid types: {', '.join(sorted(VALID_COLUMN_TYPES))}"
+                )
+            parsed_columns.append({"name": col_name, "definition": {"type": col_type}})
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -291,6 +309,8 @@ class StorageService(BaseService):
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
+        file_size_bytes = Path(file_path).stat().st_size
+
         client = self._client_factory(project.stack_url, project.token)
         try:
             results = client.upload_table(
@@ -307,6 +327,7 @@ class StorageService(BaseService):
             "project_alias": alias,
             "table_id": table_id,
             "incremental": incremental,
+            "file_size_bytes": file_size_bytes,
             "imported_rows": results.get("importedRowsCount"),
             "warnings": results.get("warnings", []),
         }

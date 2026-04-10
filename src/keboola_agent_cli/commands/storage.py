@@ -4,7 +4,7 @@ Provides direct Storage API access including sharing/linked bucket metadata
 that is not available via MCP tools.
 """
 
-import os
+from pathlib import Path
 
 import typer
 
@@ -200,6 +200,9 @@ def storage_create_bucket(
         result = service.create_bucket(
             alias=project, stage=stage, name=name, description=description, backend=backend
         )
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        raise typer.Exit(code=2) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
@@ -261,6 +264,9 @@ def storage_create_table(
             columns=column,
             primary_key=primary_key,
         )
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        raise typer.Exit(code=2) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
@@ -315,7 +321,7 @@ def storage_upload_table(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
 
-    if not os.path.isfile(file):
+    if not Path(file).is_file():
         formatter.error(message=f"File not found: {file}", error_code="FILE_NOT_FOUND")
         raise typer.Exit(code=2) from None
 
@@ -339,8 +345,10 @@ def storage_upload_table(
         formatter.output(result)
     else:
         load_type = "incremental" if result["incremental"] else "full"
+        size_mb = result.get("file_size_bytes", 0) / (1024 * 1024)
         formatter.console.print(
-            f"[bold green]Uploaded:[/bold green] {result['table_id']} ({load_type} load)"
+            f"[bold green]Uploaded:[/bold green] {result['table_id']} "
+            f"({load_type} load, {size_mb:.2f} MB)"
         )
         if result["imported_rows"] is not None:
             formatter.console.print(f"  Rows imported: {result['imported_rows']}")

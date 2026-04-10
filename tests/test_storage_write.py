@@ -103,6 +103,13 @@ class TestCreateBucketService:
 
         mock_client.close.assert_called_once()
 
+    def test_invalid_stage_raises(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service = _make_service(store, MagicMock())
+
+        with pytest.raises(ValueError, match="Invalid stage"):
+            service.create_bucket(alias="test", stage="bad", name="x")
+
     def test_unknown_project(self, tmp_path: Path) -> None:
         from keboola_agent_cli.errors import ConfigError
 
@@ -190,6 +197,13 @@ class TestCreateTableService:
             primary_key=None,
         )
 
+    def test_invalid_column_type_raises(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service = _make_service(store, MagicMock())
+
+        with pytest.raises(ValueError, match="Invalid column type 'BANANA'"):
+            service.create_table(alias="test", bucket_id="in.c-b", name="t", columns=["x:BANANA"])
+
     def test_api_error_propagates(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
@@ -213,6 +227,8 @@ class TestUploadTableService:
     """Tests for StorageService.upload_table()."""
 
     def test_success_full_load(self, tmp_path: Path) -> None:
+        csv_file = tmp_path / "users.csv"
+        csv_file.write_text("id,name\n1,Alice\n")
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         mock_client.upload_table.return_value = {"importedRowsCount": 42, "warnings": []}
@@ -221,16 +237,18 @@ class TestUploadTableService:
         result = service.upload_table(
             alias="test",
             table_id="in.c-b.users",
-            file_path="/data/users.csv",
+            file_path=str(csv_file),
         )
 
         assert result["table_id"] == "in.c-b.users"
         assert result["incremental"] is False
         assert result["imported_rows"] == 42
         assert result["warnings"] == []
+        assert "file_size_bytes" in result
+        assert result["file_size_bytes"] > 0
         mock_client.upload_table.assert_called_once_with(
             table_id="in.c-b.users",
-            file_path="/data/users.csv",
+            file_path=str(csv_file),
             incremental=False,
             delimiter=",",
             enclosure='"',
@@ -238,6 +256,8 @@ class TestUploadTableService:
         mock_client.close.assert_called_once()
 
     def test_success_incremental(self, tmp_path: Path) -> None:
+        csv_file = tmp_path / "events.csv"
+        csv_file.write_text("ts,msg\n2024-01-01,hello\n")
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         mock_client.upload_table.return_value = {"importedRowsCount": 10, "warnings": []}
@@ -246,20 +266,22 @@ class TestUploadTableService:
         result = service.upload_table(
             alias="test",
             table_id="in.c-b.events",
-            file_path="/data/events.csv",
+            file_path=str(csv_file),
             incremental=True,
         )
 
         assert result["incremental"] is True
         mock_client.upload_table.assert_called_once_with(
             table_id="in.c-b.events",
-            file_path="/data/events.csv",
+            file_path=str(csv_file),
             incremental=True,
             delimiter=",",
             enclosure='"',
         )
 
     def test_custom_delimiter_and_enclosure(self, tmp_path: Path) -> None:
+        csv_file = tmp_path / "t.csv"
+        csv_file.write_text("a;b\n1;2\n")
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         mock_client.upload_table.return_value = {"importedRowsCount": 5, "warnings": []}
@@ -268,20 +290,22 @@ class TestUploadTableService:
         service.upload_table(
             alias="test",
             table_id="in.c-b.t",
-            file_path="/data/t.csv",
+            file_path=str(csv_file),
             delimiter=";",
             enclosure="'",
         )
 
         mock_client.upload_table.assert_called_once_with(
             table_id="in.c-b.t",
-            file_path="/data/t.csv",
+            file_path=str(csv_file),
             incremental=False,
             delimiter=";",
             enclosure="'",
         )
 
     def test_warnings_passed_through(self, tmp_path: Path) -> None:
+        csv_file = tmp_path / "x.csv"
+        csv_file.write_text("id\n1\n")
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         mock_client.upload_table.return_value = {
@@ -290,11 +314,13 @@ class TestUploadTableService:
         }
         service = _make_service(store, mock_client)
 
-        result = service.upload_table(alias="test", table_id="in.c-b.t", file_path="/x.csv")
+        result = service.upload_table(alias="test", table_id="in.c-b.t", file_path=str(csv_file))
 
         assert result["warnings"] == ["Duplicate rows skipped"]
 
     def test_api_error_propagates(self, tmp_path: Path) -> None:
+        csv_file = tmp_path / "x.csv"
+        csv_file.write_text("id\n1\n")
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         mock_client.upload_table.side_effect = KeboolaApiError(
@@ -303,7 +329,7 @@ class TestUploadTableService:
         service = _make_service(store, mock_client)
 
         with pytest.raises(KeboolaApiError):
-            service.upload_table(alias="test", table_id="in.c-b.t", file_path="/x.csv")
+            service.upload_table(alias="test", table_id="in.c-b.t", file_path=str(csv_file))
 
         mock_client.close.assert_called_once()
 
@@ -392,6 +418,30 @@ class TestCreateBucketCLI:
             description="My output",
             backend="bigquery",
         )
+
+    def test_create_bucket_invalid_stage(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            MockSvc.return_value.create_bucket.side_effect = ValueError("Invalid stage 'foo'")
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "create-bucket",
+                    "--project",
+                    "test",
+                    "--stage",
+                    "foo",
+                    "--name",
+                    "x",
+                ],
+            )
+        assert result.exit_code == 2
 
     def test_create_bucket_api_error(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -511,6 +561,34 @@ class TestCreateTableCLI:
                 ],
             )
         assert result.exit_code == 0
+
+    def test_create_table_invalid_column_type(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            MockSvc.return_value.create_table.side_effect = ValueError(
+                "Invalid column type 'BANANA'"
+            )
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "create-table",
+                    "--project",
+                    "test",
+                    "--bucket-id",
+                    "in.c-b",
+                    "--name",
+                    "t",
+                    "--column",
+                    "x:BANANA",
+                ],
+            )
+        assert result.exit_code == 2
 
     def test_create_table_api_error(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

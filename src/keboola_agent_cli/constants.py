@@ -54,6 +54,17 @@ MCP_SERVER_HEALTH_TIMEOUT: float = 2.0
 # --- Storage Job Polling ---
 STORAGE_JOB_POLL_INTERVAL: float = 1.0  # seconds between polls
 STORAGE_JOB_MAX_WAIT: float = 60.0  # max seconds to wait for a storage job
+IMPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table import jobs (large files)
+
+# --- Storage Write Validation ---
+VALID_COLUMN_TYPES: frozenset[str] = frozenset(
+    {"STRING", "INTEGER", "NUMERIC", "FLOAT", "BOOLEAN", "DATE", "TIMESTAMP"}
+)
+
+# --- File Upload Timeout ---
+FILE_UPLOAD_TIMEOUT: httpx.Timeout = httpx.Timeout(
+    connect=30.0, read=300.0, write=3600.0, pool=30.0
+)
 
 # --- Parallel Workers ---
 MAX_PARALLEL_WORKERS_LIMIT: int = 100

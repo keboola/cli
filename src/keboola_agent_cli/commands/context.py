@@ -116,6 +116,17 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent storage tables --project NAME [--bucket-id BUCKET_ID]
     List storage tables, optionally filtered by bucket.
 
+  kbagent storage create-bucket --project NAME --stage STAGE --name BUCKET_NAME [--description D] [--backend B]
+    Create a new storage bucket. Stage must be "in" or "out".
+
+  kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME --column col:TYPE [...] [--primary-key COL]
+    Create a typed table. --column repeatable. Types: STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP.
+    Column type defaults to STRING if omitted (e.g. --column name is equivalent to --column name:STRING).
+
+  kbagent storage upload-table --project NAME --table-id TABLE_ID --file PATH [--incremental] [--delimiter D] [--enclosure E]
+    Upload CSV into an existing table. Full load by default; --incremental to append rows.
+    Supports files up to 5 GB via async file-first upload flow.
+
   kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes]
     Delete one or more tables. Batch: repeat --table-id. --dry-run to preview.
 
