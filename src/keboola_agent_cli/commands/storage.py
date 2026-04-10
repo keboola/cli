@@ -332,9 +332,16 @@ def storage_upload_table(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
 
-    if not Path(file).is_file():
+    p = Path(file)
+    if not p.is_file():
         formatter.error(message=f"File not found: {file}", error_code="FILE_NOT_FOUND")
         raise typer.Exit(code=2) from None
+
+    if not formatter.json_mode:
+        size_mb = p.stat().st_size / (1024 * 1024)
+        formatter.console.print(
+            f"Uploading [bold]{p.name}[/bold] ({size_mb:.2f} MB) to [cyan]{table_id}[/cyan]..."
+        )
 
     try:
         result = service.upload_table(

@@ -882,7 +882,9 @@ class KeboolaClient(BaseHttpClient):
             size_bytes: File size in bytes.
 
         Returns:
-            File resource dict including 'id' (fileId), 'url', and 'uploadParams'.
+            File resource dict including 'id' (fileId), 'url', 'uploadParams',
+            and 'gcsUploadParams' (present on GCP stacks; contains bearer token
+            and GCS bucket/key for direct PUT upload).
         """
         # Only send the two required fields. Omit optional booleans (isPermanent,
         # isPublic) so Python's False doesn't serialize to the string "False" in

@@ -1937,6 +1937,56 @@ class TestUploadTableClient:
 
         assert result.get("importedRowsCount") == 2
 
+    def test_full_flow_gcp(self, httpx_mock, tmp_path) -> None:
+        """upload_table orchestrates prepare -> GCP bearer PUT -> import-async -> poll."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_bytes(b"id,name\n1,Alice\n")
+        gcs_upload_url = "https://storage.googleapis.com/kbc-bucket/exp-15/2000/files/data.csv"
+
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/files/prepare",
+            method="POST",
+            json={
+                "id": 200,
+                "url": "https://storage.googleapis.com/kbc-bucket/data.csv?response-content-disposition=attachment",
+                "uploadParams": None,
+                "gcsUploadParams": {
+                    "bucket": "kbc-bucket",
+                    "key": "exp-15/2000/files/data.csv",
+                    "access_token": "ya29.test-token",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                },
+            },
+            status_code=200,
+        )
+        httpx_mock.add_response(
+            url=gcs_upload_url,
+            method="PUT",
+            status_code=200,
+        )
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/tables/in.c-b.users/import-async",
+            method="POST",
+            json={"id": 66, "status": "waiting"},
+            status_code=201,
+        )
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/jobs/66",
+            method="GET",
+            json={
+                "id": 66,
+                "status": "success",
+                "results": {"importedRowsCount": 1, "warnings": []},
+            },
+            status_code=200,
+        )
+
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            result = client.upload_table(table_id="in.c-b.users", file_path=str(csv_file))
+
+        assert result.get("importedRowsCount") == 1
+
     def test_cloud_upload_failure_raises(self, httpx_mock, tmp_path) -> None:
         """upload_table raises KeboolaApiError if cloud upload (signed URL PUT) returns error."""
         csv_file = tmp_path / "data.csv"
