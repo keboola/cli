@@ -801,7 +801,10 @@ class TestUploadTableCLI:
                 "table_id": "in.c-b.users",
                 "incremental": False,
                 "imported_rows": 1,
+                "file_size_bytes": 16,
                 "warnings": [],
+                "auto_created_bucket": False,
+                "auto_created_table": False,
             }
             result = runner.invoke(
                 app,
