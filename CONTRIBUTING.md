@@ -194,7 +194,7 @@ When adding a new command (e.g., `kbagent storage create-foo`), you must update 
 ### Documentation changes (mandatory!)
 
 - [ ] **`kbagent context`** -- update `AGENT_CONTEXT` string in `commands/context.py` (this is the primary reference for AI agents)
-- [ ] **SKILL.md** -- add row to the decision table in `plugins/kbagent/skills/kbagent/SKILL.md` (between `<!-- BEGIN AUTO-GENERATED COMMANDS -->` markers)
+- [ ] **SKILL.md** -- run `make skill-gen` to regenerate the decision table (CI has a freshness check that will fail if the generated output doesn't match). **Do not edit SKILL.md by hand** -- the table is auto-generated from CLI command metadata
 - [ ] **CLAUDE.md** -- add command signature to the `## All CLI Commands` section
 - [ ] **`--help` text** -- Typer docstring and option help strings should be clear and complete
 
@@ -242,6 +242,9 @@ make check          # Full CI: lint + format check + all tests
 make lint           # Just ruff linter
 make format         # Auto-format code
 make test           # Just tests
+make skill-gen      # Regenerate SKILL.md from CLI command metadata
 ```
 
 Always run `make check` before pushing. The PR won't pass CI if lint or tests fail.
+
+**SKILL.md freshness check**: CI verifies that `plugins/kbagent/skills/kbagent/SKILL.md` matches the auto-generated output from `make skill-gen`. If you added, removed, or renamed any CLI command, run `make skill-gen` and commit the result. Manual edits to the decision table will be overwritten and will cause CI to fail.
