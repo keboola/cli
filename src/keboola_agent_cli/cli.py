@@ -112,6 +112,10 @@ def main(
     ),
 ) -> None:
     """Global options applied to all commands."""
+    from .auto_update import maybe_auto_update
+
+    maybe_auto_update()
+
     # If no subcommand given, launch REPL on TTY or show help otherwise
     if ctx.invoked_subcommand is None:
         is_interactive = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()

@@ -90,6 +90,12 @@ MCP_PYPI_URL: str = "https://pypi.org/pypi/keboola-mcp-server/json"
 KBAGENT_GITHUB_REPO: str = "padak/keboola_agent_cli"
 KBAGENT_INSTALL_SOURCE: str = "git+https://github.com/padak/keboola_agent_cli"
 
+# --- Auto-Update ---
+ENV_AUTO_UPDATE: str = "KBAGENT_AUTO_UPDATE"
+ENV_SKIP_UPDATE: str = "KBAGENT_SKIP_UPDATE"
+AUTO_UPDATE_CHECK_INTERVAL: int = 3600  # 1 hour TTL for version cache
+VERSION_CACHE_FILENAME: str = "version_cache.json"
+
 # --- AI Service ---
 AI_SERVICE_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 SECRET_PLACEHOLDER: str = "<YOUR_SECRET>"
