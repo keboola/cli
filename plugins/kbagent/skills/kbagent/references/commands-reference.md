@@ -2,6 +2,14 @@
 
 All commands support `--json` for structured output. Multi-project flags (`--project`) can be repeated.
 
+## Setup & Info
+- `init [--from-global]` -- create local `.kbagent/` workspace in current directory
+- `doctor [--fix]` -- health check for CLI config and MCP server
+- `version` -- show version info and dependency update status
+- `update` -- self-update to latest version
+- `changelog [--limit N]` -- show recent changelog (default: last 5 versions). After auto-update, "What's new" is printed automatically. Manual trigger: `KBAGENT_UPDATED_FROM=0.17.0 kbagent version`
+- `context` -- print full CLI reference for AI agents
+
 ## Project Management
 - `project add --project NAME --url URL --token TOKEN` -- connect a project (token verified via API)
 - `project list` -- list all connected projects (tokens masked)
