@@ -8,6 +8,10 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.18.1": [
+        "Changelog command: kbagent changelog (#126)",
+        "What's new display after auto-update",
+    ],
     "0.18.0": [
         "Auto-update on startup (opt-out: KBAGENT_AUTO_UPDATE=false)",
         "Fix: sync pull dev-branch writes to correct directory (#121)",
