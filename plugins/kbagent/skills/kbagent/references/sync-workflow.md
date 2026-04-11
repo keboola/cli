@@ -73,7 +73,53 @@ Storage metadata is also pulled (read-only, not tracked in manifest):
 | `storage/tables/{bucket}/{table}.json` | Per-table schema, columns, row count, size |
 | `storage/samples/{bucket}/{table}/sample.csv` | Data samples (opt-in: `--with-samples`) |
 
-## Git-branching workflow (recommended)
+## Branch use workflow (simple dev branches)
+
+Use `branch use` to work with dev branches without git-branching setup.
+Each branch gets its own directory on disk.
+
+```bash
+# Pull production first
+kbagent sync pull --project prod --force
+
+# Create a dev branch (auto-activates)
+kbagent --json branch create --project prod --name "fix-etl"
+# -> Branch 'fix-etl' activated
+
+# Pull the dev branch -- configs go into a separate directory
+kbagent sync pull --project prod --force
+# -> Pulled 42 configurations into fix-etl/
+
+# Edit configs in fix-etl/, push changes
+kbagent sync push --project prod
+
+# When done, merge and switch back
+kbagent --json branch merge --project prod   # returns merge URL
+kbagent sync pull --project prod --force      # refresh main/
+```
+
+### How it works
+
+- `sync pull` detects the active branch and auto-registers it in `manifest.json`
+- Each dev branch gets a sanitized directory name (e.g. branch "My Feature" -> `my-feature/`)
+- The manifest tracks which branch each config belongs to
+- Switching branches (`branch use` / `branch reset`) changes where pull writes and push reads
+- `sync diff` and `sync push` also respect the active branch
+
+### Directory structure
+
+```
+project-root/
+  .keboola/manifest.json   # branches: [{id: 123, path: "main"}, {id: 456, path: "fix-etl"}]
+  main/                     # production configs
+    extractor/...
+    transformation/...
+  fix-etl/                  # dev branch configs (separate directory)
+    extractor/...
+    transformation/...
+```
+
+## Git-branching workflow (recommended for teams)
 
 Maps git branches to Keboola dev branches for safe parallel development.
 

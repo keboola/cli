@@ -334,6 +334,8 @@ Use `kbagent <command> --help` for full flag details and examples.
      KBC_MASTER_TOKEN_*       Per-project master token (e.g. KBC_MASTER_TOKEN_PROD)
      KBAGENT_CONFIG_DIR       Override config directory
      KBAGENT_MAX_PARALLEL_WORKERS  Max concurrent threads for multi-project ops (default 10, max 100)
+     KBAGENT_AUTO_UPDATE      Set to "false" to disable automatic update on startup
+     KBAGENT_MCP_TRANSPORT    MCP transport mode: "http" (default, persistent) or "stdio" (subprocess)
 
 8. Config resolution order:
      --config-dir flag > KBAGENT_CONFIG_DIR env > .kbagent/ in CWD/parents > ~/.config/keboola-agent-cli/

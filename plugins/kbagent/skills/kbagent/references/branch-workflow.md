@@ -40,3 +40,4 @@ kbagent --json branch merge --project ALIAS
 - **MCP tools respect active branch**: tool calls automatically use the active branch without extra flags.
 - **Config commands respect active branch**: `config list`, `config detail`, and `config search` auto-scope to the active branch. Use `--branch ID` to override.
 - **Workspaces respect active branch**: `workspace create` and `workspace delete` operate in the active branch context.
+- **Sync respects active branch**: `sync pull` writes dev branch configs into a separate directory (e.g. `fix-etl/` instead of `main/`). `sync diff` and `sync push` also auto-scope to the active branch. See [sync-workflow.md](sync-workflow.md) for details.

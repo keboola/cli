@@ -231,6 +231,31 @@ numeric postfix (`"tmp.carts2"`). Keep the original name for the "source"
 table (typically the Setup/materialization code that creates the full copy).
 Update all references in the code that creates and uses the renamed table.
 
+## Auto-update
+
+kbagent automatically checks for updates on every invocation. When a newer version
+is available on PyPI, it installs the update and re-executes the same command
+seamlessly. This is transparent -- no user action required.
+
+- Opt-out: `KBAGENT_AUTO_UPDATE=false`
+- Version cache: checks PyPI at most once per hour
+- Skipped for: dev/editable installs, `update`/`version` commands
+- Never crashes the CLI -- update failures are silently ignored
+
+## Sync and dev branches
+
+When an active branch is set (`branch use --branch ID`), sync commands automatically
+scope to that branch:
+
+- `sync pull` writes configs into a **separate directory** named after the branch
+  (e.g. `fix-etl/` instead of `main/`)
+- `sync diff` and `sync push` read/write from the correct branch directory
+- The manifest tracks all branches in `manifest.branches[]`
+- Switching back to main (`branch reset`) makes sync target `main/` again
+
+This means you can have production and dev branch configs side by side on disk
+without them overwriting each other.
+
 ## Common mistakes
 
 - **Forgetting `--json`**: without it, output is human-formatted Rich text, not parseable
