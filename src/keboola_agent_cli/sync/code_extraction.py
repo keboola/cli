@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from keboola_agent_cli.sync.sql_split import split_statements
+
 
 def _strip_trailing_empty(lines: list[str]) -> list[str]:
     """Remove trailing empty lines but preserve leading whitespace."""
@@ -18,18 +20,20 @@ def _strip_trailing_empty(lines: list[str]) -> list[str]:
     return result
 
 
-def _lines_to_script(lines: list[str]) -> list[str]:
-    """Convert collected lines into a single-string script element.
+def _lines_to_script(lines: list[str], *, is_sql: bool = False) -> list[str]:
+    """Convert collected lines back into the ``script[]`` array.
 
-    The Keboola transformation runner treats each element of the ``script``
-    array as a separate executable statement.  Joining all lines of a CODE
-    block into one string ensures multi-line SQL/Python is executed as a
-    single unit.
+    For SQL transformations: splits on semicolons using a state machine,
+    producing one element per statement (matching Keboola runtime semantics).
+    For Python/other: joins all lines into a single element.
     """
     stripped = _strip_trailing_empty(lines)
     if not stripped:
         return []
-    return ["\n".join(stripped)]
+    content = "\n".join(stripped)
+    if is_sql:
+        return split_statements(content)
+    return [content]
 
 
 # Component patterns that contain SQL transformations
@@ -137,7 +141,9 @@ def _extract_sql_transformation(config_data: dict[str, Any], config_dir: Path) -
             lines.append(SQL_CODE_MARKER.format(name=code_name))
 
             scripts = code.get("script") or []
-            for script in scripts:
+            for si, script in enumerate(scripts):
+                if si > 0:
+                    lines.append("")  # blank line between statements
                 if isinstance(script, str) and "\n" in script:
                     lines.extend(script.split("\n"))
                 else:
@@ -184,7 +190,7 @@ def _parse_sql_blocks(content: str) -> list[dict[str, Any]]:
         if stripped.startswith("/* ===== BLOCK:") and stripped.endswith("===== */"):
             # Save previous code if any
             if current_code is not None and current_block is not None:
-                current_code["script"] = _lines_to_script(current_script_lines)
+                current_code["script"] = _lines_to_script(current_script_lines, is_sql=True)
                 current_block.setdefault("codes", []).append(current_code)
                 current_code = None
                 current_script_lines = []
@@ -198,7 +204,7 @@ def _parse_sql_blocks(content: str) -> list[dict[str, Any]]:
         if stripped.startswith("/* ===== CODE:") and stripped.endswith("===== */"):
             # Save previous code if any
             if current_code is not None and current_block is not None:
-                current_code["script"] = _lines_to_script(current_script_lines)
+                current_code["script"] = _lines_to_script(current_script_lines, is_sql=True)
                 current_block.setdefault("codes", []).append(current_code)
                 current_script_lines = []
 
@@ -212,7 +218,7 @@ def _parse_sql_blocks(content: str) -> list[dict[str, Any]]:
 
     # Don't forget the last code block
     if current_code is not None and current_block is not None:
-        current_code["script"] = _lines_to_script(current_script_lines)
+        current_code["script"] = _lines_to_script(current_script_lines, is_sql=True)
         current_block.setdefault("codes", []).append(current_code)
 
     # If no markers found, treat entire content as single block/code
@@ -220,7 +226,9 @@ def _parse_sql_blocks(content: str) -> list[dict[str, Any]]:
         blocks = [
             {
                 "name": "Block 1",
-                "codes": [{"name": "Code 1", "script": _lines_to_script(content.split("\n"))}],
+                "codes": [
+                    {"name": "Code 1", "script": _lines_to_script(content.split("\n"), is_sql=True)}
+                ],
             }
         ]
 
@@ -247,7 +255,9 @@ def _extract_python_transformation(config_data: dict[str, Any], config_dir: Path
                 lines.append(PYTHON_CODE_MARKER.format(name=code_name))
 
                 scripts = code.get("script") or []
-                for script in scripts:
+                for si, script in enumerate(scripts):
+                    if si > 0:
+                        lines.append("")  # blank line between script elements
                     if isinstance(script, str) and "\n" in script:
                         lines.extend(script.split("\n"))
                     else:

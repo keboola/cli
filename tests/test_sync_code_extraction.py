@@ -226,10 +226,10 @@ class TestSqlExtraction:
         assert blocks[0]["name"] == "Block 1"
         assert blocks[0]["codes"][0]["name"] == "Code 1"
         script = blocks[0]["codes"][0]["script"]
-        # Must be a single joined string, not per-line
-        assert len(script) == 1
-        assert "SELECT 1;" in script[0]
-        assert "SELECT 2;" in script[0]
+        # SQL splitter splits on semicolons -> 2 statements
+        assert len(script) == 2
+        assert script[0] == "SELECT 1;"
+        assert script[1] == "SELECT 2;"
 
     def test_multiline_sql_produces_single_string(self, tmp_path: Path) -> None:
         """Multi-line SQL statement is joined into a single script element."""
@@ -329,6 +329,74 @@ class TestSqlExtraction:
         codes = result["parameters"]["blocks"][0]["codes"]
         assert codes[0]["name"] == "Spaces"
         assert codes[0]["script"] == []
+
+    def test_sql_roundtrip_multi_script(self, tmp_path: Path) -> None:
+        """Round-trip preserves multi-element script[] arrays (issue #119)."""
+        config_data = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "Block 1",
+                        "codes": [
+                            {
+                                "name": "multi-stmt",
+                                "script": [
+                                    "CREATE OR REPLACE TABLE a AS SELECT 1;",
+                                    "INSERT INTO a VALUES (2);",
+                                    "UPDATE a SET x = 3 WHERE x = 2;",
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+        original_scripts = copy.deepcopy(
+            config_data["parameters"]["blocks"][0]["codes"][0]["script"]
+        )
+        config_dir = tmp_path / "sql-multi-script"
+
+        extract_code_files("keboola.snowflake-transformation", config_data, config_dir)
+
+        # File should be clean SQL with no artificial markers
+        content = (config_dir / "transform.sql").read_text(encoding="utf-8")
+        assert "STATEMENT" not in content
+
+        merge_code_files("keboola.snowflake-transformation", config_data, config_dir)
+
+        scripts = config_data["parameters"]["blocks"][0]["codes"][0]["script"]
+        assert scripts == original_scripts
+
+    def test_sql_roundtrip_multiline_multi_script(self, tmp_path: Path) -> None:
+        """Round-trip with multi-line statements in multi-element script[]."""
+        config_data = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "Block 1",
+                        "codes": [
+                            {
+                                "name": "complex",
+                                "script": [
+                                    "CREATE TABLE foo AS\n    SELECT col1\n    FROM bar;",
+                                    "INSERT INTO foo\n    SELECT col2\n    FROM baz;",
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+        original_scripts = copy.deepcopy(
+            config_data["parameters"]["blocks"][0]["codes"][0]["script"]
+        )
+        config_dir = tmp_path / "sql-multi-multiline"
+
+        extract_code_files("keboola.snowflake-transformation", config_data, config_dir)
+        merge_code_files("keboola.snowflake-transformation", config_data, config_dir)
+
+        scripts = config_data["parameters"]["blocks"][0]["codes"][0]["script"]
+        assert scripts == original_scripts
 
 
 # ===================================================================
