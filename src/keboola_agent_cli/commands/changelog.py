@@ -37,7 +37,14 @@ def changelog_command(
         max=100,
     ),
 ) -> None:
-    """Show recent changelog (what changed in each version)."""
+    """Show recent changelog (what changed in each version).
+
+    After auto-update, kbagent automatically prints "What's new" for the
+    new version.  To see changes for a specific version manually, set
+    KBAGENT_UPDATED_FROM to any older version:
+
+        KBAGENT_UPDATED_FROM=0.17.0 kbagent version
+    """
     formatter = get_formatter(ctx)
     entries = get_changelog(limit)
     formatter.output({"entries": entries}, _format_changelog_human)
