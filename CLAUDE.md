@@ -28,7 +28,7 @@ make install        # install in dev mode
 make test           # run all tests
 make lint           # run ruff linter
 make format         # format code
-make check          # lint + format-check + test (CI-like)
+make check          # lint + format-check + changelog-check + test (CI-like)
 make hooks          # install pre-commit hook
 make clean          # remove caches and build artifacts
 ```
@@ -63,6 +63,8 @@ src/keboola_agent_cli/
   models.py             # Pydantic models shared across layers
   output.py             # OutputFormatter: JSON vs Rich dual-mode output
   errors.py             # KeboolaApiError, ConfigError, mask_token()
+  changelog.py          # Version changelog data + helpers (update on every release)
+  auto_update.py        # Auto-update on startup + "What's new" display
   commands/
     _helpers.py         # Shared command-layer helpers (formatter, service factory, error mapping)
     project.py          # LAYER 1: CLI commands for project management
@@ -74,6 +76,7 @@ src/keboola_agent_cli/
     branch.py           # LAYER 1: CLI commands for branch lifecycle (list/create/use/reset/delete/merge)
     workspace.py        # LAYER 1: CLI commands for workspace lifecycle (create/list/delete/query)
     component.py        # LAYER 1: CLI commands for component discovery and scaffold
+    changelog.py        # LAYER 1: Changelog display
     context.py          # LAYER 1: Agent usage instructions
     doctor.py           # LAYER 1: Health check command
   services/
@@ -154,7 +157,7 @@ All three inherit from `BaseHttpClient` (`http_base.py`) which provides shared r
 - `plugins/kbagent/.claude-plugin/plugin.json` must match. Run `make version-sync` (or `python scripts/sync_version.py`) to update it.
 - The pre-commit hook and CI automatically check version consistency.
 
-**When bumping the version**: only edit `pyproject.toml`, then run `make version-sync`. That's it. Do not edit `__init__.py` or `plugin.json` manually.
+**When bumping the version**: edit `pyproject.toml`, add a changelog entry to `src/keboola_agent_cli/changelog.py`, then run `make version-sync`. Do not edit `__init__.py` or `plugin.json` manually. CI enforces changelog completeness via `make changelog-check`.
 
 ## Coding Conventions
 
@@ -284,4 +287,5 @@ kbagent init [--from-global]
 kbagent doctor [--fix]
 kbagent version
 kbagent update
+kbagent changelog [--limit N]
 ```
