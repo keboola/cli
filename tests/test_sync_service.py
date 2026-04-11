@@ -21,7 +21,7 @@ from keboola_agent_cli.constants import (
 from keboola_agent_cli.errors import ConfigError
 from keboola_agent_cli.models import TokenVerifyResponse
 from keboola_agent_cli.services.sync_service import SyncService
-from keboola_agent_cli.sync.manifest import load_manifest
+from keboola_agent_cli.sync.manifest import Manifest, load_manifest
 
 # ---------------------------------------------------------------------------
 # Sample API data
@@ -1509,3 +1509,137 @@ class TestBranchStatus:
         assert result["git_branching"] is True
         assert result["git_branch"] == "feature-x"
         assert result["linked"] is False
+
+
+# ===================================================================
+# _ensure_branch_registered tests
+# ===================================================================
+
+
+class TestEnsureBranchRegistered:
+    """Tests for SyncService._ensure_branch_registered()."""
+
+    @staticmethod
+    def _make_manifest(branches: list[dict] | None = None) -> Manifest:
+        """Build a minimal Manifest with given branches."""
+        from keboola_agent_cli.sync.manifest import (
+            ManifestBranch,
+            ManifestGitBranching,
+            ManifestNaming,
+            ManifestProject,
+        )
+
+        return Manifest(
+            version=MANIFEST_VERSION,
+            project=ManifestProject(id=258, api_host="connection.keboola.com"),
+            naming=ManifestNaming(),
+            git_branching=ManifestGitBranching(),
+            branches=[ManifestBranch(**b) for b in (branches or [{"id": 12345, "path": "main"}])],
+            configurations=[],
+        )
+
+    def test_noop_when_branch_id_is_none(self) -> None:
+        """No-op for production (branch_id=None)."""
+        store = MagicMock()
+        svc = SyncService(config_store=store)
+        manifest = self._make_manifest()
+        client = MagicMock()
+
+        result = svc._ensure_branch_registered(manifest, None, client)
+
+        assert result is None
+        client.list_dev_branches.assert_not_called()
+        assert len(manifest.branches) == 1
+
+    def test_noop_when_branch_already_registered(self) -> None:
+        """No-op when branch_id is already in manifest.branches."""
+        store = MagicMock()
+        svc = SyncService(config_store=store)
+        manifest = self._make_manifest(
+            branches=[
+                {"id": 12345, "path": "main"},
+                {"id": 99999, "path": "feature-x"},
+            ]
+        )
+        client = MagicMock()
+
+        result = svc._ensure_branch_registered(manifest, 99999, client)
+
+        assert result is None
+        client.list_dev_branches.assert_not_called()
+        assert len(manifest.branches) == 2
+
+    def test_adds_missing_branch(self) -> None:
+        """Adds a new branch entry when branch_id is missing from manifest."""
+        store = MagicMock()
+        svc = SyncService(config_store=store)
+        manifest = self._make_manifest()
+        client = MagicMock()
+        client.list_dev_branches.return_value = [
+            {"id": 12345, "name": "Main", "isDefault": True},
+            {"id": 99999, "name": "My Feature Branch", "isDefault": False},
+        ]
+
+        result = svc._ensure_branch_registered(manifest, 99999, client)
+
+        assert result == "my-feature-branch"
+        assert len(manifest.branches) == 2
+        new_branch = manifest.branches[1]
+        assert new_branch.id == 99999
+        assert new_branch.path == "my-feature-branch"
+
+    def test_handles_path_collision(self) -> None:
+        """Appends branch_id when sanitized name collides with existing path."""
+        store = MagicMock()
+        svc = SyncService(config_store=store)
+        # Pre-populate with a branch that has path "main" (which is the default)
+        manifest = self._make_manifest(
+            branches=[
+                {"id": 12345, "path": "main"},
+                {"id": 88888, "path": "feature-x"},
+            ]
+        )
+        client = MagicMock()
+        # New branch whose sanitized name would be "feature-x" -- collision
+        client.list_dev_branches.return_value = [
+            {"id": 77777, "name": "Feature X", "isDefault": False},
+        ]
+
+        result = svc._ensure_branch_registered(manifest, 77777, client)
+
+        assert result == "feature-x-77777"
+        assert len(manifest.branches) == 3
+        assert manifest.branches[2].path == "feature-x-77777"
+
+    def test_handles_empty_branch_name(self) -> None:
+        """Falls back to 'branch-{id}' when branch name is empty."""
+        store = MagicMock()
+        svc = SyncService(config_store=store)
+        manifest = self._make_manifest()
+        client = MagicMock()
+        client.list_dev_branches.return_value = [
+            {"id": 55555, "name": "", "isDefault": False},
+        ]
+
+        result = svc._ensure_branch_registered(manifest, 55555, client)
+
+        assert result == "branch-55555"
+        assert len(manifest.branches) == 2
+        assert manifest.branches[1].path == "branch-55555"
+
+    def test_handles_branch_not_found_in_api(self) -> None:
+        """Falls back to 'branch-{id}' when branch_id not in API response."""
+        store = MagicMock()
+        svc = SyncService(config_store=store)
+        manifest = self._make_manifest()
+        client = MagicMock()
+        # API returns branches but none match the requested ID
+        client.list_dev_branches.return_value = [
+            {"id": 12345, "name": "Main", "isDefault": True},
+        ]
+
+        result = svc._ensure_branch_registered(manifest, 44444, client)
+
+        assert result == "branch-44444"
+        assert len(manifest.branches) == 2
+        assert manifest.branches[1].path == "branch-44444"

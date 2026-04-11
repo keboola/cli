@@ -53,7 +53,7 @@ from ..sync.manifest import (
     load_manifest,
     save_manifest,
 )
-from ..sync.naming import config_path, config_row_path
+from ..sync.naming import config_path, config_row_path, sanitize_name
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
@@ -232,6 +232,7 @@ class SyncService(BaseService):
         samples_data: dict[str, str] = {}  # table_id -> CSV string
         with client:
             components = client.list_components_with_configs(branch_id=branch_id)
+            self._ensure_branch_registered(manifest, branch_id, client)
 
             if not no_storage:
                 try:
@@ -295,6 +296,10 @@ class SyncService(BaseService):
         existing_file_hashes: dict[str, str] = {
             f"{c.component_id}/{c.id}": c.metadata.get("pull_hash", "")
             for c in manifest.configurations
+        }
+        # Track branch_id per config to detect branch switches
+        existing_branch_ids: dict[str, int] = {
+            f"{c.component_id}/{c.id}": c.branch_id for c in manifest.configurations
         }
 
         for component in components:
@@ -377,9 +382,19 @@ class SyncService(BaseService):
                     )
                 else:
                     # Check if remote actually changed since last pull.
-                    # If pull_config_hash matches, skip write (idempotent).
+                    # If pull_config_hash matches AND branch hasn't changed,
+                    # skip write (idempotent).  A branch switch means files
+                    # live in a different directory, so we must re-write.
                     old_cfg_hash = existing_config_hashes.get(lookup_key, "")
-                    remote_unchanged = not is_new and old_cfg_hash and old_cfg_hash == api_cfg_hash
+                    branch_switched = existing_branch_ids.get(lookup_key, branch_id or 0) != (
+                        branch_id or 0
+                    )
+                    remote_unchanged = (
+                        not is_new
+                        and not branch_switched
+                        and old_cfg_hash
+                        and old_cfg_hash == api_cfg_hash
+                    )
 
                     if remote_unchanged:
                         # Nothing changed -- reuse existing file hash
@@ -639,6 +654,7 @@ class SyncService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         with client:
             components = client.list_components_with_configs(branch_id=branch_id)
+            self._ensure_branch_registered(manifest, branch_id, client)
 
         # Build remote configs lookup: "{component_id}/{config_id}" -> API data
         remote_configs: dict[str, dict[str, Any]] = {}
@@ -865,9 +881,11 @@ class SyncService(BaseService):
         errors: list[dict[str, str]] = []
         pushed_details: list[dict[str, str]] = []
         manifest_dirty = False
-        branch_path = self._find_branch_path(manifest, branch_id)
 
         with client:
+            self._ensure_branch_registered(manifest, branch_id, client)
+            branch_path = self._find_branch_path(manifest, branch_id)
+
             for change in changes:
                 change_type = change["change_type"]
                 component_id = change["component_id"]
@@ -2012,6 +2030,51 @@ class SyncService(BaseService):
             logger.warning("Failed to parse %s", config_file)
             return None
 
+    def _ensure_branch_registered(
+        self,
+        manifest: Manifest,
+        branch_id: int | None,
+        client: Any,
+    ) -> str | None:
+        """Ensure *branch_id* has an entry in ``manifest.branches``.
+
+        If *branch_id* is ``None`` (production) or already present, this is
+        a no-op.  Otherwise the branch name is fetched from the API and a
+        new :class:`ManifestBranch` is appended.
+
+        Returns:
+            The new branch path if one was added, ``None`` otherwise.
+        """
+        if branch_id is None:
+            return None
+
+        # Already registered?
+        for branch in manifest.branches:
+            if branch.id == branch_id:
+                return None
+
+        # Fetch branch info from API to get a human-readable name
+        all_branches = client.list_dev_branches()
+        branch_name = ""
+        for b in all_branches:
+            if b.get("id") == branch_id:
+                branch_name = b.get("name", "")
+                break
+
+        # Generate filesystem-safe path
+        path = sanitize_name(branch_name) if branch_name else ""
+        if not path:
+            path = f"branch-{branch_id}"
+
+        # Handle path uniqueness -- avoid collisions with existing entries
+        existing_paths = {br.path for br in manifest.branches}
+        if path in existing_paths:
+            path = f"{path}-{branch_id}"
+
+        manifest.branches.append(ManifestBranch(id=branch_id, path=path))
+        logger.info("Registered dev branch %d as '%s' in manifest", branch_id, path)
+        return path
+
     def _find_branch_path(self, manifest: Manifest, branch_id: int | None) -> str:
         """Find the branch directory name for a given branch ID.
 
@@ -2024,7 +2087,11 @@ class SyncService(BaseService):
         for branch in manifest.branches:
             if branch.id == branch_id:
                 return branch.path
-        # Fallback to default branch
+        # Fallback to default branch -- should not happen after _ensure_branch_registered
+        logger.warning(
+            "Branch ID %s not found in manifest, falling back to default path",
+            branch_id,
+        )
         return manifest.branches[0].path if manifest.branches else "main"
 
     def _find_untracked_configs(
