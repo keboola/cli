@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from .commands.branch import branch_app
+from .commands.changelog import changelog_command
 from .commands.component import component_app
 from .commands.config import config_app
 from .commands.context import context_command
@@ -58,6 +59,7 @@ app.command("init", rich_help_panel=_SETUP)(init_command)
 app.command("doctor", rich_help_panel=_SETUP)(doctor_command)
 app.command("version", rich_help_panel=_SETUP)(version_command)
 app.command("update", rich_help_panel=_SETUP)(update_command)
+app.command("changelog", rich_help_panel=_SETUP)(changelog_command)
 app.command("context", rich_help_panel=_SETUP)(context_command)
 app.command("repl", rich_help_panel=_SETUP)(repl_command)
 app.add_typer(permissions_app, name="permissions", rich_help_panel=_SETUP)
@@ -112,9 +114,10 @@ def main(
     ),
 ) -> None:
     """Global options applied to all commands."""
-    from .auto_update import maybe_auto_update
+    from .auto_update import maybe_auto_update, show_post_update_changelog
 
     maybe_auto_update()
+    show_post_update_changelog()
 
     # If no subcommand given, launch REPL on TTY or show help otherwise
     if ctx.invoked_subcommand is None:
@@ -218,7 +221,7 @@ def main(
             pass  # Don't let warning check crash the CLI
 
     # Enforce permissions for top-level commands (sub-app commands use callbacks)
-    _top_level_commands = {"init", "doctor", "version", "update", "context", "repl"}
+    _top_level_commands = {"init", "doctor", "version", "update", "changelog", "context", "repl"}
     _is_help = "--help" in sys.argv or "-h" in sys.argv
     if ctx.invoked_subcommand in _top_level_commands and not _is_help:
         try:

@@ -283,6 +283,9 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent update
     Self-update kbagent to latest version (via uv tool install --upgrade).
 
+  kbagent changelog [--limit N]
+    Show recent changelog (what changed in each version). Default: last 5 versions.
+
   kbagent permissions list [--category read|write|destructive|admin]
     List all operations with risk categories and current allowed/denied status.
 

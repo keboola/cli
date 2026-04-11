@@ -89,6 +89,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "doctor": "read",
     "version": "read",
     "update": "admin",
+    "changelog": "read",
     "context": "read",
     "repl": "read",
     # Permissions (always allowed -- listed for completeness)

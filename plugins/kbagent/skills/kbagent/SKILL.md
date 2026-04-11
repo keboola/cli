@@ -47,6 +47,7 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 | Goal | Command |
 |------|---------|
 | Update kbagent to the latest version | `kbagent update` |
+| Show recent changelog (what changed in each version) | `kbagent changelog` |
 | List all operations with their risk category and current allowed/denied status | `kbagent permissions list` |
 | Show the current active permission policy | `kbagent permissions show` |
 | Set the permission policy (firewall rules) | `kbagent permissions set --mode MODE` |

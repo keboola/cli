@@ -21,6 +21,7 @@ from pathlib import Path
 import platformdirs
 
 from . import __version__
+from .changelog import ENV_UPDATED_FROM, format_whats_new
 from .constants import (
     AUTO_UPDATE_CHECK_INTERVAL,
     ENV_AUTO_UPDATE,
@@ -205,6 +206,24 @@ def _re_exec() -> None:
         os.execvpe(sys.executable, new_argv, env)
 
 
+def show_post_update_changelog() -> None:
+    """Print 'What's new' after a successful auto-update re-exec.
+
+    Checks for ``KBAGENT_UPDATED_FROM`` env var (set before re-exec).
+    If present, prints the changelog for the current version and clears
+    the env var so it only fires once.
+    """
+    try:
+        old_version = os.environ.pop(ENV_UPDATED_FROM, "")
+        if not old_version:
+            return
+        msg = format_whats_new(old_version, __version__)
+        if msg:
+            sys.stderr.write(msg)
+    except Exception:
+        pass  # Never crash
+
+
 def maybe_auto_update() -> None:
     """Main entry point for the auto-update flow.
 
@@ -248,6 +267,8 @@ def maybe_auto_update() -> None:
             return
 
         sys.stderr.write(f"Updated to v{latest_version}. Re-launching...\n")
+        # Store old version so the re-exec'd process can show "What's new"
+        os.environ[ENV_UPDATED_FROM] = __version__
         _re_exec()
 
         # If re-exec fails (shouldn't happen), continue with old version

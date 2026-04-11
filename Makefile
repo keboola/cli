@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-mcp sync test test-unit test-integration test-file lint lint-fix format format-check skill-check skill-gen version-sync version-check check clean hooks
+.PHONY: help install install-mcp sync test test-unit test-integration test-file lint lint-fix format format-check skill-check skill-gen version-sync version-check changelog changelog-check check clean hooks
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -64,12 +64,18 @@ version-check: ## Check plugin.json version matches pyproject.toml (fails if mis
 		exit 1; \
 	fi
 
+changelog: ## Generate changelog skeleton from GitHub releases
+	uv run python scripts/generate_changelog.py
+
+changelog-check: ## Check all releases have changelog entries
+	uv run python scripts/generate_changelog.py --check
+
 hooks: ## Install git pre-commit hook (lint + format on staged files)
 	cp scripts/pre-commit .git/hooks/pre-commit
 	chmod +x .git/hooks/pre-commit
 	@echo "Pre-commit hook installed."
 
-check: lint format-check skill-check version-check test ## Run all checks (lint + format + skill + version + test)
+check: lint format-check skill-check version-check changelog-check test ## Run all checks (lint + format + skill + version + changelog + test)
 
 clean: ## Remove build artifacts and caches
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
