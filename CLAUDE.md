@@ -277,6 +277,8 @@ kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
 kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR]
 
+kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]
+
 kbagent context
 kbagent init [--from-global]
 kbagent doctor [--fix]

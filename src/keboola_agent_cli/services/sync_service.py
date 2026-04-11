@@ -32,7 +32,7 @@ from ..constants import (
     STORAGE_DIR_NAME,
     STORAGE_SAMPLES_DIR_NAME,
 )
-from ..errors import ConfigError
+from ..errors import ConfigError, KeboolaApiError
 from ..sync.code_extraction import extract_code_files, merge_code_files
 from ..sync.config_format import (
     api_config_to_local,
@@ -805,6 +805,7 @@ class SyncService(BaseService):
         project_root: Path,
         dry_run: bool = False,
         force: bool = False,
+        allow_plaintext_fallback: bool = False,
     ) -> dict[str, Any]:
         """Push local changes to Keboola.
 
@@ -882,6 +883,7 @@ class SyncService(BaseService):
                             project_root,
                             manifest,
                             branch_id,
+                            allow_plaintext_fallback=allow_plaintext_fallback,
                         )
                         if result:
                             new_id = str(result.get("id", ""))
@@ -920,6 +922,7 @@ class SyncService(BaseService):
                             project_root,
                             manifest,
                             branch_id,
+                            allow_plaintext_fallback=allow_plaintext_fallback,
                         )
                         # Update both hashes so pull knows local == remote
                         config_dir = project_root / branch_path / config_path_str
@@ -993,12 +996,23 @@ class SyncService(BaseService):
         project_id: int | None,
         component_id: str,
         configuration: dict[str, Any],
+        *,
+        allow_plaintext_fallback: bool = False,
     ) -> dict[str, Any]:
         """Encrypt #-prefixed secret values in configuration before push.
 
         Walks the configuration dict recursively, collects all #-prefixed keys
         with unencrypted string values, sends them to the Encryption API,
         and replaces plaintext values with encrypted ones.
+
+        Args:
+            client: HTTP client with encrypt_values method.
+            project_id: Keboola project ID (encryption skipped if None).
+            component_id: Component ID for encryption context.
+            configuration: Config dict to encrypt in-place.
+            allow_plaintext_fallback: When False (default), encryption failure
+                raises KeboolaApiError. When True, logs a warning and continues
+                with plaintext values (escape hatch).
         """
         if not project_id:
             return configuration
@@ -1020,7 +1034,22 @@ class SyncService(BaseService):
             _apply_encrypted(configuration, "", encrypted)
             logger.info("Encrypted %d secret value(s) for %s", len(encrypted), component_id)
         except Exception as exc:
-            logger.warning("Failed to encrypt secrets for %s: %s", component_id, exc)
+            if allow_plaintext_fallback:
+                logger.warning(
+                    "Failed to encrypt secrets for %s: %s (plaintext fallback allowed)",
+                    component_id,
+                    exc,
+                )
+            else:
+                raise KeboolaApiError(
+                    message=(
+                        f"Encryption failed for {component_id}: {exc}. "
+                        f"Refusing to push plaintext secrets. "
+                        f"Use --allow-plaintext-on-encrypt-failure to override."
+                    ),
+                    status_code=0,
+                    error_code="ENCRYPTION_FAILED",
+                ) from exc
 
         return configuration
 
@@ -1032,6 +1061,8 @@ class SyncService(BaseService):
         project_root: Path,
         manifest: Manifest,
         branch_id: int | None,
+        *,
+        allow_plaintext_fallback: bool = False,
     ) -> dict[str, Any] | None:
         """Create a new config from a local _config.yml file."""
         branch_path = self._find_branch_path(manifest, branch_id)
@@ -1053,7 +1084,11 @@ class SyncService(BaseService):
         # Encrypt #-prefixed secrets before sending to API
         project_id = manifest.project.id if manifest.project else None
         configuration = self._encrypt_secrets_in_config(
-            client, project_id, component_id, configuration
+            client,
+            project_id,
+            component_id,
+            configuration,
+            allow_plaintext_fallback=allow_plaintext_fallback,
         )
 
         result = client.create_config(
@@ -1086,6 +1121,8 @@ class SyncService(BaseService):
         project_root: Path,
         manifest: Manifest,
         branch_id: int | None,
+        *,
+        allow_plaintext_fallback: bool = False,
     ) -> None:
         """Update an existing config from a local _config.yml file."""
         branch_path = self._find_branch_path(manifest, branch_id)
@@ -1107,7 +1144,11 @@ class SyncService(BaseService):
         # Encrypt #-prefixed secrets before sending to API
         project_id = manifest.project.id if manifest.project else None
         configuration = self._encrypt_secrets_in_config(
-            client, project_id, component_id, configuration
+            client,
+            project_id,
+            component_id,
+            configuration,
+            allow_plaintext_fallback=allow_plaintext_fallback,
         )
 
         client.update_config(
@@ -1305,6 +1346,7 @@ class SyncService(BaseService):
         base_dir: Path,
         dry_run: bool = False,
         force: bool = False,
+        allow_plaintext_fallback: bool = False,
     ) -> dict[str, Any]:
         """Push all registered projects that have a local manifest.
 
@@ -1314,6 +1356,8 @@ class SyncService(BaseService):
             base_dir: Parent directory containing per-project subdirectories.
             dry_run: Compute changes but don't execute them.
             force: Allow deletions without extra confirmation.
+            allow_plaintext_fallback: Allow push with plaintext secrets on
+                encryption failure.
 
         Returns:
             Dict with per-project push results, a summary, and skipped list.
@@ -1337,7 +1381,13 @@ class SyncService(BaseService):
             nonlocal success_count, failed_count
             project_root = base_dir / alias
             try:
-                result = self.push(alias, project_root, dry_run=dry_run, force=force)
+                result = self.push(
+                    alias,
+                    project_root,
+                    dry_run=dry_run,
+                    force=force,
+                    allow_plaintext_fallback=allow_plaintext_fallback,
+                )
                 results[alias] = result
                 success_count += 1
             except Exception as exc:

@@ -11,6 +11,7 @@ from .commands.component import component_app
 from .commands.config import config_app
 from .commands.context import context_command
 from .commands.doctor import doctor_command
+from .commands.encrypt import encrypt_app
 from .commands.init import init_command
 from .commands.job import job_app
 from .commands.lineage import lineage_app
@@ -33,6 +34,7 @@ from .services.branch_service import BranchService
 from .services.component_service import ComponentService
 from .services.config_service import ConfigService
 from .services.doctor_service import DoctorService
+from .services.encrypt_service import EncryptService
 from .services.job_service import JobService
 from .services.lineage_service import LineageService
 from .services.mcp_service import McpService
@@ -80,6 +82,7 @@ app.add_typer(branch_app, name="branch", rich_help_panel=_DEV)
 app.add_typer(workspace_app, name="workspace", rich_help_panel=_DEV)
 app.add_typer(tool_app, name="tool", rich_help_panel=_DEV)
 app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
+app.add_typer(encrypt_app, name="encrypt", rich_help_panel=_DEV)
 
 
 @app.callback()
@@ -153,6 +156,7 @@ def main(
     sharing_service = SharingService(config_store=config_store)
     storage_service = StorageService(config_store=config_store)
     sync_service = SyncService(config_store=config_store)
+    encrypt_service = EncryptService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
     version_service = VersionService()
@@ -182,6 +186,7 @@ def main(
     ctx.obj["sharing_service"] = sharing_service
     ctx.obj["storage_service"] = storage_service
     ctx.obj["sync_service"] = sync_service
+    ctx.obj["encrypt_service"] = encrypt_service
     ctx.obj["workspace_service"] = workspace_service
     ctx.obj["doctor_service"] = doctor_service
     ctx.obj["version_service"] = version_service

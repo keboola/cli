@@ -104,6 +104,7 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 | Link the current git branch to a Keboola development branch | `kbagent sync branch-link --project PROJECT` |
 | Remove the branch mapping for the current git branch | `kbagent sync branch-unlink` |
 | Show the branch mapping status for the current git branch | `kbagent sync branch-status` |
+| Encrypt #-prefixed secret values for a Keboola component | `kbagent encrypt values --project PROJECT --component-id COMPONENT-ID --input INPUT-DATA` |
 <!-- END AUTO-GENERATED COMMANDS -->
 
 ### Sync pull notable flags

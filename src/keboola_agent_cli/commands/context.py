@@ -234,8 +234,9 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent sync diff --project ALIAS [--all-projects] [--directory DIR]
     3-way diff: local vs pull-time snapshot vs remote. Detects conflicts.
 
-  kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force]
+  kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
+    Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
 
   kbagent sync branch-link --project ALIAS [--branch-id ID] [--branch-name NAME]
     Link git branch to Keboola dev branch. Auto-creates if needed.
@@ -245,6 +246,15 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent sync branch-status [--directory DIR]
     Show current branch mapping status.
+
+### Encryption
+
+  kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|-  [--output-file PATH]
+    Encrypt #-prefixed secret values via Keboola Encryption API (one-way, no decrypt).
+    Scope: ComponentSecure (project + component). Use for MCP tool call workflows
+    where ciphertext must exist before calling update_config / create_config.
+    --input accepts: inline JSON, @file.json (from file), or - (from stdin).
+    Already-encrypted values (KBC:: prefix) pass through unchanged.
 
 ### MCP Tools (Multi-Project)
 

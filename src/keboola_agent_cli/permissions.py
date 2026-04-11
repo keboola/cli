@@ -73,6 +73,8 @@ OPERATION_REGISTRY: dict[str, str] = {
     # Storage destructive
     "storage.delete-table": "destructive",
     "storage.delete-bucket": "destructive",
+    # Encryption
+    "encrypt.values": "write",
     # Sync / git workflow
     "sync.init": "write",
     "sync.pull": "write",

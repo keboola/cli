@@ -744,6 +744,11 @@ def sync_push(
         "--force",
         help="Allow deletion of remote configs that were removed locally",
     ),
+    allow_plaintext: bool = typer.Option(
+        False,
+        "--allow-plaintext-on-encrypt-failure",
+        help="Allow push even if secret encryption fails (DANGEROUS: secrets stored as plaintext)",
+    ),
 ) -> None:
     """Push local configuration changes to a Keboola project.
 
@@ -769,7 +774,12 @@ def sync_push(
     if all_projects:
         base_dir = _safe_resolve_dir(directory)
         try:
-            data = service.push_all(base_dir, dry_run=dry_run, force=force)
+            data = service.push_all(
+                base_dir,
+                dry_run=dry_run,
+                force=force,
+                allow_plaintext_fallback=allow_plaintext,
+            )
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code="CONFIG_ERROR")
             raise typer.Exit(code=5) from None
@@ -788,6 +798,7 @@ def sync_push(
             project_root=project_root,
             dry_run=dry_run,
             force=force,
+            allow_plaintext_fallback=allow_plaintext,
         )
     except FileNotFoundError as exc:
         formatter.error(message=str(exc), error_code="NOT_INITIALIZED")
