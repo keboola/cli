@@ -67,12 +67,15 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 ## Sync (GitOps)
 - `sync init --project ALIAS [--directory DIR] [--git-branching]` -- initialize sync working directory
 - `sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N]` -- download configs to local files. For large projects (>100 configs), automatically fetches jobs per-config when the grouped API limit is insufficient
-- `sync push --project ALIAS [--all-projects] [--dry-run] [--force]` -- push local changes (auto-encrypts secrets)
+- `sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure]` -- push local changes (auto-encrypts secrets, fails if encryption fails)
 - `sync diff --project ALIAS [--all-projects]` -- 3-way diff (local vs base vs remote), detects conflicts
 - `sync status [--directory DIR]` -- show locally modified/added/deleted configs
 - `sync branch-link --project ALIAS [--branch-id ID] [--branch-name NAME]` -- link git branch to Keboola dev branch
 - `sync branch-unlink [--directory DIR]` -- remove git-to-Keboola branch mapping
 - `sync branch-status [--directory DIR]` -- show current branch mapping
+
+## Encryption
+- `encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]` -- encrypt #-prefixed secrets via Keboola Encryption API (one-way, no decrypt). Scope: ComponentSecure (project + component). Use for MCP tool call workflows.
 
 ## Utility
 - `init [--from-global]` -- create local `.kbagent/` workspace (per-directory isolation)

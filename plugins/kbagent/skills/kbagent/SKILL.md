@@ -8,6 +8,7 @@ description: >
   temporary workspaces, bulk-onboarding organizations, syncing project configs
   as local files (GitOps), git-branching with Keboola dev branch isolation,
   sharing buckets across projects, linking shared data,
+  encrypting secrets for MCP tool call workflows,
   and syncing storage metadata and job history. Triggers: kbagent, Keboola project,
   keboola configs, keboola jobs, keboola lineage, keboola transformations,
   keboola MCP tools, keboola workspace, SQL debugging, keboola branches,
@@ -16,7 +17,9 @@ description: >
   keboola gitops, sync pull, sync push, sync diff, branch-link,
   search configs, find in configurations, audit configurations,
   input mapping migration, remove input mapping, Snowflake paths,
-  MULTI_STATEMENT_COUNT, statement count error, SQL transformation migration.
+  MULTI_STATEMENT_COUNT, statement count error, SQL transformation migration,
+  keboola encrypt, encrypt secrets, encrypt credentials, encrypt password,
+  keboola encryption API, #password, #api_token, KBC::ProjectSecure.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -146,6 +149,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Workspace SQL debugging | [workspace-workflow](references/workspace-workflow.md) |
 | Bucket sharing & linking | [sharing-workflow](references/sharing-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
+| Encrypting secrets for MCP tools | [encrypt-workflow](references/encrypt-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
 | Reading synced data | [reading-synced-data](references/reading-synced-data.md) |
 | SQL migration (input mapping removal) | [sql-migration-workflow](references/sql-migration-workflow.md) |
