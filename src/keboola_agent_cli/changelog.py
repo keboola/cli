@@ -8,6 +8,9 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.18.3": [
+        "New: job run command with --row-id, --wait, --timeout (#135)",
+    ],
     "0.18.2": [
         "New: storage download-table -- export table data to CSV (#130)",
         "New: storage table-detail -- show columns, types, primary key (#130)",

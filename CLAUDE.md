@@ -235,6 +235,7 @@ kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [
 
 kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
 kbagent job detail --project NAME --job-id ID
+kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N]
 
 kbagent storage buckets [--project NAME] [--branch ID]
 kbagent storage bucket-detail --project NAME --bucket-id ID [--branch ID]

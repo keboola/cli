@@ -109,6 +109,10 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent job detail --project NAME --job-id ID
     Full job detail including result message and timing.
 
+  kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N]
+    Run a Queue API job. --row-id selects specific config rows (repeatable; omit to run entire config).
+    --wait polls until job finishes. --timeout sets max wait in seconds (default 300).
+
 ### Storage
 
   kbagent storage buckets [--project NAME] [--branch ID]

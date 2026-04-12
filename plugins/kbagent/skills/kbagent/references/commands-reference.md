@@ -36,6 +36,7 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 ## Job History
 - `job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N]` -- list jobs (default 50, max 500)
 - `job detail --project NAME --job-id ID` -- full job detail with timing and result message
+- `job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N]` -- run a job, optionally wait for completion
 
 ## Storage
 - `storage buckets [--project NAME] [--branch ID]` -- list buckets with sharing/linked info (branch-aware)
