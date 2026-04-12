@@ -919,11 +919,9 @@ class KeboolaClient(BaseHttpClient):
             and 'gcsUploadParams' (present on GCP stacks; contains bearer token
             and GCS bucket/key for direct PUT upload).
         """
-        # Only send the two required fields. Omit optional booleans (isPermanent,
-        # isPublic) so Python's False doesn't serialize to the string "False" in
-        # form-data — which some backends treat as truthy, potentially making
-        # files permanent or publicly accessible.
-        body: dict[str, Any] = {"name": name, "sizeBytes": size_bytes}
+        # federationToken=1 is required on newer stacks (AWS, Azure) to get
+        # cloud-native credentials instead of deprecated presigned POST fields.
+        body: dict[str, Any] = {"name": name, "sizeBytes": size_bytes, "federationToken": "1"}
         response = self._request("POST", "/v2/storage/files/prepare", data=body)
         return response.json()
 
@@ -934,22 +932,22 @@ class KeboolaClient(BaseHttpClient):
     ) -> None:
         """Upload a file to cloud storage using credentials from files/prepare.
 
-        Three upload paths based on what the API returns:
+        Four upload paths based on what the API returns:
 
         GCP stack (``gcsUploadParams`` present):
             PUT to ``https://storage.googleapis.com/{bucket}/{key}`` with an
-            OAuth2 ``Authorization: Bearer`` header. The ``url`` field in the
-            response is a download URL and is NOT used for upload.
-
-        S3 stack (``uploadParams`` non-empty):
-            Multipart form POST to ``url``. All ``uploadParams`` fields are
-            included as form fields first; the file field is appended last
-            (S3 policy requires the file to be the final part).
+            OAuth2 ``Authorization: Bearer`` header.
 
         Azure stack (``absUploadParams`` present):
-            PUT to ABS container URL constructed from SASConnectionString.
-            The ``url`` field is read-only — upload must use the write-capable
-            SAS from ``absUploadParams.absCredentials.SASConnectionString``.
+            PUT to ABS container URL constructed from SASConnectionString
+            with ``x-ms-blob-type: BlockBlob`` header.
+
+        AWS stack with federation (``uploadParams.credentials`` present):
+            PUT to ``https://{bucket}.s3.{region}.amazonaws.com/{key}``
+            with AWS SigV4 signed headers.
+
+        Legacy S3 presigned POST (``uploadParams`` without credentials):
+            Multipart form POST — deprecated on newer stacks.
 
         Args:
             upload_info: Full response dict from prepare_file_upload().
@@ -959,6 +957,7 @@ class KeboolaClient(BaseHttpClient):
 
         gcs_params = upload_info.get("gcsUploadParams")
         abs_params = upload_info.get("absUploadParams")
+        upload_params = upload_info.get("uploadParams") or {}
 
         if gcs_params:
             # GCP: PUT via GCS JSON API with short-lived OAuth2 bearer token
@@ -983,24 +982,38 @@ class KeboolaClient(BaseHttpClient):
                     headers={"x-ms-blob-type": "BlockBlob"},
                 )
             success_codes = (200, 201)
-        else:
-            url = upload_info["url"]
-            upload_params = upload_info.get("uploadParams") or {}
+        elif upload_params.get("credentials"):
+            # AWS S3 with federation token: PUT with SigV4 signed headers
+            creds = upload_params["credentials"]
+            bucket = upload_params["bucket"]
+            key = upload_params["key"]
+            region = upload_info.get("region", "us-east-1")
+            upload_url = f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+            with p.open("rb") as fh:
+                file_bytes = fh.read()
+            headers = _s3_signed_headers(
+                upload_url, creds, region, method="PUT", payload=file_bytes
+            )
             with httpx.Client(timeout=FILE_UPLOAD_TIMEOUT) as http:
-                if upload_params:
-                    # S3 presigned POST: multipart form — uploadParams first, file last
-                    form_fields: list[tuple[str, Any]] = [
-                        (k, (None, str(v))) for k, v in upload_params.items()
-                    ]
-                    with p.open("rb") as fh:
-                        form_fields.append(("file", (p.name, fh, "application/octet-stream")))
-                        response = http.post(url, files=form_fields)
-                    success_codes = (200, 204)
-                else:
-                    # Fallback: signed URL PUT (no extra auth needed)
-                    with p.open("rb") as fh:
-                        response = http.put(url, content=fh)
-                    success_codes = (200, 201)
+                response = http.put(upload_url, content=file_bytes, headers=headers)
+            success_codes = (200,)
+        elif upload_params:
+            # Legacy S3 presigned POST: multipart form — uploadParams first, file last
+            url = upload_info["url"]
+            with httpx.Client(timeout=FILE_UPLOAD_TIMEOUT) as http:
+                form_fields: list[tuple[str, Any]] = [
+                    (k, (None, str(v))) for k, v in upload_params.items()
+                ]
+                with p.open("rb") as fh:
+                    form_fields.append(("file", (p.name, fh, "application/octet-stream")))
+                    response = http.post(url, files=form_fields)
+            success_codes = (200, 204)
+        else:
+            # Fallback: signed URL PUT (no extra auth needed)
+            url = upload_info["url"]
+            with p.open("rb") as fh, httpx.Client(timeout=FILE_UPLOAD_TIMEOUT) as http:
+                response = http.put(url, content=fh)
+            success_codes = (200, 201)
 
         if response.status_code not in success_codes:
             raise KeboolaApiError(
@@ -1854,8 +1867,14 @@ class _CloudDownloader:
             return response.content
 
 
-def _s3_signed_headers(url: str, creds: dict[str, str], region: str) -> dict[str, str]:
-    """Generate AWS SigV4 signed headers for an S3 GET request.
+def _s3_signed_headers(
+    url: str,
+    creds: dict[str, str],
+    region: str,
+    method: str = "GET",
+    payload: bytes = b"",
+) -> dict[str, str]:
+    """Generate AWS SigV4 signed headers for an S3 request.
 
     Implements minimal AWS Signature Version 4 signing using only stdlib
     (hmac, hashlib, urllib.parse). No boto3/botocore dependency required.
@@ -1864,6 +1883,8 @@ def _s3_signed_headers(url: str, creds: dict[str, str], region: str) -> dict[str
         url: Full S3 URL (https://bucket.s3.region.amazonaws.com/key).
         creds: Dict with AccessKeyId, SecretAccessKey, SessionToken.
         region: AWS region (e.g. "us-east-1").
+        method: HTTP method (GET or PUT).
+        payload: Request body bytes (empty for GET).
 
     Returns:
         Dict of headers to include in the request.
@@ -1891,7 +1912,6 @@ def _s3_signed_headers(url: str, creds: dict[str, str], region: str) -> dict[str
 
     # Canonical request
     canonical_uri = quote(unquote(path), safe="/~")
-    # Sort query params
     if query:
         params_list = sorted(query.split("&"))
         canonical_querystring = "&".join(params_list)
@@ -1905,11 +1925,11 @@ def _s3_signed_headers(url: str, creds: dict[str, str], region: str) -> dict[str
     signed_headers = ";".join(sorted(headers_to_sign.keys()))
     canonical_headers = "".join(f"{k}:{v}\n" for k, v in sorted(headers_to_sign.items()))
 
-    payload_hash = hashlib.sha256(b"").hexdigest()  # empty body for GET
+    payload_hash = hashlib.sha256(payload).hexdigest()
 
     canonical_request = "\n".join(
         [
-            "GET",
+            method,
             canonical_uri,
             canonical_querystring,
             canonical_headers,
