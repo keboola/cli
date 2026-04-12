@@ -19,7 +19,12 @@ from ._helpers import (
     resolve_branch,
 )
 
-storage_app = typer.Typer(help="Browse and manage storage buckets and tables")
+storage_app = typer.Typer(help="Browse and manage storage buckets, tables, and files")
+
+# Rich help panel names for grouping in --help output
+_BUCKETS = "Buckets"
+_TABLES = "Tables"
+_FILES = "Files"
 
 
 @storage_app.callback(invoke_without_command=True)
@@ -27,7 +32,7 @@ def _storage_permission_check(ctx: typer.Context) -> None:
     check_cli_permission(ctx, "storage")
 
 
-@storage_app.command("buckets")
+@storage_app.command("buckets", rich_help_panel=_BUCKETS)
 def storage_buckets(
     ctx: typer.Context,
     project: list[str] | None = typer.Option(
@@ -110,7 +115,7 @@ def storage_buckets(
         emit_project_warnings(formatter, result)
 
 
-@storage_app.command("bucket-detail")
+@storage_app.command("bucket-detail", rich_help_panel=_BUCKETS)
 def storage_bucket_detail(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -195,7 +200,7 @@ def storage_bucket_detail(
                 )
 
 
-@storage_app.command("table-detail")
+@storage_app.command("table-detail", rich_help_panel=_TABLES)
 def storage_table_detail(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -266,7 +271,7 @@ def storage_table_detail(
             formatter.console.print(table)
 
 
-@storage_app.command("create-bucket")
+@storage_app.command("create-bucket", rich_help_panel=_BUCKETS)
 def storage_create_bucket(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -335,7 +340,7 @@ def storage_create_bucket(
             formatter.console.print(f"  Description: {result['description']}")
 
 
-@storage_app.command("create-table")
+@storage_app.command("create-table", rich_help_panel=_TABLES)
 def storage_create_table(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -406,7 +411,7 @@ def storage_create_table(
         formatter.console.print(f"  Columns: {', '.join(result['columns'])}")
 
 
-@storage_app.command("upload-table")
+@storage_app.command("upload-table", rich_help_panel=_TABLES)
 def storage_upload_table(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -516,7 +521,7 @@ def storage_upload_table(
                 formatter.console.print(f"  [yellow]Warning:[/yellow] {w}")
 
 
-@storage_app.command("download-table")
+@storage_app.command("download-table", rich_help_panel=_TABLES)
 def storage_download_table(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -599,7 +604,7 @@ def storage_download_table(
         )
 
 
-@storage_app.command("tables")
+@storage_app.command("tables", rich_help_panel=_TABLES)
 def storage_tables(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -668,7 +673,7 @@ def storage_tables(
         formatter.console.print(table)
 
 
-@storage_app.command("delete-table")
+@storage_app.command("delete-table", rich_help_panel=_TABLES)
 def storage_delete_table(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -759,7 +764,7 @@ def storage_delete_table(
         raise typer.Exit(code=1)
 
 
-@storage_app.command("delete-bucket")
+@storage_app.command("delete-bucket", rich_help_panel=_BUCKETS)
 def storage_delete_bucket(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -854,7 +859,7 @@ def _format_file_size(size_bytes: int | None) -> str:
     return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-@storage_app.command("file-list")
+@storage_app.command("file-list", rich_help_panel=_FILES)
 def storage_file_list(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -949,7 +954,7 @@ def storage_file_list(
         formatter.console.print(table)
 
 
-@storage_app.command("file-upload")
+@storage_app.command("file-upload", rich_help_panel=_FILES)
 def storage_file_upload(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -1033,7 +1038,7 @@ def storage_file_upload(
             formatter.console.print("  Permanent: yes")
 
 
-@storage_app.command("file-download")
+@storage_app.command("file-download", rich_help_panel=_FILES)
 def storage_file_download(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -1106,7 +1111,7 @@ def storage_file_download(
         )
 
 
-@storage_app.command("file-info")
+@storage_app.command("file-info", rich_help_panel=_FILES)
 def storage_file_info(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -1153,7 +1158,7 @@ def storage_file_info(
             )
 
 
-@storage_app.command("file-delete")
+@storage_app.command("file-delete", rich_help_panel=_FILES)
 def storage_file_delete(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -1213,7 +1218,7 @@ def storage_file_delete(
         raise typer.Exit(code=1)
 
 
-@storage_app.command("file-tag")
+@storage_app.command("file-tag", rich_help_panel=_FILES)
 def storage_file_tag(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -1281,7 +1286,7 @@ def storage_file_tag(
         raise typer.Exit(code=1)
 
 
-@storage_app.command("load-file")
+@storage_app.command("load-file", rich_help_panel=_FILES)
 def storage_load_file(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -1366,7 +1371,7 @@ def storage_load_file(
             formatter.console.print(f"  [yellow]Warning:[/yellow] {w}")
 
 
-@storage_app.command("unload-table")
+@storage_app.command("unload-table", rich_help_panel=_FILES)
 def storage_unload_table(
     ctx: typer.Context,
     project: str = typer.Option(

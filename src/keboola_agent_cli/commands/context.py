@@ -150,6 +150,36 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
     Delete one or more buckets. --force cascade-deletes tables. Linked/shared buckets protected. Branch-aware.
 
+### Storage Files
+
+  kbagent storage file-list --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]
+    List Storage Files. --tag filters by tags (AND logic, repeat for multiple). --query for full-text search on name. Branch-aware.
+
+  kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID]
+    Upload any file to Storage Files. --tag assigns tags (repeatable). --permanent prevents auto-deletion after 15 days.
+    --name overrides the filename (default: local filename). Branch-aware.
+
+  kbagent storage file-download --project NAME [--file-id ID | --tag TAG ...] [--output FILE]
+    Download a Storage File. Either --file-id (by ID) or --tag (latest file matching all tags).
+    --output sets local path (default: original filename). Handles sliced and gzipped files transparently.
+
+  kbagent storage file-info --project NAME --file-id ID
+    Show file metadata: name, size, tags, sliced/permanent status, creator token. Does not download.
+
+  kbagent storage file-delete --project NAME --file-id ID [--file-id ...] [--dry-run] [--yes]
+    Delete one or more Storage Files. Batch: repeat --file-id. --dry-run to preview.
+
+  kbagent storage file-tag --project NAME --file-id ID [--add TAG ...] [--remove TAG ...]
+    Add and/or remove tags on a file in a single operation. Both --add and --remove are repeatable.
+
+  kbagent storage load-file --project NAME --file-id ID --table-id TABLE_ID [--incremental] [--delimiter D] [--enclosure E] [--branch ID]
+    Import an already-uploaded Storage File into a table. Useful for files uploaded by components or file-upload.
+    --incremental to append rows. Branch-aware.
+
+  kbagent storage unload-table --project NAME --table-id TABLE_ID [--columns COL ...] [--limit N] [--tag TAG ...] [--download] [--output FILE] [--branch ID]
+    Export a table to a Storage File. The file stays in Keboola for other components to use.
+    --tag assigns tags to the exported file. --download also saves it locally. Branch-aware.
+
 ### Sharing (Cross-Project)
 
   kbagent sharing list [--project NAME]
