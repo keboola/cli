@@ -1874,16 +1874,50 @@ class TestUploadToCloud:
         assert exc_info.value.status_code == 403
 
 
+_ABS_SAS = (
+    "BlobEndpoint=https://kbcftp.blob.core.windows.net;"
+    "SharedAccessSignature=sv=2017-11-09&sr=c&sp=rwl&sig=abc123"
+)
+_ABS_UPLOAD_PARAMS = {
+    "blobName": "data.csv",
+    "accountName": "kbcftp",
+    "container": "exp-15-files-123",
+    "absCredentials": {"SASConnectionString": _ABS_SAS},
+}
+
+
 class TestUploadToCloudAzure:
     """Tests for _upload_to_cloud Azure Blob Storage path."""
+
+    def test_abs_put_uses_write_sas(self, httpx_mock, tmp_path) -> None:
+        """Azure upload constructs URL from absUploadParams (not read-only url)."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_bytes(b"id\n1\n")
+        expected_url = (
+            "https://kbcftp.blob.core.windows.net/exp-15-files-123/data.csv"
+            "?sv=2017-11-09&sr=c&sp=rwl&sig=abc123"
+        )
+        httpx_mock.add_response(url=expected_url, method="PUT", status_code=201)
+        upload_info = {
+            "url": "https://kbcftp.blob.core.windows.net/read-only?sp=rl",
+            "absUploadParams": _ABS_UPLOAD_PARAMS,
+        }
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client._upload_to_cloud(upload_info, str(csv_file))
+
+        put_req = next(r for r in httpx_mock.get_requests() if r.method == "PUT")
+        assert "sp=rwl" in str(put_req.url)
+        assert "read-only" not in str(put_req.url)
 
     def test_abs_put_includes_blob_type_header(self, httpx_mock, tmp_path) -> None:
         """Azure PUT must include x-ms-blob-type: BlockBlob header."""
         csv_file = tmp_path / "data.csv"
         csv_file.write_bytes(b"id\n1\n")
-        abs_url = "https://kbcftp.blob.core.windows.net/exp-15/file.csv?sv=2024-05-04&sig=abc"
-        httpx_mock.add_response(url=abs_url, method="PUT", status_code=201)
-        upload_info = {"url": abs_url, "uploadParams": {}}
+        httpx_mock.add_response(method="PUT", status_code=201)
+        upload_info = {
+            "url": "https://kbcftp.blob.core.windows.net/read-only?sp=rl",
+            "absUploadParams": _ABS_UPLOAD_PARAMS,
+        }
         with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
             client._upload_to_cloud(upload_info, str(csv_file))
 
@@ -1894,11 +1928,36 @@ class TestUploadToCloudAzure:
         """Azure returns 201 Created on success — must not raise."""
         csv_file = tmp_path / "data.csv"
         csv_file.write_bytes(b"id\n1\n")
-        abs_url = "https://kbcftp.blob.core.windows.net/exp-15/file.csv?sv=2024-05-04&sig=xyz"
-        httpx_mock.add_response(url=abs_url, method="PUT", status_code=201)
-        upload_info = {"url": abs_url, "uploadParams": {}}
+        httpx_mock.add_response(method="PUT", status_code=201)
+        upload_info = {
+            "url": "https://kbcftp.blob.core.windows.net/read-only?sp=rl",
+            "absUploadParams": _ABS_UPLOAD_PARAMS,
+        }
         with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
             client._upload_to_cloud(upload_info, str(csv_file))  # should not raise
+
+
+class TestBuildAbsUploadUrl:
+    """Tests for _build_abs_upload_url helper."""
+
+    def test_parses_connection_string(self) -> None:
+        from keboola_agent_cli.client import _build_abs_upload_url
+
+        params = {
+            "blobName": "test.csv",
+            "container": "exp-15-files-123",
+            "absCredentials": {
+                "SASConnectionString": (
+                    "BlobEndpoint=https://account.blob.core.windows.net;"
+                    "SharedAccessSignature=sv=2017-11-09&sr=c&sp=rwl&sig=abc%2Bxyz"
+                ),
+            },
+        }
+        url = _build_abs_upload_url(params)
+        assert url == (
+            "https://account.blob.core.windows.net/exp-15-files-123/test.csv"
+            "?sv=2017-11-09&sr=c&sp=rwl&sig=abc%2Bxyz"
+        )
 
 
 class TestImportTableAsync:

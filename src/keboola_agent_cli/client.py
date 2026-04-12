@@ -946,8 +946,10 @@ class KeboolaClient(BaseHttpClient):
             included as form fields first; the file field is appended last
             (S3 policy requires the file to be the final part).
 
-        ABS/other signed URL (``uploadParams`` empty/null):
-            Raw PUT of the file bytes directly to ``url``.
+        Azure stack (``absUploadParams`` present):
+            PUT to ABS container URL constructed from SASConnectionString.
+            The ``url`` field is read-only — upload must use the write-capable
+            SAS from ``absUploadParams.absCredentials.SASConnectionString``.
 
         Args:
             upload_info: Full response dict from prepare_file_upload().
@@ -956,6 +958,8 @@ class KeboolaClient(BaseHttpClient):
         p = Path(file_path)
 
         gcs_params = upload_info.get("gcsUploadParams")
+        abs_params = upload_info.get("absUploadParams")
+
         if gcs_params:
             # GCP: PUT via GCS JSON API with short-lived OAuth2 bearer token
             bucket = gcs_params["bucket"]
@@ -969,6 +973,16 @@ class KeboolaClient(BaseHttpClient):
                     headers={"Authorization": f"Bearer {access_token}"},
                 )
             success_codes = (200,)
+        elif abs_params:
+            # Azure Blob Storage: PUT with write-capable SAS from absUploadParams
+            upload_url = _build_abs_upload_url(abs_params)
+            with p.open("rb") as fh, httpx.Client(timeout=FILE_UPLOAD_TIMEOUT) as http:
+                response = http.put(
+                    upload_url,
+                    content=fh,
+                    headers={"x-ms-blob-type": "BlockBlob"},
+                )
+            success_codes = (200, 201)
         else:
             url = upload_info["url"]
             upload_params = upload_info.get("uploadParams") or {}
@@ -983,13 +997,9 @@ class KeboolaClient(BaseHttpClient):
                         response = http.post(url, files=form_fields)
                     success_codes = (200, 204)
                 else:
-                    # ABS (Azure Blob Storage) or other signed URL: raw PUT
+                    # Fallback: signed URL PUT (no extra auth needed)
                     with p.open("rb") as fh:
-                        response = http.put(
-                            url,
-                            content=fh,
-                            headers={"x-ms-blob-type": "BlockBlob"},
-                        )
+                        response = http.put(url, content=fh)
                     success_codes = (200, 201)
 
         if response.status_code not in success_codes:
@@ -1687,6 +1697,44 @@ class KeboolaClient(BaseHttpClient):
             error_code="QUERY_JOB_TIMEOUT",
             retryable=True,
         )
+
+
+# ---------------------------------------------------------------------------
+# Cloud storage upload helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_abs_upload_url(abs_params: dict[str, Any]) -> str:
+    """Build Azure Blob Storage upload URL from absUploadParams.
+
+    Parses SASConnectionString to extract BlobEndpoint and SharedAccessSignature,
+    then constructs: ``{BlobEndpoint}/{container}/{blobName}?{SAS}``.
+
+    The ``url`` field in the API response is read-only (``sp=rl``).
+    The write-capable SAS (``sp=rwl``) is only in ``absUploadParams``.
+
+    Args:
+        abs_params: The absUploadParams dict from files/prepare response.
+
+    Returns:
+        Full HTTPS URL with write-capable SAS token.
+    """
+    blob_name = abs_params["blobName"]
+    container = abs_params["container"]
+    sas_string = abs_params["absCredentials"]["SASConnectionString"]
+
+    # Format: "BlobEndpoint=https://...;SharedAccessSignature=sv=2017-11-09&..."
+    # partition("=") splits on first "=" only, preserving "=" in SAS values.
+    parts: dict[str, str] = {}
+    for segment in sas_string.split(";"):
+        key, sep, value = segment.partition("=")
+        if sep:
+            parts[key] = value
+
+    blob_endpoint = parts.get("BlobEndpoint", "").rstrip("/")
+    sas = parts.get("SharedAccessSignature", "")
+
+    return f"{blob_endpoint}/{container}/{blob_name}?{sas}"
 
 
 # ---------------------------------------------------------------------------
