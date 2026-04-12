@@ -1919,8 +1919,27 @@ class _CloudDownloader:
                 provider="gcp",
                 auth_fn=lambda _url: {"Authorization": f"{token_type} {token}"},
             )
+        elif provider == "azure":
+            # Azure: SAS token from absCredentials for authenticating slice downloads
+            abs_creds = file_detail.get("absCredentials", {})
+            sas_string = abs_creds.get("SASConnectionString", "")
+            # Parse "BlobEndpoint=https://...;SharedAccessSignature=sv=..."
+            sas_parts: dict[str, str] = {}
+            for segment in sas_string.split(";"):
+                key, sep, value = segment.partition("=")
+                if sep:
+                    sas_parts[key] = value
+            blob_endpoint = sas_parts.get("BlobEndpoint", "").rstrip("/")
+            sas = sas_parts.get("SharedAccessSignature", "")
+            return _CloudDownloader(
+                provider="azure",
+                auth_fn=lambda _url, _be=blob_endpoint, _sas=sas: {
+                    "_blob_endpoint": _be,
+                    "_sas": _sas,
+                },
+            )
         else:
-            # Azure / other: presigned URLs, no extra auth needed
+            # Other: presigned URLs, no extra auth needed
             return _CloudDownloader(provider=provider, auth_fn=lambda _url: {})
 
     def resolve_base_url(self, file_detail: dict[str, Any]) -> str:
@@ -1940,8 +1959,15 @@ class _CloudDownloader:
             bucket = gcs_path.get("bucket", "")
             key = gcs_path.get("key", "")
             return f"https://storage.googleapis.com/{bucket}/{key}"
+        elif self._provider == "azure":
+            # Azure: base URL from absCredentials endpoint + container
+            auth_info = self._auth_fn("")
+            blob_endpoint = auth_info.get("_blob_endpoint", "")
+            abs_path = file_detail.get("absPath", {})
+            container = abs_path.get("container", "")
+            return f"{blob_endpoint}/{container}/"
         else:
-            # Azure/other: entries should be full URLs
+            # Other: entries should be full URLs
             return ""
 
     def resolve_slice_url(
@@ -1952,9 +1978,9 @@ class _CloudDownloader:
     ) -> str:
         """Convert a manifest entry URL to a downloadable HTTPS URL.
 
-        Manifest entries use cloud-native URLs (s3://bucket/key/slice.gz).
-        This strips the cloud prefix and appends the relative slice path
-        to the HTTPS base URL.
+        Manifest entries use cloud-native URLs (s3://bucket/key/slice.gz,
+        azure://container/blob). This strips the cloud prefix and builds
+        an HTTPS URL for download.
 
         Args:
             base_url: HTTPS base URL from resolve_base_url().
@@ -1981,13 +2007,25 @@ class _CloudDownloader:
             prefix = f"gs://{bucket}/{key}"
             relative = entry_url.removeprefix(prefix) if entry_url.startswith(prefix) else entry_url
             return base_url + relative
+        elif self._provider == "azure":
+            # entry_url: "azure://account.blob.core.windows.net/container/blob.gz"
+            # Replace azure:// with https:// and append SAS token
+            auth_info = self._auth_fn("")
+            sas = auth_info.get("_sas", "")
+            if entry_url.startswith("azure://"):
+                https_url = "https://" + entry_url[len("azure://") :]
+                return f"{https_url}?{sas}"
+            return entry_url
         else:
-            # Azure/other: entry URLs should be full HTTPS URLs
+            # Other: entry URLs should be full HTTPS URLs
             return entry_url
 
     def download_bytes(self, url: str) -> bytes:
         """Download content from a cloud URL with appropriate authentication."""
-        headers = self._auth_fn(url)
+        auth_result = self._auth_fn(url)
+        # Azure stores metadata (endpoint, SAS) in auth_fn result, not HTTP headers.
+        # The SAS token is embedded in the URL by resolve_slice_url().
+        headers = {k: v for k, v in auth_result.items() if not k.startswith("_")}
         with httpx.Client(timeout=FILE_DOWNLOAD_TIMEOUT) as http:
             response = http.get(url, headers=headers)
             response.raise_for_status()
