@@ -791,6 +791,453 @@ class StorageService(BaseService):
         return result
 
     # ------------------------------------------------------------------
+    # File operations
+    # ------------------------------------------------------------------
+
+    def list_files(
+        self,
+        alias: str,
+        limit: int = 20,
+        offset: int = 0,
+        tags: list[str] | None = None,
+        since_id: int | None = None,
+        query: str | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """List Storage Files from a project.
+
+        Args:
+            alias: Project alias.
+            limit: Max number of files.
+            offset: Pagination offset.
+            tags: Filter by tags (AND logic).
+            since_id: Return only files newer than this ID.
+            query: Full-text search on file name.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Dict with project_alias and list of files.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            files = client.list_files(
+                limit=limit,
+                offset=offset,
+                tags=tags,
+                since_id=since_id,
+                query=query,
+                branch_id=branch_id,
+            )
+        finally:
+            client.close()
+
+        return {
+            "project_alias": alias,
+            "files": files,
+            "count": len(files),
+        }
+
+    def upload_file(
+        self,
+        alias: str,
+        file_path: str,
+        name: str | None = None,
+        tags: list[str] | None = None,
+        is_permanent: bool = False,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Upload a local file to Storage Files.
+
+        Args:
+            alias: Project alias.
+            file_path: Local path to the file.
+            name: Custom filename (defaults to local basename).
+            tags: Optional list of tags.
+            is_permanent: If True, file is not auto-deleted.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Dict with file metadata.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        file_size_bytes = Path(file_path).stat().st_size
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            result = client.upload_file(
+                file_path=file_path,
+                name=name,
+                tags=tags,
+                is_permanent=is_permanent,
+                branch_id=branch_id,
+            )
+        finally:
+            client.close()
+
+        result["project_alias"] = alias
+        result["file_size_bytes"] = file_size_bytes
+        return result
+
+    def get_file_info(
+        self,
+        alias: str,
+        file_id: int,
+    ) -> dict[str, Any]:
+        """Get Storage File metadata.
+
+        Args:
+            alias: Project alias.
+            file_id: Storage file ID.
+
+        Returns:
+            File resource dict.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            file_info = client.get_file_info(file_id)
+        finally:
+            client.close()
+
+        file_info["project_alias"] = alias
+        return file_info
+
+    def download_file(
+        self,
+        alias: str,
+        file_id: int | None = None,
+        tags: list[str] | None = None,
+        output_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Download a Storage File to local disk.
+
+        Supports download by file ID or by tags (downloads latest matching file).
+        Handles both sliced and non-sliced files.
+
+        Args:
+            alias: Project alias.
+            file_id: Storage file ID (mutually exclusive with tags).
+            tags: Download latest file matching these tags.
+            output_path: Local output path (defaults to file's name).
+
+        Returns:
+            Dict with download metadata.
+        """
+        from ..errors import KeboolaApiError
+
+        if not file_id and not tags:
+            raise ValueError("Either --file-id or --tag must be provided")
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            # Resolve file ID from tags if needed
+            if not file_id:
+                files = client.list_files(limit=1, tags=tags)
+                if not files:
+                    tag_str = ", ".join(tags or [])
+                    raise KeboolaApiError(
+                        message=f"No files found matching tags: {tag_str}",
+                        status_code=404,
+                        error_code="FILE_NOT_FOUND",
+                        retryable=False,
+                    )
+                file_id = files[0]["id"]
+
+            file_detail = client.get_file_info(file_id)
+            file_name = file_detail.get("name", f"file_{file_id}")
+            effective_output = output_path or file_name
+
+            if file_detail.get("isSliced"):
+                bytes_written = client.download_sliced_file(file_detail, effective_output)
+            else:
+                download_url = file_detail.get("url")
+                if not download_url:
+                    raise KeboolaApiError(
+                        message=f"No download URL for file {file_id}",
+                        status_code=500,
+                        error_code="FILE_NO_URL",
+                        retryable=False,
+                    )
+                bytes_written = client.download_file(download_url, effective_output)
+        finally:
+            client.close()
+
+        return {
+            "project_alias": alias,
+            "file_id": file_id,
+            "file_name": file_name,
+            "output_path": str(Path(effective_output).resolve()),
+            "file_size_bytes": bytes_written,
+            "is_sliced": file_detail.get("isSliced", False),
+        }
+
+    def delete_files(
+        self,
+        alias: str,
+        file_ids: list[int],
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Delete one or more Storage Files.
+
+        Batch-tolerant: accumulates errors per file.
+
+        Args:
+            alias: Project alias.
+            file_ids: List of file IDs to delete.
+            dry_run: If True, only report what would be deleted.
+
+        Returns:
+            Dict with deleted, failed, dry_run lists.
+        """
+        from ..errors import KeboolaApiError
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        deleted: list[int] = []
+        failed: list[dict[str, Any]] = []
+        would_delete: list[int] = []
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            for fid in file_ids:
+                if dry_run:
+                    would_delete.append(fid)
+                    continue
+                try:
+                    client.delete_file(fid)
+                    deleted.append(fid)
+                except KeboolaApiError as exc:
+                    failed.append({"id": fid, "error": exc.message})
+        finally:
+            client.close()
+
+        result: dict[str, Any] = {
+            "project_alias": alias,
+            "deleted": deleted,
+            "failed": failed,
+            "dry_run": dry_run,
+        }
+        if dry_run:
+            result["would_delete"] = would_delete
+        return result
+
+    def tag_file(
+        self,
+        alias: str,
+        file_id: int,
+        add_tags: list[str] | None = None,
+        remove_tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Add and/or remove tags on a Storage File.
+
+        Args:
+            alias: Project alias.
+            file_id: Storage file ID.
+            add_tags: Tags to add.
+            remove_tags: Tags to remove.
+
+        Returns:
+            Dict with operation results.
+        """
+        from ..errors import KeboolaApiError
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        added: list[str] = []
+        removed: list[str] = []
+        errors: list[dict[str, str]] = []
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            for tag in add_tags or []:
+                try:
+                    client.tag_file(file_id, tag)
+                    added.append(tag)
+                except KeboolaApiError as exc:
+                    errors.append({"tag": tag, "action": "add", "error": exc.message})
+
+            for tag in remove_tags or []:
+                try:
+                    client.untag_file(file_id, tag)
+                    removed.append(tag)
+                except KeboolaApiError as exc:
+                    errors.append({"tag": tag, "action": "remove", "error": exc.message})
+        finally:
+            client.close()
+
+        return {
+            "project_alias": alias,
+            "file_id": file_id,
+            "added": added,
+            "removed": removed,
+            "errors": errors,
+        }
+
+    def load_file_to_table(
+        self,
+        alias: str,
+        file_id: int,
+        table_id: str,
+        incremental: bool = False,
+        delimiter: str = ",",
+        enclosure: str = '"',
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Load an existing Storage File into a table.
+
+        Triggers import-async with dataFileId. Useful for importing files
+        that are already in Storage (uploaded by components or file-upload).
+
+        Args:
+            alias: Project alias.
+            file_id: Storage file ID to import.
+            table_id: Target table ID.
+            incremental: Append rows (True) or full load (False).
+            delimiter: CSV column delimiter.
+            enclosure: CSV value enclosure character.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Dict with import results.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            job = client.import_table_async(
+                table_id=table_id,
+                file_id=file_id,
+                incremental=incremental,
+                delimiter=delimiter,
+                enclosure=enclosure,
+                branch_id=branch_id,
+            )
+        finally:
+            client.close()
+
+        results = job.get("results", {})
+        return {
+            "project_alias": alias,
+            "file_id": file_id,
+            "table_id": table_id,
+            "incremental": incremental,
+            "imported_rows": results.get("importedRowsCount"),
+            "warnings": results.get("warnings", []),
+        }
+
+    def unload_table_to_file(
+        self,
+        alias: str,
+        table_id: str,
+        columns: list[str] | None = None,
+        limit: int | None = None,
+        tags: list[str] | None = None,
+        download: bool = False,
+        output_path: str | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Export a table to a Storage File.
+
+        Creates a file in Storage that can be downloaded or used by other
+        components. Optionally tags the output file and downloads it locally.
+
+        Args:
+            alias: Project alias.
+            table_id: Table ID to export.
+            columns: Optional list of column names.
+            limit: Optional max rows.
+            tags: Tags to apply to the exported file.
+            download: If True, also download the file locally.
+            output_path: Local output path (only used when download=True).
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Dict with export metadata and file info.
+        """
+        from ..errors import KeboolaApiError
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            # Step 1: Export table async
+            job = client.export_table_async(
+                table_id=table_id,
+                columns=columns,
+                limit=limit,
+                branch_id=branch_id,
+            )
+
+            # Step 2: Get file ID from job results
+            file_info = job.get("results", {}).get("file", {})
+            file_id = file_info.get("id")
+            if not file_id:
+                raise KeboolaApiError(
+                    message="Export job completed but no file ID in results",
+                    status_code=500,
+                    error_code="EXPORT_NO_FILE",
+                    retryable=False,
+                )
+
+            # Step 3: Tag the exported file
+            for tag in tags or []:
+                client.tag_file(file_id, tag)
+
+            # Step 4: Get full file detail
+            file_detail = client.get_file_info(file_id)
+
+            result: dict[str, Any] = {
+                "project_alias": alias,
+                "table_id": table_id,
+                "file_id": file_id,
+                "file_name": file_detail.get("name"),
+                "file_size_bytes": file_detail.get("sizeBytes"),
+                "is_sliced": file_detail.get("isSliced", False),
+                "tags": file_detail.get("tags", []),
+            }
+
+            # Step 5: Download if requested
+            if download:
+                effective_output = output_path or f"{table_id.rsplit('.', 1)[-1]}.csv"
+
+                if file_detail.get("isSliced"):
+                    bytes_written = client.download_sliced_file(file_detail, effective_output)
+                else:
+                    download_url = file_detail.get("url")
+                    if not download_url:
+                        raise KeboolaApiError(
+                            message=f"No download URL for file {file_id}",
+                            status_code=500,
+                            error_code="FILE_NO_URL",
+                            retryable=False,
+                        )
+                    bytes_written = client.download_file(download_url, effective_output)
+
+                result["downloaded"] = True
+                result["output_path"] = str(Path(effective_output).resolve())
+                result["downloaded_bytes"] = bytes_written
+            else:
+                result["downloaded"] = False
+        finally:
+            client.close()
+
+        return result
+
+    # ------------------------------------------------------------------
     # Parallel workers
     # ------------------------------------------------------------------
 

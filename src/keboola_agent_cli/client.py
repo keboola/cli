@@ -905,6 +905,9 @@ class KeboolaClient(BaseHttpClient):
         self,
         name: str,
         size_bytes: int,
+        tags: list[str] | None = None,
+        is_permanent: bool = False,
+        notify: bool = False,
     ) -> dict[str, Any]:
         """Register a file with the Storage API and get a presigned upload URL.
 
@@ -913,6 +916,9 @@ class KeboolaClient(BaseHttpClient):
         Args:
             name: Filename (e.g. "data.csv").
             size_bytes: File size in bytes.
+            tags: Optional list of tags to assign to the file.
+            is_permanent: If True, file is not auto-deleted after 15 days.
+            notify: If True, send notification on upload completion.
 
         Returns:
             File resource dict including 'id' (fileId), 'url', 'uploadParams',
@@ -922,6 +928,13 @@ class KeboolaClient(BaseHttpClient):
         # federationToken=1 is required on newer stacks (AWS, Azure) to get
         # cloud-native credentials instead of deprecated presigned POST fields.
         body: dict[str, Any] = {"name": name, "sizeBytes": size_bytes, "federationToken": "1"}
+        if is_permanent:
+            body["isPermanent"] = "1"
+        if notify:
+            body["notify"] = "1"
+        if tags:
+            for i, tag in enumerate(tags):
+                body[f"tags[{i}]"] = tag
         response = self._request("POST", "/v2/storage/files/prepare", data=body)
         return response.json()
 
@@ -1198,6 +1211,112 @@ class KeboolaClient(BaseHttpClient):
             params={"federationToken": "1"},
         )
         return response.json()
+
+    def list_files(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        tags: list[str] | None = None,
+        since_id: int | None = None,
+        query: str | None = None,
+        branch_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List Storage Files with optional filtering.
+
+        Args:
+            limit: Max number of files to return.
+            offset: Pagination offset.
+            tags: Filter by tags (AND logic — all tags must match).
+            since_id: Return only files with ID greater than this.
+            query: Full-text search query on file name.
+            branch_id: If set, list files from a specific dev branch.
+
+        Returns:
+            List of file resource dicts.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if tags:
+            for i, tag in enumerate(tags):
+                params[f"tags[{i}]"] = tag
+        if since_id is not None:
+            params["sinceId"] = since_id
+        if query:
+            params["q"] = query
+        response = self._request("GET", f"{prefix}/files", params=params)
+        return response.json()
+
+    def upload_file(
+        self,
+        file_path: str,
+        name: str | None = None,
+        tags: list[str] | None = None,
+        is_permanent: bool = False,
+        notify: bool = False,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Upload a local file to Storage Files.
+
+        Wraps prepare_file_upload + _upload_to_cloud into a single call.
+
+        Args:
+            file_path: Local path to the file to upload.
+            name: Custom filename (defaults to local file basename).
+            tags: Optional list of tags to assign.
+            is_permanent: If True, file is not auto-deleted after 15 days.
+            notify: If True, send notification on upload completion.
+            branch_id: If set, upload to a specific dev branch.
+
+        Returns:
+            File resource dict with id, name, sizeBytes, tags, url.
+        """
+        p = Path(file_path)
+        size_bytes = p.stat().st_size
+        file_name = name or p.name
+        upload_info = self.prepare_file_upload(
+            name=file_name,
+            size_bytes=size_bytes,
+            tags=tags,
+            is_permanent=is_permanent,
+            notify=notify,
+        )
+        self._upload_to_cloud(upload_info, file_path)
+        # Return file info (prepare response has the file metadata)
+        return {
+            "id": upload_info["id"],
+            "name": upload_info.get("name", file_name),
+            "sizeBytes": size_bytes,
+            "tags": upload_info.get("tags", tags or []),
+            "isPermanent": upload_info.get("isPermanent", is_permanent),
+            "created": upload_info.get("created"),
+        }
+
+    def delete_file(self, file_id: int) -> None:
+        """Delete a Storage File.
+
+        Args:
+            file_id: Storage file ID.
+        """
+        self._request("DELETE", f"/v2/storage/files/{file_id}")
+
+    def tag_file(self, file_id: int, tag: str) -> None:
+        """Add a tag to a Storage File.
+
+        Args:
+            file_id: Storage file ID.
+            tag: Tag string to add.
+        """
+        self._request("POST", f"/v2/storage/files/{file_id}/tags", data={"tag": tag})
+
+    def untag_file(self, file_id: int, tag: str) -> None:
+        """Remove a tag from a Storage File.
+
+        Args:
+            file_id: Storage file ID.
+            tag: Tag string to remove.
+        """
+        safe_tag = quote(tag, safe="")
+        self._request("DELETE", f"/v2/storage/files/{file_id}/tags/{safe_tag}")
 
     def download_sliced_file(self, file_detail: dict[str, Any], output_path: str) -> int:
         """Download a sliced file by fetching manifest and concatenating slices.

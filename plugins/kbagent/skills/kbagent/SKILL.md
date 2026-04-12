@@ -9,6 +9,7 @@ description: >
   as local files (GitOps), git-branching with Keboola dev branch isolation,
   sharing buckets across projects, linking shared data,
   encrypting secrets for MCP tool call workflows,
+  uploading/downloading Storage Files with tag management,
   and syncing storage metadata and job history. Triggers: kbagent, Keboola project,
   keboola configs, keboola jobs, keboola lineage, keboola transformations,
   keboola MCP tools, keboola workspace, SQL debugging, keboola branches,
@@ -81,6 +82,14 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 | List storage tables from a project | `kbagent storage tables --project PROJECT` |
 | Delete one or more storage tables | `kbagent storage delete-table --project PROJECT --table-id TABLE-ID` |
 | Delete one or more storage buckets | `kbagent storage delete-bucket --project PROJECT --bucket-id BUCKET-ID` |
+| List Storage Files with optional tag filtering | `kbagent storage file-list --project PROJECT` |
+| Upload a local file to Storage Files | `kbagent storage file-upload --project PROJECT --file FILE` |
+| Download a Storage File to local disk | `kbagent storage file-download --project PROJECT` |
+| Show Storage File metadata (without downloading) | `kbagent storage file-info --project PROJECT --file-id FILE-ID` |
+| Delete one or more Storage Files | `kbagent storage file-delete --project PROJECT --file-id FILE-ID` |
+| Add and/or remove tags on a Storage File | `kbagent storage file-tag --project PROJECT --file-id FILE-ID` |
+| Load a Storage File into a table | `kbagent storage load-file --project PROJECT --file-id FILE-ID --table-id TABLE-ID` |
+| Export a table to a Storage File | `kbagent storage unload-table --project PROJECT --table-id TABLE-ID` |
 | List shared buckets available for linking | `kbagent sharing list` |
 | Enable sharing on a bucket | `kbagent sharing share --project PROJECT --bucket-id BUCKET-ID --type SHARING-TYPE` |
 | Disable sharing on a bucket | `kbagent sharing unshare --project PROJECT --bucket-id BUCKET-ID` |
