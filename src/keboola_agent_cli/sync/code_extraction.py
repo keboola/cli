@@ -182,6 +182,7 @@ def _parse_sql_blocks(content: str) -> list[dict[str, Any]]:
     current_block: dict[str, Any] | None = None
     current_code: dict[str, Any] | None = None
     current_script_lines: list[str] = []
+    orphan_lines: list[str] = []
 
     for line in content.split("\n"):
         stripped = line.strip()
@@ -198,6 +199,7 @@ def _parse_sql_blocks(content: str) -> list[dict[str, Any]]:
             block_name = stripped[len("/* ===== BLOCK:") :].rstrip(" =*/").strip()
             current_block = {"name": block_name, "codes": []}
             blocks.append(current_block)
+            orphan_lines = []
             continue
 
         # Check for code marker
@@ -210,11 +212,19 @@ def _parse_sql_blocks(content: str) -> list[dict[str, Any]]:
 
             code_name = stripped[len("/* ===== CODE:") :].rstrip(" =*/").strip()
             current_code = {"name": code_name}
+            # Prepend any orphan lines collected between BLOCK and this CODE marker
+            if orphan_lines:
+                current_script_lines = list(orphan_lines)
+                orphan_lines = []
             continue
 
-        # Regular line - add to current code's script
+        # Regular line
         if current_code is not None:
             current_script_lines.append(line)
+        elif current_block is not None and stripped:
+            # Lines between BLOCK marker and first CODE marker — preserve them
+            # so they're not silently discarded on roundtrip.
+            orphan_lines.append(line)
 
     # Don't forget the last code block
     if current_code is not None and current_block is not None:

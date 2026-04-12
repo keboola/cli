@@ -601,11 +601,26 @@ class SyncService(BaseService):
                 )
                 continue
 
-            # Compare file hash against the hash stored at pull time
+            # Compare file hash against the hash stored at pull time.
+            # Check both _config.yml AND extracted code files (transform.sql etc.)
+            # to match the same logic used by diff().
             current_hash = self._file_hash(config_file)
             pull_hash = cfg.metadata.get("pull_hash", "")
+            config_unchanged = bool(pull_hash and current_hash == pull_hash)
 
-            if pull_hash and current_hash == pull_hash:
+            extras_unchanged = True
+            stored_extra = cfg.metadata.get("pull_extra_hashes", {})
+            for fname, stored_h in stored_extra.items():
+                fpath = config_dir / fname
+                if fpath.exists():
+                    if self._file_hash(fpath) != stored_h:
+                        extras_unchanged = False
+                        break
+                else:
+                    extras_unchanged = False
+                    break
+
+            if config_unchanged and extras_unchanged:
                 unchanged += 1
             else:
                 modified.append(
@@ -953,10 +968,23 @@ class SyncService(BaseService):
                                 new_cfg_hash = config_hash(local_data)
                             else:
                                 new_cfg_hash = ""
+                            # Refresh extra hashes for extracted code files
+                            new_extra: dict[str, str] = {}
+                            for fname in [
+                                "_description.md",
+                                "transform.sql",
+                                "transform.py",
+                                "code.py",
+                                "pyproject.toml",
+                            ]:
+                                fpath = config_dir / fname
+                                if fpath.exists():
+                                    new_extra[fname] = self._file_hash(fpath)
                             for cfg in manifest.configurations:
                                 if cfg.component_id == component_id and cfg.id == config_id:
                                     cfg.metadata["pull_hash"] = new_file_hash
                                     cfg.metadata["pull_config_hash"] = new_cfg_hash
+                                    cfg.metadata["pull_extra_hashes"] = new_extra
                                     break
                             manifest_dirty = True
                         updated += 1
@@ -2097,14 +2125,25 @@ class SyncService(BaseService):
     def _find_untracked_configs(
         self, project_root: Path, manifest: Manifest
     ) -> list[dict[str, str]]:
-        """Scan for _config.yml files that are not tracked in the manifest."""
+        """Scan for _config.yml files that are not tracked in the manifest.
+
+        Only scans branch directories that have at least one tracked
+        configuration. This prevents phantom "added" configs from
+        inactive/old branch directories left over from a previous pull.
+        """
         tracked_paths: set[str] = set()
+        active_branch_ids: set[int] = set()
         for cfg in manifest.configurations:
             branch_path = self._find_branch_path(manifest, cfg.branch_id)
             tracked_paths.add(str(project_root / branch_path / cfg.path))
+            active_branch_ids.add(cfg.branch_id)
 
         added: list[dict[str, str]] = []
         for branch in manifest.branches:
+            # Only scan branches that have tracked configs — skip inactive
+            # branch directories to avoid phantom "added" configs.
+            if branch.id not in active_branch_ids:
+                continue
             branch_dir = project_root / branch.path
             if not branch_dir.exists():
                 continue
