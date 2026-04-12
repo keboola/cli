@@ -983,10 +983,14 @@ class KeboolaClient(BaseHttpClient):
                         response = http.post(url, files=form_fields)
                     success_codes = (200, 204)
                 else:
-                    # ABS or other signed URL: raw PUT
+                    # ABS (Azure Blob Storage) or other signed URL: raw PUT
                     with p.open("rb") as fh:
-                        response = http.put(url, content=fh)
-                    success_codes = (200,)
+                        response = http.put(
+                            url,
+                            content=fh,
+                            headers={"x-ms-blob-type": "BlockBlob"},
+                        )
+                    success_codes = (200, 201)
 
         if response.status_code not in success_codes:
             raise KeboolaApiError(
