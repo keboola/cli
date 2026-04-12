@@ -8,6 +8,14 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.18.4": [
+        "New: Storage Files commands -- files, file-detail, file-upload, file-download, file-tag, file-delete (#134)",
+        "New: load-file -- import an uploaded Storage File into a table (#134)",
+        "New: unload-table -- export a table to a Storage File with tags (#134)",
+        "New: download by tag -- file-download --tag fetches latest matching file (#134)",
+        "Fix: Azure sliced file download (azure:// URL handling in _CloudDownloader)",
+        "UX: storage --help groups commands into Buckets/Tables/Files sections",
+    ],
     "0.18.3": [
         "New: job run command with --row-id, --wait, --timeout (#135)",
     ],
