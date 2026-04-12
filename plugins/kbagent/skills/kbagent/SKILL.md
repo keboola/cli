@@ -160,6 +160,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Creating new configurations | [scaffold-workflow](references/scaffold-workflow.md) |
 | MCP tools (multi-project read/write) | [mcp-workflow](references/mcp-workflow.md) |
 | Workspace SQL debugging | [workspace-workflow](references/workspace-workflow.md) |
+| Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
 | Bucket sharing & linking | [sharing-workflow](references/sharing-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
 | Encrypting secrets for MCP tools | [encrypt-workflow](references/encrypt-workflow.md) |
