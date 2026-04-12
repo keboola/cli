@@ -66,6 +66,14 @@ FILE_UPLOAD_TIMEOUT: httpx.Timeout = httpx.Timeout(
     connect=30.0, read=300.0, write=3600.0, pool=30.0
 )
 
+# --- File Download Timeout ---
+FILE_DOWNLOAD_TIMEOUT: httpx.Timeout = httpx.Timeout(
+    connect=30.0, read=3600.0, write=10.0, pool=30.0
+)
+
+# --- Export Job ---
+EXPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table export jobs (large tables)
+
 # --- Parallel Workers ---
 MAX_PARALLEL_WORKERS_LIMIT: int = 100
 

@@ -22,6 +22,8 @@ from .constants import (
     DEFAULT_JOB_LIMIT,
     DEFAULT_JOBS_PER_CONFIG,
     DEFAULT_TIMEOUT,
+    EXPORT_JOB_MAX_WAIT,
+    FILE_DOWNLOAD_TIMEOUT,
     FILE_UPLOAD_TIMEOUT,
     IMPORT_JOB_MAX_WAIT,
     QUERY_JOB_MAX_WAIT,
@@ -1103,6 +1105,149 @@ class KeboolaClient(BaseHttpClient):
         )
         return response.text
 
+    def export_table_async(
+        self,
+        table_id: str,
+        columns: list[str] | None = None,
+        limit: int | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Start an async table export and wait for completion.
+
+        Args:
+            table_id: Full table ID (e.g. "in.c-bucket.table").
+            columns: Optional list of column names to export.
+            limit: Optional max number of rows to export.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Completed export job dict (results contain file info).
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_id = quote(table_id, safe="")
+        params: dict[str, Any] = {}
+        if columns:
+            params["columns"] = ",".join(columns)
+        if limit is not None:
+            params["limit"] = str(limit)
+        response = self._request(
+            "POST",
+            f"{prefix}/tables/{safe_id}/export-async",
+            data=params,
+        )
+        return self._wait_for_storage_job(response.json(), max_wait=EXPORT_JOB_MAX_WAIT)
+
+    def get_file_info(self, file_id: int) -> dict[str, Any]:
+        """Get file metadata including download URL.
+
+        Args:
+            file_id: Storage file ID (from export job results).
+
+        Returns:
+            File resource dict with 'url', 'isSliced', 'sizeBytes', etc.
+        """
+        response = self._request(
+            "GET",
+            f"/v2/storage/files/{file_id}",
+            params={"federationToken": "1"},
+        )
+        return response.json()
+
+    def download_sliced_file(self, file_detail: dict[str, Any], output_path: str) -> int:
+        """Download a sliced file by fetching manifest and concatenating slices.
+
+        Handles S3 (SigV4 auth) and GCS (bearer token) providers.
+        Decompresses gzipped slices transparently.
+
+        The manifest `url` from file info is already a presigned URL (download
+        directly). Manifest entries have cloud-native URLs (s3://, gs://) that
+        need auth — we build HTTPS URLs from the s3Path/gcsPath credentials.
+
+        Args:
+            file_detail: Full file info dict from get_file_info()
+                (must include provider credentials from federationToken=1).
+            output_path: Local file path to write to.
+
+        Returns:
+            Number of bytes written.
+        """
+        import gzip
+        import json as json_mod
+
+        provider = file_detail.get("provider", "")
+        downloader = _CloudDownloader.create(file_detail)
+
+        # Step 1: Download the manifest (url is already presigned, no extra auth)
+        with httpx.Client(timeout=FILE_DOWNLOAD_TIMEOUT) as http:
+            resp = http.get(file_detail["url"])
+            resp.raise_for_status()
+            manifest_data = resp.content
+
+        manifest = json_mod.loads(manifest_data)
+        entries = manifest.get("entries", [])
+        if not entries:
+            raise KeboolaApiError(
+                message="Sliced file manifest has no entries",
+                status_code=500,
+                error_code="EXPORT_EMPTY_MANIFEST",
+                retryable=False,
+            )
+
+        logger.info("Downloading %d slices (provider=%s)", len(entries), provider)
+
+        # Step 2: Resolve the base URL from cloud path info
+        base_url = downloader.resolve_base_url(file_detail)
+
+        # Step 3: Download and concatenate all slices
+        total = 0
+        with open(output_path, "wb") as fh:
+            for entry in entries:
+                entry_url = entry.get("url", "")
+                # Strip cloud prefix (s3://bucket/key/ or gs://bucket/key/)
+                # to get relative slice name, then build HTTPS URL
+                slice_url = downloader.resolve_slice_url(base_url, entry_url, file_detail)
+                raw = downloader.download_bytes(slice_url)
+                # Decompress if gzipped
+                if entry_url.split("?")[0].endswith(".gz"):
+                    raw = gzip.decompress(raw)
+                fh.write(raw)
+                total += len(raw)
+
+        return total
+
+    def download_file(self, url: str, output_path: str) -> int:
+        """Download a non-sliced file from a presigned URL.
+
+        Handles gzip decompression transparently.
+
+        Args:
+            url: Presigned download URL from file info.
+            output_path: Local file path to write to.
+
+        Returns:
+            Number of bytes written.
+        """
+        import gzip
+
+        with (
+            httpx.Client(timeout=FILE_DOWNLOAD_TIMEOUT) as http,
+            http.stream("GET", url) as response,
+        ):
+            response.raise_for_status()
+            is_gzipped = url.rstrip("?").split("?")[0].endswith(".gz")
+            if is_gzipped:
+                compressed = b"".join(response.iter_bytes())
+                data = gzip.decompress(compressed)
+                Path(output_path).write_bytes(data)
+                return len(data)
+            else:
+                total = 0
+                with open(output_path, "wb") as fh:
+                    for chunk in response.iter_bytes():
+                        fh.write(chunk)
+                        total += len(chunk)
+                return total
+
     def list_jobs(
         self,
         component_id: str | None = None,
@@ -1519,3 +1664,220 @@ class KeboolaClient(BaseHttpClient):
             error_code="QUERY_JOB_TIMEOUT",
             retryable=True,
         )
+
+
+# ---------------------------------------------------------------------------
+# Cloud storage download helpers (S3 SigV4, GCS bearer, ABS signed URL)
+# ---------------------------------------------------------------------------
+
+
+class _CloudDownloader:
+    """Abstraction for downloading from cloud storage using Keboola file credentials.
+
+    Supports three cloud backends:
+    - AWS S3: Uses SigV4 signing with temporary credentials
+    - GCP GCS: Uses OAuth2 bearer token
+    - Azure ABS: Uses presigned/SAS URLs
+    """
+
+    def __init__(self, provider: str, auth_fn: Any) -> None:
+        self._provider = provider
+        self._auth_fn = auth_fn
+
+    @staticmethod
+    def create(file_detail: dict[str, Any]) -> "_CloudDownloader":
+        """Create a downloader from file detail response.
+
+        Args:
+            file_detail: Response from GET /v2/storage/files/{id}?federationToken=1.
+        """
+        provider = file_detail.get("provider", "")
+
+        if provider == "aws":
+            creds = file_detail.get("credentials", {})
+            region = file_detail.get("region", "us-east-1")
+            return _CloudDownloader(
+                provider="aws",
+                auth_fn=lambda url: _s3_signed_headers(url, creds, region),
+            )
+        elif provider == "gcp":
+            gcs_creds = file_detail.get("gcsCredentials", {})
+            token = gcs_creds.get("access_token", "")
+            token_type = gcs_creds.get("token_type", "Bearer")
+            return _CloudDownloader(
+                provider="gcp",
+                auth_fn=lambda _url: {"Authorization": f"{token_type} {token}"},
+            )
+        else:
+            # Azure / other: presigned URLs, no extra auth needed
+            return _CloudDownloader(provider=provider, auth_fn=lambda _url: {})
+
+    def resolve_base_url(self, file_detail: dict[str, Any]) -> str:
+        """Build the HTTPS base URL for downloading slices.
+
+        Returns:
+            Base HTTPS URL (e.g. "https://bucket.s3.region.amazonaws.com/key/prefix/").
+        """
+        if self._provider == "aws":
+            s3_path = file_detail.get("s3Path", {})
+            bucket = s3_path.get("bucket", "")
+            key = s3_path.get("key", "")
+            region = file_detail.get("region", "us-east-1")
+            return f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+        elif self._provider == "gcp":
+            gcs_path = file_detail.get("gcsPath", {})
+            bucket = gcs_path.get("bucket", "")
+            key = gcs_path.get("key", "")
+            return f"https://storage.googleapis.com/{bucket}/{key}"
+        else:
+            # Azure/other: entries should be full URLs
+            return ""
+
+    def resolve_slice_url(
+        self,
+        base_url: str,
+        entry_url: str,
+        file_detail: dict[str, Any],
+    ) -> str:
+        """Convert a manifest entry URL to a downloadable HTTPS URL.
+
+        Manifest entries use cloud-native URLs (s3://bucket/key/slice.gz).
+        This strips the cloud prefix and appends the relative slice path
+        to the HTTPS base URL.
+
+        Args:
+            base_url: HTTPS base URL from resolve_base_url().
+            entry_url: Raw entry URL from manifest (e.g. "s3://bucket/key/slice.gz").
+            file_detail: Full file detail dict.
+
+        Returns:
+            Full HTTPS URL for the slice.
+        """
+        if self._provider == "aws":
+            # entry_url: "s3://bucket/key/prefix/slice.csv.gz"
+            # base_url: "https://bucket.s3.region.amazonaws.com/key/prefix/"
+            s3_path = file_detail.get("s3Path", {})
+            bucket = s3_path.get("bucket", "")
+            key = s3_path.get("key", "")
+            prefix = f"s3://{bucket}/{key}"
+            relative = entry_url.removeprefix(prefix) if entry_url.startswith(prefix) else entry_url
+            return base_url + relative
+        elif self._provider == "gcp":
+            # entry_url: "gs://bucket/key/prefix/slice.csv.gz"
+            gcs_path = file_detail.get("gcsPath", {})
+            bucket = gcs_path.get("bucket", "")
+            key = gcs_path.get("key", "")
+            prefix = f"gs://{bucket}/{key}"
+            relative = entry_url.removeprefix(prefix) if entry_url.startswith(prefix) else entry_url
+            return base_url + relative
+        else:
+            # Azure/other: entry URLs should be full HTTPS URLs
+            return entry_url
+
+    def download_bytes(self, url: str) -> bytes:
+        """Download content from a cloud URL with appropriate authentication."""
+        headers = self._auth_fn(url)
+        with httpx.Client(timeout=FILE_DOWNLOAD_TIMEOUT) as http:
+            response = http.get(url, headers=headers)
+            response.raise_for_status()
+            return response.content
+
+
+def _s3_signed_headers(url: str, creds: dict[str, str], region: str) -> dict[str, str]:
+    """Generate AWS SigV4 signed headers for an S3 GET request.
+
+    Implements minimal AWS Signature Version 4 signing using only stdlib
+    (hmac, hashlib, urllib.parse). No boto3/botocore dependency required.
+
+    Args:
+        url: Full S3 URL (https://bucket.s3.region.amazonaws.com/key).
+        creds: Dict with AccessKeyId, SecretAccessKey, SessionToken.
+        region: AWS region (e.g. "us-east-1").
+
+    Returns:
+        Dict of headers to include in the request.
+    """
+    import datetime
+    import hashlib
+    import hmac
+    from urllib.parse import unquote, urlparse
+
+    access_key = creds["AccessKeyId"]
+    secret_key = creds["SecretAccessKey"]
+    session_token = creds.get("SessionToken", "")
+
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    path = parsed.path or "/"
+    query = parsed.query or ""
+
+    now = datetime.datetime.now(datetime.UTC)
+    date_stamp = now.strftime("%Y%m%d")
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+
+    service = "s3"
+    scope = f"{date_stamp}/{region}/{service}/aws4_request"
+
+    # Canonical request
+    canonical_uri = quote(unquote(path), safe="/~")
+    # Sort query params
+    if query:
+        params_list = sorted(query.split("&"))
+        canonical_querystring = "&".join(params_list)
+    else:
+        canonical_querystring = ""
+
+    headers_to_sign: dict[str, str] = {"host": host, "x-amz-date": amz_date}
+    if session_token:
+        headers_to_sign["x-amz-security-token"] = session_token
+
+    signed_headers = ";".join(sorted(headers_to_sign.keys()))
+    canonical_headers = "".join(f"{k}:{v}\n" for k, v in sorted(headers_to_sign.items()))
+
+    payload_hash = hashlib.sha256(b"").hexdigest()  # empty body for GET
+
+    canonical_request = "\n".join(
+        [
+            "GET",
+            canonical_uri,
+            canonical_querystring,
+            canonical_headers,
+            signed_headers,
+            payload_hash,
+        ]
+    )
+
+    # String to sign
+    string_to_sign = "\n".join(
+        [
+            "AWS4-HMAC-SHA256",
+            amz_date,
+            scope,
+            hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+        ]
+    )
+
+    # Signing key
+    def _hmac_sha256(key: bytes, msg: str) -> bytes:
+        return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+    k_date = _hmac_sha256(f"AWS4{secret_key}".encode(), date_stamp)
+    k_region = _hmac_sha256(k_date, region)
+    k_service = _hmac_sha256(k_region, service)
+    k_signing = _hmac_sha256(k_service, "aws4_request")
+
+    signature = hmac.new(k_signing, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    authorization = (
+        f"AWS4-HMAC-SHA256 Credential={access_key}/{scope}, "
+        f"SignedHeaders={signed_headers}, Signature={signature}"
+    )
+
+    result: dict[str, str] = {
+        "Authorization": authorization,
+        "x-amz-date": amz_date,
+        "x-amz-content-sha256": payload_hash,
+    }
+    if session_token:
+        result["x-amz-security-token"] = session_token
+    return result

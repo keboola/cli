@@ -1203,3 +1203,421 @@ class TestUploadTableBranch:
         assert result.exit_code == 0
         call_kwargs = svc.upload_table.call_args.kwargs
         assert call_kwargs["branch_id"] == 33
+
+
+# ---------------------------------------------------------------------------
+# Service tests: download_table
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadTableService:
+    """Tests for StorageService.download_table()."""
+
+    def test_success_full_export(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.export_table_async.return_value = {
+            "results": {"file": {"id": 42}},
+        }
+        mock_client.get_file_info.return_value = {
+            "id": 42,
+            "url": "https://s3.example.com/data.csv",
+            "isSliced": False,
+        }
+        mock_client.list_tables.return_value = [
+            {"id": "in.c-b.users", "columns": ["id", "name", "email"]},
+        ]
+
+        out_file = tmp_path / "output.csv"
+
+        def _fake_download(url, path):
+            Path(path).write_text('"1","Alice","a@b.c"\n')
+            return 1024
+
+        mock_client.download_file.side_effect = _fake_download
+        service = _make_service(store, mock_client)
+
+        result = service.download_table(
+            alias="test",
+            table_id="in.c-b.users",
+            output_path=str(out_file),
+        )
+
+        assert result["table_id"] == "in.c-b.users"
+        assert result["output_path"] == str(out_file.resolve())
+        assert result["columns"] == ["id", "name", "email"]
+        # Header was prepended
+        content = out_file.read_text()
+        assert content.startswith('"id","name","email"\n')
+        mock_client.export_table_async.assert_called_once_with(
+            table_id="in.c-b.users",
+            columns=None,
+            limit=None,
+            branch_id=None,
+        )
+        mock_client.get_file_info.assert_called_once_with(42)
+        mock_client.close.assert_called_once()
+
+    def test_with_columns_and_limit(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.export_table_async.return_value = {
+            "results": {"file": {"id": 99}},
+        }
+        mock_client.get_file_info.return_value = {
+            "id": 99,
+            "url": "https://s3.example.com/filtered.csv",
+            "isSliced": False,
+        }
+        out_file = tmp_path / "events.csv"
+
+        def _fake_download(url, path):
+            Path(path).write_text('"1","Alice"\n')
+            return 512
+
+        mock_client.download_file.side_effect = _fake_download
+        mock_client.list_tables.return_value = []
+        service = _make_service(store, mock_client)
+
+        result = service.download_table(
+            alias="test",
+            table_id="in.c-b.events",
+            output_path=str(out_file),
+            columns=["id", "name"],
+            limit=100,
+        )
+
+        assert result["columns"] == ["id", "name"]
+        assert result["limit"] == 100
+        # Check header was prepended
+        content = out_file.read_text()
+        assert content.startswith('"id","name"\n')
+        mock_client.export_table_async.assert_called_once_with(
+            table_id="in.c-b.events",
+            columns=["id", "name"],
+            limit=100,
+            branch_id=None,
+        )
+
+    def test_derives_filename_from_table_id(self, tmp_path: Path) -> None:
+        import os
+
+        os.chdir(tmp_path)
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.export_table_async.return_value = {
+            "results": {"file": {"id": 1}},
+        }
+        mock_client.get_file_info.return_value = {
+            "id": 1,
+            "url": "https://s3.example.com/data.csv",
+            "isSliced": False,
+        }
+        mock_client.list_tables.return_value = []
+
+        def _fake_download(url, path):
+            Path(path).write_text('"data"\n')
+            return 256
+
+        mock_client.download_file.side_effect = _fake_download
+        service = _make_service(store, mock_client)
+
+        result = service.download_table(
+            alias="test",
+            table_id="in.c-my-bucket.my-table",
+        )
+
+        assert result["output_path"].endswith("my-table.csv")
+
+    def test_sliced_file_calls_download_sliced(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.export_table_async.return_value = {
+            "results": {"file": {"id": 55}},
+        }
+        file_detail = {
+            "id": 55,
+            "url": "https://s3.example.com/manifest",
+            "isSliced": True,
+            "provider": "aws",
+        }
+        mock_client.get_file_info.return_value = file_detail
+        mock_client.list_tables.return_value = [
+            {"id": "in.c-b.huge", "columns": ["a", "b"]},
+        ]
+        out_path = str(tmp_path / "out.csv")
+
+        def _fake_sliced_download(detail, path):
+            Path(path).write_text('"1","2"\n')
+            return 4096
+
+        mock_client.download_sliced_file.side_effect = _fake_sliced_download
+        service = _make_service(store, mock_client)
+
+        result = service.download_table(
+            alias="test",
+            table_id="in.c-b.huge",
+            output_path=out_path,
+        )
+
+        assert result["columns"] == ["a", "b"]
+        mock_client.download_sliced_file.assert_called_once_with(file_detail, out_path)
+        mock_client.close.assert_called_once()
+
+    def test_no_file_id_raises_error(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.export_table_async.return_value = {
+            "results": {},
+        }
+        mock_client.list_tables.return_value = []
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError, match="no file ID"):
+            service.download_table(
+                alias="test",
+                table_id="in.c-b.t",
+                output_path=str(tmp_path / "out.csv"),
+            )
+
+        mock_client.close.assert_called_once()
+
+    def test_api_error_propagates(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.export_table_async.side_effect = KeboolaApiError(
+            "Table not found", status_code=404, error_code="NOT_FOUND"
+        )
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError):
+            service.download_table(
+                alias="test",
+                table_id="in.c-b.missing",
+                output_path=str(tmp_path / "out.csv"),
+            )
+
+        mock_client.close.assert_called_once()
+
+    def test_with_branch_id(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.export_table_async.return_value = {
+            "results": {"file": {"id": 7}},
+        }
+        mock_client.get_file_info.return_value = {
+            "id": 7,
+            "url": "https://s3.example.com/branch.csv",
+            "isSliced": False,
+        }
+        mock_client.list_tables.return_value = []
+
+        def _fake_download(url, path):
+            Path(path).write_text('"data"\n')
+            return 128
+
+        mock_client.download_file.side_effect = _fake_download
+        service = _make_service(store, mock_client)
+
+        service.download_table(
+            alias="test",
+            table_id="in.c-b.t",
+            output_path=str(tmp_path / "out.csv"),
+            branch_id=42,
+        )
+
+        mock_client.export_table_async.assert_called_once_with(
+            table_id="in.c-b.t",
+            columns=None,
+            limit=None,
+            branch_id=42,
+        )
+
+
+# ---------------------------------------------------------------------------
+# CLI tests: download-table
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadTableCLI:
+    """CLI tests for `kbagent storage download-table`."""
+
+    def test_download_table_json(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.download_table.return_value = {
+                "project_alias": "test",
+                "table_id": "in.c-b.users",
+                "output_path": "/tmp/users.csv",
+                "file_size_bytes": 2048,
+                "columns": None,
+                "limit": None,
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "download-table",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-b.users",
+                    "--output",
+                    "/tmp/users.csv",
+                ],
+            )
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert data["table_id"] == "in.c-b.users"
+        assert data["file_size_bytes"] == 2048
+        svc.download_table.assert_called_once_with(
+            alias="test",
+            table_id="in.c-b.users",
+            output_path="/tmp/users.csv",
+            columns=None,
+            limit=None,
+            branch_id=None,
+        )
+
+    def test_download_table_with_columns_and_limit(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.download_table.return_value = {
+                "project_alias": "test",
+                "table_id": "in.c-b.events",
+                "output_path": "/tmp/events.csv",
+                "file_size_bytes": 512,
+                "columns": ["id", "name"],
+                "limit": 50,
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "download-table",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-b.events",
+                    "--output",
+                    "/tmp/events.csv",
+                    "--columns",
+                    "id",
+                    "--columns",
+                    "name",
+                    "--limit",
+                    "50",
+                ],
+            )
+        assert result.exit_code == 0
+        svc.download_table.assert_called_once_with(
+            alias="test",
+            table_id="in.c-b.events",
+            output_path="/tmp/events.csv",
+            columns=["id", "name"],
+            limit=50,
+            branch_id=None,
+        )
+
+    def test_download_table_api_error(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.download_table.side_effect = KeboolaApiError(
+                "Table not found", status_code=404, error_code="NOT_FOUND"
+            )
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "download-table",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-b.missing",
+                ],
+            )
+        assert result.exit_code == 1
+
+    def test_download_table_human_mode(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.download_table.return_value = {
+                "project_alias": "test",
+                "table_id": "in.c-b.users",
+                "output_path": "/tmp/users.csv",
+                "file_size_bytes": 1048576,
+                "columns": None,
+                "limit": None,
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "storage",
+                    "download-table",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-b.users",
+                    "--output",
+                    "/tmp/users.csv",
+                ],
+            )
+        assert result.exit_code == 0
+        assert "Exported" in result.output
+
+    def test_download_table_with_branch(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.download_table.return_value = {
+                "project_alias": "test",
+                "table_id": "in.c-b.data",
+                "output_path": "/tmp/data.csv",
+                "file_size_bytes": 100,
+                "columns": None,
+                "limit": None,
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "download-table",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-b.data",
+                    "--branch",
+                    "33",
+                ],
+            )
+        assert result.exit_code == 0
+        call_kwargs = svc.download_table.call_args.kwargs
+        assert call_kwargs["branch_id"] == 33

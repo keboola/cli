@@ -34,6 +34,26 @@ def _read_csv_header(file_path: str, delimiter: str = ",") -> list[str]:
     return columns
 
 
+def _prepend_csv_header(file_path: str, columns: list[str]) -> None:
+    """Prepend a CSV header row to an existing file.
+
+    Reads the file content, writes header + content back.
+    Uses CSV quoting for column names to match Keboola's RFC4180 format.
+    """
+    import io
+
+    writer_buf = io.StringIO()
+    writer = csv.writer(writer_buf, quoting=csv.QUOTE_ALL)
+    writer.writerow(columns)
+    header_line = writer_buf.getvalue()
+
+    p = Path(file_path)
+    original = p.read_bytes()
+    with p.open("wb") as fh:
+        fh.write(header_line.encode("utf-8"))
+        fh.write(original)
+
+
 class StorageService(BaseService):
     """Business logic for storage bucket and table operations.
 
@@ -451,6 +471,111 @@ class StorageService(BaseService):
             "warnings": results.get("warnings", []),
             "auto_created_bucket": auto_created_bucket,
             "auto_created_table": auto_created_table,
+        }
+
+    # ------------------------------------------------------------------
+    # Download / export operations
+    # ------------------------------------------------------------------
+
+    def download_table(
+        self,
+        alias: str,
+        table_id: str,
+        output_path: str | None = None,
+        columns: list[str] | None = None,
+        limit: int | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Export a storage table to a local CSV file.
+
+        Uses the async export flow: export-async -> poll job -> get file
+        info -> download from cloud URL. Handles gzip decompression
+        transparently.
+
+        Args:
+            alias: Project alias.
+            table_id: Full table ID (e.g. "in.c-bucket.table").
+            output_path: Local file path to write to. If None, derives
+                from table name (e.g. "my-table.csv").
+            columns: Optional list of column names to export.
+            limit: Optional max number of rows to export.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Dict with export metadata: path, size, rows, table_id, etc.
+        """
+        from ..errors import KeboolaApiError
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        # Derive output filename from table ID if not specified
+        if not output_path:
+            table_name = table_id.rsplit(".", 1)[-1] if "." in table_id else table_id
+            output_path = f"{table_name}.csv"
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            # Step 0: Get table columns for CSV header
+            table_detail = client.list_tables(include="columns", branch_id=branch_id)
+            table_columns = columns  # Use explicit columns if specified
+            if not table_columns:
+                for t in table_detail:
+                    if t.get("id") == table_id:
+                        table_columns = t.get("columns", [])
+                        break
+
+            # Step 1: Start async export and wait for completion
+            job = client.export_table_async(
+                table_id=table_id,
+                columns=columns,
+                limit=limit,
+                branch_id=branch_id,
+            )
+
+            # Step 2: Get file info from job results
+            file_info = job.get("results", {}).get("file", {})
+            file_id = file_info.get("id")
+            if not file_id:
+                raise KeboolaApiError(
+                    message="Export job completed but no file ID in results",
+                    status_code=500,
+                    error_code="EXPORT_NO_FILE",
+                    retryable=False,
+                )
+
+            # Step 3: Get download URL
+            file_detail = client.get_file_info(file_id)
+            download_url = file_detail.get("url")
+            if not download_url:
+                raise KeboolaApiError(
+                    message=f"No download URL for file {file_id}",
+                    status_code=500,
+                    error_code="EXPORT_NO_URL",
+                    retryable=False,
+                )
+
+            # Step 4: Download the file
+            if file_detail.get("isSliced"):
+                bytes_written = client.download_sliced_file(file_detail, output_path)
+            else:
+                bytes_written = client.download_file(download_url, output_path)
+
+            # Step 5: Prepend CSV header row
+            if table_columns:
+                _prepend_csv_header(output_path, table_columns)
+                # Recalculate size after adding header
+                bytes_written = Path(output_path).stat().st_size
+        finally:
+            client.close()
+
+        return {
+            "project_alias": alias,
+            "table_id": table_id,
+            "output_path": str(Path(output_path).resolve()),
+            "file_size_bytes": bytes_written,
+            "columns": table_columns or [],
+            "limit": limit,
         }
 
     # ------------------------------------------------------------------

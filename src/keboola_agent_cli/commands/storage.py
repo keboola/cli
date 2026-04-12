@@ -445,6 +445,89 @@ def storage_upload_table(
                 formatter.console.print(f"  [yellow]Warning:[/yellow] {w}")
 
 
+@storage_app.command("download-table")
+def storage_download_table(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    table_id: str = typer.Option(
+        ...,
+        "--table-id",
+        help="Table ID to export (e.g. 'in.c-my-bucket.my-table')",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        help="Output file path (default: {table_name}.csv)",
+    ),
+    columns: list[str] | None = typer.Option(
+        None,
+        "--columns",
+        help="Column names to export (repeat for multiple: --columns col1 --columns col2)",
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        help="Max number of rows to export",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
+) -> None:
+    """Export a storage table to a local CSV file.
+
+    Downloads table data via the async export API. Handles gzip
+    decompression transparently. Use --columns to select specific
+    columns and --limit to cap row count.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    if not formatter.json_mode:
+        msg = f"Exporting [cyan]{table_id}[/cyan]"
+        if columns:
+            msg += f" (columns: {', '.join(columns)})"
+        if limit:
+            msg += f" (limit: {limit})"
+        msg += "..."
+        formatter.console.print(msg)
+
+    try:
+        result = service.download_table(
+            alias=project,
+            table_id=table_id,
+            output_path=output,
+            columns=columns,
+            limit=limit,
+            branch_id=effective_branch,
+        )
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        raise typer.Exit(code=2) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        size_mb = result["file_size_bytes"] / (1024 * 1024)
+        formatter.console.print(
+            f"[bold green]Exported:[/bold green] {result['table_id']} -> {result['output_path']} "
+            f"({size_mb:.2f} MB)"
+        )
+
+
 @storage_app.command("tables")
 def storage_tables(
     ctx: typer.Context,

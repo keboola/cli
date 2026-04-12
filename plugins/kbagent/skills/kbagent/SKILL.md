@@ -75,6 +75,7 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 | Create a new storage bucket | `kbagent storage create-bucket --project PROJECT --stage STAGE --name NAME` |
 | Create a new storage table with typed columns | `kbagent storage create-table --project PROJECT --bucket-id BUCKET-ID --name NAME --column COLUMN` |
 | Upload a CSV file into a storage table | `kbagent storage upload-table --project PROJECT --table-id TABLE-ID --file FILE` |
+| Export a storage table to a local CSV file | `kbagent storage download-table --project PROJECT --table-id TABLE-ID` |
 | List storage tables from a project | `kbagent storage tables --project PROJECT` |
 | Delete one or more storage tables | `kbagent storage delete-table --project PROJECT --table-id TABLE-ID` |
 | Delete one or more storage buckets | `kbagent storage delete-bucket --project PROJECT --bucket-id BUCKET-ID` |
