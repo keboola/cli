@@ -108,6 +108,9 @@ VERSION_CACHE_FILENAME: str = "version_cache.json"
 AI_SERVICE_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 SECRET_PLACEHOLDER: str = "<YOUR_SECRET>"
 
+# --- Job Run ---
+DEFAULT_JOB_RUN_TIMEOUT: float = 300.0  # 5 min default for --wait polling
+
 # --- Permission Exit Code ---
 EXIT_PERMISSION_DENIED: int = 6
 

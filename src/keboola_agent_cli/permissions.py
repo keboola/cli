@@ -30,6 +30,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     # Job history
     "job.list": "read",
     "job.detail": "read",
+    "job.run": "write",
     # Lineage
     "lineage.show": "read",
     # Sharing

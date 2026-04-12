@@ -147,3 +147,46 @@ class JobService(BaseService):
 
         detail["project_alias"] = alias
         return detail
+
+    def run_job(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        config_row_ids: list[str] | None = None,
+        wait: bool = False,
+        timeout: float = 300.0,
+    ) -> dict[str, Any]:
+        """Create and optionally wait for a Queue API job.
+
+        Args:
+            alias: Project alias.
+            component_id: Component ID to run.
+            config_id: Configuration ID to run.
+            config_row_ids: Optional row IDs (omit to run entire config).
+            wait: If True, poll until job finishes or timeout.
+            timeout: Max seconds to wait (only used when wait=True).
+
+        Returns:
+            Job dict with project_alias. If wait=True, returns the
+            completed job; otherwise returns the initial job response.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            job = client.create_job(
+                component_id=component_id,
+                config_id=config_id,
+                config_row_ids=config_row_ids,
+            )
+            job_id = str(job.get("id", ""))
+
+            if wait and job_id:
+                job = client.wait_for_queue_job(job_id, max_wait=timeout)
+        finally:
+            client.close()
+
+        job["project_alias"] = alias
+        return job

@@ -1382,6 +1382,7 @@ class KeboolaClient(BaseHttpClient):
         component_id: str,
         config_id: str,
         config_data: dict[str, Any] | None = None,
+        config_row_ids: list[str] | None = None,
         mode: str = "run",
     ) -> dict[str, Any]:
         """Create and run a Queue API job.
@@ -1390,6 +1391,8 @@ class KeboolaClient(BaseHttpClient):
             component_id: Component ID (e.g. keboola.sandboxes).
             config_id: Configuration ID.
             config_data: Optional runtime config data override.
+            config_row_ids: Optional list of config row IDs to run
+                (omit to run entire config).
             mode: Job mode (default: run).
 
         Returns:
@@ -1402,14 +1405,19 @@ class KeboolaClient(BaseHttpClient):
         }
         if config_data:
             body["configData"] = config_data
+        if config_row_ids:
+            body["configRowIds"] = config_row_ids
         response = self._queue_request("POST", "/jobs", json=body)
         return response.json()
 
-    def wait_for_queue_job(self, job_id: str) -> dict[str, Any]:
+    def wait_for_queue_job(
+        self, job_id: str, max_wait: float = STORAGE_JOB_MAX_WAIT
+    ) -> dict[str, Any]:
         """Poll a Queue API job until it reaches a terminal state.
 
         Args:
             job_id: The Queue job ID.
+            max_wait: Maximum seconds to wait (default: STORAGE_JOB_MAX_WAIT).
 
         Returns:
             Completed job dict.
@@ -1417,7 +1425,7 @@ class KeboolaClient(BaseHttpClient):
         Raises:
             KeboolaApiError: If the job fails or times out.
         """
-        deadline = time.monotonic() + STORAGE_JOB_MAX_WAIT
+        deadline = time.monotonic() + max_wait
         while time.monotonic() < deadline:
             job = self.get_job_detail(job_id)
             if job.get("isFinished"):
@@ -1438,7 +1446,7 @@ class KeboolaClient(BaseHttpClient):
             time.sleep(STORAGE_JOB_POLL_INTERVAL)
 
         raise KeboolaApiError(
-            message=f"Queue job {job_id} did not complete within {STORAGE_JOB_MAX_WAIT}s",
+            message=f"Queue job {job_id} did not complete within {max_wait}s",
             status_code=504,
             error_code="QUEUE_JOB_TIMEOUT",
             retryable=True,
