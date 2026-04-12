@@ -8,6 +8,15 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.18.2": [
+        "New: storage download-table -- export table data to CSV (#130)",
+        "New: storage table-detail -- show columns, types, primary key (#130)",
+        "Fix: Azure upload uses absUploadParams with write-capable SAS (#131)",
+        "Fix: AWS upload uses federation token with SigV4 signing (#131)",
+        "Fix: sync status detects code file changes (transform.sql etc.) (#132)",
+        "Fix: sync status no longer shows phantom configs after branch switch (#132)",
+        "Fix: SQL parser preserves content between BLOCK and CODE markers (#132)",
+    ],
     "0.18.1": [
         "Changelog command: kbagent changelog (#126)",
         "What's new display after auto-update",
