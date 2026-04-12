@@ -208,6 +208,62 @@ class StorageService(BaseService):
 
         return result
 
+    def get_table_detail(
+        self,
+        alias: str,
+        table_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Get detailed info about a storage table including columns.
+
+        Args:
+            alias: Project alias.
+            table_id: Full table ID (e.g. "in.c-bucket.table").
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Dict with table metadata, columns, and size info.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            table = client.get_table_detail(table_id, branch_id=branch_id)
+        finally:
+            client.close()
+
+        columns = table.get("columns", [])
+        column_metadata = table.get("columnMetadata", {})
+
+        column_details = []
+        for col in columns:
+            col_info: dict[str, Any] = {"name": col}
+            meta = column_metadata.get(col, [])
+            for m in meta:
+                if m.get("key") == "KBC.datatype.basetype":
+                    col_info["type"] = m.get("value", "")
+                elif m.get("key") == "KBC.datatype.nullable":
+                    col_info["nullable"] = m.get("value", "") == "1"
+            column_details.append(col_info)
+
+        return {
+            "project_alias": alias,
+            "table_id": table.get("id", table_id),
+            "name": table.get("name", ""),
+            "display_name": table.get("displayName", ""),
+            "bucket_id": table.get("bucket", {}).get("id", ""),
+            "columns": columns,
+            "column_details": column_details,
+            "primary_key": table.get("primaryKey", []),
+            "rows_count": table.get("rowsCount", 0),
+            "data_size_bytes": table.get("dataSizeBytes", 0),
+            "is_alias": table.get("isAlias", False),
+            "last_import_date": table.get("lastImportDate", ""),
+            "last_change_date": table.get("lastChangeDate", ""),
+            "created": table.get("created", ""),
+        }
+
     def list_tables(
         self,
         alias: str,

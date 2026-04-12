@@ -623,6 +623,25 @@ class KeboolaClient(BaseHttpClient):
         response = self._request("GET", f"{prefix}/buckets/{safe_id}")
         return response.json()
 
+    def get_table_detail(
+        self,
+        table_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Get detailed information about a storage table.
+
+        Args:
+            table_id: Full table ID (e.g. "in.c-bucket.table").
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Table detail dict including columns, metadata, bucket info.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_id = quote(table_id, safe="")
+        response = self._request("GET", f"{prefix}/tables/{safe_id}")
+        return response.json()
+
     def list_tables(
         self,
         bucket_id: str | None = None,

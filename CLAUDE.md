@@ -239,6 +239,7 @@ kbagent job detail --project NAME --job-id ID
 kbagent storage buckets [--project NAME] [--branch ID]
 kbagent storage bucket-detail --project NAME --bucket-id ID [--branch ID]
 kbagent storage tables --project NAME [--bucket-id ID] [--branch ID]
+kbagent storage table-detail --project NAME --table-id ID [--branch ID]
 kbagent storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
 kbagent storage create-table --project NAME --bucket-id ID --name NAME --column COL:TYPE [...] [--primary-key COL] [--branch ID]
 kbagent storage upload-table --project NAME --table-id ID --file PATH [--incremental] [--branch ID]

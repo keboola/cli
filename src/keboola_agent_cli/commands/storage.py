@@ -195,6 +195,77 @@ def storage_bucket_detail(
                 )
 
 
+@storage_app.command("table-detail")
+def storage_table_detail(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    table_id: str = typer.Option(
+        ...,
+        "--table-id",
+        help="Table ID (e.g. 'in.c-my-bucket.my-table')",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
+) -> None:
+    """Show detailed table info including columns and types."""
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    try:
+        result = service.get_table_detail(
+            alias=project,
+            table_id=table_id,
+            branch_id=effective_branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        formatter.console.print(f"[bold]Table:[/bold] {result['table_id']}")
+        formatter.console.print(f"  Name: {result['display_name'] or result['name']}")
+        formatter.console.print(f"  Bucket: {result['bucket_id']}")
+        formatter.console.print(f"  Rows: {result['rows_count']:,}")
+        size_mb = result["data_size_bytes"] / (1024 * 1024)
+        formatter.console.print(f"  Size: {size_mb:.2f} MB")
+        if result["primary_key"]:
+            formatter.console.print(f"  Primary key: {', '.join(result['primary_key'])}")
+        if result["last_import_date"]:
+            formatter.console.print(f"  Last import: {result['last_import_date']}")
+
+        if result["column_details"]:
+            formatter.console.print()
+            from rich.table import Table
+
+            table = Table(title="Columns")
+            table.add_column("Name", style="bold cyan")
+            table.add_column("Type", style="dim")
+            table.add_column("Nullable", style="dim")
+
+            for col in result["column_details"]:
+                table.add_row(
+                    col["name"],
+                    col.get("type", ""),
+                    "yes" if col.get("nullable") else "",
+                )
+
+            formatter.console.print(table)
+
+
 @storage_app.command("create-bucket")
 def storage_create_bucket(
     ctx: typer.Context,
