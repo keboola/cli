@@ -18,11 +18,13 @@ from ..errors import ConfigError, KeboolaApiError
 from ..output import format_config_detail, format_configs_table, format_search_results
 from ._helpers import (
     check_cli_permission,
+    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
     resolve_branch,
+    should_hint,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,6 +95,16 @@ def config_list(
     If a dev branch is active (via 'branch use'), configs from that branch
     are listed. Use --branch to override.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.list",
+            project=project,
+            component_type=component_type,
+            component_id=component_id,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -158,6 +170,16 @@ def config_detail(
     If a dev branch is active (via 'branch use'), the detail is fetched
     from that branch. Use --branch to override.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.detail",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -231,6 +253,19 @@ def config_search(
     If a dev branch is active (via 'branch use'), configs from that branch
     are searched. Use --branch to override.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.search",
+            query=query,
+            project=project,
+            component_type=component_type,
+            component_id=component_id,
+            ignore_case=ignore_case,
+            regex=use_regex,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
     config_store: ConfigStore = ctx.obj["config_store"]

@@ -13,10 +13,12 @@ from ..constants import VALID_COMPONENT_TYPES
 from ..errors import ConfigError, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
+    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    should_hint,
 )
 
 component_app = typer.Typer(help="Discover and inspect Keboola components")
@@ -149,6 +151,9 @@ def component_list(
     ),
 ) -> None:
     """List available components from connected projects."""
+    if should_hint(ctx):
+        emit_hint(ctx, "component.list", project=project, type=component_type, query=query)
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "component_service")
 
@@ -193,6 +198,9 @@ def component_detail(
     ),
 ) -> None:
     """Show detailed information about a specific component."""
+    if should_hint(ctx):
+        emit_hint(ctx, "component.detail", project=project, component_id=component_id)
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "component_service")
 

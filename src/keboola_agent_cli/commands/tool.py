@@ -15,10 +15,12 @@ from ..errors import ConfigError
 from ..output import OutputFormatter, format_tool_result, format_tools_table
 from ._helpers import (
     check_cli_permission,
+    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
     resolve_branch,
+    should_hint,
     validate_branch_requires_project,
 )
 
@@ -80,6 +82,9 @@ def tool_list(
     ),
 ) -> None:
     """List available MCP tools from the keboola-mcp-server."""
+    if should_hint(ctx):
+        emit_hint(ctx, "tool.list", project=project, branch=branch)
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "mcp_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -142,6 +147,16 @@ def tool_call(
     If an active branch is set for the project, it is used automatically.
     Use --branch to override or scope the call to a specific development branch.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "tool.call",
+            tool_name=tool_name,
+            project=project,
+            input=tool_input,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "mcp_service")
     config_store: ConfigStore = ctx.obj["config_store"]

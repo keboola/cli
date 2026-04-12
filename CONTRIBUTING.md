@@ -188,6 +188,8 @@ When adding a new command (e.g., `kbagent storage create-foo`), you must update 
 - [ ] **Client method** in `client.py` (or `manage_client.py`) -- HTTP layer
 - [ ] **Service method** in `services/` -- business logic, validation, orchestration
 - [ ] **Command function** in `commands/` -- Typer options, formatter, error handling
+- [ ] **Hint definition** in `hints/definitions/` -- register a `CommandHint` for `--hint` code generation (see existing files for pattern)
+- [ ] **Hint short-circuit** in the command function -- add `if should_hint(ctx): emit_hint(...)` before service call
 - [ ] **Permission registration** in `permissions.py` (`OPERATION_REGISTRY` dict)
 - [ ] **Service wiring** in `cli.py` if adding a new service class
 

@@ -112,11 +112,32 @@ def main(
         "--config-dir",
         help="Override config directory path.",
     ),
+    hint: str | None = typer.Option(
+        None,
+        "--hint",
+        help="Show equivalent Python code instead of executing. "
+        "Values: 'client' (direct API usage, default) or 'service' (uses CLI config).",
+    ),
 ) -> None:
     """Global options applied to all commands."""
     from .auto_update import maybe_auto_update, show_post_update_changelog
 
-    maybe_auto_update()
+    # Skip auto-update in hint mode (code generation only)
+    if hint:
+        from .hints.models import HintMode
+
+        valid_modes = [m.value for m in HintMode]
+        if hint not in valid_modes:
+            typer.echo(
+                f"Error: Invalid --hint value '{hint}'.\n"
+                f"Usage: kbagent --hint client <command>  (direct API calls)\n"
+                f"       kbagent --hint service <command> (uses CLI config)\n"
+                f"Valid values: {', '.join(valid_modes)}",
+                err=True,
+            )
+            raise typer.Exit(code=2) from None
+    else:
+        maybe_auto_update()
     show_post_update_changelog()
 
     # If no subcommand given, launch REPL on TTY or show help otherwise
@@ -175,9 +196,17 @@ def main(
         # Config may be invalid (e.g. corrupted JSON) -- skip permission check
         permission_engine = PermissionEngine(None)
 
+    # Resolve hint mode
+    hint_mode = None
+    if hint:
+        from .hints.models import HintMode
+
+        hint_mode = HintMode(hint)
+
     ctx.ensure_object(dict)
     ctx.obj["formatter"] = formatter
     ctx.obj["json_output"] = json_output
+    ctx.obj["hint_mode"] = hint_mode
     ctx.obj["permission_engine"] = permission_engine
     ctx.obj["verbose"] = verbose
     ctx.obj["no_color"] = effective_no_color
@@ -223,6 +252,16 @@ def main(
     # Enforce permissions for top-level commands (sub-app commands use callbacks)
     _top_level_commands = {"init", "doctor", "version", "update", "changelog", "context", "repl"}
     _is_help = "--help" in sys.argv or "-h" in sys.argv
+
+    # Hint mode on top-level commands — these are all local, no hints available
+    if hint_mode and ctx.invoked_subcommand in _top_level_commands:
+        typer.echo(
+            f"No --hint available for '{ctx.invoked_subcommand}'. "
+            f"This command operates locally and does not make API calls.",
+            err=True,
+        )
+        raise typer.Exit(0)
+
     if ctx.invoked_subcommand in _top_level_commands and not _is_help:
         try:
             permission_engine.check_or_raise(ctx.invoked_subcommand)

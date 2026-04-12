@@ -101,6 +101,7 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 | `--verbose / -v` | Verbose output |
 | `--no-color` | Disable colors |
 | `--config-dir` | Override config directory |
+| `--hint client\|service` | Generate Python code instead of executing (see [programming-with-cli.md](programming-with-cli.md)) |
 
 ## Environment Variables
 | Variable | Purpose |

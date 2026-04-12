@@ -8,7 +8,14 @@ import typer
 
 from ..errors import ConfigError
 from ..output import format_lineage_table
-from ._helpers import check_cli_permission, emit_project_warnings, get_formatter, get_service
+from ._helpers import (
+    check_cli_permission,
+    emit_hint,
+    emit_project_warnings,
+    get_formatter,
+    get_service,
+    should_hint,
+)
 
 lineage_app = typer.Typer(help="Analyze cross-project data lineage via bucket sharing")
 
@@ -28,6 +35,9 @@ def lineage_show(
     ),
 ) -> None:
     """Show cross-project data lineage via bucket sharing."""
+    if should_hint(ctx):
+        emit_hint(ctx, "lineage.show", project=project)
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "lineage_service")
 

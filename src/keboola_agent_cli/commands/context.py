@@ -47,6 +47,7 @@ observability -- all API requests will include the X-Conversation-ID header.
   --verbose / -v  Verbose output
   --no-color      Disable colors (auto-disabled in non-TTY)
   --config-dir    Override config directory path
+  --hint MODE     Generate Python code instead of executing (MODE: client or service)
 
 ## All Commands
 
@@ -392,6 +393,15 @@ Use `kbagent <command> --help` for full flag details and examples.
      - Example: get_configs uses "configs" (list of objects), not flat "config_id"
        kbagent --json tool call get_configs --project prod --branch 456 \\
          --input '{{"configs": [{{"component_id": "keboola.snowflake-transformation", "configuration_id": "12345"}}]}}'
+
+10. Python code generation with --hint:
+     kbagent --hint client config list --project prod   # Direct API calls (KeboolaClient)
+     kbagent --hint service config list --project prod  # Service layer (uses CLI config)
+     Two modes:
+       client  -- generates code with explicit URL + token, no CLI config dependency
+       service -- generates code using ConfigStore with explicit config_dir path
+     Works on all API-backed commands (45 total). No API calls are made.
+     Use this when building Python scripts that automate Keboola operations.
 
 ## Exit Codes
 

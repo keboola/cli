@@ -11,10 +11,12 @@ from ..errors import ConfigError, KeboolaApiError
 from ..output import format_job_detail, format_jobs_table
 from ._helpers import (
     check_cli_permission,
+    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    should_hint,
 )
 
 job_app = typer.Typer(help="Browse job history and run jobs")
@@ -55,6 +57,17 @@ def job_list(
     ),
 ) -> None:
     """List jobs from connected projects."""
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "job.list",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            status=status,
+            limit=limit,
+        )
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "job_service")
 
@@ -108,6 +121,9 @@ def job_detail(
     job_id: str = typer.Option(..., "--job-id", help="Job ID"),
 ) -> None:
     """Show detailed information about a specific job."""
+    if should_hint(ctx):
+        emit_hint(ctx, "job.detail", project=project, job_id=job_id)
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "job_service")
 
@@ -167,6 +183,18 @@ def job_run(
     Creates a Queue API job and optionally waits for completion.
     Use --row-id to run specific configuration rows.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "job.run",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            row_id=row_id,
+            wait=wait,
+            timeout=timeout,
+        )
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "job_service")
 

@@ -12,10 +12,12 @@ from ..errors import ConfigError, KeboolaApiError
 from ..output import format_query_results, format_workspaces_table
 from ._helpers import (
     check_cli_permission,
+    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    should_hint,
 )
 
 workspace_app = typer.Typer(help="Workspace lifecycle for SQL debugging")
@@ -60,6 +62,16 @@ def workspace_create(
     Default: fast headless mode via Storage API (~1s).
     With --ui: creates via Queue job (~15s), visible in Keboola UI Workspaces tab.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "workspace.create",
+            project=project,
+            name=name,
+            backend=backend,
+            read_only=read_only,
+        )
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
@@ -105,6 +117,9 @@ def workspace_list(
     ),
 ) -> None:
     """List workspaces from connected projects."""
+    if should_hint(ctx):
+        emit_hint(ctx, "workspace.list", project=project)
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
@@ -136,6 +151,9 @@ def workspace_detail(
     ),
 ) -> None:
     """Show workspace details (password NOT included)."""
+    if should_hint(ctx):
+        emit_hint(ctx, "workspace.detail", project=project, workspace_id=workspace_id)
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
@@ -183,6 +201,9 @@ def workspace_delete(
     ),
 ) -> None:
     """Delete a workspace."""
+    if should_hint(ctx):
+        emit_hint(ctx, "workspace.delete", project=project, workspace_id=workspace_id)
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
@@ -220,6 +241,9 @@ def workspace_password(
     ),
 ) -> None:
     """Reset workspace password and show the new one."""
+    if should_hint(ctx):
+        emit_hint(ctx, "workspace.password", project=project, workspace_id=workspace_id)
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
@@ -273,6 +297,16 @@ def workspace_load(
 
     Waits for the async load job to complete.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "workspace.load",
+            project=project,
+            workspace_id=workspace_id,
+            tables=tables,
+            preserve=preserve,
+        )
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
@@ -332,6 +366,16 @@ def workspace_query(
 
     Provide SQL via --sql or --file (exactly one required).
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "workspace.query",
+            project=project,
+            workspace_id=workspace_id,
+            sql=sql,
+            transactional=transactional,
+        )
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
@@ -410,6 +454,17 @@ def workspace_from_transformation(
     Reads the transformation, creates a config-tied workspace, and loads
     all input tables. Returns credentials ready for SQL debugging.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "workspace.from-transformation",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            row_id=row_id,
+            backend=backend,
+        )
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 

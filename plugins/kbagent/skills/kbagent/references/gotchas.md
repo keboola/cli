@@ -258,6 +258,24 @@ scope to that branch:
 This means you can have production and dev branch configs side by side on disk
 without them overwriting each other.
 
+## --hint mode: generate Python code
+
+Use `--hint` to generate equivalent Python code instead of executing a command:
+
+```bash
+kbagent --hint client config list --project myproj   # direct API calls
+kbagent --hint service config list --project myproj  # service layer with CLI config
+```
+
+Two modes:
+- **`--hint client`**: generates code using `KeboolaClient` with explicit URL + token
+- **`--hint service`**: generates code using the service layer with `ConfigStore`
+
+Important: `--hint` requires a value (`client` or `service`). Writing just `--hint`
+without a value will cause a parsing error.
+
+See [docs/hint-mode.md](../../../../../docs/hint-mode.md) for full documentation.
+
 ## Common mistakes
 
 - **Forgetting `--json`**: without it, output is human-formatted Rich text, not parseable

@@ -12,11 +12,13 @@ from ..config_store import ConfigStore
 from ..errors import ConfigError, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
+    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
     resolve_branch,
+    should_hint,
 )
 
 storage_app = typer.Typer(help="Browse and manage storage buckets, tables, and files")
@@ -52,6 +54,9 @@ def storage_buckets(
     source project ID and name. This information is not available via
     MCP tools.
     """
+    if should_hint(ctx):
+        emit_hint(ctx, "storage.buckets", project=project, branch=branch)
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -140,6 +145,9 @@ def storage_bucket_detail(
     and schema from the source project. Each table includes a ready-to-use
     fully-qualified Snowflake path with proper quoting.
     """
+    if should_hint(ctx):
+        emit_hint(ctx, "storage.bucket-detail", project=project, bucket_id=bucket_id, branch=branch)
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -220,6 +228,9 @@ def storage_tables(
     ),
 ) -> None:
     """List storage tables from a project."""
+    if should_hint(ctx):
+        emit_hint(ctx, "storage.tables", project=project, bucket_id=bucket_id, branch=branch)
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -289,6 +300,9 @@ def storage_table_detail(
     ),
 ) -> None:
     """Show detailed table info including columns and types."""
+    if should_hint(ctx):
+        emit_hint(ctx, "storage.table-detail", project=project, table_id=table_id, branch=branch)
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -375,6 +389,18 @@ def storage_create_bucket(
     ),
 ) -> None:
     """Create a new storage bucket."""
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.create-bucket",
+            project=project,
+            stage=stage,
+            name=name,
+            description=description,
+            backend=backend,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -447,6 +473,18 @@ def storage_create_table(
 
     Column types: STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.create-table",
+            project=project,
+            bucket_id=bucket_id,
+            name=name,
+            column=column,
+            primary_key=primary_key,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -531,6 +569,17 @@ def storage_upload_table(
     STRING from the CSV header). Use --no-auto-create to require the table to
     already exist.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.upload-table",
+            project=project,
+            table_id=table_id,
+            file=file,
+            incremental=incremental,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -630,6 +679,18 @@ def storage_download_table(
     decompression transparently. Use --columns to select specific
     columns and --limit to cap row count.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.download-table",
+            project=project,
+            table_id=table_id,
+            output=output,
+            columns=columns,
+            limit=limit,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -708,6 +769,16 @@ def storage_delete_table(
     Supports batch deletion with multiple --table-id flags.
     All deletes are async and wait for completion.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.delete-table",
+            project=project,
+            table_id=table_id,
+            dry_run=dry_run,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -805,6 +876,17 @@ def storage_delete_bucket(
     With --force, cascade-deletes all tables in the bucket.
     Linked and shared buckets are protected (use sharing unlink/unshare).
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.delete-bucket",
+            project=project,
+            bucket_id=bucket_id,
+            force=force,
+            dry_run=dry_run,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -899,6 +981,18 @@ def storage_file_list(
     Lists files from the project's Storage Files API. Use --tag to filter
     by tags (AND logic - all specified tags must match).
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.files",
+            project=project,
+            tag=tag,
+            limit=limit,
+            offset=offset,
+            query=query,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -969,6 +1063,9 @@ def storage_file_info(
     ),
 ) -> None:
     """Show Storage File metadata (without downloading)."""
+    if should_hint(ctx):
+        emit_hint(ctx, "storage.file-detail", project=project, file_id=file_id)
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
 
@@ -1040,6 +1137,18 @@ def storage_file_upload(
     Uploads any file (CSV, JSON, ZIP, etc.) to Keboola Storage Files.
     Use --tag to assign tags and --permanent to prevent auto-deletion.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.file-upload",
+            project=project,
+            file=file,
+            name=name,
+            tag=tag,
+            permanent=permanent,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -1115,6 +1224,16 @@ def storage_file_download(
     Download by file ID (--file-id) or by tags (--tag, downloads the latest
     matching file). Handles both sliced and non-sliced files transparently.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.file-download",
+            project=project,
+            file_id=file_id,
+            tag=tag,
+            output=output,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
 
@@ -1186,6 +1305,9 @@ def storage_file_tag(
 
     Use --add and --remove to modify tags in a single operation.
     """
+    if should_hint(ctx):
+        emit_hint(ctx, "storage.file-tag", project=project, file_id=file_id, add=add, remove=remove)
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
 
@@ -1252,6 +1374,9 @@ def storage_file_delete(
     ),
 ) -> None:
     """Delete one or more Storage Files."""
+    if should_hint(ctx):
+        emit_hint(ctx, "storage.file-delete", project=project, file_id=file_id, dry_run=dry_run)
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
 
@@ -1330,6 +1455,19 @@ def storage_load_file(
     Imports an already-uploaded file (from file-upload or component output)
     into a storage table. Use --incremental to append rows.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.load-file",
+            project=project,
+            file_id=file_id,
+            table_id=table_id,
+            incremental=incremental,
+            delimiter=delimiter,
+            enclosure=enclosure,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -1422,6 +1560,20 @@ def storage_unload_table(
     components. Use --tag to tag the output file and --download to also
     save it locally.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.unload-table",
+            project=project,
+            table_id=table_id,
+            columns=columns,
+            limit=limit,
+            tag=tag,
+            download=download,
+            output=output,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]

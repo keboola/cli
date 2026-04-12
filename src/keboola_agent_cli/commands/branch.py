@@ -10,10 +10,12 @@ from ..errors import ConfigError, KeboolaApiError
 from ..output import format_branches_table
 from ._helpers import (
     check_cli_permission,
+    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    should_hint,
 )
 
 branch_app = typer.Typer(help="Manage development branches")
@@ -34,6 +36,9 @@ def branch_list(
     ),
 ) -> None:
     """List development branches from connected projects."""
+    if should_hint(ctx):
+        emit_hint(ctx, "branch.list", project=project)
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 
@@ -74,6 +79,9 @@ def branch_create(
     The created branch becomes the active branch for the project,
     so subsequent tool calls will automatically use it.
     """
+    if should_hint(ctx):
+        emit_hint(ctx, "branch.create", project=project, name=name, description=description)
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 
@@ -184,6 +192,9 @@ def branch_delete(
     If the deleted branch was the active branch, it is automatically
     reset to main/production.
     """
+    if should_hint(ctx):
+        emit_hint(ctx, "branch.delete", project=project, branch=branch)
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 

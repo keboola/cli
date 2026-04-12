@@ -5,6 +5,7 @@ Provides common patterns used by all CLI commands:
 - Exit code mapping for API errors
 - Warning emission for multi-project operations
 - Branch resolution for --branch flag
+- Hint mode detection and code generation
 """
 
 import os
@@ -107,13 +108,31 @@ def check_cli_permission(ctx: typer.Context, group_name: str) -> None:
 
     Called from sub-app callbacks. Constructs operation name as
     '{group_name}.{subcommand}' and checks against the permission engine.
-    Always allows --help through so users can read docs for blocked commands.
+    Always allows --help and --hint through (no API calls made).
 
     Args:
         ctx: Typer context (must have permission_engine in obj).
         group_name: The sub-app name (e.g., 'branch', 'config').
     """
     if _is_help_request(ctx):
+        return
+
+    # Hint mode: skip permission check + catch commands without hint definitions
+    if should_hint(ctx):
+        subcommand = ctx.invoked_subcommand
+        if subcommand:
+            cli_command = f"{group_name}.{subcommand}"
+            from ..hints import HintRegistry
+            from ..hints import definitions as _defs  # noqa: F401
+
+            if HintRegistry.get(cli_command) is not None:
+                return  # Hint exists — let the command function handle it
+            # No hint registered for this command
+            typer.echo(
+                f"No --hint available for '{group_name} {subcommand}'.",
+                err=True,
+            )
+            raise typer.Exit(0)
         return
 
     engine = ctx.obj.get("permission_engine")
@@ -206,3 +225,64 @@ def resolve_branch(
             return alias, proj.active_branch_id
 
     return project, None
+
+
+# ── Hint mode helpers ──────────────────────────────────────────────
+
+
+def should_hint(ctx: typer.Context) -> bool:
+    """Check if --hint mode is active."""
+    return ctx.obj.get("hint_mode") is not None
+
+
+def emit_hint(ctx: typer.Context, cli_command: str, **params: Any) -> None:
+    """Render Python hint code, print to stdout, and exit.
+
+    Resolves the project alias to a stack_url and config_dir, then
+    delegates to the hint renderer.
+
+    Args:
+        ctx: Typer context (must have hint_mode and config_store).
+        cli_command: Dot-separated command key, e.g. 'config.list'.
+        **params: CLI parameters passed to the command.
+    """
+    from ..hints import render_hint
+
+    hint_mode = ctx.obj["hint_mode"]
+    config_store: ConfigStore = ctx.obj["config_store"]
+
+    # Resolve project alias -> stack_url
+    stack_url = _resolve_hint_stack_url(config_store, params.get("project"))
+
+    # Actual config_dir path (for service layer hints)
+    config_dir = config_store.config_path.parent
+
+    # Branch ID from params
+    branch_id = params.get("branch")
+
+    output = render_hint(cli_command, hint_mode, params, stack_url, config_dir, branch_id)
+    sys.stdout.write(output + "\n")
+    raise typer.Exit(0)
+
+
+def _resolve_hint_stack_url(
+    config_store: ConfigStore,
+    project: str | list[str] | None,
+) -> str | None:
+    """Resolve a project alias to its stack_url for hint rendering.
+
+    Returns None if the project cannot be resolved (hint will use a placeholder).
+    """
+    if project is None:
+        return None
+
+    alias = project[0] if isinstance(project, list) else project
+
+    try:
+        proj = config_store.get_project(alias)
+        if proj:
+            return proj.stack_url
+    except Exception:
+        pass
+
+    return None

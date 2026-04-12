@@ -79,6 +79,11 @@ src/keboola_agent_cli/
     changelog.py        # LAYER 1: Changelog display
     context.py          # LAYER 1: Agent usage instructions
     doctor.py           # LAYER 1: Health check command
+  hints/
+    __init__.py         # HintRegistry + render_hint() public API
+    models.py           # HintMode, ClientCall, ServiceCall, HintStep, CommandHint
+    renderer.py         # ClientRenderer + ServiceRenderer (Python code generation)
+    definitions/        # One file per command group (config.py, storage.py, job.py, ...)
   services/
     base.py             # LAYER 2: BaseService - shared parallel execution infrastructure
     project_service.py  # LAYER 2: Business logic for projects
@@ -219,7 +224,7 @@ Note: `SKILL.md` instructs Claude to run `kbagent context` as its first step, wh
 ## All CLI Commands
 
 ```
-# Global options: --json, --verbose, --no-color, --config-dir
+# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service
 
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list

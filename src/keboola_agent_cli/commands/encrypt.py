@@ -13,9 +13,11 @@ import typer
 from ..errors import ConfigError, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
+    emit_hint,
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    should_hint,
 )
 
 encrypt_app = typer.Typer(
@@ -65,6 +67,11 @@ def encrypt_values(
         echo '{"#token": "abc"}' | kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --input -
         kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --input @secrets.json --output-file encrypted.json
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx, "encrypt.values", project=project, component_id=component_id, input=input_data
+        )
+        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "encrypt_service")
 

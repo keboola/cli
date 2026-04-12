@@ -41,6 +41,7 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 3. **Multi-project by default**: read commands query ALL connected projects in parallel -- no need to loop
 4. **Write commands need `--project`**: specify the target project alias
 5. **Tokens are always masked** in output -- this is expected, not an error
+6. **Use `--hint` for Python code generation**: `kbagent --hint client <command>` generates Python code using `KeboolaClient` (direct API), `kbagent --hint service <command>` generates code using the service layer with CLI config. See [programming-with-cli.md](references/programming-with-cli.md) for details.
 
 ## Choosing the right approach
 
