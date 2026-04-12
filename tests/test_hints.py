@@ -466,6 +466,112 @@ class TestHintCLI:
         assert result.exit_code == 0
 
 
+# ── Security tests ─────────────────────────────────────────────────
+
+
+class TestHintSecurity:
+    """Security-focused tests for the hint system (CWE-94 prevention)."""
+
+    def test_string_param_with_quotes_is_escaped(self) -> None:
+        """Quotes in parameter values must be escaped to prevent code injection."""
+        hint = CommandHint(
+            cli_command="test.cmd",
+            description="Test",
+            steps=[
+                HintStep(
+                    comment="Do something",
+                    client=ClientCall(
+                        method="some_method",
+                        args={"param": "{evil}"},
+                        result_var="result",
+                    ),
+                ),
+            ],
+        )
+        # Attempt injection via double-quote breakout
+        code = ClientRenderer.render(
+            hint,
+            params={"evil": 'value", x=__import__("os").system("id") #'},
+            stack_url=STACK_URL,
+            branch_id=None,
+        )
+        # The quotes must be escaped — generated code must be safe to compile
+        compile(code, "<hint>", "exec")
+        # Injected code must NOT appear as executable
+        assert "__import__" not in code or '\\"' in code
+
+    def test_list_param_with_quotes_is_escaped(self) -> None:
+        """Quotes in list parameter values must be escaped."""
+        hint = CommandHint(
+            cli_command="test.cmd",
+            description="Test",
+            steps=[
+                HintStep(
+                    comment="Do something",
+                    client=ClientCall(
+                        method="some_method",
+                        args={"items": "{evil_list}"},
+                        result_var="result",
+                    ),
+                ),
+            ],
+        )
+        code = ClientRenderer.render(
+            hint,
+            params={"evil_list": ["normal", 'evil"]; import os #']},
+            stack_url=STACK_URL,
+            branch_id=None,
+        )
+        compile(code, "<hint>", "exec")
+        assert "import os" not in code or '\\"' in code
+
+    def test_docstring_injection_prevented(self) -> None:
+        """Triple quotes in params must not break the docstring."""
+        hint = CommandHint(
+            cli_command="test.cmd",
+            description="Test",
+            steps=[
+                HintStep(
+                    comment="Do something",
+                    client=ClientCall(method="some_method", result_var="result"),
+                ),
+            ],
+        )
+        code = ClientRenderer.render(
+            hint,
+            params={"project": '"""\nimport os\nos.system("id")\n"""'},
+            stack_url=STACK_URL,
+            branch_id=None,
+        )
+        compile(code, "<hint>", "exec")
+
+    def test_newlines_in_params_escaped(self) -> None:
+        """Newline characters in params must be escaped."""
+        hint = CommandHint(
+            cli_command="test.cmd",
+            description="Test",
+            steps=[
+                HintStep(
+                    comment="Do something",
+                    client=ClientCall(
+                        method="some_method",
+                        args={"name": "{name}"},
+                        result_var="result",
+                    ),
+                ),
+            ],
+        )
+        code = ClientRenderer.render(
+            hint,
+            params={"name": "line1\nline2\rline3"},
+            stack_url=STACK_URL,
+            branch_id=None,
+        )
+        compile(code, "<hint>", "exec")
+        # Raw newlines must not appear in the string literal
+        assert "line1\nline2" not in code
+
+
 # ── Test helpers ───────────────────────────────────────────────────
 
 

@@ -15,8 +15,24 @@ from .models import CommandHint
 _DEFAULT_STACK_URL = "https://connection.keboola.com"
 
 
+def _escape_for_python_string(value: str) -> str:
+    """Escape a value for safe embedding inside a double-quoted Python string literal.
+
+    Prevents code injection via crafted parameter values (CWE-94).
+    """
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+
+
+def _sanitize_for_comment(value: str) -> str:
+    """Remove characters that could break Python comments or docstrings."""
+    return value.replace("\n", " ").replace("\r", " ").replace('"""', "...")
+
+
 def _build_original_command(hint: CommandHint, params: dict[str, Any]) -> str:
-    """Reconstruct the original CLI command string for the docstring."""
+    """Reconstruct the original CLI command string for the docstring.
+
+    Values are sanitized to prevent docstring/comment injection.
+    """
     parts = ["kbagent"]
     # Convert "config.list" -> "config list"
     parts.extend(hint.cli_command.split("."))
@@ -30,9 +46,9 @@ def _build_original_command(hint: CommandHint, params: dict[str, Any]) -> str:
                 parts.append(flag)
         elif isinstance(value, list):
             for item in value:
-                parts.extend([flag, str(item)])
+                parts.extend([flag, _sanitize_for_comment(str(item))])
         else:
-            parts.extend([flag, str(value)])
+            parts.extend([flag, _sanitize_for_comment(str(value))])
 
     return " ".join(parts)
 
@@ -59,9 +75,14 @@ def _substitute_params(args: dict[str, str], params: dict[str, Any]) -> dict[str
                     skip = True
                     break
                 if isinstance(param_value, str):
-                    resolved = resolved.replace(placeholder, f'"{param_value}"')
+                    safe = _escape_for_python_string(param_value)
+                    resolved = resolved.replace(placeholder, f'"{safe}"')
                 elif isinstance(param_value, list):
-                    list_repr = "[" + ", ".join(f'"{v}"' for v in param_value) + "]"
+                    list_repr = (
+                        "["
+                        + ", ".join(f'"{_escape_for_python_string(str(v))}"' for v in param_value)
+                        + "]"
+                    )
                     resolved = resolved.replace(placeholder, list_repr)
                 else:
                     resolved = resolved.replace(placeholder, str(param_value))
@@ -100,9 +121,10 @@ class ClientRenderer:
         original_cmd = _build_original_command(hint, params)
         lines: list[str] = []
 
-        # Shebang + docstring
+        # Shebang + docstring (escape to prevent triple-quote injection)
+        safe_cmd = original_cmd.replace('"""', '"\\"" ')
         lines.append("#!/usr/bin/env python3")
-        lines.append(f'"""Equivalent of: {original_cmd}"""')
+        lines.append(f'"""Equivalent of: {safe_cmd}"""')
         lines.append("")
 
         # Imports
@@ -138,7 +160,8 @@ class ClientRenderer:
                 project = params.get("project")
                 if project:
                     proj_label = project[0] if isinstance(project, list) else project
-                    url_comment = f"  # from project '{proj_label}'"
+                    safe_label = _escape_for_python_string(str(proj_label))
+                    url_comment = f"  # from project '{safe_label}'"
             lines.append("client = KeboolaClient(")
             lines.append(f'    base_url="{url}",{url_comment}')
             lines.append('    token=os.environ["KBC_STORAGE_TOKEN"],')
@@ -257,9 +280,10 @@ class ServiceRenderer:
                 hint, params, stack_url, branch_id, config_dir=config_dir
             )
 
-        # Shebang + docstring
+        # Shebang + docstring (escape to prevent triple-quote injection)
+        safe_cmd = original_cmd.replace('"""', '"\\"" ')
         lines.append("#!/usr/bin/env python3")
-        lines.append(f'"""Equivalent of: {original_cmd}"""')
+        lines.append(f'"""Equivalent of: {safe_cmd}"""')
         lines.append("")
 
         # Collect unique service imports
