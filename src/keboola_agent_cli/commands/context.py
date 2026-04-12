@@ -152,7 +152,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Storage Files
 
-  kbagent storage file-list --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]
+  kbagent storage files --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]
     List Storage Files. --tag filters by tags (AND logic, repeat for multiple). --query for full-text search on name. Branch-aware.
 
   kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID]
@@ -163,7 +163,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     Download a Storage File. Either --file-id (by ID) or --tag (latest file matching all tags).
     --output sets local path (default: original filename). Handles sliced and gzipped files transparently.
 
-  kbagent storage file-info --project NAME --file-id ID
+  kbagent storage file-detail --project NAME --file-id ID
     Show file metadata: name, size, tags, sliced/permanent status, creator token. Does not download.
 
   kbagent storage file-delete --project NAME --file-id ID [--file-id ...] [--dry-run] [--yes]

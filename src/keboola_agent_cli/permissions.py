@@ -74,8 +74,8 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.create-table": "write",
     "storage.upload-table": "write",
     # Storage files
-    "storage.file-list": "read",
-    "storage.file-info": "read",
+    "storage.files": "read",
+    "storage.file-detail": "read",
     "storage.file-download": "read",
     "storage.file-upload": "write",
     "storage.file-tag": "write",

@@ -200,6 +200,75 @@ def storage_bucket_detail(
                 )
 
 
+@storage_app.command("tables", rich_help_panel=_TABLES)
+def storage_tables(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    bucket_id: str | None = typer.Option(
+        None,
+        "--bucket-id",
+        help="Filter tables by bucket ID",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
+) -> None:
+    """List storage tables from a project."""
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    try:
+        result = service.list_tables(
+            alias=project,
+            bucket_id=bucket_id,
+            branch_id=effective_branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        from rich.table import Table
+
+        tables = result["tables"]
+        if not tables:
+            formatter.console.print("[dim]No tables found.[/dim]")
+            return
+
+        table = Table(title=f"Tables - {result['project_alias']}")
+        table.add_column("Table ID", style="bold cyan")
+        table.add_column("Rows", justify="right")
+        table.add_column("Size", justify="right", style="dim")
+        table.add_column("Last Import", style="dim")
+
+        for t in tables:
+            size_mb = t["data_size_bytes"] / (1024 * 1024) if t["data_size_bytes"] else 0
+            last_import = t.get("last_import_date", "")
+            if last_import and "T" in last_import:
+                last_import = last_import.split("T")[0]
+            table.add_row(
+                t["id"],
+                str(t["rows_count"]),
+                f"{size_mb:.1f} MB",
+                last_import,
+            )
+
+        formatter.console.print(table)
+
+
 @storage_app.command("table-detail", rich_help_panel=_TABLES)
 def storage_table_detail(
     ctx: typer.Context,
@@ -604,75 +673,6 @@ def storage_download_table(
         )
 
 
-@storage_app.command("tables", rich_help_panel=_TABLES)
-def storage_tables(
-    ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
-    bucket_id: str | None = typer.Option(
-        None,
-        "--bucket-id",
-        help="Filter tables by bucket ID",
-    ),
-    branch: int | None = typer.Option(
-        None,
-        "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
-    ),
-) -> None:
-    """List storage tables from a project."""
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "storage_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
-
-    try:
-        result = service.list_tables(
-            alias=project,
-            bucket_id=bucket_id,
-            branch_id=effective_branch,
-        )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        from rich.table import Table
-
-        tables = result["tables"]
-        if not tables:
-            formatter.console.print("[dim]No tables found.[/dim]")
-            return
-
-        table = Table(title=f"Tables - {result['project_alias']}")
-        table.add_column("Table ID", style="bold cyan")
-        table.add_column("Rows", justify="right")
-        table.add_column("Size", justify="right", style="dim")
-        table.add_column("Last Import", style="dim")
-
-        for t in tables:
-            size_mb = t["data_size_bytes"] / (1024 * 1024) if t["data_size_bytes"] else 0
-            last_import = t.get("last_import_date", "")
-            if last_import and "T" in last_import:
-                last_import = last_import.split("T")[0]
-            table.add_row(
-                t["id"],
-                str(t["rows_count"]),
-                f"{size_mb:.1f} MB",
-                last_import,
-            )
-
-        formatter.console.print(table)
-
-
 @storage_app.command("delete-table", rich_help_panel=_TABLES)
 def storage_delete_table(
     ctx: typer.Context,
@@ -859,7 +859,7 @@ def _format_file_size(size_bytes: int | None) -> str:
     return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-@storage_app.command("file-list", rich_help_panel=_FILES)
+@storage_app.command("files", rich_help_panel=_FILES)
 def storage_file_list(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -952,6 +952,53 @@ def storage_file_list(
             )
 
         formatter.console.print(table)
+
+
+@storage_app.command("file-detail", rich_help_panel=_FILES)
+def storage_file_info(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    file_id: int = typer.Option(
+        ...,
+        "--file-id",
+        help="Storage file ID",
+    ),
+) -> None:
+    """Show Storage File metadata (without downloading)."""
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+
+    try:
+        result = service.get_file_info(alias=project, file_id=file_id)
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        formatter.console.print(f"[bold]File ID:[/bold] {result.get('id')}")
+        formatter.console.print(f"[bold]Name:[/bold] {result.get('name')}")
+        formatter.console.print(f"[bold]Size:[/bold] {_format_file_size(result.get('sizeBytes'))}")
+        formatter.console.print(f"[bold]Created:[/bold] {result.get('created', '')}")
+        formatter.console.print(f"[bold]Sliced:[/bold] {'yes' if result.get('isSliced') else 'no'}")
+        formatter.console.print(
+            f"[bold]Permanent:[/bold] {'yes' if result.get('isPermanent') else 'no'}"
+        )
+        tags_str = ", ".join(result.get("tags", []))
+        formatter.console.print(f"[bold]Tags:[/bold] {tags_str or '(none)'}")
+        creator = result.get("creatorToken", {})
+        if isinstance(creator, dict):
+            formatter.console.print(
+                f"[bold]Creator:[/bold] {creator.get('description', 'unknown')}"
+            )
 
 
 @storage_app.command("file-upload", rich_help_panel=_FILES)
@@ -1111,113 +1158,6 @@ def storage_file_download(
         )
 
 
-@storage_app.command("file-info", rich_help_panel=_FILES)
-def storage_file_info(
-    ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
-    file_id: int = typer.Option(
-        ...,
-        "--file-id",
-        help="Storage file ID",
-    ),
-) -> None:
-    """Show Storage File metadata (without downloading)."""
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "storage_service")
-
-    try:
-        result = service.get_file_info(alias=project, file_id=file_id)
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        formatter.console.print(f"[bold]File ID:[/bold] {result.get('id')}")
-        formatter.console.print(f"[bold]Name:[/bold] {result.get('name')}")
-        formatter.console.print(f"[bold]Size:[/bold] {_format_file_size(result.get('sizeBytes'))}")
-        formatter.console.print(f"[bold]Created:[/bold] {result.get('created', '')}")
-        formatter.console.print(f"[bold]Sliced:[/bold] {'yes' if result.get('isSliced') else 'no'}")
-        formatter.console.print(
-            f"[bold]Permanent:[/bold] {'yes' if result.get('isPermanent') else 'no'}"
-        )
-        tags_str = ", ".join(result.get("tags", []))
-        formatter.console.print(f"[bold]Tags:[/bold] {tags_str or '(none)'}")
-        creator = result.get("creatorToken", {})
-        if isinstance(creator, dict):
-            formatter.console.print(
-                f"[bold]Creator:[/bold] {creator.get('description', 'unknown')}"
-            )
-
-
-@storage_app.command("file-delete", rich_help_panel=_FILES)
-def storage_file_delete(
-    ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
-    file_id: list[int] = typer.Option(
-        ...,
-        "--file-id",
-        help="Storage file ID to delete (repeat for multiple)",
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        help="Show what would be deleted without executing",
-    ),
-    yes: bool = typer.Option(
-        False,
-        "--yes",
-        "-y",
-        help="Skip confirmation prompt",
-    ),
-) -> None:
-    """Delete one or more Storage Files."""
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "storage_service")
-
-    try:
-        result = service.delete_files(
-            alias=project,
-            file_ids=file_id,
-            dry_run=dry_run,
-        )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        if dry_run:
-            for fid in result.get("would_delete", []):
-                formatter.console.print(f"[bold blue]Would delete:[/bold blue] file ID {fid}")
-        else:
-            for fid in result["deleted"]:
-                formatter.console.print(f"[bold green]Deleted:[/bold green] file ID {fid}")
-        for f_err in result["failed"]:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] file ID {f_err['id']}: {f_err['error']}"
-            )
-
-    if result["failed"]:
-        raise typer.Exit(code=1)
-
-
 @storage_app.command("file-tag", rich_help_panel=_FILES)
 def storage_file_tag(
     ctx: typer.Context,
@@ -1283,6 +1223,66 @@ def storage_file_tag(
             )
 
     if result["errors"]:
+        raise typer.Exit(code=1)
+
+
+@storage_app.command("file-delete", rich_help_panel=_FILES)
+def storage_file_delete(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    file_id: list[int] = typer.Option(
+        ...,
+        "--file-id",
+        help="Storage file ID to delete (repeat for multiple)",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be deleted without executing",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompt",
+    ),
+) -> None:
+    """Delete one or more Storage Files."""
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+
+    try:
+        result = service.delete_files(
+            alias=project,
+            file_ids=file_id,
+            dry_run=dry_run,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        if dry_run:
+            for fid in result.get("would_delete", []):
+                formatter.console.print(f"[bold blue]Would delete:[/bold blue] file ID {fid}")
+        else:
+            for fid in result["deleted"]:
+                formatter.console.print(f"[bold green]Deleted:[/bold green] file ID {fid}")
+        for f_err in result["failed"]:
+            formatter.console.print(
+                f"[bold red]Failed:[/bold red] file ID {f_err['id']}: {f_err['error']}"
+            )
+
+    if result["failed"]:
         raise typer.Exit(code=1)
 
 

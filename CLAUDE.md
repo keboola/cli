@@ -247,10 +247,10 @@ kbagent storage upload-table --project NAME --table-id ID --file PATH [--increme
 kbagent storage download-table --project NAME --table-id ID [--output FILE] [--columns COL ...] [--limit N] [--branch ID]
 kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
-kbagent storage file-list --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]
+kbagent storage files --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]
 kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID]
 kbagent storage file-download --project NAME [--file-id ID | --tag TAG ...] [--output FILE]
-kbagent storage file-info --project NAME --file-id ID
+kbagent storage file-detail --project NAME --file-id ID
 kbagent storage file-delete --project NAME --file-id ID [--file-id ...] [--dry-run] [--yes]
 kbagent storage file-tag --project NAME --file-id ID [--add TAG ...] [--remove TAG ...]
 kbagent storage load-file --project NAME --file-id ID --table-id ID [--incremental] [--delimiter D] [--enclosure E] [--branch ID]

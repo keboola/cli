@@ -74,20 +74,20 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 | Run a job for a component configuration | `kbagent job run --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | List storage buckets with sharing/linked bucket information | `kbagent storage buckets` |
 | Show detailed bucket info including Snowflake direct access paths | `kbagent storage bucket-detail --project PROJECT --bucket-id BUCKET-ID` |
+| List storage tables from a project | `kbagent storage tables --project PROJECT` |
 | Show detailed table info including columns and types | `kbagent storage table-detail --project PROJECT --table-id TABLE-ID` |
 | Create a new storage bucket | `kbagent storage create-bucket --project PROJECT --stage STAGE --name NAME` |
 | Create a new storage table with typed columns | `kbagent storage create-table --project PROJECT --bucket-id BUCKET-ID --name NAME --column COLUMN` |
 | Upload a CSV file into a storage table | `kbagent storage upload-table --project PROJECT --table-id TABLE-ID --file FILE` |
 | Export a storage table to a local CSV file | `kbagent storage download-table --project PROJECT --table-id TABLE-ID` |
-| List storage tables from a project | `kbagent storage tables --project PROJECT` |
 | Delete one or more storage tables | `kbagent storage delete-table --project PROJECT --table-id TABLE-ID` |
 | Delete one or more storage buckets | `kbagent storage delete-bucket --project PROJECT --bucket-id BUCKET-ID` |
-| List Storage Files with optional tag filtering | `kbagent storage file-list --project PROJECT` |
+| List Storage Files with optional tag filtering | `kbagent storage files --project PROJECT` |
+| Show Storage File metadata (without downloading) | `kbagent storage file-detail --project PROJECT --file-id FILE-ID` |
 | Upload a local file to Storage Files | `kbagent storage file-upload --project PROJECT --file FILE` |
 | Download a Storage File to local disk | `kbagent storage file-download --project PROJECT` |
-| Show Storage File metadata (without downloading) | `kbagent storage file-info --project PROJECT --file-id FILE-ID` |
-| Delete one or more Storage Files | `kbagent storage file-delete --project PROJECT --file-id FILE-ID` |
 | Add and/or remove tags on a Storage File | `kbagent storage file-tag --project PROJECT --file-id FILE-ID` |
+| Delete one or more Storage Files | `kbagent storage file-delete --project PROJECT --file-id FILE-ID` |
 | Load a Storage File into a table | `kbagent storage load-file --project PROJECT --file-id FILE-ID --table-id TABLE-ID` |
 | Export a table to a Storage File | `kbagent storage unload-table --project PROJECT --table-id TABLE-ID` |
 | List shared buckets available for linking | `kbagent sharing list` |

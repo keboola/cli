@@ -1,6 +1,6 @@
 """Tests for Storage Files commands and service methods.
 
-Covers: file-list, file-upload, file-download, file-info,
+Covers: files, file-upload, file-download, file-detail,
 file-delete, file-tag, load-file, unload-table.
 """
 
@@ -634,7 +634,7 @@ class TestClientTagFile:
 
 
 class TestFileListCli:
-    """Tests for `kbagent storage file-list` command."""
+    """Tests for `kbagent storage files` command."""
 
     def test_file_list_json(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -650,7 +650,7 @@ class TestFileListCli:
             }
             result = runner.invoke(
                 app,
-                ["--json", "storage", "file-list", "--project", "test"],
+                ["--json", "storage", "files", "--project", "test"],
             )
 
         assert result.exit_code == 0
@@ -674,7 +674,7 @@ class TestFileListCli:
                 [
                     "--json",
                     "storage",
-                    "file-list",
+                    "files",
                     "--project",
                     "test",
                     "--tag",
@@ -702,7 +702,7 @@ class TestFileListCli:
             }
             result = runner.invoke(
                 app,
-                ["storage", "file-list", "--project", "test"],
+                ["storage", "files", "--project", "test"],
             )
 
         assert result.exit_code == 0
@@ -809,7 +809,7 @@ class TestFileDownloadCli:
 
 
 class TestFileInfoCli:
-    """Tests for `kbagent storage file-info` command."""
+    """Tests for `kbagent storage file-detail` command."""
 
     def test_file_info_json(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -821,7 +821,7 @@ class TestFileInfoCli:
             MockSvc.return_value.get_file_info.return_value = SAMPLE_FILE.copy()
             result = runner.invoke(
                 app,
-                ["--json", "storage", "file-info", "--project", "test", "--file-id", "12345"],
+                ["--json", "storage", "file-detail", "--project", "test", "--file-id", "12345"],
             )
 
         assert result.exit_code == 0
@@ -841,7 +841,7 @@ class TestFileInfoCli:
             }
             result = runner.invoke(
                 app,
-                ["storage", "file-info", "--project", "test", "--file-id", "12345"],
+                ["storage", "file-detail", "--project", "test", "--file-id", "12345"],
             )
 
         assert result.exit_code == 0
