@@ -120,6 +120,9 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent storage tables --project NAME [--bucket-id BUCKET_ID] [--branch ID]
     List storage tables, optionally filtered by bucket. Branch-aware.
 
+  kbagent storage table-detail --project NAME --table-id TABLE_ID [--branch ID]
+    Show detailed table info: columns (with types if available), primary key, row count, size, last import date. Branch-aware.
+
   kbagent storage create-bucket --project NAME --stage STAGE --name BUCKET_NAME [--description D] [--backend B] [--branch ID]
     Create a new storage bucket. Stage must be "in" or "out". Branch-aware.
 
@@ -131,6 +134,11 @@ Use `kbagent <command> --help` for full flag details and examples.
     Upload CSV into a table. Auto-creates bucket and table if missing (columns inferred as STRING from CSV header).
     Use --no-auto-create to require the table to already exist.
     Full load by default; --incremental to append rows. Supports files up to 5 GB via async file-first upload flow. Branch-aware.
+
+  kbagent storage download-table --project NAME --table-id TABLE_ID [--output FILE] [--columns COL ...] [--limit N] [--branch ID]
+    Export table data to a local CSV file. Async export with streaming download.
+    Default filename: TABLE_NAME.csv. Use --columns to select columns (see table-detail for names).
+    Use --limit to cap row count. Handles sliced files and gzip decompression transparently. Branch-aware.
 
   kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes] [--branch ID]
     Delete one or more tables. Batch: repeat --table-id. --dry-run to preview. Branch-aware.

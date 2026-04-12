@@ -15,6 +15,8 @@ Not all commands return data the same way. Key differences:
 | `workspace list` | `{"workspaces": [...], "errors": [...]}` |
 | `branch list` | `{"branches": [...]}` |
 | `config search` | `{"matches": [...], "errors": [...], "stats": {...}}` |
+| `storage table-detail` | `{"table_id": ..., "columns": [...], "column_details": [...]}` |
+| `storage download-table` | `{"table_id": ..., "output_path": ..., "file_size_bytes": N}` |
 
 Always check the actual response structure rather than assuming a pattern.
 
