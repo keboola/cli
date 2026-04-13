@@ -29,7 +29,7 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID]` -- list configs across projects (branch-aware)
 - `config detail --project NAME --component-id ID --config-id ID [--branch ID]` -- full config with parameters and rows (branch-aware)
 - `config search --query PATTERN [--project NAME] [-i] [-r] [--branch ID]` -- search config bodies for string/regex (branch-aware)
-- `config update --project NAME --component-id ID --config-id ID [--name N] [--description D]` -- update name/description
+- `config update --project NAME --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--dry-run] [--branch ID]` -- update metadata and/or configuration content. `--set` targets a nested key (e.g. `parameters.db.host=new-host`). `--merge` deep-merges into existing config (preserves sibling keys). `--dry-run` previews changes without applying. Paths are relative to the configuration root (unlike MCP's `update_config` which uses paths relative to `parameters`)
 - `config delete --project NAME --component-id ID --config-id ID [--branch ID]` -- delete a configuration
 - `config new --component-id ID [--project NAME] [--name NAME] [--output-dir DIR]` -- scaffold new config from component schema
 

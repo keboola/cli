@@ -324,6 +324,28 @@ def config_search(
         emit_project_warnings(formatter, result)
 
 
+def _parse_json_input(raw: str) -> dict:
+    """Parse JSON from inline string, ``@file``, or ``-`` (stdin)."""
+    import sys
+
+    if raw == "-":
+        return json.loads(sys.stdin.read())
+    if raw.startswith("@"):
+        file_path = Path(raw[1:])
+        if not file_path.is_file():
+            raise FileNotFoundError(f"Input file not found: {file_path}")
+        return json.loads(file_path.read_text(encoding="utf-8"))
+    return json.loads(raw)
+
+
+def _parse_set_value(raw: str) -> object:
+    """Try to parse *raw* as JSON; fall back to plain string."""
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw
+
+
 @config_app.command("update")
 def config_update(
     ctx: typer.Context,
@@ -352,19 +374,117 @@ def config_update(
         "--description",
         help="New configuration description",
     ),
+    configuration: str | None = typer.Option(
+        None,
+        "--configuration",
+        help="Configuration JSON: inline, @file.json, or - for stdin",
+    ),
+    configuration_file: Path | None = typer.Option(
+        None,
+        "--configuration-file",
+        help="Path to a JSON file with configuration content",
+        exists=True,
+        readable=True,
+    ),
+    set_values: list[str] | None = typer.Option(
+        None,
+        "--set",
+        help="Set a nested value: PATH VALUE (e.g. --set 'parameters.db.host=new-host')",
+    ),
+    merge: bool = typer.Option(
+        False,
+        "--merge",
+        help="Deep-merge into existing config instead of replacing",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would change without applying",
+    ),
     branch: int | None = typer.Option(
         None,
         "--branch",
         help="Update in a specific dev branch ID (defaults to active branch)",
     ),
 ) -> None:
-    """Update a configuration's name and/or description.
+    """Update a configuration's metadata and/or content.
 
-    If a dev branch is active (via 'branch use'), the update targets
-    that branch. Use --branch to override.
+    \b
+    Metadata options (--name, --description) update display info.
+    Content options modify the configuration JSON itself:
+      --configuration / --configuration-file : provide a full JSON blob
+      --set PATH=VALUE : set a single nested key (repeatable)
+      --merge : deep-merge into existing config (preserves sibling keys)
+      --dry-run : preview changes without applying
+
+    \b
+    Examples:
+      # Update just the name
+      kbagent config update --project P --component-id C --config-id ID --name "New name"
+
+      # Replace entire configuration from a file
+      kbagent config update --project P --component-id C --config-id ID --configuration-file config.json
+
+      # Deep-merge a partial update (preserves sibling keys!)
+      kbagent config update --project P --component-id C --config-id ID \\
+        --configuration '{"parameters": {"tables": {"new": "data"}}}' --merge
+
+      # Set a single nested value
+      kbagent config update --project P --component-id C --config-id ID \\
+        --set 'parameters.db.host=new-host.example.com'
+
+      # Preview changes without applying
+      kbagent config update --project P --component-id C --config-id ID \\
+        --set 'parameters.db.host=new-host' --dry-run
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
+
+    # --- Parse configuration content ------------------------------------------
+    config_dict: dict | None = None
+    if configuration and configuration_file:
+        formatter.error(
+            message="Cannot use both --configuration and --configuration-file.",
+            error_code="VALIDATION_ERROR",
+        )
+        raise typer.Exit(code=2) from None
+
+    if configuration:
+        try:
+            config_dict = _parse_json_input(configuration)
+        except (json.JSONDecodeError, FileNotFoundError) as exc:
+            formatter.error(
+                message=f"Invalid --configuration input: {exc}",
+                error_code="VALIDATION_ERROR",
+            )
+            raise typer.Exit(code=2) from None
+
+    if configuration_file:
+        try:
+            config_dict = json.loads(configuration_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            formatter.error(
+                message=f"Invalid JSON in {configuration_file}: {exc}",
+                error_code="VALIDATION_ERROR",
+            )
+            raise typer.Exit(code=2) from None
+
+    # --- Parse --set values ---------------------------------------------------
+    parsed_sets: list[tuple[str, object]] | None = None
+    if set_values:
+        parsed_sets = []
+        for item in set_values:
+            if "=" not in item:
+                formatter.error(
+                    message=f"Invalid --set format: '{item}'. Expected PATH=VALUE.",
+                    error_code="VALIDATION_ERROR",
+                )
+                raise typer.Exit(code=2) from None
+            path, _, raw_value = item.partition("=")
+            parsed_sets.append((path.strip(), _parse_set_value(raw_value.strip())))
+
+    # --set implies merge
+    effective_merge = merge or bool(parsed_sets)
 
     try:
         result = service.update_config(
@@ -373,6 +493,10 @@ def config_update(
             config_id=config_id,
             name=name,
             description=description,
+            configuration=config_dict,
+            set_paths=parsed_sets,
+            merge=effective_merge,
+            dry_run=dry_run,
             branch_id=branch,
         )
     except ConfigError as exc:
@@ -385,6 +509,21 @@ def config_update(
             retryable=exc.retryable,
         )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    # --- Output ---------------------------------------------------------------
+    if result.get("dry_run"):
+        changes = result.get("changes", [])
+        if formatter.json_mode:
+            formatter.output(result)
+        else:
+            if not changes:
+                formatter.success("No changes detected.")
+            else:
+                formatter.console.print(f"\n[bold]Dry-run: {len(changes)} change(s)[/bold]\n")
+                for change in changes:
+                    formatter.console.print(f"  {change}")
+                formatter.console.print()
+        return
 
     if formatter.json_mode:
         formatter.output(result)

@@ -85,6 +85,44 @@ kbagent looks for configuration in this order:
 
 Use `kbagent init` to create a local `.kbagent/` workspace for per-directory isolation.
 
+## config update vs MCP update_config
+
+For updating configuration content, prefer `kbagent config update` over MCP's `update_config` tool:
+
+| Feature | CLI `config update` | MCP `update_config` |
+|---------|--------------------|--------------------|
+| Path reference | Configuration root (`parameters.db.host`) | Relative to `parameters` (`db.host`) |
+| Deep merge | `--merge` preserves all sibling keys | Must use correct path or risk data loss |
+| Dry-run preview | `--dry-run` shows diff without applying | Not available |
+| Performance | ~1s (direct API call) | ~3-4s (MCP subprocess overhead) |
+| Input source | Inline JSON, `@file.json`, stdin (`-`) | Inline JSON only |
+
+**Key difference**: CLI paths start from the configuration root. MCP paths are relative to
+the `parameters` object. Using `path: "parameters.tables"` in MCP actually resolves to
+`parameters.parameters.tables` (double nesting), which causes confusing failures.
+
+**When to use MCP's `update_config`**: Only for `str_replace` and `list_append` operations
+which are not available in the CLI command. For `set` operations, always prefer CLI.
+
+**Examples:**
+```bash
+# Set a single nested value (--set implies merge)
+kbagent --json config update --project P --component-id C --config-id ID \
+  --set "parameters.db.host=new-host.example.com"
+
+# Deep-merge a partial JSON (preserves all siblings)
+kbagent --json config update --project P --component-id C --config-id ID \
+  --configuration '{"parameters": {"tables": {"new": "data"}}}' --merge
+
+# Preview changes before applying
+kbagent --json config update --project P --component-id C --config-id ID \
+  --set "parameters.config.debug=false" --dry-run
+
+# Update from a file
+kbagent --json config update --project P --component-id C --config-id ID \
+  --configuration-file updated-config.json --merge
+```
+
 ## Batch size limits for update_sql_transformation
 
 When using `update_sql_transformation` with `str_replace` operations, **limit batches

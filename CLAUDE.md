@@ -55,6 +55,7 @@ src/keboola_agent_cli/
   __main__.py           # python -m support
   cli.py                # Typer root app, global options, subcommand wiring
   constants.py          # Shared constants (retry params, timeouts, defaults)
+  json_utils.py         # Deep-merge, set_nested_value, compute_diff utilities
   http_base.py          # BaseHttpClient - shared HTTP foundation for both clients
   client.py             # LAYER 3: HTTP client (Storage API + Queue API)
   manage_client.py      # LAYER 3: HTTP client (Manage API, X-KBC-ManageApiToken)
@@ -115,6 +116,8 @@ tests/
   test_org_service.py      # Org service tests (slugify, setup, idempotency)
   test_workspace_service.py # Workspace service tests (CRUD, query, from-transformation)
   test_workspace_cli.py    # Workspace CLI tests via CliRunner
+  test_json_utils.py       # Deep-merge and nested-path utility tests
+  test_config_update.py    # Config update with configuration content (merge, set, dry-run)
   test_doctor_service.py   # Doctor service tests
   test_http_base.py        # BaseHttpClient tests
   test_helpers.py          # Command helpers tests
@@ -237,6 +240,7 @@ kbagent project refresh --all [--dry-run] [--force] [--yes] [--token-description
 kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID]
 kbagent config detail --project NAME --component-id ID --config-id ID [--branch ID]
 kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [--ignore-case] [--regex] [--branch ID]
+kbagent config update --project NAME --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--dry-run] [--branch ID]
 
 kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
 kbagent job detail --project NAME --job-id ID

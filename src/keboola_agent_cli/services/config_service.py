@@ -4,10 +4,12 @@ Orchestrates multi-project configuration retrieval in parallel, filtering,
 aggregation, and full-text search without knowing about CLI or HTTP details.
 """
 
+import json
 import re
 from typing import Any
 
 from ..errors import KeboolaApiError
+from ..json_utils import compute_diff, deep_merge, set_nested_value
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -242,9 +244,13 @@ class ConfigService(BaseService):
         config_id: str,
         name: str | None = None,
         description: str | None = None,
+        configuration: dict[str, Any] | None = None,
+        set_paths: list[tuple[str, Any]] | None = None,
+        merge: bool = False,
+        dry_run: bool = False,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """Update a configuration's name and/or description.
+        """Update a configuration's metadata and/or content.
 
         Args:
             alias: Project alias.
@@ -252,36 +258,89 @@ class ConfigService(BaseService):
             config_id: The configuration ID to update.
             name: New name (if None, not changed).
             description: New description (if None, not changed).
+            configuration: Full configuration dict to set/merge.
+            set_paths: List of (path, value) tuples for targeted updates
+                       (e.g. ``[("parameters.tables", {...})]``).
+            merge: If True, deep-merge *configuration* or *set_paths* into
+                   the existing config instead of replacing.  When using
+                   *set_paths* merge is always implied.
+            dry_run: If True, compute and return the diff without applying.
             branch_id: If set, update in a specific dev branch.
                        If None, uses the project's active branch (if any).
 
         Returns:
             Dict with the updated configuration from the API.
+            When *dry_run* is True the dict contains ``"dry_run": True``
+            and a ``"changes"`` list instead of the API response.
 
         Raises:
             ConfigError: If the alias is not found.
             KeboolaApiError: If the API call fails.
         """
-        if name is None and description is None:
+        has_content = configuration is not None or bool(set_paths)
+        has_metadata = name is not None or description is not None
+
+        if not has_content and not has_metadata:
             raise KeboolaApiError(
                 status_code=400,
                 error_code="VALIDATION_ERROR",
-                message="At least one of --name or --description must be provided.",
+                message=(
+                    "At least one of --name, --description, --configuration, "
+                    "--configuration-file, or --set must be provided."
+                ),
             )
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
-
         effective_branch_id = branch_id or project.active_branch_id
 
         client = self._client_factory(project.stack_url, project.token)
         try:
+            final_config: dict[str, Any] | None = None
+
+            if has_content:
+                final_config = self._resolve_configuration(
+                    client=client,
+                    component_id=component_id,
+                    config_id=config_id,
+                    configuration=configuration,
+                    set_paths=set_paths,
+                    merge=merge,
+                    branch_id=effective_branch_id,
+                )
+
+            if dry_run:
+                current = client.get_config_detail(
+                    component_id, config_id, branch_id=effective_branch_id
+                )
+                old_cfg = current.get("configuration", {})
+                new_cfg = final_config if final_config is not None else old_cfg
+                changes = compute_diff(old_cfg, new_cfg)
+                return {
+                    "dry_run": True,
+                    "project_alias": alias,
+                    "component_id": component_id,
+                    "config_id": config_id,
+                    "branch_id": effective_branch_id,
+                    "changes": changes,
+                    "old_configuration": old_cfg,
+                    "new_configuration": new_cfg,
+                }
+
+            change_parts = []
+            if has_metadata:
+                change_parts.append("metadata")
+            if has_content:
+                change_parts.append("configuration")
+            change_desc = f"Updated {' + '.join(change_parts)} via kbagent config update"
+
             result = client.update_config(
                 component_id=component_id,
                 config_id=config_id,
                 name=name,
                 description=description,
-                change_description="Updated via kbagent config update",
+                configuration=final_config,
+                change_description=change_desc,
                 branch_id=effective_branch_id,
             )
         finally:
@@ -290,6 +349,46 @@ class ConfigService(BaseService):
         result["project_alias"] = alias
         result["branch_id"] = effective_branch_id
         return result
+
+    def _resolve_configuration(
+        self,
+        client: Any,
+        component_id: str,
+        config_id: str,
+        configuration: dict[str, Any] | None,
+        set_paths: list[tuple[str, Any]] | None,
+        merge: bool,
+        branch_id: int | None,
+    ) -> dict[str, Any]:
+        """Build the final configuration dict by merging/setting paths.
+
+        When *merge* is True or *set_paths* are given, the current
+        configuration is fetched from the API and changes are applied
+        on top of it (deep-merge for dicts, replace for scalars/lists).
+        """
+        needs_current = merge or bool(set_paths)
+
+        if needs_current:
+            current_detail = client.get_config_detail(component_id, config_id, branch_id=branch_id)
+            current_cfg: dict[str, Any] = current_detail.get("configuration", {})
+            if isinstance(current_cfg, str):
+                current_cfg = json.loads(current_cfg)
+        else:
+            current_cfg = {}
+
+        if set_paths:
+            result = current_cfg
+            for path, value in set_paths:
+                result = set_nested_value(result, path, value)
+            if configuration:
+                result = deep_merge(result, configuration)
+            return result
+
+        if merge and configuration:
+            return deep_merge(current_cfg, configuration)
+
+        # Full replace (no merge, no set_paths)
+        return configuration if configuration is not None else current_cfg
 
     def delete_config(
         self,

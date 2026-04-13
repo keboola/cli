@@ -90,8 +90,11 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent config detail --project NAME --component-id ID --config-id ID [--branch ID]
     Full config detail including parameters and rows. Branch-aware.
 
-  kbagent config update --project NAME --component-id ID --config-id ID [--name N] [--description D] [--branch ID]
-    Update config name/description. Targets active dev branch if set.
+  kbagent config update --project NAME --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--dry-run] [--branch ID]
+    Update config metadata and/or configuration content. --set targets a
+    nested key (e.g. parameters.db.host=new-host). --merge deep-merges into
+    existing config (preserves sibling keys). --dry-run previews changes.
+    Paths are always relative to the configuration root.
 
   kbagent config delete --project NAME --component-id ID --config-id ID [--branch ID]
     Delete a configuration. Branch-aware.
