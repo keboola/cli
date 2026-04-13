@@ -8,6 +8,14 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.18.5": [
+        "New: --hint client|service flag -- generate Python code for any CLI command (#153)",
+        "New: kbagent as Python SDK -- import KeboolaClient or service layer in your scripts",
+        "New: 47 commands with hint support (config, storage, job, branch, workspace, sharing, tool...)",
+        "Security: escape parameter values in generated code to prevent code injection (CWE-94)",
+        "UX: commands without hints show clear 'no hint available' message",
+        "Docs: programming-with-cli.md reference guide for SDK usage",
+    ],
     "0.18.4": [
         "New: Storage Files commands -- files, file-detail, file-upload, file-download, file-tag, file-delete (#134)",
         "New: load-file -- import an uploaded Storage File into a table (#134)",
