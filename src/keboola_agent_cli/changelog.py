@@ -8,6 +8,13 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.18.6": [
+        "New: config update --set PATH=VALUE -- set nested config keys without losing siblings (#156)",
+        "New: config update --merge -- deep-merge partial JSON into existing configuration (#156)",
+        "New: config update --dry-run -- preview changes before applying (#156)",
+        "New: config update --configuration / --configuration-file -- update full config content (#156)",
+        "Perf: 3-4x faster than MCP update_config (direct API, no subprocess overhead)",
+    ],
     "0.18.5": [
         "New: --hint client|service flag -- generate Python code for any CLI command (#153)",
         "New: kbagent as Python SDK -- import KeboolaClient or service layer in your scripts",
