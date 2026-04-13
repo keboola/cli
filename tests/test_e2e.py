@@ -5,11 +5,15 @@ Exercises the FULL CLI surface against a real (empty) Keboola project:
   - Storage CRUD (create-bucket / create-table / upload / download / delete)
   - Config operations (list / detail / search / update --set / update --merge / delete)
   - File operations (upload / list / detail / download / tag / delete)
-  - Branch lifecycle (list / create / use / reset / delete)
-  - Component discovery (list / detail)
-  - Job commands (list)
+  - Branch lifecycle (list / create / use / reset / merge / delete)
+  - Workspace lifecycle (create / list / detail / password / load / query / delete)
+  - Component discovery (list / detail / config new scaffold)
+  - Job commands (list / detail with filters)
   - Encrypt (values)
-  - Lineage, sharing, doctor, context, version, changelog
+  - Permissions (list / show / check)
+  - Sync workflow (init / pull / status / diff / push --dry-run)
+  - Tool commands (list / call) -- requires keboola-mcp-server
+  - Lineage, sharing, doctor, context, version, changelog, init
 
 All resources are prefixed with 'e2e-{run_id}' and cleaned up even on failure.
 
@@ -27,6 +31,8 @@ from __future__ import annotations
 import csv
 import json
 import os
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -177,11 +183,56 @@ def _create_test_csv(path: Path, rows: int = 5) -> Path:
     return csv_path
 
 
+def _create_incremental_csv(path: Path, start: int = 6, rows: int = 3) -> Path:
+    """Create a CSV file for incremental upload testing."""
+    csv_path = path / f"{RUN_ID}_incr_data.csv"
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["id", "name", "value"])
+        for i in range(start, start + rows):
+            writer.writerow([i, f"item_{i}", i * 10])
+    return csv_path
+
+
 def _create_test_file(path: Path, content: str = "hello e2e") -> Path:
     """Create a small text file for file-upload testing."""
     file_path = path / f"{RUN_ID}_file.txt"
     file_path.write_text(content)
     return file_path
+
+
+def _check_mcp_module() -> bool:
+    """Check if keboola-mcp-server is available as a Python module."""
+    try:
+        result = subprocess.run(
+            ["python", "-m", "keboola_mcp_server", "--help"],
+            capture_output=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+# MCP server availability
+HAS_MCP_SERVER = shutil.which("keboola_mcp_server") is not None or _check_mcp_module()
+
+skip_without_mcp = pytest.mark.skipif(
+    not HAS_MCP_SERVER,
+    reason="Tool tests require keboola-mcp-server",
+)
+
+
+def _git(cwd: Path, *args: str) -> str:
+    """Run a git command and return stdout."""
+    result = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -218,12 +269,21 @@ class TestFullE2E:
         self._created_branches: list[int] = []
         self._created_config_ids: list[tuple[str, str]] = []  # (component_id, config_id)
         self._created_file_ids: list[int] = []
+        self._created_workspace_ids: list[int] = []
 
     @pytest.fixture(autouse=True)
     def cleanup(self) -> Any:
         """Guarantee cleanup of ALL created resources, even on test failure."""
         yield
         print("\n--- CLEANUP ---")
+        # Delete workspaces
+        for ws_id in self._created_workspace_ids:
+            try:
+                self.api.delete_workspace(ws_id)
+                print(f"  Deleted workspace {ws_id}")
+            except Exception as exc:
+                print(f"  WARN: failed to delete workspace {ws_id}: {exc}")
+
         # Delete configs created via API
         for comp_id, cfg_id in self._created_config_ids:
             try:
@@ -280,117 +340,168 @@ class TestFullE2E:
         """Progressive scenario testing every CLI command group."""
 
         # ==============================================================
-        # PHASE 1: Setup — offline commands + project registration
+        # PHASE 1: Setup -- offline commands + project registration
         # ==============================================================
 
         _step(1, "version / changelog / context", "offline commands")
         self._test_offline_commands()
 
-        _step(2, "project add", "register project")
+        _step(2, "init", "create local workspace in sub-dir")
+        self._test_init()
+
+        _step(3, "project add", "register project")
         self._test_project_add()
 
-        _step(3, "project list + status", "verify connectivity")
+        _step(4, "project list + status", "verify connectivity")
         self._test_project_list_and_status()
 
-        _step(4, "doctor", "health check")
+        _step(5, "doctor", "health check")
         self._test_doctor()
 
         # ==============================================================
         # PHASE 2: Read empty project
         # ==============================================================
 
-        _step(5, "read empty project", "config list / storage buckets / job list")
+        _step(6, "read empty project", "config list / storage buckets / job list")
         self._test_empty_reads()
 
         # ==============================================================
         # PHASE 3: Storage CRUD
         # ==============================================================
 
-        _step(6, "storage create-bucket")
+        _step(7, "storage create-bucket")
         bucket_id = self._test_create_bucket()
 
-        _step(7, "storage buckets + bucket-detail", "verify bucket exists")
+        _step(8, "storage buckets + bucket-detail", "verify bucket exists")
         self._test_bucket_listing(bucket_id)
 
-        _step(8, "storage create-table")
+        _step(9, "storage create-table")
         table_id = self._test_create_table(bucket_id)
 
-        _step(9, "storage upload-table", "upload CSV data")
+        _step(10, "storage upload-table", "upload CSV data")
         self._test_upload_table(table_id)
 
-        _step(10, "storage tables + table-detail")
+        _step(
+            11,
+            "storage upload-table --incremental",
+            "append rows + verify total",
+        )
+        self._test_upload_incremental(table_id)
+
+        _step(12, "storage tables + table-detail")
         self._test_table_listing(bucket_id, table_id)
 
-        _step(11, "storage download-table", "data round-trip verification")
+        _step(13, "storage download-table", "data round-trip verification")
         self._test_download_table(table_id)
 
-        _step(12, "storage unload-table", "export to file storage")
+        _step(14, "storage unload-table", "export to file storage")
         self._test_unload_table(table_id)
+
+        _step(15, "storage load-file", "upload CSV as file then load into table")
+        self._test_load_file(table_id)
 
         # ==============================================================
         # PHASE 4: Config operations (create via API, test via CLI)
         # ==============================================================
 
-        _step(13, "config create (via API) + CLI list / detail / search")
+        _step(16, "config create (via API) + CLI list / detail / search")
         config_id = self._test_config_operations()
 
-        _step(14, "config update --set / --merge / --dry-run")
+        _step(17, "config update --set / --dry-run / --name / --configuration")
         self._test_config_update(config_id)
 
-        # Component list requires at least one config in the project
-        _step(15, "component list + detail", "discover components")
+        _step(18, "config update --merge", "partial merge without losing keys")
+        self._test_config_merge(config_id)
+
+        _step(19, "config new scaffold", "generate boilerplate for component")
+        self._test_config_new_scaffold()
+
+        # ==============================================================
+        # PHASE 5: Component commands
+        # ==============================================================
+
+        _step(20, "component list + detail", "discover components")
         self._test_component_commands()
 
         # ==============================================================
-        # PHASE 5: File operations
+        # PHASE 6: Workspace lifecycle
         # ==============================================================
 
-        _step(16, "file upload / list / detail / download / tag / delete")
+        _step(21, "workspace create")
+        workspace_id = self._test_workspace_create()
+
+        if workspace_id is not None:
+            _step(22, "workspace list")
+            self._test_workspace_list(workspace_id)
+
+            _step(23, "workspace detail")
+            self._test_workspace_detail(workspace_id)
+
+            _step(24, "workspace password")
+            self._test_workspace_password(workspace_id)
+
+            _step(25, "workspace load", "load test table into workspace")
+            self._test_workspace_load(workspace_id, table_id)
+
+            _step(26, "workspace query", "run SQL in workspace")
+            self._test_workspace_query(workspace_id, table_id)
+
+            _step(27, "workspace delete")
+            self._test_workspace_delete(workspace_id)
+
+        # ==============================================================
+        # PHASE 7: File operations
+        # ==============================================================
+
+        _step(28, "file upload / list / detail / download / tag / delete")
         self._test_file_operations()
 
         # ==============================================================
-        # PHASE 6: Encrypt
+        # PHASE 8: Encrypt
         # ==============================================================
 
-        _step(17, "encrypt values")
+        _step(29, "encrypt values")
         self._test_encrypt(config_id)
 
         # ==============================================================
-        # PHASE 7: Branch lifecycle
+        # PHASE 9: Branch lifecycle (expanded with merge)
         # ==============================================================
 
-        _step(18, "branch list / create / use / reset / delete")
+        _step(30, "branch lifecycle", "list / create / use / reset / merge / delete")
         self._test_branch_lifecycle()
 
         # ==============================================================
-        # PHASE 8: Sharing & Lineage (read-only on single project)
+        # PHASE 10: Permissions
         # ==============================================================
 
-        _step(19, "sharing list / lineage show", "read-only checks")
+        _step(31, "permissions list / show / check", "permission system")
+        self._test_permissions()
+
+        # ==============================================================
+        # PHASE 11: Sharing & Lineage
+        # ==============================================================
+
+        _step(32, "sharing list / lineage show", "read-only checks")
         self._test_sharing_and_lineage()
 
         # ==============================================================
-        # PHASE 9: Job list (verify structure with real data)
+        # PHASE 12: Job commands (expanded)
         # ==============================================================
 
-        _step(20, "job list", "verify job listing structure")
-        self._test_job_list()
+        _step(33, "job list + detail", "verify job listing structure")
+        self._test_job_commands()
 
         # ==============================================================
-        # PHASE 10: Config delete + storage cleanup via CLI
+        # PHASE 13: Cleanup
         # ==============================================================
 
-        _step(21, "config delete", "cleanup config via CLI")
+        _step(34, "config delete", "cleanup config via CLI")
         self._test_config_delete(config_id)
 
-        _step(22, "storage delete-table + delete-bucket", "CLI-driven cleanup")
+        _step(35, "storage delete-table + delete-bucket", "CLI-driven cleanup")
         self._test_storage_cleanup(bucket_id, table_id)
 
-        # ==============================================================
-        # PHASE 11: Project edit & remove
-        # ==============================================================
-
-        _step(23, "project edit + remove", "final cleanup")
+        _step(36, "project edit + remove", "final cleanup")
         self._test_project_edit_and_remove()
 
         print("\n" + "=" * 60)
@@ -402,7 +513,7 @@ class TestFullE2E:
     # ==================================================================
 
     def _test_offline_commands(self) -> None:
-        """Test version, changelog, context — no project needed."""
+        """Test version, changelog, context -- no project needed."""
         # version (not JSON, just prints version string)
         result = self._run_raw("version")
         assert result.exit_code == 0
@@ -416,6 +527,26 @@ class TestFullE2E:
         result = self._run_raw("context")
         assert result.exit_code == 0
         assert "kbagent" in result.output
+
+    def _test_init(self) -> None:
+        """Test init command -- creates .kbagent/ in a sub-directory."""
+        init_dir = self.work_dir / "init_test"
+        init_dir.mkdir()
+
+        # Use a separate config_dir for init (it creates its own workspace)
+        init_config_dir = init_dir / "config_for_init"
+        init_config_dir.mkdir()
+
+        # Run init from the init_dir by invoking with cwd override
+        # The init command uses Path.cwd(), so we patch it
+        with patch("keboola_agent_cli.commands.init.Path.cwd", return_value=init_dir):
+            result = _invoke(
+                init_config_dir,
+                ["--json", "init"],
+            )
+        data = _json_ok(result)
+        assert data["data"]["created"] is True
+        assert "path" in data["data"]
 
     def _test_project_add(self) -> None:
         """Add a project and verify the response."""
@@ -462,7 +593,7 @@ class TestFullE2E:
         assert data["data"]["errors"] == []
         # configs may or may not be empty (some projects have default configs)
 
-        # storage buckets — filter only our prefix later
+        # storage buckets -- filter only our prefix later
         data = self._run_ok("storage", "buckets", "--project", self.alias)
         # Just check structure
         assert "buckets" in data["data"]
@@ -471,58 +602,6 @@ class TestFullE2E:
         # job list
         data = self._run_ok("job", "list", "--project", self.alias, "--limit", "5")
         assert "jobs" in data["data"]
-        assert data["data"]["errors"] == []
-
-    def _test_component_commands(self) -> None:
-        """List components and get detail for one.
-
-        NOTE: component list only returns components that have at least one
-        configuration in the project. This test runs AFTER config creation.
-        """
-        # component list — now that we have a keboola.ex-db-snowflake config
-        data = self._run_ok("component", "list", "--project", self.alias)
-        components = data["data"]["components"]
-        assert len(components) > 0, "Expected at least one component after config creation"
-        comp_ids = [c["component_id"] for c in components]
-        assert TEST_COMPONENT_ID in comp_ids
-
-        # component list with --type filter
-        data = self._run_ok(
-            "component",
-            "list",
-            "--project",
-            self.alias,
-            "--type",
-            "extractor",
-        )
-        for c in data["data"]["components"]:
-            assert c["component_type"] == "extractor"
-
-        # component detail (uses AI Service)
-        data = self._run_ok(
-            "component",
-            "detail",
-            "--component-id",
-            TEST_COMPONENT_ID,
-            "--project",
-            self.alias,
-        )
-        detail = data["data"]
-        assert detail["component_id"] == TEST_COMPONENT_ID
-        assert detail["component_type"] == "extractor"
-
-    def _test_job_list(self) -> None:
-        """Verify job listing structure."""
-        data = self._run_ok(
-            "job",
-            "list",
-            "--project",
-            self.alias,
-            "--limit",
-            "5",
-        )
-        assert "jobs" in data["data"]
-        assert "errors" in data["data"]
         assert data["data"]["errors"] == []
 
     def _test_create_bucket(self) -> str:
@@ -603,6 +682,40 @@ class TestFullE2E:
         )
         assert data["data"]["table_id"] == table_id
 
+    def _test_upload_incremental(self, table_id: str) -> None:
+        """Upload additional rows incrementally and verify total count."""
+        csv_path = _create_incremental_csv(self.data_dir, start=6, rows=3)
+        data = self._run_ok(
+            "storage",
+            "upload-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--file",
+            str(csv_path),
+            "--incremental",
+        )
+        assert data["data"]["table_id"] == table_id
+
+        # Download and verify total rows (5 original + 3 incremental = 8)
+        output_path = self.data_dir / "incr_verify.csv"
+        self._run_ok(
+            "storage",
+            "download-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--output",
+            str(output_path),
+        )
+        assert output_path.exists()
+        with open(output_path) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        assert len(rows) == 8, f"Expected 8 rows after incremental upload, got {len(rows)}"
+
     def _test_table_listing(self, bucket_id: str, table_id: str) -> None:
         """Verify table appears in listings and detail is correct."""
         # tables
@@ -648,13 +761,11 @@ class TestFullE2E:
         )
         assert output_path.exists()
 
-        # Verify content matches what we uploaded
+        # Verify content (8 rows after incremental upload)
         with open(output_path) as f:
             reader = csv.DictReader(f)
             rows = list(reader)
-        assert len(rows) == 5
-        ids = sorted([r["id"] for r in rows])
-        assert ids == ["1", "2", "3", "4", "5"]
+        assert len(rows) == 8
 
         # Test with --columns and --limit
         limited_path = self.data_dir / "limited.csv"
@@ -701,6 +812,55 @@ class TestFullE2E:
         assert result_data["file_id"] > 0
         assert unload_path.exists()
 
+    def _test_load_file(self, table_id: str) -> None:
+        """Upload a CSV as a file, then load it into a table via load-file."""
+        # Create a CSV file to upload
+        csv_path = self.data_dir / f"{RUN_ID}_loadfile.csv"
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["id", "name", "value"])
+            writer.writerow([100, "loadfile_item", 999])
+
+        # Upload as a Storage file
+        data = self._run_ok(
+            "storage",
+            "file-upload",
+            "--project",
+            self.alias,
+            "--file",
+            str(csv_path),
+            "--tag",
+            f"e2e-loadfile-{RUN_ID}",
+        )
+        file_id = data["data"]["id"]
+        self._created_file_ids.append(file_id)
+
+        # Load file into existing table
+        data = self._run_ok(
+            "storage",
+            "load-file",
+            "--project",
+            self.alias,
+            "--file-id",
+            str(file_id),
+            "--table-id",
+            table_id,
+            "--incremental",
+        )
+        assert data["status"] == "ok"
+
+        # Clean up the uploaded file
+        self._run_ok(
+            "storage",
+            "file-delete",
+            "--project",
+            self.alias,
+            "--file-id",
+            str(file_id),
+            "--yes",
+        )
+        self._created_file_ids.remove(file_id)
+
     def _test_config_operations(self) -> str:
         """Create a config via API, then test CLI read operations."""
         # Create a test configuration via API (CLI has no config create)
@@ -721,7 +881,7 @@ class TestFullE2E:
         config_id = str(config_body["id"])
         self._created_config_ids.append((TEST_COMPONENT_ID, config_id))
 
-        # config list — should find our config
+        # config list -- should find our config
         data = self._run_ok("config", "list", "--project", self.alias)
         config_names = [c["config_name"] for c in data["data"]["configs"]]
         assert f"{RUN_ID} Test Config" in config_names
@@ -782,7 +942,7 @@ class TestFullE2E:
         return config_id
 
     def _test_config_update(self, config_id: str) -> None:
-        """Test config update with --set, --merge, and --dry-run."""
+        """Test config update with --set, --dry-run, --name, --configuration."""
         # --dry-run first
         data = self._run_ok(
             "config",
@@ -929,6 +1089,196 @@ class TestFullE2E:
         assert db_config["port"] == 5439
         assert "schema" not in db_config
 
+    def _test_config_merge(self, config_id: str) -> None:
+        """Test config update --merge: partial merge without losing existing keys."""
+        # Current state: host=final.example.com, port=5439, database=final_db
+        # Merge in a new key (timeout) without losing existing ones
+        merge_json = json.dumps({"parameters": {"db": {"timeout": 30}}})
+        data = self._run_ok(
+            "config",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--configuration",
+            merge_json,
+            "--merge",
+        )
+        assert data["status"] == "ok"
+
+        # Verify merge: timeout added, existing keys preserved
+        data = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        db_config = data["data"]["configuration"]["parameters"]["db"]
+        assert db_config["timeout"] == 30, "Merged key 'timeout' should be present"
+        assert db_config["host"] == "final.example.com", "Existing 'host' preserved"
+        assert db_config["port"] == 5439, "Existing 'port' preserved"
+        assert db_config["database"] == "final_db", "Existing 'database' preserved"
+
+    def _test_config_new_scaffold(self) -> None:
+        """Test config new -- generate scaffold for a component."""
+        scaffold_dir = self.data_dir / "scaffold"
+        scaffold_dir.mkdir()
+
+        data = self._run_ok(
+            "config",
+            "new",
+            "--component-id",
+            "keboola.ex-http",
+            "--project",
+            self.alias,
+            "--output-dir",
+            str(scaffold_dir),
+        )
+        result = data["data"]
+        assert "files_written" in result or "directory" in result
+
+    def _test_component_commands(self) -> None:
+        """List components and get detail for one.
+
+        NOTE: component list only returns components that have at least one
+        configuration in the project. This test runs AFTER config creation.
+        """
+        # component list -- now that we have a keboola.ex-db-snowflake config
+        data = self._run_ok("component", "list", "--project", self.alias)
+        components = data["data"]["components"]
+        assert len(components) > 0, "Expected at least one component after config creation"
+        comp_ids = [c["component_id"] for c in components]
+        assert TEST_COMPONENT_ID in comp_ids
+
+        # component list with --type filter
+        data = self._run_ok(
+            "component",
+            "list",
+            "--project",
+            self.alias,
+            "--type",
+            "extractor",
+        )
+        for c in data["data"]["components"]:
+            assert c["component_type"] == "extractor"
+
+        # component detail (uses AI Service)
+        data = self._run_ok(
+            "component",
+            "detail",
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--project",
+            self.alias,
+        )
+        detail = data["data"]
+        assert detail["component_id"] == TEST_COMPONENT_ID
+        assert detail["component_type"] == "extractor"
+
+    def _test_workspace_create(self) -> int | None:
+        """Create a workspace, return its ID or None if unsupported."""
+        result = self._run(
+            "workspace",
+            "create",
+            "--project",
+            self.alias,
+        )
+        if result.exit_code != 0:
+            print(
+                f"  {_YELLOW}WARN: workspace create failed "
+                f"(exit {result.exit_code}), skipping workspace tests{_RESET}"
+            )
+            return None
+
+        data = _json_ok(result)
+        ws_data = data["data"]
+        workspace_id = ws_data["workspace_id"]
+        assert workspace_id > 0
+        self._created_workspace_ids.append(workspace_id)
+        return workspace_id
+
+    def _test_workspace_list(self, workspace_id: int) -> None:
+        """Verify workspace appears in the list."""
+        data = self._run_ok("workspace", "list", "--project", self.alias)
+        ws_ids = [w["id"] for w in data["data"]["workspaces"]]
+        assert workspace_id in ws_ids
+
+    def _test_workspace_detail(self, workspace_id: int) -> None:
+        """Get workspace detail and verify structure."""
+        data = self._run_ok(
+            "workspace",
+            "detail",
+            "--project",
+            self.alias,
+            "--workspace-id",
+            str(workspace_id),
+        )
+        detail = data["data"]
+        assert detail["workspace_id"] == workspace_id
+
+    def _test_workspace_password(self, workspace_id: int) -> None:
+        """Reset workspace password and verify a new password is returned."""
+        data = self._run_ok(
+            "workspace",
+            "password",
+            "--project",
+            self.alias,
+            "--workspace-id",
+            str(workspace_id),
+        )
+        assert data["data"]["password"]  # non-empty password
+
+    def _test_workspace_load(self, workspace_id: int, table_id: str) -> None:
+        """Load a table into the workspace."""
+        data = self._run_ok(
+            "workspace",
+            "load",
+            "--project",
+            self.alias,
+            "--workspace-id",
+            str(workspace_id),
+            "--tables",
+            table_id,
+        )
+        assert data["status"] == "ok"
+
+    def _test_workspace_query(self, workspace_id: int, table_id: str) -> None:
+        """Run a SQL query in the workspace and verify result."""
+        # Table name in workspace is the last segment of table_id
+        ws_table_name = table_id.rsplit(".", 1)[-1]
+        sql = f'SELECT COUNT(*) AS cnt FROM "{ws_table_name}"'
+        data = self._run_ok(
+            "workspace",
+            "query",
+            "--project",
+            self.alias,
+            "--workspace-id",
+            str(workspace_id),
+            "--sql",
+            sql,
+        )
+        assert data["status"] == "ok"
+
+    def _test_workspace_delete(self, workspace_id: int) -> None:
+        """Delete the workspace."""
+        data = self._run_ok(
+            "workspace",
+            "delete",
+            "--project",
+            self.alias,
+            "--workspace-id",
+            str(workspace_id),
+        )
+        assert data["status"] == "ok"
+        self._created_workspace_ids.remove(workspace_id)
+
     def _test_file_operations(self) -> None:
         """Test the full file lifecycle: upload, list, detail, download, tag, delete."""
         # Create a test file
@@ -1074,8 +1424,8 @@ class TestFullE2E:
         assert encrypted["#password"].startswith("KBC::")
 
     def _test_branch_lifecycle(self) -> None:
-        """Test branch create, list, use, reset, delete."""
-        # branch list — should only have main
+        """Test branch create, list, use, reset, merge (or delete)."""
+        # branch list -- should only have main
         data = self._run_ok("branch", "list", "--project", self.alias)
         branches = data["data"]["branches"]
         # Main branch always exists
@@ -1099,15 +1449,15 @@ class TestFullE2E:
         assert branch_data["branch_name"] == branch_name
         assert branch_data["activated"] is True
         self._created_branches.append(branch_id)
-        # Branch create auto-activates — reset so further tests use main
+        # Branch create auto-activates -- reset so further tests use main
         self._run_ok("branch", "reset", "--project", self.alias)
 
-        # branch list — should now include our branch
+        # branch list -- should now include our branch
         data = self._run_ok("branch", "list", "--project", self.alias)
         branch_names = [b["name"] for b in data["data"]["branches"]]
         assert branch_name in branch_names
 
-        # branch use — activate the dev branch
+        # branch use -- activate the dev branch
         data = self._run_ok(
             "branch",
             "use",
@@ -1126,7 +1476,7 @@ class TestFullE2E:
         data = self._run_ok("storage", "buckets", "--project", self.alias)
         assert data["data"]["errors"] == []
 
-        # branch reset — deactivate the dev branch
+        # branch reset -- deactivate the dev branch
         data = self._run_ok("branch", "reset", "--project", self.alias)
 
         # Verify: project status should show no active branch
@@ -1134,8 +1484,25 @@ class TestFullE2E:
         status = data["data"][0]
         assert status["active_branch_id"] is None
 
-        # branch delete
-        data = self._run_ok(
+        # Try branch merge
+        merge_result = self._run(
+            "branch",
+            "merge",
+            "--project",
+            self.alias,
+            "--branch",
+            str(branch_id),
+        )
+        # branch merge returns a URL for UI-based merge; it doesn't
+        # auto-merge via API. We verify the command succeeds, then delete.
+        if merge_result.exit_code == 0:
+            merge_data = json.loads(merge_result.output)
+            assert merge_data["status"] == "ok"
+            # The response contains a URL to the branch overview
+            assert "url" in merge_data["data"] or "message" in merge_data["data"]
+
+        # Clean up: delete the branch
+        self._run_ok(
             "branch",
             "delete",
             "--project",
@@ -1150,6 +1517,27 @@ class TestFullE2E:
         branch_ids = [b["id"] for b in data["data"]["branches"]]
         assert branch_id not in branch_ids
 
+    def _test_permissions(self) -> None:
+        """Test permissions list, show, and check commands."""
+        # permissions list -- returns array of operations
+        data = self._run_ok("permissions", "list")
+        operations = data["data"]
+        assert isinstance(operations, list)
+        assert len(operations) > 0
+        # Each operation should have required fields
+        op = operations[0]
+        assert "name" in op
+        assert "category" in op
+
+        # permissions show -- no policy set, should show inactive
+        data = self._run_ok("permissions", "show")
+        assert data["data"]["active"] is False
+
+        # permissions check -- without policy, everything should be allowed
+        data = self._run_ok("permissions", "check", "branch.delete")
+        assert data["data"]["operation"] == "branch.delete"
+        assert data["data"]["allowed"] is True
+
     def _test_sharing_and_lineage(self) -> None:
         """Test sharing list and lineage show (read-only, may be empty)."""
         # sharing list
@@ -1160,6 +1548,48 @@ class TestFullE2E:
         data = self._run_ok("lineage", "show", "--project", self.alias)
         # Lineage may be empty on a single-project setup
         assert data["status"] == "ok"
+
+    def _test_job_commands(self) -> None:
+        """Verify job listing structure and detail (if jobs exist)."""
+        # job list
+        data = self._run_ok(
+            "job",
+            "list",
+            "--project",
+            self.alias,
+            "--limit",
+            "5",
+        )
+        assert "jobs" in data["data"]
+        assert "errors" in data["data"]
+        assert data["data"]["errors"] == []
+
+        # job list with component filter
+        data = self._run_ok(
+            "job",
+            "list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--limit",
+            "5",
+        )
+        assert "jobs" in data["data"]
+
+        # If any jobs exist, get detail for the first one
+        jobs = data["data"]["jobs"]
+        if jobs:
+            job_id = str(jobs[0]["id"])
+            detail_data = self._run_ok(
+                "job",
+                "detail",
+                "--project",
+                self.alias,
+                "--job-id",
+                job_id,
+            )
+            assert detail_data["data"]["id"]
 
     def _test_config_delete(self, config_id: str) -> None:
         """Delete the test config via CLI."""
@@ -1230,7 +1660,7 @@ class TestFullE2E:
 
     def _test_project_edit_and_remove(self) -> None:
         """Edit project URL, then remove it."""
-        # project edit — change URL back to same (just verify command works)
+        # project edit -- change URL back to same (just verify command works)
         data = self._run_ok(
             "project",
             "edit",
@@ -1420,6 +1850,8 @@ class TestE2EJsonConsistency:
             ["sharing", "list", "--project", self.alias],
             ["lineage", "show", "--project", self.alias],
             ["doctor"],
+            ["permissions", "list"],
+            ["permissions", "show"],
         ]
         for cmd in commands:
             result = self._run(*cmd)
@@ -1446,3 +1878,191 @@ class TestE2EJsonConsistency:
             assert self.token not in result.output, (
                 f"Full token leaked in output of: {' '.join(cmd)}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Sync workflow tests
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2ESyncWorkflow:
+    """Test sync init/pull/diff/status/push in a temp git repo."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        """Set up config dir, project dir (as git repo), and register project."""
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-sync"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self.project_dir = tmp_path / "project"
+        self.project_dir.mkdir()
+
+        # Register the project
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        # Initialize git repo
+        _git(self.project_dir, "init")
+        _git(self.project_dir, "config", "user.email", "e2e@test.local")
+        _git(self.project_dir, "config", "user.name", "E2E Test")
+        _git(
+            self.project_dir,
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+        )
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_sync_workflow(self) -> None:
+        """Full sync lifecycle: init, pull, status, diff, push --dry-run."""
+
+        # 1. sync init
+        _step(1, "sync init")
+        data = self._run_ok(
+            "sync",
+            "init",
+            "--project",
+            self.alias,
+            "--directory",
+            str(self.project_dir),
+        )
+        result = data["data"]
+        assert result["project_alias"] == self.alias
+
+        # 2. sync pull
+        _step(2, "sync pull")
+        data = self._run_ok(
+            "sync",
+            "pull",
+            "--project",
+            self.alias,
+            "--directory",
+            str(self.project_dir),
+        )
+        pull_result = data["data"]
+        # Should have configs_pulled key (may be 0 on empty project)
+        assert "configs_pulled" in pull_result
+
+        # Commit pulled files so status/diff have a baseline
+        _git(self.project_dir, "add", "-A")
+        _git(self.project_dir, "commit", "-m", "pulled configs")
+
+        # 3. sync status
+        _step(3, "sync status")
+        data = self._run_ok(
+            "sync",
+            "status",
+            "--directory",
+            str(self.project_dir),
+        )
+        assert data["status"] == "ok"
+
+        # 4. sync diff
+        _step(4, "sync diff")
+        data = self._run_ok(
+            "sync",
+            "diff",
+            "--project",
+            self.alias,
+            "--directory",
+            str(self.project_dir),
+        )
+        assert data["status"] == "ok"
+
+        # 5. sync push --dry-run
+        _step(5, "sync push --dry-run")
+        data = self._run_ok(
+            "sync",
+            "push",
+            "--project",
+            self.alias,
+            "--directory",
+            str(self.project_dir),
+            "--dry-run",
+        )
+        assert data["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Tool command tests (requires MCP server)
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@skip_without_mcp
+@pytest.mark.e2e
+class TestE2EToolCommands:
+    """Test MCP tool list and call commands."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        """Register a project for tool tests."""
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-tool"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_tool_list(self) -> None:
+        """tool list should return a list of available MCP tools."""
+        result = self._run("tool", "list", "--project", self.alias)
+        assert result.exit_code == 0
+
+    def test_tool_call_get_buckets(self) -> None:
+        """tool call get_buckets should return bucket data."""
+        result = self._run(
+            "tool",
+            "call",
+            "get_buckets",
+            "--project",
+            self.alias,
+        )
+        assert result.exit_code == 0

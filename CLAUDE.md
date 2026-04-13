@@ -124,6 +124,7 @@ tests/
   test_ai_client.py        # AI Service client tests
   test_component_service.py # Component service tests
   test_component_cli.py    # Component CLI tests via CliRunner
+  test_e2e.py              # E2E tests against real API (make test-e2e)
   test_integration.py      # Integration tests (edge cases, linting)
 ```
 
@@ -198,6 +199,8 @@ All three inherit from `BaseHttpClient` (`http_base.py`) which provides shared r
 14. **Protected main branch**: direct pushes to `main` are blocked. Always create a feature branch, commit there, push, create a PR via `gh pr create`, merge via `gh pr merge`, then switch back to main and pull.
 
 15. **Pre-commit checks are mandatory.** Before every `git commit`, run `ruff check` and `ruff format --check` on changed files. A pre-commit hook (`scripts/pre-commit`, install via `make hooks`) does this automatically. **Never commit without passing lint + format.** If using sub-agents that write code, always run `make check` (or at minimum `ruff check src/ tests/ && ruff format . --check`) before committing their output.
+
+16. **E2E test coverage**: Every new CLI command MUST have a corresponding E2E test in `tests/test_e2e.py`. Run `make test-e2e` to verify. E2E tests require `E2E_API_TOKEN` and `E2E_URL` env vars and exercise the full CLI against a real Keboola project.
 
 ## Claude Code Plugin (Marketplace)
 
