@@ -1,9 +1,9 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-mcp sync test test-unit test-integration test-file lint lint-fix format format-check skill-check skill-gen version-sync version-check changelog changelog-check check clean hooks
+.PHONY: help install install-mcp sync test test-unit test-integration test-e2e test-file lint lint-fix format format-check skill-check skill-gen version-sync version-check changelog changelog-check check clean hooks
 
 help: ## Show this help message
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 install: ## Install in development mode (editable)
 	uv pip install -e ".[dev]"
@@ -14,14 +14,17 @@ install-mcp: ## Install Keboola MCP server (required for 'tool' commands)
 sync: ## Sync dependencies from lockfile
 	uv sync
 
-test: ## Run all tests
-	uv run pytest tests/ -v
+test: ## Run all tests (excluding e2e — use test-e2e separately)
+	uv run pytest tests/ -v -m "not e2e"
 
-test-unit: ## Run unit tests only (exclude integration)
-	uv run pytest tests/ -v -m "not integration"
+test-unit: ## Run unit tests only (exclude integration and e2e)
+	uv run pytest tests/ -v -m "not integration and not e2e"
 
 test-integration: ## Run integration tests only
 	uv run pytest tests/ -v -m integration
+
+test-e2e: ## Run E2E tests (E2E_API_TOKEN and E2E_URL required)
+	uv run pytest tests/test_e2e.py -v -s --tb=long
 
 test-file: ## Run a specific test file (FILE=tests/test_cli.py)
 	uv run pytest $(FILE) -v
