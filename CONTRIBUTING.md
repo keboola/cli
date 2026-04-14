@@ -188,22 +188,29 @@ When adding a new command (e.g., `kbagent storage create-foo`), you must update 
 - [ ] **Client method** in `client.py` (or `manage_client.py`) -- HTTP layer
 - [ ] **Service method** in `services/` -- business logic, validation, orchestration
 - [ ] **Command function** in `commands/` -- Typer options, formatter, error handling
-- [ ] **Hint definition** in `hints/definitions/` -- register a `CommandHint` for `--hint` code generation (see existing files for pattern)
-- [ ] **Hint short-circuit** in the command function -- add `if should_hint(ctx): emit_hint(...)` before service call
+- [ ] **`--hint` support** -- every command must support `--hint client` and `--hint service` code generation:
+  - [ ] **Hint definition** in `hints/definitions/` -- register a `CommandHint` with `ClientCall` + `ServiceCall` (see existing files for pattern)
+  - [ ] **Hint short-circuit** in the command function -- add `if should_hint(ctx): emit_hint(...)` **before** the service call
+  - [ ] **Verify** both modes produce valid Python: `kbagent --hint client <command> ...` and `kbagent --hint service <command> ...`
 - [ ] **Permission registration** in `permissions.py` (`OPERATION_REGISTRY` dict)
 - [ ] **Service wiring** in `cli.py` if adding a new service class
 
 ### Documentation changes (mandatory!)
 
-- [ ] **`kbagent context`** -- update `AGENT_CONTEXT` string in `commands/context.py` (this is the primary reference for AI agents)
+- [ ] **`kbagent context`** -- update `AGENT_CONTEXT` string in `commands/context.py` (this is the primary reference for AI agents; if it's missing there, AI agents won't know the command exists)
 - [ ] **SKILL.md** -- run `make skill-gen` to regenerate the decision table (CI has a freshness check that will fail if the generated output doesn't match). **Do not edit SKILL.md by hand** -- the table is auto-generated from CLI command metadata
 - [ ] **CLAUDE.md** -- add command signature to the `## All CLI Commands` section
+- [ ] **Plugin references** -- update `plugins/kbagent/skills/kbagent/references/`:
+  - [ ] **`commands-reference.md`** -- add the new command to the appropriate section (this is a hand-maintained file, NOT auto-generated)
+  - [ ] **New reference file** -- if the command introduces a new workflow or topic area (e.g. a new subcommand group), create a dedicated `<topic>-workflow.md` in the references directory. Existing examples: `workspace-workflow.md`, `branch-workflow.md`, `sync-workflow.md`, `storage-files-workflow.md`
+  - [ ] **`gotchas.md`** -- if the command has non-obvious behavior, response format quirks, or common mistakes, document them here
 - [ ] **`--help` text** -- Typer docstring and option help strings should be clear and complete
 
 ### Tests (mandatory!)
 
 - [ ] **Service-layer tests** -- mock the client, test business logic, edge cases, error propagation
 - [ ] **CLI-layer tests** -- use `CliRunner`, test JSON output, error exit codes
+- [ ] **E2E tests** -- add a test in `tests/test_e2e.py` that exercises the command against a real Keboola project (requires `E2E_API_TOKEN` + `E2E_URL`). Run `make test-e2e` to verify. Every CLI command must have E2E coverage
 - [ ] **Run `make check`** before committing (lint + format + full test suite)
 
 ### UX considerations
