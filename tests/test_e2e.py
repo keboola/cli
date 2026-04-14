@@ -518,16 +518,23 @@ class TestFullE2E:
         self._test_job_commands()
 
         # ==============================================================
-        # PHASE 14: Cleanup
+        # PHASE 14: Storage column delete
         # ==============================================================
 
-        _step(40, "config delete", "cleanup config via CLI")
+        _step(40, "storage delete-column", "dry-run + actual delete + verify")
+        self._test_delete_column(table_id)
+
+        # ==============================================================
+        # PHASE 15: Cleanup
+        # ==============================================================
+
+        _step(41, "config delete", "cleanup config via CLI")
         self._test_config_delete(config_id)
 
-        _step(41, "storage delete-table + delete-bucket", "CLI-driven cleanup")
+        _step(42, "storage delete-table + delete-bucket", "CLI-driven cleanup")
         self._test_storage_cleanup(bucket_id, table_id)
 
-        _step(42, "project edit + remove", "final cleanup")
+        _step(43, "project edit + remove", "final cleanup")
         self._test_project_edit_and_remove()
 
         print("\n" + "=" * 60)
@@ -1870,6 +1877,68 @@ class TestFullE2E:
         assert data["data"]["config_id"] == config_id
         # Remove from cleanup since we deleted via CLI
         self._created_config_ids.remove((TEST_COMPONENT_ID, config_id))
+
+    def _test_delete_column(self, table_id: str) -> None:
+        """Delete a column from a table: dry-run, actual delete, verify."""
+        # Verify the table has 'value' column before we delete it
+        data = self._run_ok(
+            "storage",
+            "table-detail",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )
+        columns_before = data["data"]["columns"]
+        assert "value" in columns_before, f"Expected 'value' column, got {columns_before}"
+
+        # delete-column dry-run
+        data = self._run_ok(
+            "storage",
+            "delete-column",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--column",
+            "value",
+            "--dry-run",
+        )
+        assert data["data"]["dry_run"] is True
+        assert "value" in data["data"]["would_delete"]
+        assert data["data"]["table_id"] == table_id
+
+        # delete-column (actual)
+        data = self._run_ok(
+            "storage",
+            "delete-column",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--column",
+            "value",
+            "--yes",
+        )
+        assert "value" in data["data"]["deleted"]
+        assert data["data"]["failed"] == []
+        assert data["data"]["table_id"] == table_id
+
+        # Verify the column is gone
+        data = self._run_ok(
+            "storage",
+            "table-detail",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )
+        columns_after = data["data"]["columns"]
+        assert "value" not in columns_after, (
+            f"'value' column should be deleted, got {columns_after}"
+        )
+        assert "id" in columns_after
+        assert "name" in columns_after
 
     def _test_storage_cleanup(self, bucket_id: str, table_id: str) -> None:
         """Delete table and bucket via CLI commands."""
