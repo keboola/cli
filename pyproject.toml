@@ -19,6 +19,7 @@ dependencies = [
     "pyyaml>=6",
     "packaging>=23",
     "prompt-toolkit>=3.0",
+    "kai-client>=0.11.0",
 ]
 
 [project.scripts]

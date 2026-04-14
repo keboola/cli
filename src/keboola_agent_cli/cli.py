@@ -15,6 +15,7 @@ from .commands.doctor import doctor_command
 from .commands.encrypt import encrypt_app
 from .commands.init import init_command
 from .commands.job import job_app
+from .commands.kai import kai_app
 from .commands.lineage import lineage_app
 from .commands.org import org_app
 from .commands.permissions import permissions_app
@@ -37,6 +38,7 @@ from .services.config_service import ConfigService
 from .services.doctor_service import DoctorService
 from .services.encrypt_service import EncryptService
 from .services.job_service import JobService
+from .services.kai_service import KaiService
 from .services.lineage_service import LineageService
 from .services.mcp_service import McpService
 from .services.org_service import OrgService
@@ -77,6 +79,7 @@ app.add_typer(job_app, name="job", rich_help_panel=_BROWSE)
 app.add_typer(storage_app, name="storage", rich_help_panel=_BROWSE)
 app.add_typer(sharing_app, name="sharing", rich_help_panel=_BROWSE)
 app.add_typer(lineage_app, name="lineage", rich_help_panel=_BROWSE)
+app.add_typer(kai_app, name="kai", rich_help_panel=_BROWSE)
 
 # -- Development --
 _DEV = "Development"
@@ -186,6 +189,7 @@ def main(
     sync_service = SyncService(config_store=config_store)
     encrypt_service = EncryptService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
+    kai_service = KaiService(config_store=config_store)
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
     version_service = VersionService()
 
@@ -224,6 +228,7 @@ def main(
     ctx.obj["sync_service"] = sync_service
     ctx.obj["encrypt_service"] = encrypt_service
     ctx.obj["workspace_service"] = workspace_service
+    ctx.obj["kai_service"] = kai_service
     ctx.obj["doctor_service"] = doctor_service
     ctx.obj["version_service"] = version_service
 

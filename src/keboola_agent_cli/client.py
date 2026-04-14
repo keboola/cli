@@ -189,6 +189,7 @@ class KeboolaClient(BaseHttpClient):
             project_name=owner.get("name", ""),
             owner_name=owner.get("name", ""),
             default_backend=owner.get("defaultBackend", "snowflake"),
+            features=owner.get("features", []),
         )
 
     def list_components(

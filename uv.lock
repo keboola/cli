@@ -407,12 +407,28 @@ wheels = [
 ]
 
 [[package]]
+name = "kai-client"
+version = "0.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3d/ab/67459462a6fa561d8264fc2a615cf96a091755bc9328ff13c57c74778a59/kai_client-0.11.0.tar.gz", hash = "sha256:f3d42c96a8f92c56af784570d3b07c10701ffec29ce9cf0a4b8a4af374798d7a", size = 101197, upload-time = "2026-02-21T14:10:05.608Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/58/271197c664cee82c6775830945f46776ef74dc70f2e711b4087115ae8d88/kai_client-0.11.0-py3-none-any.whl", hash = "sha256:cbd173a805888cf2d46a841be1b8ae193a0f1237eafda0a8b0e589f8f006b81e", size = 26690, upload-time = "2026-02-21T14:10:04.144Z" },
+]
+
+[[package]]
 name = "keboola-agent-cli"
 version = "0.18.6"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "jsonschema" },
+    { name = "kai-client" },
     { name = "mcp" },
     { name = "packaging" },
     { name = "platformdirs" },
@@ -437,6 +453,7 @@ dev = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "jsonschema", specifier = ">=4.20" },
+    { name = "kai-client", specifier = ">=0.11.0" },
     { name = "mcp", specifier = ">=1.0.0,<2.0.0" },
     { name = "packaging", specifier = ">=23" },
     { name = "platformdirs", specifier = ">=4" },

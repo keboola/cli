@@ -100,6 +100,10 @@ class TokenVerifyResponse(BaseModel):
         default="snowflake",
         description="Project default backend (snowflake, bigquery, etc.)",
     )
+    features: list[str] = Field(
+        default_factory=list,
+        description="Project feature flags (e.g. agent-chat, storage-types)",
+    )
 
 
 class ComponentDetail(BaseModel):

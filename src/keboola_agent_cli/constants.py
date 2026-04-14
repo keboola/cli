@@ -106,6 +106,11 @@ VERSION_CACHE_FILENAME: str = "version_cache.json"
 
 # --- AI Service ---
 AI_SERVICE_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
+
+# --- Kai (Keboola AI Assistant) ---
+KAI_FEATURE_FLAG: str = "agent-chat"
+KAI_REQUEST_TIMEOUT: float = 300.0  # 5 min for non-streaming requests
+KAI_STREAM_TIMEOUT: float = 600.0  # 10 min for SSE streaming responses
 SECRET_PLACEHOLDER: str = "<YOUR_SECRET>"
 
 # --- Job Run ---

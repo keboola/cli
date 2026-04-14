@@ -60,6 +60,11 @@ OPERATION_REGISTRY: dict[str, str] = {
     # MCP tools
     "tool.list": "read",
     "tool.call": "write",
+    # Kai (Keboola AI Assistant)
+    "kai.ping": "read",
+    "kai.ask": "read",
+    "kai.chat": "write",
+    "kai.history": "read",
     # Component discovery
     "component.list": "read",
     "component.detail": "read",
