@@ -1128,6 +1128,21 @@ class KeboolaClient(BaseHttpClient):
         response = self._request("DELETE", f"{prefix}/tables/{safe_id}", params={"async": "true"})
         return self._wait_for_storage_job(response.json())
 
+    def delete_column(self, table_id: str, column_name: str, branch_id: int | None = None) -> None:
+        """Delete a column from a storage table.
+
+        This is a synchronous operation (no async job).
+
+        Args:
+            table_id: Full table ID (e.g. "in.c-bucket.table").
+            column_name: Name of the column to delete.
+            branch_id: If set, target a specific dev branch.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_table_id = quote(table_id, safe="")
+        safe_column = quote(column_name, safe="")
+        self._request("DELETE", f"{prefix}/tables/{safe_table_id}/columns/{safe_column}")
+
     def list_tables_with_metadata(self) -> list[dict[str, Any]]:
         """List all storage tables with columns and metadata.
 

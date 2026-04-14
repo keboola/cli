@@ -397,6 +397,229 @@ class TestDeleteBucketCLI:
 
 
 # ---------------------------------------------------------------------------
+# delete-column: service layer
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteColumnsService:
+    """Tests for StorageService.delete_columns()."""
+
+    def test_single_column_success(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.delete_column.return_value = None
+        service = _make_service(store, mock_client)
+
+        result = service.delete_columns(alias="test", table_id="in.c-data.users", columns=["age"])
+
+        assert result["deleted"] == ["age"]
+        assert result["failed"] == []
+        assert result["dry_run"] is False
+        assert result["table_id"] == "in.c-data.users"
+        mock_client.delete_column.assert_called_once_with("in.c-data.users", "age", branch_id=None)
+
+    def test_batch_multiple_columns(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.delete_column.return_value = None
+        service = _make_service(store, mock_client)
+
+        result = service.delete_columns(
+            alias="test", table_id="in.c-data.users", columns=["age", "email"]
+        )
+
+        assert result["deleted"] == ["age", "email"]
+        assert result["failed"] == []
+        assert mock_client.delete_column.call_count == 2
+
+    def test_batch_partial_failure(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.delete_column.side_effect = [
+            None,
+            KeboolaApiError("Column not found", status_code=404, error_code="NOT_FOUND"),
+        ]
+        service = _make_service(store, mock_client)
+
+        result = service.delete_columns(
+            alias="test", table_id="in.c-data.users", columns=["age", "missing"]
+        )
+
+        assert result["deleted"] == ["age"]
+        assert len(result["failed"]) == 1
+        assert result["failed"][0]["column"] == "missing"
+
+    def test_dry_run(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        service = _make_service(store, mock_client)
+
+        result = service.delete_columns(
+            alias="test", table_id="in.c-data.users", columns=["age"], dry_run=True
+        )
+
+        assert result["dry_run"] is True
+        assert result["would_delete"] == ["age"]
+        assert result["table_id"] == "in.c-data.users"
+        mock_client.delete_column.assert_not_called()
+
+    def test_unknown_project(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.errors import ConfigError
+
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(ConfigError):
+            service.delete_columns(alias="nonexistent", table_id="in.c-data.t", columns=["col"])
+
+
+# ---------------------------------------------------------------------------
+# delete-column: CLI layer
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteColumnCLI:
+    """CLI tests for `kbagent storage delete-column`."""
+
+    def test_delete_column_json(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.delete_columns.return_value = {
+                "deleted": ["age"],
+                "failed": [],
+                "dry_run": False,
+                "project_alias": "test",
+                "table_id": "in.c-data.users",
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "delete-column",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-data.users",
+                    "--column",
+                    "age",
+                    "--yes",
+                ],
+            )
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert data["deleted"] == ["age"]
+        assert data["table_id"] == "in.c-data.users"
+
+    def test_delete_column_dry_run(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.delete_columns.return_value = {
+                "deleted": [],
+                "failed": [],
+                "would_delete": ["age"],
+                "dry_run": True,
+                "project_alias": "test",
+                "table_id": "in.c-data.users",
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "delete-column",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-data.users",
+                    "--column",
+                    "age",
+                    "--dry-run",
+                ],
+            )
+        assert result.exit_code == 0
+
+    def test_delete_column_multiple(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.delete_columns.return_value = {
+                "deleted": ["age", "email"],
+                "failed": [],
+                "dry_run": False,
+                "project_alias": "test",
+                "table_id": "in.c-data.users",
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "delete-column",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-data.users",
+                    "--column",
+                    "age",
+                    "--column",
+                    "email",
+                    "--yes",
+                ],
+            )
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert data["deleted"] == ["age", "email"]
+
+    def test_delete_column_exit_1_on_failure(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.delete_columns.return_value = {
+                "deleted": [],
+                "failed": [{"column": "missing", "error": "not found"}],
+                "dry_run": False,
+                "project_alias": "test",
+                "table_id": "in.c-data.users",
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "delete-column",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-data.users",
+                    "--column",
+                    "missing",
+                    "--yes",
+                ],
+            )
+        assert result.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
 # Branch support tests
 # ---------------------------------------------------------------------------
 
@@ -619,3 +842,58 @@ class TestStorageTablesBranch:
         assert result.exit_code == 0
         call_kwargs = svc.list_tables.call_args.kwargs
         assert call_kwargs["branch_id"] == 30
+
+
+class TestDeleteColumnBranch:
+    """Tests for --branch support in delete-column."""
+
+    def test_service_passes_branch_id(self, tmp_path: Path) -> None:
+        """delete_columns passes branch_id to client.delete_column."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.delete_column.return_value = None
+        service = _make_service(store, mock_client)
+
+        result = service.delete_columns(
+            alias="test", table_id="in.c-data.users", columns=["age"], branch_id=42
+        )
+
+        assert result["deleted"] == ["age"]
+        mock_client.delete_column.assert_called_once_with("in.c-data.users", "age", branch_id=42)
+
+    def test_cli_branch_flag_json(self, tmp_path: Path) -> None:
+        """storage delete-column --branch 42 passes branch_id to service."""
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.delete_columns.return_value = {
+                "deleted": ["age"],
+                "failed": [],
+                "dry_run": False,
+                "project_alias": "test",
+                "table_id": "in.c-data.users",
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "delete-column",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-data.users",
+                    "--column",
+                    "age",
+                    "--branch",
+                    "42",
+                    "--yes",
+                ],
+            )
+        assert result.exit_code == 0
+        call_kwargs = svc.delete_columns.call_args.kwargs
+        assert call_kwargs["branch_id"] == 42

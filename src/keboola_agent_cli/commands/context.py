@@ -151,6 +151,9 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes] [--branch ID]
     Delete one or more tables. Batch: repeat --table-id. --dry-run to preview. Branch-aware.
 
+  kbagent storage delete-column --project NAME --table-id ID --column COL [--column ...] [--dry-run] [--yes] [--branch ID]
+    Delete one or more columns from a table. Batch: repeat --column. --dry-run to preview. Branch-aware.
+
   kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
     Delete one or more buckets. --force cascade-deletes tables. Linked/shared buckets protected. Branch-aware.
 

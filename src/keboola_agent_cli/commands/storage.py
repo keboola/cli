@@ -835,6 +835,118 @@ def storage_delete_table(
         raise typer.Exit(code=1)
 
 
+@storage_app.command("delete-column", rich_help_panel=_TABLES)
+def storage_delete_column(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    table_id: str = typer.Option(
+        ...,
+        "--table-id",
+        help="Table ID containing the column(s) (e.g. 'in.c-bucket.table')",
+    ),
+    column: list[str] = typer.Option(
+        ...,
+        "--column",
+        help="Column name to delete. Can be repeated.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be deleted without executing",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompt",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
+) -> None:
+    """Delete one or more columns from a storage table.
+
+    Supports batch deletion with multiple --column flags.
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.delete-column",
+            project=project,
+            table_id=table_id,
+            column=column,
+            dry_run=dry_run,
+            branch=branch,
+        )
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    if dry_run:
+        try:
+            result = service.delete_columns(
+                alias=project,
+                table_id=table_id,
+                columns=column,
+                dry_run=True,
+                branch_id=effective_branch,
+            )
+        except ConfigError as exc:
+            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            raise typer.Exit(code=5) from None
+
+        if formatter.json_mode:
+            formatter.output(result)
+        else:
+            for col in result.get("would_delete", []):
+                formatter.console.print(
+                    f"[bold blue]Would delete:[/bold blue] {col} from {table_id}"
+                )
+        return
+
+    if (
+        not yes
+        and not formatter.json_mode
+        and not typer.confirm(
+            f"Delete {len(column)} column(s) from table '{table_id}' in project '{project}'?"
+        )
+    ):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+
+    try:
+        result = service.delete_columns(
+            alias=project,
+            table_id=table_id,
+            columns=column,
+            branch_id=effective_branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        for col in result["deleted"]:
+            formatter.console.print(f"[bold green]Deleted:[/bold green] {col} from {table_id}")
+        for f_item in result["failed"]:
+            formatter.console.print(
+                f"[bold red]Failed:[/bold red] {f_item['column']}: {f_item['error']}"
+            )
+
+    if result["failed"]:
+        raise typer.Exit(code=1)
+
+
 @storage_app.command("delete-bucket", rich_help_panel=_BUCKETS)
 def storage_delete_bucket(
     ctx: typer.Context,

@@ -350,6 +350,45 @@ HintRegistry.register(
     )
 )
 
+# ── storage delete-column ─────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="storage.delete-column",
+        description="Delete one or more columns from a table",
+        steps=[
+            HintStep(
+                comment="Delete column(s)",
+                client=ClientCall(
+                    method="delete_column",
+                    args={
+                        "table_id": "{table_id}",
+                        "column_name": "{column}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var=None,
+                ),
+                service=ServiceCall(
+                    service_class="StorageService",
+                    service_module="storage_service",
+                    method="delete_columns",
+                    args={
+                        "alias": "{project}",
+                        "table_id": "{table_id}",
+                        "columns": "{column}",
+                        "dry_run": "{dry_run}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Client layer deletes one column at a time. Loop for batch.",
+            "Synchronous API — no async job polling needed.",
+        ],
+    )
+)
+
 # ── storage files ──────��──────────────────────────────────���────────
 
 HintRegistry.register(
