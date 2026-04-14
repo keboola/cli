@@ -20,7 +20,7 @@ make test-e2e
 
 | Class | Tests | What it covers |
 |-------|------:|----------------|
-| `TestFullE2E` | 1 (36 steps) | Progressive scenario building state from empty project |
+| `TestFullE2E` | 1 (41 steps) | Progressive scenario building state from empty project |
 | `TestE2EErrorHandling` | 6 | Invalid tokens, nonexistent resources, correct exit codes |
 | `TestE2EJsonConsistency` | 2 | All read commands return valid JSON; token never leaks |
 | `TestE2ESyncWorkflow` | 1 (5 steps) | Sync init/pull/status/diff/push in a temp git repo |
@@ -92,49 +92,59 @@ Resources are prefixed with `e2e-{timestamp}` and cleaned up via yield fixture e
 
 Steps 21-27 are wrapped in try/except -- if workspace API is unavailable on the stack, they are skipped gracefully.
 
-### Phase 7: File operations
+### Phase 7: Transformation job run (Snowflake SQL)
 
 | Step | Command | What is verified |
 |-----:|---------|------------------|
-| 28 | `file-upload`, `files`, `file-detail`, `file-download`, `file-tag --add/--remove`, `file-delete --dry-run`, `file-delete --yes` | Full lifecycle: upload with tags, list by tag, detail shows tags, download content matches, tag add/remove verified, dry-run shows would_delete, actual delete confirmed |
+| 28 | `storage create-bucket` (out stage) + API `create_config` | Output bucket created, Snowflake transformation config created with SQL: `SELECT id, name, CAST(value AS INT) AS value, CAST(value AS INT) * 2 AS doubled_value` |
+| 29 | `job run --wait --timeout 300` | Transformation executes, job status is `success` |
+| 30 | `job detail --job-id ID` | Completed job detail: `status=success`, `isFinished=true`, component is `keboola.snowflake-transformation` |
+| 31 | `storage download-table` (output table) | Output downloaded, 9 rows, every row has `doubled_value == value * 2` |
+| 32 | `config delete` + `storage delete-bucket --force` | Transformation config and output bucket cleaned up |
 
-### Phase 8: Encrypt
-
-| Step | Command | What is verified |
-|-----:|---------|------------------|
-| 29 | `encrypt values` | Input `#password`/`#api_key` encrypted to `KBC::ProjectSecure::...` format |
-
-### Phase 9: Branch lifecycle
+### Phase 8: File operations
 
 | Step | Command | What is verified |
 |-----:|---------|------------------|
-| 30 | `branch list`, `branch create`, `branch use`, `branch reset`, `branch merge`, `branch delete` | Main branch exists, dev branch created (auto-activates), use/reset toggle active branch in project status, merge returns URL, branch deleted and gone from list |
+| 33 | `file-upload`, `files`, `file-detail`, `file-download`, `file-tag --add/--remove`, `file-delete --dry-run`, `file-delete --yes` | Full lifecycle: upload with tags, list by tag, detail shows tags, download content matches, tag add/remove verified, dry-run shows would_delete, actual delete confirmed |
 
-### Phase 10: Permissions
-
-| Step | Command | What is verified |
-|-----:|---------|------------------|
-| 31 | `permissions list`, `permissions show`, `permissions check branch.delete` | List returns operations array, show returns policy status, check returns `allowed: true` |
-
-### Phase 11: Sharing and lineage
+### Phase 9: Encrypt
 
 | Step | Command | What is verified |
 |-----:|---------|------------------|
-| 32 | `sharing list`, `lineage show` | Both return valid responses (may be empty on single project) |
+| 34 | `encrypt values` | Input `#password`/`#api_key` encrypted to `KBC::ProjectSecure::...` format |
 
-### Phase 12: Job commands
-
-| Step | Command | What is verified |
-|-----:|---------|------------------|
-| 33 | `job list`, `job list --component-id`, `job detail` | List structure correct, component filter works. If jobs exist from uploads: detail returns full job data with status field |
-
-### Phase 13: Cleanup via CLI
+### Phase 10: Branch lifecycle
 
 | Step | Command | What is verified |
 |-----:|---------|------------------|
-| 34 | `config delete` | Config removed, confirmed by config_id in response |
-| 35 | `storage delete-table --dry-run`, `--yes`, `storage delete-bucket --dry-run`, `--yes` | Dry-run shows would_delete, actual delete confirmed |
-| 36 | `project edit`, `project remove` | Edit preserves alias, remove confirmed, project gone from list |
+| 35 | `branch list`, `branch create`, `branch use`, `branch reset`, `branch merge`, `branch delete` | Main branch exists, dev branch created (auto-activates), use/reset toggle active branch in project status, merge returns URL, branch deleted and gone from list |
+
+### Phase 11: Permissions
+
+| Step | Command | What is verified |
+|-----:|---------|------------------|
+| 36 | `permissions list`, `permissions show`, `permissions check branch.delete` | List returns operations array, show returns policy status, check returns `allowed: true` |
+
+### Phase 12: Sharing and lineage
+
+| Step | Command | What is verified |
+|-----:|---------|------------------|
+| 37 | `sharing list`, `lineage show` | Both return valid responses (may be empty on single project) |
+
+### Phase 13: Job commands
+
+| Step | Command | What is verified |
+|-----:|---------|------------------|
+| 38 | `job list`, `job list --component-id`, `job detail` | List structure correct, component filter works. If jobs exist from uploads: detail returns full job data with status field |
+
+### Phase 14: Cleanup via CLI
+
+| Step | Command | What is verified |
+|-----:|---------|------------------|
+| 39 | `config delete` | Config removed, confirmed by config_id in response |
+| 40 | `storage delete-table --dry-run`, `--yes`, `storage delete-bucket --dry-run`, `--yes` | Dry-run shows would_delete, actual delete confirmed |
+| 41 | `project edit`, `project remove` | Edit preserves alias, remove confirmed, project gone from list |
 
 ---
 
@@ -196,7 +206,6 @@ Skipped if `keboola-mcp-server` is not installed.
 | `permissions set/reset` | Interactive random-code confirmation blocks automated testing |
 | `workspace from-transformation` | Requires existing transformation config with input mappings |
 | `workspace query --file` | Equivalent to `--sql`; only the input source differs |
-| `job run` | Requires a runnable configuration (transformation with valid SQL) |
 | `update` | Would actually update the installed package via PyPI |
 | `repl` | Interactive REPL, not testable via CliRunner |
 | `doctor --fix` | Installs MCP server binary; side effect not suitable for E2E |

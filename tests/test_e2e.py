@@ -450,58 +450,77 @@ class TestFullE2E:
             self._test_workspace_delete(workspace_id)
 
         # ==============================================================
-        # PHASE 7: File operations
+        # PHASE 7: Transformation job run (Snowflake SQL)
         # ==============================================================
 
-        _step(28, "file upload / list / detail / download / tag / delete")
+        _step(28, "transformation setup", "create output bucket + SQL config")
+        out_bucket_id, transform_config_id, out_table_id = self._test_transformation_setup(table_id)
+
+        _step(29, "job run --wait", "execute Snowflake transformation")
+        job_id = self._test_job_run(transform_config_id)
+
+        _step(30, "job detail", "verify completed job")
+        self._test_job_detail(job_id)
+
+        _step(31, "download transformation output", "verify transformed data")
+        self._test_transformation_output(out_table_id)
+
+        _step(32, "transformation cleanup")
+        self._test_transformation_cleanup(out_bucket_id, transform_config_id)
+
+        # ==============================================================
+        # PHASE 8: File operations
+        # ==============================================================
+
+        _step(33, "file upload / list / detail / download / tag / delete")
         self._test_file_operations()
 
         # ==============================================================
-        # PHASE 8: Encrypt
+        # PHASE 9: Encrypt
         # ==============================================================
 
-        _step(29, "encrypt values")
+        _step(34, "encrypt values")
         self._test_encrypt(config_id)
 
         # ==============================================================
-        # PHASE 9: Branch lifecycle (expanded with merge)
+        # PHASE 10: Branch lifecycle (expanded with merge)
         # ==============================================================
 
-        _step(30, "branch lifecycle", "list / create / use / reset / merge / delete")
+        _step(35, "branch lifecycle", "list / create / use / reset / merge / delete")
         self._test_branch_lifecycle()
 
         # ==============================================================
-        # PHASE 10: Permissions
+        # PHASE 11: Permissions
         # ==============================================================
 
-        _step(31, "permissions list / show / check", "permission system")
+        _step(36, "permissions list / show / check", "permission system")
         self._test_permissions()
 
         # ==============================================================
-        # PHASE 11: Sharing & Lineage
+        # PHASE 12: Sharing & Lineage
         # ==============================================================
 
-        _step(32, "sharing list / lineage show", "read-only checks")
+        _step(37, "sharing list / lineage show", "read-only checks")
         self._test_sharing_and_lineage()
 
         # ==============================================================
-        # PHASE 12: Job commands (expanded)
+        # PHASE 13: Job commands (expanded)
         # ==============================================================
 
-        _step(33, "job list + detail", "verify job listing structure")
+        _step(38, "job list + detail", "verify job listing structure")
         self._test_job_commands()
 
         # ==============================================================
-        # PHASE 13: Cleanup
+        # PHASE 14: Cleanup
         # ==============================================================
 
-        _step(34, "config delete", "cleanup config via CLI")
+        _step(39, "config delete", "cleanup config via CLI")
         self._test_config_delete(config_id)
 
-        _step(35, "storage delete-table + delete-bucket", "CLI-driven cleanup")
+        _step(40, "storage delete-table + delete-bucket", "CLI-driven cleanup")
         self._test_storage_cleanup(bucket_id, table_id)
 
-        _step(36, "project edit + remove", "final cleanup")
+        _step(41, "project edit + remove", "final cleanup")
         self._test_project_edit_and_remove()
 
         print("\n" + "=" * 60)
@@ -1278,6 +1297,194 @@ class TestFullE2E:
         )
         assert data["status"] == "ok"
         self._created_workspace_ids.remove(workspace_id)
+
+    # ------------------------------------------------------------------
+    # Transformation job run
+    # ------------------------------------------------------------------
+
+    def _test_transformation_setup(self, input_table_id: str) -> tuple[str, str, str]:
+        """Create output bucket + Snowflake transformation config.
+
+        Returns (out_bucket_id, transform_config_id, out_table_id).
+        """
+        # Create output bucket for transformation results
+        out_bucket_name = f"{RUN_ID.replace('-', '_')}_out"
+        data = self._run_ok(
+            "storage",
+            "create-bucket",
+            "--project",
+            self.alias,
+            "--stage",
+            "out",
+            "--name",
+            out_bucket_name,
+            "--description",
+            "E2E transformation output",
+        )
+        out_bucket_id = data["data"]["id"]
+        assert out_bucket_id.startswith("out.c-")
+        self._created_buckets.append(out_bucket_id)
+
+        # Derive workspace table name (last segment of table_id)
+        ws_input_name = input_table_id.rsplit(".", 1)[-1]
+        out_table_id = f"{out_bucket_id}.{RUN_ID.replace('-', '_')}_result"
+
+        # Create Snowflake transformation config via API
+        transform_config = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "E2E Block",
+                        "codes": [
+                            {
+                                "name": "Transform",
+                                "script": [
+                                    (
+                                        f'CREATE TABLE "{RUN_ID.replace("-", "_")}_result"'
+                                        f" AS SELECT"
+                                        f' "id",'
+                                        f' "name",'
+                                        f' CAST("value" AS INTEGER) AS "value",'
+                                        f' CAST("value" AS INTEGER) * 2'
+                                        f' AS "doubled_value"'
+                                        f' FROM "{ws_input_name}"'
+                                    )
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            },
+            "storage": {
+                "input": {
+                    "tables": [
+                        {
+                            "source": input_table_id,
+                            "destination": ws_input_name,
+                        }
+                    ]
+                },
+                "output": {
+                    "tables": [
+                        {
+                            "source": f"{RUN_ID.replace('-', '_')}_result",
+                            "destination": out_table_id,
+                        }
+                    ]
+                },
+            },
+        }
+
+        config_body = self.api.create_config(
+            component_id="keboola.snowflake-transformation",
+            name=f"{RUN_ID} SQL Transform",
+            configuration=transform_config,
+            description="E2E: doubles the value column",
+        )
+        transform_config_id = str(config_body["id"])
+        self._created_config_ids.append(("keboola.snowflake-transformation", transform_config_id))
+
+        return out_bucket_id, transform_config_id, out_table_id
+
+    def _test_job_run(self, transform_config_id: str) -> str:
+        """Run the transformation job with --wait and return the job ID."""
+        data = self._run_ok(
+            "job",
+            "run",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.snowflake-transformation",
+            "--config-id",
+            transform_config_id,
+            "--wait",
+            "--timeout",
+            "300",
+        )
+        job_data = data["data"]
+        assert job_data["status"] == "success", (
+            f"Job failed with status={job_data['status']}: "
+            f"{job_data.get('result', {}).get('message', 'no message')}"
+        )
+        job_id = str(job_data["id"])
+        assert job_id
+        return job_id
+
+    def _test_job_detail(self, job_id: str) -> None:
+        """Verify job detail for the completed transformation."""
+        data = self._run_ok(
+            "job",
+            "detail",
+            "--project",
+            self.alias,
+            "--job-id",
+            job_id,
+        )
+        detail = data["data"]
+        assert detail["status"] == "success"
+        assert detail["isFinished"] is True
+        assert "keboola.snowflake-transformation" in str(
+            detail.get("component", detail.get("operationName", ""))
+        )
+
+    def _test_transformation_output(self, out_table_id: str) -> None:
+        """Download the transformation output and verify doubled values."""
+        output_path = self.data_dir / "transform_output.csv"
+        self._run_ok(
+            "storage",
+            "download-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            out_table_id,
+            "--output",
+            str(output_path),
+        )
+        assert output_path.exists()
+
+        with open(output_path) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        # 5 original + 3 incremental + 1 from load-file = 9 rows
+        assert len(rows) >= 8, f"Expected at least 8 rows, got {len(rows)}"
+
+        # Verify transformation: doubled_value == value * 2
+        for row in rows:
+            value = int(row["value"])
+            doubled = int(row["doubled_value"])
+            assert doubled == value * 2, (
+                f"Row id={row['id']}: value={value}, "
+                f"expected doubled_value={value * 2}, got {doubled}"
+            )
+
+    def _test_transformation_cleanup(self, out_bucket_id: str, transform_config_id: str) -> None:
+        """Clean up transformation resources via CLI."""
+        # Delete transformation config
+        self._run_ok(
+            "config",
+            "delete",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.snowflake-transformation",
+            "--config-id",
+            transform_config_id,
+        )
+        self._created_config_ids.remove(("keboola.snowflake-transformation", transform_config_id))
+
+        # Delete output bucket (--force to cascade delete output table)
+        self._run_ok(
+            "storage",
+            "delete-bucket",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            out_bucket_id,
+            "--force",
+            "--yes",
+        )
+        self._created_buckets.remove(out_bucket_id)
 
     def _test_file_operations(self) -> None:
         """Test the full file lifecycle: upload, list, detail, download, tag, delete."""
