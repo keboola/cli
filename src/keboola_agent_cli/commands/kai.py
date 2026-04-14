@@ -9,7 +9,7 @@ import typer
 from ..errors import ConfigError, KeboolaApiError
 from ._helpers import check_cli_permission, get_formatter, get_service, map_error_to_exit_code
 
-kai_app = typer.Typer(help="Keboola AI Assistant (Kai) — ask questions about your project")
+kai_app = typer.Typer(help="(BETA) Keboola AI Assistant (Kai) — ask questions about your project")
 
 
 @kai_app.callback(invoke_without_command=True)

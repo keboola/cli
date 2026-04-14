@@ -312,6 +312,24 @@ Use `kbagent <command> --help` for full flag details and examples.
     --input accepts: inline JSON, @file.json (from file), or - (from stdin).
     --branch is a CLI flag (NOT a tool input param). Do not pass branch_id in --input.
 
+### Kai -- Keboola AI Assistant (BETA)
+
+  kbagent kai ping [--project NAME]
+    Check Kai server health and MCP connection status.
+    Fails with KAI_NOT_ENABLED if the project lacks the 'agent-chat' feature.
+
+  kbagent kai ask --message "question" [--project NAME]
+    One-shot question to Kai. Collects full response. Use --json for structured output.
+    Kai has MCP access to project data -- use for Keboola-specific questions
+    (e.g. "What tables do I have?", "Is it safe to drop bucket X?").
+
+  kbagent kai chat --message "msg" [--chat-id ID] [--project NAME]
+    Send message in a chat session. Use --chat-id to continue a conversation.
+    Without --chat-id starts a new chat. Returns chat_id for continuation.
+
+  kbagent kai history [--project NAME] [--limit N]
+    List recent Kai chat sessions. Default limit: 10.
+
 ### Utility Commands
 
   kbagent init [--from-global]
