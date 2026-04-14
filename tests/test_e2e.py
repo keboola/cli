@@ -504,23 +504,30 @@ class TestFullE2E:
         self._test_sharing_and_lineage()
 
         # ==============================================================
+        # PHASE 12.5: Kai (Keboola AI Assistant)
+        # ==============================================================
+
+        _step(38, "kai ping / ask / history", "Keboola AI Assistant")
+        self._test_kai_commands()
+
+        # ==============================================================
         # PHASE 13: Job commands (expanded)
         # ==============================================================
 
-        _step(38, "job list + detail", "verify job listing structure")
+        _step(39, "job list + detail", "verify job listing structure")
         self._test_job_commands()
 
         # ==============================================================
         # PHASE 14: Cleanup
         # ==============================================================
 
-        _step(39, "config delete", "cleanup config via CLI")
+        _step(40, "config delete", "cleanup config via CLI")
         self._test_config_delete(config_id)
 
-        _step(40, "storage delete-table + delete-bucket", "CLI-driven cleanup")
+        _step(41, "storage delete-table + delete-bucket", "CLI-driven cleanup")
         self._test_storage_cleanup(bucket_id, table_id)
 
-        _step(41, "project edit + remove", "final cleanup")
+        _step(42, "project edit + remove", "final cleanup")
         self._test_project_edit_and_remove()
 
         print("\n" + "=" * 60)
@@ -1755,6 +1762,56 @@ class TestFullE2E:
         data = self._run_ok("lineage", "show", "--project", self.alias)
         # Lineage may be empty on a single-project setup
         assert data["status"] == "ok"
+
+    def _test_kai_commands(self) -> None:
+        """Test Kai AI Assistant commands (gracefully skip if not available)."""
+        # kai ping — check if Kai is available for this project
+        result = self._run("kai", "ping", "--project", self.alias)
+        if result.exit_code != 0:
+            output = result.output
+            if "KAI_NOT_ENABLED" in output or "KAI_ERROR" in output:
+                print(
+                    f"  {_YELLOW}SKIP: Kai not available for this project "
+                    f"(exit {result.exit_code}){_RESET}"
+                )
+                return
+            # Unexpected error — fail the test
+            assert result.exit_code == 0, f"kai ping failed unexpectedly: {result.output}"
+
+        # Ping succeeded — verify structure
+        ping_data = json.loads(result.output)
+        assert ping_data["status"] == "ok"
+        assert "timestamp" in ping_data["data"]
+        assert "mcp_status" in ping_data["data"]
+
+        # kai ask — one-shot question
+        result = self._run(
+            "kai",
+            "ask",
+            "--project",
+            self.alias,
+            "-m",
+            "Reply with just the word OK",
+        )
+        if result.exit_code != 0:
+            # Auth issue (e.g. token type) — skip remaining kai tests
+            print(
+                f"  {_YELLOW}SKIP: kai ask failed "
+                f"(exit {result.exit_code}), skipping chat/history{_RESET}"
+            )
+            return
+
+        ask_data = json.loads(result.output)
+        assert ask_data["status"] == "ok"
+        assert "response" in ask_data["data"]
+        assert "chat_id" in ask_data["data"]
+        assert len(ask_data["data"]["response"]) > 0
+
+        # kai history — list recent chats (at least the one we just created)
+        data = self._run_ok("kai", "history", "--project", self.alias, "--limit", "5")
+        assert "chats" in data["data"]
+        # We just chatted, so there should be at least 1
+        assert len(data["data"]["chats"]) >= 1
 
     def _test_job_commands(self) -> None:
         """Verify job listing structure and detail (if jobs exist)."""

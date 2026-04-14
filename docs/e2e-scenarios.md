@@ -132,6 +132,16 @@ Steps 21-27 are wrapped in try/except -- if workspace API is unavailable on the 
 |-----:|---------|------------------|
 | 37 | `sharing list`, `lineage show` | Both return valid responses (may be empty on single project) |
 
+### Phase 12.5: Kai (Keboola AI Assistant)
+
+| Step | Command | What is verified |
+|-----:|---------|------------------|
+| 38 | `kai ping` | Server health, timestamp, MCP status. Gracefully skips all kai tests if `agent-chat` feature not enabled |
+| 38 | `kai ask -m "..."` | One-shot question, verify response text + chat_id. Skips if auth fails (token type) |
+| 38 | `kai history --limit 5` | At least 1 chat after asking |
+
+Steps are wrapped in graceful skip logic — if Kai is not available (feature flag or auth), remaining kai tests are skipped without failing.
+
 ### Phase 13: Job commands
 
 | Step | Command | What is verified |

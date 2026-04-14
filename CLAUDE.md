@@ -305,6 +305,11 @@ kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-di
 
 kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]
 
+kbagent kai ping [--project NAME]
+kbagent kai ask --message "question" [--project NAME]
+kbagent kai chat --message "msg" [--chat-id ID] [--project NAME]
+kbagent kai history [--project NAME] [--limit N]
+
 kbagent context
 kbagent init [--from-global]
 kbagent doctor [--fix]
