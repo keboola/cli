@@ -1346,11 +1346,20 @@ class TestClientDownloadSlicedFileToDir:
             content=json_mod.dumps(manifest).encode(),
         )
 
-        # Stub the cloud downloader to avoid real S3/GCS calls
+        # Stub the cloud downloader to avoid real S3/GCS calls. stream_to_file
+        # is the OOM-safe path (issue #187): it writes directly to disk rather
+        # than returning bytes, so the fake has to side-effect the destination.
+        slice_payloads = iter([b"PAR1_slice_1", b"PAR1_slice_2"])
+
+        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool) -> int:
+            payload = next(slice_payloads)
+            Path(dest).write_bytes(payload)
+            return len(payload)
+
         fake_downloader = MagicMock()
         fake_downloader.resolve_base_url.return_value = "https://bucket.s3.amazonaws.com/export"
         fake_downloader.resolve_slice_url.side_effect = lambda base, entry_url, fd: entry_url
-        fake_downloader.download_bytes.side_effect = [b"PAR1_slice_1", b"PAR1_slice_2"]
+        fake_downloader.stream_to_file.side_effect = _fake_stream_to_file
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
@@ -1398,10 +1407,17 @@ class TestClientDownloadSlicedFileToDir:
             content=json_mod.dumps(manifest).encode(),
         )
 
+        # The real stream_to_file streams+decompresses gzip; mirror that so
+        # the test still verifies the .gz-suffix handling in the caller.
+        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool) -> int:
+            data = payload if decompress_gzip else gz_payload
+            Path(dest).write_bytes(data)
+            return len(data)
+
         fake_downloader = MagicMock()
         fake_downloader.resolve_base_url.return_value = "https://bucket.s3.amazonaws.com/export"
         fake_downloader.resolve_slice_url.side_effect = lambda base, entry_url, fd: entry_url
-        fake_downloader.download_bytes.return_value = gz_payload
+        fake_downloader.stream_to_file.side_effect = _fake_stream_to_file
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",

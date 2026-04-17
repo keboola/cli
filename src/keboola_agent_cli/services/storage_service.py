@@ -37,21 +37,30 @@ def _read_csv_header(file_path: str, delimiter: str = ",") -> list[str]:
 def _prepend_csv_header(file_path: str, columns: list[str]) -> None:
     """Prepend a CSV header row to an existing file.
 
-    Reads the file content, writes header + content back.
-    Uses CSV quoting for column names to match Keboola's RFC4180 format.
+    Streams the original body into a temp file so that multi-GB CSV exports
+    never sit in RAM at once (issue #187: the old read_bytes() peaked at the
+    full file size). Uses CSV quoting to match Keboola's RFC4180 format.
     """
     import io
+    import shutil
+    import tempfile
 
     writer_buf = io.StringIO()
     writer = csv.writer(writer_buf, quoting=csv.QUOTE_ALL)
     writer.writerow(columns)
-    header_line = writer_buf.getvalue()
+    header_line = writer_buf.getvalue().encode("utf-8")
 
     p = Path(file_path)
-    original = p.read_bytes()
-    with p.open("wb") as fh:
-        fh.write(header_line.encode("utf-8"))
-        fh.write(original)
+    # Temp file sits next to the target so shutil.move is a cheap rename on
+    # the same filesystem.
+    with tempfile.NamedTemporaryFile(
+        dir=p.parent, prefix=p.name + ".", suffix=".tmp", delete=False
+    ) as tmp:
+        tmp_path = Path(tmp.name)
+        tmp.write(header_line)
+        with p.open("rb") as src:
+            shutil.copyfileobj(src, tmp, length=1024 * 1024)
+    tmp_path.replace(p)
 
 
 class StorageService(BaseService):

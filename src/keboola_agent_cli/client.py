@@ -23,6 +23,7 @@ from .constants import (
     DEFAULT_JOBS_PER_CONFIG,
     DEFAULT_TIMEOUT,
     EXPORT_JOB_MAX_WAIT,
+    FILE_DOWNLOAD_CHUNK_SIZE,
     FILE_DOWNLOAD_TIMEOUT,
     FILE_UPLOAD_TIMEOUT,
     IMPORT_JOB_MAX_WAIT,
@@ -1471,6 +1472,10 @@ class KeboolaClient(BaseHttpClient):
         Handles S3 (SigV4 auth) and GCS (bearer token) providers.
         Decompresses gzipped slices transparently.
 
+        Streams each slice chunk-by-chunk into a temp file and concatenates
+        into ``output_path``. Peak RAM is O(chunk size), not O(slice size) —
+        required for multi-GB tables on memory-constrained hosts (issue #187).
+
         The manifest `url` from file info is already a presigned URL (download
         directly). Manifest entries have cloud-native URLs (s3://, gs://) that
         need auth — we build HTTPS URLs from the s3Path/gcsPath credentials.
@@ -1483,13 +1488,47 @@ class KeboolaClient(BaseHttpClient):
         Returns:
             Number of bytes written.
         """
-        import gzip
+        import shutil
+        import tempfile
+
+        entries, base_url, downloader, _manifest_data = self._prepare_sliced_download(file_detail)
+
+        # Stream each slice into a temp file, then copy-append into output.
+        # Keeping per-slice temp files on disk (not in RAM) is the whole point.
+        total = 0
+        out_path = Path(output_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("wb") as out_fh:
+            for entry in entries:
+                entry_url = entry.get("url", "")
+                slice_url = downloader.resolve_slice_url(base_url, entry_url, file_detail)
+                is_gz = entry_url.split("?")[0].endswith(".gz")
+                with tempfile.NamedTemporaryFile(
+                    dir=out_path.parent, prefix=".slice-", delete=True
+                ) as tmp:
+                    downloader.stream_to_file(slice_url, tmp.name, decompress_gzip=is_gz)
+                    tmp.seek(0)
+                    shutil.copyfileobj(tmp, out_fh, length=FILE_DOWNLOAD_CHUNK_SIZE)
+                    total += Path(tmp.name).stat().st_size
+
+        return total
+
+    def _prepare_sliced_download(
+        self, file_detail: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], str, "_CloudDownloader", bytes]:
+        """Fetch and parse the manifest, returning entries + download context.
+
+        The manifest is small JSON (few KB even for TB tables), so loading it
+        fully is fine. Entries are the per-slice URLs that callers iterate.
+
+        Returns a 4-tuple: (entries, base_url, downloader, raw_manifest_bytes).
+        The raw manifest is useful for callers that persist it next to slices.
+        """
         import json as json_mod
 
         provider = file_detail.get("provider", "")
         downloader = _CloudDownloader.create(file_detail)
 
-        # Step 1: Download the manifest (url is already presigned, no extra auth)
         with httpx.Client(timeout=FILE_DOWNLOAD_TIMEOUT) as http:
             resp = http.get(file_detail["url"])
             resp.raise_for_status()
@@ -1506,26 +1545,8 @@ class KeboolaClient(BaseHttpClient):
             )
 
         logger.info("Downloading %d slices (provider=%s)", len(entries), provider)
-
-        # Step 2: Resolve the base URL from cloud path info
         base_url = downloader.resolve_base_url(file_detail)
-
-        # Step 3: Download and concatenate all slices
-        total = 0
-        with open(output_path, "wb") as fh:
-            for entry in entries:
-                entry_url = entry.get("url", "")
-                # Strip cloud prefix (s3://bucket/key/ or gs://bucket/key/)
-                # to get relative slice name, then build HTTPS URL
-                slice_url = downloader.resolve_slice_url(base_url, entry_url, file_detail)
-                raw = downloader.download_bytes(slice_url)
-                # Decompress if gzipped
-                if entry_url.split("?")[0].endswith(".gz"):
-                    raw = gzip.decompress(raw)
-                fh.write(raw)
-                total += len(raw)
-
-        return total
+        return entries, base_url, downloader, manifest_data
 
     def download_sliced_file_to_dir(
         self, file_detail: dict[str, Any], output_dir: str
@@ -1555,59 +1576,33 @@ class KeboolaClient(BaseHttpClient):
             Dict with ``output_dir``, ``slice_count``, ``total_bytes``, and
             ``slices`` (list of ``{path, size_bytes}``).
         """
-        import gzip
-        import json as json_mod
-        from pathlib import Path
-
-        provider = file_detail.get("provider", "")
-        downloader = _CloudDownloader.create(file_detail)
-
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
 
-        with httpx.Client(timeout=FILE_DOWNLOAD_TIMEOUT) as http:
-            resp = http.get(file_detail["url"])
-            resp.raise_for_status()
-            manifest_data = resp.content
-
-        manifest = json_mod.loads(manifest_data)
-        entries = manifest.get("entries", [])
-        if not entries:
-            raise KeboolaApiError(
-                message="Sliced file manifest has no entries",
-                status_code=500,
-                error_code="EXPORT_EMPTY_MANIFEST",
-                retryable=False,
-            )
+        entries, base_url, downloader, manifest_data = self._prepare_sliced_download(file_detail)
 
         # Persist the manifest alongside slices for traceability.
         (out / "_manifest.json").write_bytes(manifest_data)
 
-        logger.info("Downloading %d slices to %s (provider=%s)", len(entries), out, provider)
-
-        base_url = downloader.resolve_base_url(file_detail)
         slices: list[dict[str, Any]] = []
         total = 0
 
         for idx, entry in enumerate(entries):
             entry_url = entry.get("url", "")
             slice_url = downloader.resolve_slice_url(base_url, entry_url, file_detail)
-            raw = downloader.download_bytes(slice_url)
 
             clean_url = entry_url.split("?")[0]
             basename = clean_url.rsplit("/", 1)[-1]
-
-            if clean_url.endswith(".gz"):
-                raw = gzip.decompress(raw)
+            is_gz = clean_url.endswith(".gz")
+            if is_gz:
                 basename = basename.removesuffix(".gz")
-
             if not basename:
                 basename = f"part-{idx:05d}"
 
             slice_path = out / basename
-            slice_path.write_bytes(raw)
-            slices.append({"path": str(slice_path.resolve()), "size_bytes": len(raw)})
-            total += len(raw)
+            written = downloader.stream_to_file(slice_url, slice_path, decompress_gzip=is_gz)
+            slices.append({"path": str(slice_path.resolve()), "size_bytes": written})
+            total += written
 
         return {
             "output_dir": str(out.resolve()),
@@ -1619,35 +1614,35 @@ class KeboolaClient(BaseHttpClient):
     def download_file(self, url: str, output_path: str) -> int:
         """Download a non-sliced file from a presigned URL.
 
-        Handles gzip decompression transparently.
+        Streams the body chunk-by-chunk and decompresses gzip on the fly, so
+        peak RAM stays at O(chunk size) even for multi-GB payloads (issue #187).
 
         Args:
             url: Presigned download URL from file info.
             output_path: Local file path to write to.
 
         Returns:
-            Number of bytes written.
+            Number of bytes written (post-decompression if the URL is gzipped).
         """
         import gzip
+        import shutil
+
+        out_path = Path(output_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        is_gzipped = url.rstrip("?").split("?")[0].endswith(".gz")
 
         with (
             httpx.Client(timeout=FILE_DOWNLOAD_TIMEOUT) as http,
             http.stream("GET", url) as response,
         ):
             response.raise_for_status()
-            is_gzipped = url.rstrip("?").split("?")[0].endswith(".gz")
+            source: Any = _IterBytesReader(response.iter_bytes(FILE_DOWNLOAD_CHUNK_SIZE))
             if is_gzipped:
-                compressed = b"".join(response.iter_bytes())
-                data = gzip.decompress(compressed)
-                Path(output_path).write_bytes(data)
-                return len(data)
-            else:
-                total = 0
-                with open(output_path, "wb") as fh:
-                    for chunk in response.iter_bytes():
-                        fh.write(chunk)
-                        total += len(chunk)
-                return total
+                source = gzip.GzipFile(fileobj=source, mode="rb")
+            with out_path.open("wb") as fh:
+                shutil.copyfileobj(source, fh, length=FILE_DOWNLOAD_CHUNK_SIZE)
+
+        return out_path.stat().st_size
 
     def list_jobs(
         self,
@@ -2141,6 +2136,36 @@ def _build_abs_upload_url(abs_params: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
+class _IterBytesReader:
+    """Adapt an httpx iter_bytes() iterator to a .read(n) file-like interface.
+
+    shutil.copyfileobj and gzip.GzipFile both need a binary stream with
+    read(size). httpx exposes an iterator instead, so we buffer the current
+    chunk and hand out at most ``size`` bytes per read, refilling from the
+    iterator as needed. The buffer holds at most one iterator chunk at a time
+    (~1 MiB), so total memory stays bounded regardless of response size.
+    """
+
+    def __init__(self, chunks: Any) -> None:
+        self._chunks = iter(chunks)
+        self._buf = b""
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            pieces = [self._buf]
+            self._buf = b""
+            pieces.extend(self._chunks)
+            return b"".join(pieces)
+        while len(self._buf) < size:
+            try:
+                self._buf += next(self._chunks)
+            except StopIteration:
+                break
+        out = self._buf[:size]
+        self._buf = self._buf[size:]
+        return out
+
+
 class _CloudDownloader:
     """Abstraction for downloading from cloud storage using Keboola file credentials.
 
@@ -2279,16 +2304,50 @@ class _CloudDownloader:
             # Other: entry URLs should be full HTTPS URLs
             return entry_url
 
-    def download_bytes(self, url: str) -> bytes:
-        """Download content from a cloud URL with appropriate authentication."""
+    def _request_headers(self, url: str) -> dict[str, str]:
+        """Resolve auth headers for a cloud URL.
+
+        Azure stores metadata (endpoint, SAS) in the auth_fn result (keys
+        prefixed with "_"); those are filtered out here. The SAS token itself
+        is embedded into the URL by resolve_slice_url().
+        """
         auth_result = self._auth_fn(url)
-        # Azure stores metadata (endpoint, SAS) in auth_fn result, not HTTP headers.
-        # The SAS token is embedded in the URL by resolve_slice_url().
-        headers = {k: v for k, v in auth_result.items() if not k.startswith("_")}
-        with httpx.Client(timeout=FILE_DOWNLOAD_TIMEOUT) as http:
-            response = http.get(url, headers=headers)
+        return {k: v for k, v in auth_result.items() if not k.startswith("_")}
+
+    def stream_to_file(self, url: str, dest: "Path | str", decompress_gzip: bool) -> int:
+        """Stream a cloud URL directly to a local file in bounded-memory chunks.
+
+        Used for slice downloads where the payload can be hundreds of MB per
+        slice. Peak RAM is O(chunk size), not O(slice size), which is what
+        makes multi-GB table exports survive on small VMs (see issue #187).
+
+        Args:
+            url: Full HTTPS URL (with auth baked in for Azure).
+            dest: Local file path to write to.
+            decompress_gzip: If True, wrap the response stream in gzip.GzipFile
+                so the decompressed bytes are what lands on disk. Streaming
+                gzip keeps both compressed and decompressed state bounded.
+
+        Returns:
+            Number of bytes written to ``dest`` (post-decompression if applicable).
+        """
+        import gzip
+        import shutil
+
+        headers = self._request_headers(url)
+        dest_path = Path(dest)
+        with (
+            httpx.Client(timeout=FILE_DOWNLOAD_TIMEOUT) as http,
+            http.stream("GET", url, headers=headers) as response,
+        ):
             response.raise_for_status()
-            return response.content
+            source: Any = _IterBytesReader(response.iter_bytes(FILE_DOWNLOAD_CHUNK_SIZE))
+            if decompress_gzip:
+                source = gzip.GzipFile(fileobj=source, mode="rb")
+            with dest_path.open("wb") as fh:
+                shutil.copyfileobj(source, fh, length=FILE_DOWNLOAD_CHUNK_SIZE)
+
+        return dest_path.stat().st_size
 
 
 def _s3_signed_headers(
