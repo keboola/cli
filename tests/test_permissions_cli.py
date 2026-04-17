@@ -371,19 +371,31 @@ class TestInitReadOnly:
     """Tests for `kbagent init --read-only`."""
 
     def test_init_read_only_creates_policy(self, tmp_path: Path) -> None:
-        """init --read-only should create config with read-only permission policy."""
+        """init --read-only --from-global should create config with read-only permission policy."""
         work_dir = tmp_path / "project"
         work_dir.mkdir()
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()
+        # Seed global config with a project so read-only won't refuse an empty workspace.
+        global_store = ConfigStore(config_dir=global_dir)
+        global_store.save(
+            AppConfig(
+                projects={
+                    "prod": ProjectConfig(
+                        stack_url="https://connection.keboola.com",
+                        token=TEST_TOKEN,
+                    )
+                }
+            )
+        )
+
         with (
             patch("keboola_agent_cli.commands.init.Path.cwd", return_value=work_dir),
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
         ):
-            # Use a real store for the global config
-            global_dir = tmp_path / "global"
-            global_dir.mkdir()
-            MockStore.return_value = ConfigStore(config_dir=global_dir)
+            MockStore.return_value = global_store
 
-            result = runner.invoke(app, ["--json", "init", "--read-only"])
+            result = runner.invoke(app, ["--json", "init", "--from-global", "--read-only"])
 
         assert result.exit_code == 0
         data = json.loads(result.output)["data"]
@@ -421,6 +433,33 @@ class TestInitReadOnly:
         assert "Bash(*--config-dir*)" in deny_rules
         assert "Bash(*KBAGENT_CONFIG_DIR*)" in deny_rules
         assert "Bash(kbagent permissions reset*)" in deny_rules
+
+    def test_init_read_only_refuses_empty_workspace(self, tmp_path: Path) -> None:
+        """init --read-only with no projects must fail -- would lock the user out.
+
+        Read-only chmod's config.json to 0400 and denies cli:write, so subsequent
+        'project add' would be impossible. Refuse to create a useless workspace.
+        """
+        work_dir = tmp_path / "project"
+        work_dir.mkdir()
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()  # Empty global config -- nothing to copy
+
+        with (
+            patch("keboola_agent_cli.commands.init.Path.cwd", return_value=work_dir),
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+        ):
+            MockStore.return_value = ConfigStore(config_dir=global_dir)
+
+            result = runner.invoke(app, ["--json", "init", "--read-only"])
+
+        assert result.exit_code == 5
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+        assert data["error"]["code"] == "CONFIG_ERROR"
+        assert "empty workspace" in data["error"]["message"]
+        # Ensure no config was written
+        assert not (work_dir / ".kbagent" / "config.json").exists()
 
     def test_init_read_only_with_from_global(self, tmp_path: Path) -> None:
         """init --read-only --from-global should copy projects AND set read-only."""

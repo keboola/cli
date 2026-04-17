@@ -77,6 +77,24 @@ def init_command(
             raise typer.Exit(code=5)
         config = global_store.load()
 
+    if read_only and len(config.projects) == 0:
+        # Read-only locks the config (chmod 0400 + cli:write deny), so an empty
+        # read-only workspace cannot accept any project via `project add` afterwards.
+        # Refuse to create a useless locked workspace and guide the user to the
+        # correct order: init -> project add -> permissions set.
+        formatter.error(
+            message=(
+                "Cannot init --read-only with an empty workspace: read-only blocks "
+                "'project add', so you would be locked out. Correct workflow: "
+                "1) 'kbagent init' (without --read-only), "
+                "2) 'kbagent project add ...', "
+                "3) 'kbagent permissions set --mode allow --deny cli:write --deny tool:write' to lock. "
+                "Alternatively, use --from-global to seed projects from the global config."
+            ),
+            error_code="CONFIG_ERROR",
+        )
+        raise typer.Exit(code=5)
+
     if read_only:
         config.permissions = PermissionPolicy(
             mode="allow",
