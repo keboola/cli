@@ -119,7 +119,52 @@ kbagent --json storage unload-table \
 | File stays in Keboola | No (download only) | Yes (file persists) |
 | Can tag the output | No | Yes (`--tag`) |
 | Can download locally | Always | Optional (`--download`) |
+| Parquet export | No (CSV only) | Yes (`--file-type parquet`) |
 | Use case | Quick local export | Share data between components, snapshots |
+
+### Parquet export
+
+`unload-table --file-type parquet` produces a sliced Apache Parquet file in Storage Files.
+This avoids the CSV round-trip for analytics data, preserves Keboola's typed backend
+output, and is directly consumable by pyarrow, Spark, DuckDB and other Parquet readers.
+
+```bash
+# Export as Parquet (stays in Keboola)
+kbagent --json storage unload-table \
+  --project ALIAS \
+  --table-id in.c-data.users \
+  --file-type parquet --tag daily-snapshot
+
+# Export + download -- creates a directory (default layout mirrors Keboola addressing)
+kbagent storage unload-table \
+  --project ALIAS \
+  --table-id in.c-data.users \
+  --file-type parquet --download
+# -> ./ALIAS/in.c-data.users.parquet/
+#      ├── <slice>.parquet       (one or more)
+#      └── _manifest.json         (leading underscore -> skipped by parquet readers)
+```
+
+Read the dataset back in one line:
+
+```python
+import pyarrow.parquet as pq
+t = pq.read_table("./ALIAS/in.c-data.users.parquet/")
+```
+
+**Downloading an existing Parquet Storage File** -- `storage file-download` auto-detects
+sliced `.parquet` files and routes them to the per-slice downloader, so you cannot
+accidentally corrupt the output by asking for a single-file save:
+
+```bash
+kbagent storage file-download --project ALIAS --file-id 123 --output ./dir/
+# dir/ contains <slice>.parquet files + _manifest.json (same layout as unload-table --download)
+```
+
+**Constraints:**
+- Parquet output is **always sliced** -- `--download` produces a directory, never a single file
+- CSV concat logic is never used for parquet -- each slice is a self-contained file with its own footer
+- Default download path: `./{project_alias}/{table_id}.parquet/` -- override with `--output`
 
 ## Typical workflows
 
@@ -165,6 +210,6 @@ kbagent --json storage load-file \
 - Tag filtering uses **AND logic** -- all specified tags must match
 - `file-download --tag` downloads the **most recent** matching file
 - `load-file` skips the upload step -- the file is already in cloud storage
-- `unload-table` creates a **sliced file** for large tables (handled transparently on download)
+- `unload-table` creates a **sliced file** for large tables and always for Parquet (handled transparently on download; CSV slices are concatenated, Parquet slices are preserved as separate files)
 - All file commands support `--branch` for dev branch operations
 - Works across all cloud backends (AWS, GCP, Azure) transparently

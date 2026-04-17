@@ -55,6 +55,16 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `storage delete-column --project NAME --table-id ID --column COL [--column ...] [--force] [--dry-run] [--yes] [--branch ID]` -- delete columns from a table (branch-aware)
 - `storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]` -- delete buckets (branch-aware)
 
+## Storage Files
+- `storage files --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]` -- list Storage Files, optionally filtered by tag/query
+- `storage file-detail --project NAME --file-id ID` -- file metadata (size, tags, sliced, provider)
+- `storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID]` -- upload a file to Storage
+- `storage file-download --project NAME [--file-id ID | --tag TAG ...] [--output FILE|DIR]` -- download a Storage File. Auto-detects sliced `.parquet` files and writes per-slice into a directory (never concatenates -- parquet slices have their own footers)
+- `storage file-tag --project NAME --file-id ID [--add TAG ...] [--remove TAG ...]` -- add/remove tags on a file
+- `storage file-delete --project NAME --file-id ID [--file-id ...] [--dry-run] [--yes]` -- delete Storage Files
+- `storage load-file --project NAME --file-id ID --table-id ID [--incremental] [--delimiter D] [--enclosure E] [--branch ID]` -- import a Storage File into a table (CSV)
+- `storage unload-table --project NAME --table-id ID [--columns COL ...] [--limit N] [--tag TAG ...] [--download] [--output FILE|DIR] [--file-type csv|parquet] [--branch ID]` -- export a table to a Storage File. `--file-type parquet` produces sliced Parquet; `--download` saves each slice as its own file under `./{project}/{table_id}.parquet/` (default) together with `_manifest.json`
+
 ## Data Lineage
 - `lineage build -d DIR -o FILE [--refresh] [--ai]` -- build column-level lineage graph from sync'd data
 - `lineage show -l FILE --downstream "project:table" [--columns] [-c COL] [--format text|mermaid|html|er]` -- query downstream dependencies from cache

@@ -397,6 +397,9 @@ class TestFullE2E:
         _step(14, "storage unload-table", "export to file storage")
         self._test_unload_table(table_id)
 
+        _step(14.1, "storage unload-table --file-type parquet", "Parquet export + sliced download")
+        self._test_unload_table_parquet(table_id)
+
         _step(15, "storage load-file", "upload CSV as file then load into table")
         self._test_load_file(table_id)
 
@@ -865,6 +868,54 @@ class TestFullE2E:
         assert result_data["table_id"] == table_id
         assert result_data["file_id"] > 0
         assert unload_path.exists()
+
+    def _test_unload_table_parquet(self, table_id: str) -> None:
+        """Unload a table as sliced Parquet and verify the per-slice download layout.
+
+        Exercises the Storage async export with fileType=parquet and the
+        download_sliced_file_to_dir path (each slice saved as its own file,
+        _manifest.json sidecar preserved). Concatenation-based download
+        would produce an invalid parquet here -- the test fails loudly if
+        the wrong path is ever taken.
+        """
+        out_dir = self.data_dir / "parquet_out"
+        data = self._run_ok(
+            "storage",
+            "unload-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--file-type",
+            "parquet",
+            "--download",
+            "--output",
+            str(out_dir),
+        )
+        result = data["data"]
+        assert result["table_id"] == table_id
+        assert result["file_id"] > 0
+        assert result["file_type"] == "parquet"
+        assert result["is_sliced"] is True
+        assert result["downloaded"] is True
+        assert result["slice_count"] >= 1
+        assert len(result["slices"]) == result["slice_count"]
+        assert out_dir.is_dir()
+
+        manifest = out_dir / "_manifest.json"
+        assert manifest.is_file(), "parquet sidecar _manifest.json must be present"
+
+        parquet_files = list(out_dir.glob("*.parquet"))
+        assert len(parquet_files) == result["slice_count"], (
+            f"expected {result['slice_count']} parquet slices, found {len(parquet_files)}"
+        )
+        # Every slice should have the parquet magic bytes ("PAR1") at the start
+        # and end of the file -- cheap, dependency-free validity check.
+        for path in parquet_files:
+            raw = path.read_bytes()
+            assert len(raw) > 8, f"slice {path.name} is suspiciously small"
+            assert raw[:4] == b"PAR1", f"slice {path.name} is missing PAR1 header"
+            assert raw[-4:] == b"PAR1", f"slice {path.name} is missing PAR1 footer"
 
     def _test_load_file(self, table_id: str) -> None:
         """Upload a CSV as a file, then load it into a table via load-file."""

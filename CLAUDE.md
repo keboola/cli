@@ -274,7 +274,7 @@ kbagent storage file-detail --project NAME --file-id ID
 kbagent storage file-delete --project NAME --file-id ID [--file-id ...] [--dry-run] [--yes]
 kbagent storage file-tag --project NAME --file-id ID [--add TAG ...] [--remove TAG ...]
 kbagent storage load-file --project NAME --file-id ID --table-id ID [--incremental] [--delimiter D] [--enclosure E] [--branch ID]
-kbagent storage unload-table --project NAME --table-id ID [--columns COL ...] [--limit N] [--tag TAG ...] [--download] [--output FILE] [--branch ID]
+kbagent storage unload-table --project NAME --table-id ID [--columns COL ...] [--limit N] [--tag TAG ...] [--download] [--output FILE|DIR] [--file-type csv|parquet] [--branch ID]
 
 kbagent lineage build --directory PATH --output PATH [--ai] [--refresh]
 kbagent lineage show --load PATH [--upstream NODE] [--downstream NODE] [--column COL] [--columns] [--project ALIAS] [--depth N] [--format text|mermaid|html|er]
