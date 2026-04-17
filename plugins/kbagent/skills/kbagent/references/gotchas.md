@@ -404,3 +404,28 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   client-side. Picking a single status misses the other killable states -- e.g.
   a runaway loop often piles up `waiting` jobs while you're typing
   `--status processing`.
+
+## Parquet export: slices, not a single file
+
+- `storage unload-table --file-type parquet` always produces a **sliced** output.
+  With `--download`, the result is a **directory** (`./{project}/{table_id}.parquet/`),
+  never a single `.parquet` file. If your code expects a single file, adapt it to
+  read the directory as a Parquet dataset:
+  ```python
+  import pyarrow.parquet as pq
+  t = pq.read_table("./ALIAS/in.c-bucket.table.parquet/")
+  ```
+- **Never concatenate Parquet slices.** Each slice is a self-contained Parquet
+  file with its own footer. Binary concatenation (how CSV slices are merged)
+  would produce an invalid file. For the same reason, `storage file-download`
+  auto-detects sliced `.parquet` files and routes them to the per-slice
+  downloader -- there is no flag to force single-file mode.
+- The manifest sidecar is written as `_manifest.json` (**with a leading
+  underscore**). This is intentional: Hive/Spark/pyarrow parquet readers skip
+  files starting with `_` or `.` when scanning a directory as a dataset, so the
+  manifest is preserved for traceability without breaking direct reads. Same
+  convention as `_SUCCESS`, `_metadata`, `_common_metadata` in Hadoop.
+- The default path `./{project_alias}/{table_id}.parquet/` mirrors Keboola
+  addressing. When exporting multiple tables, each ends up in a predictable
+  subdirectory and there is no risk of name collisions. Override with
+  `--output DIR` if you need a custom location.
