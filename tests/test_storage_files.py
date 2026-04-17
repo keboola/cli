@@ -1346,11 +1346,20 @@ class TestClientDownloadSlicedFileToDir:
             content=json_mod.dumps(manifest).encode(),
         )
 
-        # Stub the cloud downloader to avoid real S3/GCS calls
+        # Stub the cloud downloader to avoid real S3/GCS calls. stream_to_file
+        # is the OOM-safe path (issue #187): it writes directly to disk rather
+        # than returning bytes, so the fake has to side-effect the destination.
+        slice_payloads = iter([b"PAR1_slice_1", b"PAR1_slice_2"])
+
+        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool) -> int:
+            payload = next(slice_payloads)
+            Path(dest).write_bytes(payload)
+            return len(payload)
+
         fake_downloader = MagicMock()
         fake_downloader.resolve_base_url.return_value = "https://bucket.s3.amazonaws.com/export"
         fake_downloader.resolve_slice_url.side_effect = lambda base, entry_url, fd: entry_url
-        fake_downloader.download_bytes.side_effect = [b"PAR1_slice_1", b"PAR1_slice_2"]
+        fake_downloader.stream_to_file.side_effect = _fake_stream_to_file
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
@@ -1398,10 +1407,17 @@ class TestClientDownloadSlicedFileToDir:
             content=json_mod.dumps(manifest).encode(),
         )
 
+        # The real stream_to_file streams+decompresses gzip; mirror that so
+        # the test still verifies the .gz-suffix handling in the caller.
+        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool) -> int:
+            data = payload if decompress_gzip else gz_payload
+            Path(dest).write_bytes(data)
+            return len(data)
+
         fake_downloader = MagicMock()
         fake_downloader.resolve_base_url.return_value = "https://bucket.s3.amazonaws.com/export"
         fake_downloader.resolve_slice_url.side_effect = lambda base, entry_url, fd: entry_url
-        fake_downloader.download_bytes.return_value = gz_payload
+        fake_downloader.stream_to_file.side_effect = _fake_stream_to_file
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
@@ -1456,3 +1472,96 @@ class TestClientDownloadSlicedFileToDir:
 
         assert exc_info.value.error_code == "EXPORT_EMPTY_MANIFEST"
         client.close()
+
+
+class TestDownloadTableKeepSlices:
+    """download_table(keep_slices=True) writes slices into a directory."""
+
+    def _make_service(self, tmp_path: Path, fake_client: MagicMock) -> StorageService:
+        config_dir = tmp_path / "cfg"
+        config_dir.mkdir(exist_ok=True)
+        store = ConfigStore(config_dir=config_dir)
+        store.save(
+            AppConfig(
+                projects={
+                    "proj": ProjectConfig(
+                        stack_url="https://connection.keboola.com",
+                        token=TEST_TOKEN,
+                    )
+                }
+            )
+        )
+        return StorageService(config_store=store, client_factory=lambda _u, _t: fake_client)
+
+    def test_keep_slices_writes_directory_with_columns_sidecar(self, tmp_path: Path) -> None:
+        """With keep_slices=True we expect a dir + slice files + _columns.csv."""
+        out_dir = tmp_path / "proj" / "in.c-b.t.csv"
+        slice_a = out_dir / "part-0.csv"
+        slice_b = out_dir / "part-1.csv"
+
+        def _fake_download_to_dir(file_detail: dict, output_dir: str) -> dict:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            slice_a.write_bytes(b"1,2\n")
+            slice_b.write_bytes(b"3,4\n")
+            (Path(output_dir) / "_manifest.json").write_text("{}")
+            return {
+                "output_dir": str(Path(output_dir).resolve()),
+                "slice_count": 2,
+                "total_bytes": 8,
+                "slices": [
+                    {"path": str(slice_a.resolve()), "size_bytes": 4},
+                    {"path": str(slice_b.resolve()), "size_bytes": 4},
+                ],
+            }
+
+        fake_client = MagicMock()
+        fake_client.list_tables.return_value = [{"id": "in.c-b.t", "columns": ["a", "b"]}]
+        fake_client.export_table_async.return_value = {"results": {"file": {"id": 99}}}
+        fake_client.get_file_info.return_value = {
+            "id": 99,
+            "isSliced": True,
+            "url": "https://example.com/manifest",
+        }
+        fake_client.download_sliced_file_to_dir.side_effect = _fake_download_to_dir
+
+        svc = self._make_service(tmp_path, fake_client)
+        result = svc.download_table(
+            alias="proj",
+            table_id="in.c-b.t",
+            output_path=str(out_dir),
+            keep_slices=True,
+        )
+
+        assert result["keep_slices"] is True
+        assert result["slice_count"] == 2
+        assert result["file_size_bytes"] == 8
+        # Sidecar with the column order is the contract for downstream readers
+        sidecar = out_dir / "_columns.csv"
+        assert sidecar.exists()
+        assert sidecar.read_text().strip() == '"a","b"'
+        # Each slice is left as-is, no header was prepended into a slice
+        assert slice_a.read_bytes() == b"1,2\n"
+        assert slice_b.read_bytes() == b"3,4\n"
+
+    def test_keep_slices_on_non_sliced_export_errors(self, tmp_path: Path) -> None:
+        """The flag is meaningless if the export wasn't sliced -- error early."""
+        fake_client = MagicMock()
+        fake_client.list_tables.return_value = [{"id": "in.c-b.t", "columns": ["a"]}]
+        fake_client.export_table_async.return_value = {"results": {"file": {"id": 7}}}
+        fake_client.get_file_info.return_value = {
+            "id": 7,
+            "isSliced": False,
+            "url": "https://example.com/file.csv.gz",
+        }
+
+        svc = self._make_service(tmp_path, fake_client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.download_table(
+                alias="proj",
+                table_id="in.c-b.t",
+                output_path=str(tmp_path / "out"),
+                keep_slices=True,
+            )
+        assert exc_info.value.error_code == "NOT_SLICED"
+        # Crucially: the sliced download path must not have been reached
+        fake_client.download_sliced_file_to_dir.assert_not_called()

@@ -34,24 +34,49 @@ def _read_csv_header(file_path: str, delimiter: str = ",") -> list[str]:
     return columns
 
 
+def _write_columns_sidecar(output_dir: str, columns: list[str]) -> None:
+    """Write a _columns.csv sidecar listing the table's column order.
+
+    Storage exports slices without a header row; the column list comes from
+    the table metadata. Writing a tiny sidecar here lets downstream tools
+    (DuckDB read_csv, polars scan_csv) reconstruct the schema without
+    querying Storage. Using the ``_`` prefix matches the _manifest.json
+    convention that pyarrow/Spark/Hive use for "skip when reading as a
+    dataset".
+    """
+    sidecar = Path(output_dir) / "_columns.csv"
+    with sidecar.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh, quoting=csv.QUOTE_ALL)
+        writer.writerow(columns)
+
+
 def _prepend_csv_header(file_path: str, columns: list[str]) -> None:
     """Prepend a CSV header row to an existing file.
 
-    Reads the file content, writes header + content back.
-    Uses CSV quoting for column names to match Keboola's RFC4180 format.
+    Streams the original body into a temp file so that multi-GB CSV exports
+    never sit in RAM at once (issue #187: the old read_bytes() peaked at the
+    full file size). Uses CSV quoting to match Keboola's RFC4180 format.
     """
     import io
+    import shutil
+    import tempfile
 
     writer_buf = io.StringIO()
     writer = csv.writer(writer_buf, quoting=csv.QUOTE_ALL)
     writer.writerow(columns)
-    header_line = writer_buf.getvalue()
+    header_line = writer_buf.getvalue().encode("utf-8")
 
     p = Path(file_path)
-    original = p.read_bytes()
-    with p.open("wb") as fh:
-        fh.write(header_line.encode("utf-8"))
-        fh.write(original)
+    # Temp file sits next to the target so shutil.move is a cheap rename on
+    # the same filesystem.
+    with tempfile.NamedTemporaryFile(
+        dir=p.parent, prefix=p.name + ".", suffix=".tmp", delete=False
+    ) as tmp:
+        tmp_path = Path(tmp.name)
+        tmp.write(header_line)
+        with p.open("rb") as src:
+            shutil.copyfileobj(src, tmp, length=1024 * 1024)
+    tmp_path.replace(p)
 
 
 class StorageService(BaseService):
@@ -541,6 +566,7 @@ class StorageService(BaseService):
         columns: list[str] | None = None,
         limit: int | None = None,
         branch_id: int | None = None,
+        keep_slices: bool = False,
     ) -> dict[str, Any]:
         """Export a storage table to a local CSV file.
 
@@ -551,24 +577,33 @@ class StorageService(BaseService):
         Args:
             alias: Project alias.
             table_id: Full table ID (e.g. "in.c-bucket.table").
-            output_path: Local file path to write to. If None, derives
-                from table name (e.g. "my-table.csv").
+            output_path: Local file path (default mode) or directory
+                (``keep_slices=True``) to write to. Defaults to
+                ``<table>.csv`` / ``<alias>/<table_id>.csv/`` respectively.
             columns: Optional list of column names to export.
             limit: Optional max number of rows to export.
             branch_id: If set, target a specific dev branch.
+            keep_slices: If True, write each slice as its own file inside
+                the output directory and preserve the manifest. The CSV
+                header is written to a sidecar ``_columns.csv`` rather than
+                prepended to any slice so no slice has to be rewritten
+                end-to-end (which would defeat the memory story). For most
+                analytical tools the slices themselves are header-less
+                parts of a single logical CSV; headers come from catalog
+                metadata, not the slice bodies.
 
         Returns:
-            Dict with export metadata: path, size, rows, table_id, etc.
+            Dict with export metadata. With ``keep_slices`` the result also
+            contains ``slice_count`` and ``slices`` (list of {path, size}).
         """
         from ..errors import KeboolaApiError
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
-        # Derive output filename from table ID if not specified
+        table_name = table_id.rsplit(".", 1)[-1] if "." in table_id else table_id
         if not output_path:
-            table_name = table_id.rsplit(".", 1)[-1] if "." in table_id else table_id
-            output_path = f"{table_name}.csv"
+            output_path = f"{alias}/{table_id}.csv" if keep_slices else f"{table_name}.csv"
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -611,7 +646,38 @@ class StorageService(BaseService):
                     retryable=False,
                 )
 
-            # Step 4: Download the file
+            # Step 4a: Sliced-directory mode -- each slice is its own file.
+            # This is the OOM-safe-by-default path for analytical workflows
+            # (DuckDB, polars, Spark read a directory natively).
+            if keep_slices:
+                if not file_detail.get("isSliced"):
+                    raise KeboolaApiError(
+                        message=(
+                            "--keep-slices is only meaningful for tables that "
+                            "Storage exports as multiple slices; this export "
+                            "produced a single file. Re-run without --keep-slices."
+                        ),
+                        status_code=400,
+                        error_code="NOT_SLICED",
+                        retryable=False,
+                    )
+                slice_info = client.download_sliced_file_to_dir(file_detail, output_path)
+                # Sidecar with the column order so downstream readers can
+                # reconstruct the header without hitting Storage.
+                _write_columns_sidecar(slice_info["output_dir"], table_columns or [])
+                return {
+                    "project_alias": alias,
+                    "table_id": table_id,
+                    "output_path": slice_info["output_dir"],
+                    "file_size_bytes": slice_info["total_bytes"],
+                    "columns": table_columns or [],
+                    "limit": limit,
+                    "keep_slices": True,
+                    "slice_count": slice_info["slice_count"],
+                    "slices": slice_info["slices"],
+                }
+
+            # Step 4b: Default mode -- concat into a single CSV file.
             if file_detail.get("isSliced"):
                 bytes_written = client.download_sliced_file(file_detail, output_path)
             else:
@@ -632,6 +698,7 @@ class StorageService(BaseService):
             "file_size_bytes": bytes_written,
             "columns": table_columns or [],
             "limit": limit,
+            "keep_slices": False,
         }
 
     # ------------------------------------------------------------------
@@ -1236,6 +1303,7 @@ class StorageService(BaseService):
         output_path: str | None = None,
         branch_id: int | None = None,
         file_type: str = "csv",
+        keep_slices: bool = False,
     ) -> dict[str, Any]:
         """Export a table to a Storage File.
 
@@ -1331,7 +1399,27 @@ class StorageService(BaseService):
                     result["downloaded_bytes"] = slice_info["total_bytes"]
                     result["slice_count"] = slice_info["slice_count"]
                     result["slices"] = slice_info["slices"]
+                elif keep_slices and file_detail.get("isSliced"):
+                    # Preserve slices as a directory (parallel to parquet layout)
+                    effective_output = output_path or f"{alias}/{table_id}.csv"
+                    slice_info = client.download_sliced_file_to_dir(file_detail, effective_output)
+                    result["downloaded"] = True
+                    result["output_path"] = slice_info["output_dir"]
+                    result["downloaded_bytes"] = slice_info["total_bytes"]
+                    result["slice_count"] = slice_info["slice_count"]
+                    result["slices"] = slice_info["slices"]
+                    result["keep_slices"] = True
                 else:
+                    if keep_slices:
+                        raise KeboolaApiError(
+                            message=(
+                                "--keep-slices requires a sliced export; this "
+                                "file is a single non-sliced CSV. Drop the flag."
+                            ),
+                            status_code=400,
+                            error_code="NOT_SLICED",
+                            retryable=False,
+                        )
                     effective_output = output_path or f"{table_short}.csv"
 
                     if file_detail.get("isSliced"):

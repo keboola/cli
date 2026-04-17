@@ -1485,6 +1485,7 @@ class TestDownloadTableCLI:
             columns=None,
             limit=None,
             branch_id=None,
+            keep_slices=False,
         )
 
     def test_download_table_with_columns_and_limit(self, tmp_path: Path) -> None:
@@ -1531,6 +1532,7 @@ class TestDownloadTableCLI:
             columns=["id", "name"],
             limit=50,
             branch_id=None,
+            keep_slices=False,
         )
 
     def test_download_table_api_error(self, tmp_path: Path) -> None:

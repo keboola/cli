@@ -655,7 +655,10 @@ def storage_download_table(
     output: str | None = typer.Option(
         None,
         "--output",
-        help="Output file path (default: {table_name}.csv)",
+        help=(
+            "Output path. Default mode: file path (e.g. table.csv). "
+            "With --keep-slices: directory path (default ./{project}/{table_id}.csv/)."
+        ),
     ),
     columns: list[str] | None = typer.Option(
         None,
@@ -672,12 +675,25 @@ def storage_download_table(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    keep_slices: bool = typer.Option(
+        False,
+        "--keep-slices",
+        help=(
+            "Save each slice as its own file under --output (treated as a "
+            "directory). Avoids the concat pass, matches the parquet download "
+            "layout, and is the analytical-workflow-friendly option for DuckDB, "
+            "polars, Spark. A _columns.csv sidecar holds the column order."
+        ),
+    ),
 ) -> None:
     """Export a storage table to a local CSV file.
 
     Downloads table data via the async export API. Handles gzip
     decompression transparently. Use --columns to select specific
     columns and --limit to cap row count.
+
+    Use --keep-slices to write the individual slices into a directory
+    instead of concatenating them into a single file.
     """
     if should_hint(ctx):
         emit_hint(
@@ -689,6 +705,7 @@ def storage_download_table(
             columns=columns,
             limit=limit,
             branch=branch,
+            keep_slices=keep_slices,
         )
 
     formatter = get_formatter(ctx)
@@ -713,6 +730,7 @@ def storage_download_table(
             columns=columns,
             limit=limit,
             branch_id=effective_branch,
+            keep_slices=keep_slices,
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
@@ -728,9 +746,14 @@ def storage_download_table(
         formatter.output(result)
     else:
         size_mb = result["file_size_bytes"] / (1024 * 1024)
+        suffix = (
+            f", {result['slice_count']} slices"
+            if result.get("keep_slices") and result.get("slice_count")
+            else ""
+        )
         formatter.console.print(
             f"[bold green]Exported:[/bold green] {result['table_id']} -> {result['output_path']} "
-            f"({size_mb:.2f} MB)"
+            f"({size_mb:.2f} MB{suffix})"
         )
 
 
@@ -1693,6 +1716,16 @@ def storage_unload_table(
         "always sliced; with --download each slice is saved as its own file "
         "under --output (treated as a directory).",
     ),
+    keep_slices: bool = typer.Option(
+        False,
+        "--keep-slices",
+        help=(
+            "CSV-only with --download: write each slice as its own file under "
+            "--output (treated as a directory) instead of concatenating into a "
+            "single CSV. Mirrors the parquet download layout. Ignored for "
+            "parquet (always sliced) and for non-sliced exports."
+        ),
+    ),
 ) -> None:
     """Export a table to a Storage File.
 
@@ -1725,6 +1758,7 @@ def storage_unload_table(
             output=output,
             branch=branch,
             file_type=file_type,
+            keep_slices=keep_slices,
         )
 
     formatter = get_formatter(ctx)
@@ -1750,6 +1784,7 @@ def storage_unload_table(
             output_path=output,
             branch_id=effective_branch,
             file_type=file_type,
+            keep_slices=keep_slices,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")

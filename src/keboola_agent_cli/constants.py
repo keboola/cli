@@ -75,6 +75,12 @@ FILE_DOWNLOAD_TIMEOUT: httpx.Timeout = httpx.Timeout(
     connect=30.0, read=3600.0, write=10.0, pool=30.0
 )
 
+# --- File Download Streaming ---
+# Chunk size for streamed downloads. Bounded buffer keeps peak RSS small even
+# for multi-GB tables (see GitHub issue #187: 200MB parquet slices OOM'd on 2GB RAM
+# hosts when loaded whole-body via response.content).
+FILE_DOWNLOAD_CHUNK_SIZE: int = 1024 * 1024  # 1 MiB
+
 # --- Export Job ---
 EXPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table export jobs (large tables)
 
