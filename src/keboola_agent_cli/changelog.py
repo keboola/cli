@@ -8,6 +8,9 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.20.4": [
+        "Docs: 'kbagent context' now includes a worked Parquet export example for AI agents",
+    ],
     "0.20.3": [
         "New: storage unload-table --file-type parquet -- export tables as Parquet (sliced)",
         "New: --download with parquet saves each slice as its own file + _manifest.json into a directory",
