@@ -8,6 +8,13 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.20.3": [
+        "New: storage unload-table --file-type parquet -- export tables as Parquet (sliced)",
+        "New: --download with parquet saves each slice as its own file + _manifest.json into a directory",
+        "New: default parquet output path ./{project}/{table_id}.parquet/ (Hive-style, pyarrow-ready)",
+        "New: storage file-download auto-detects sliced .parquet files and writes them per-slice",
+        "New: client.download_sliced_file_to_dir() -- preserves slices instead of binary-concatenating (unsafe for parquet)",
+    ],
     "0.20.2": [
         "New: job terminate -- kill Queue API jobs with --job-id or bulk --status filter (#181)",
         "New: --status any filter for terminating all killable jobs (created+waiting+processing)",

@@ -203,9 +203,12 @@ Use `kbagent <command> --help` for full flag details and examples.
     Import an already-uploaded Storage File into a table. Useful for files uploaded by components or file-upload.
     --incremental to append rows. Branch-aware.
 
-  kbagent storage unload-table --project NAME --table-id TABLE_ID [--columns COL ...] [--limit N] [--tag TAG ...] [--download] [--output FILE] [--branch ID]
+  kbagent storage unload-table --project NAME --table-id TABLE_ID [--columns COL ...] [--limit N] [--tag TAG ...] [--download] [--output FILE|DIR] [--file-type csv|parquet] [--branch ID]
     Export a table to a Storage File. The file stays in Keboola for other components to use.
     --tag assigns tags to the exported file. --download also saves it locally. Branch-aware.
+    --file-type parquet produces a sliced Parquet file (CSV default). With --download, --output
+    is a directory that will hold one .parquet file per slice plus _manifest.json.
+    Default parquet directory: ./{{project}}/{{table_id}}.parquet/ (mirrors Keboola addressing).
 
 ### Sharing (Cross-Project)
 
