@@ -1303,6 +1303,7 @@ class KeboolaClient(BaseHttpClient):
         columns: list[str] | None = None,
         limit: int | None = None,
         branch_id: int | None = None,
+        file_type: str = "csv",
     ) -> dict[str, Any]:
         """Start an async table export and wait for completion.
 
@@ -1311,13 +1312,18 @@ class KeboolaClient(BaseHttpClient):
             columns: Optional list of column names to export.
             limit: Optional max number of rows to export.
             branch_id: If set, target a specific dev branch.
+            file_type: Output format, either "csv" (default) or "parquet".
+                Parquet exports are always sliced and Snappy-compressed inside
+                the parquet format (not gzipped at the slice level).
 
         Returns:
             Completed export job dict (results contain file info).
         """
+        if file_type not in ("csv", "parquet"):
+            raise ValueError(f"file_type must be 'csv' or 'parquet', got {file_type!r}")
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         safe_id = quote(table_id, safe="")
-        params: dict[str, Any] = {}
+        params: dict[str, Any] = {"fileType": file_type}
         if columns:
             params["columns"] = ",".join(columns)
         if limit is not None:
@@ -1520,6 +1526,95 @@ class KeboolaClient(BaseHttpClient):
                 total += len(raw)
 
         return total
+
+    def download_sliced_file_to_dir(
+        self, file_detail: dict[str, Any], output_dir: str
+    ) -> dict[str, Any]:
+        """Download a sliced file preserving each slice as a separate local file.
+
+        Unlike download_sliced_file() which binary-concatenates slices, this
+        writes every manifest entry into its own file under ``output_dir``.
+        Required for formats like Parquet where each slice is a self-contained
+        file with its own footer and cannot be safely concatenated.
+
+        The original manifest is also written to ``output_dir/_manifest.json``
+        so the slice set stays self-describing. The leading underscore follows
+        the Hive/Spark/pyarrow convention that makes Parquet readers skip the
+        file when scanning the directory as a dataset.
+
+        Gzip-compressed slices (typical for CSV) are decompressed transparently
+        and the ``.gz`` suffix is stripped from the written filename. Parquet
+        slices are written as-is (Snappy compression lives inside the format).
+
+        Args:
+            file_detail: Full file info dict from get_file_info() with
+                federationToken=1 provider credentials.
+            output_dir: Directory to write slices into. Created if missing.
+
+        Returns:
+            Dict with ``output_dir``, ``slice_count``, ``total_bytes``, and
+            ``slices`` (list of ``{path, size_bytes}``).
+        """
+        import gzip
+        import json as json_mod
+        from pathlib import Path
+
+        provider = file_detail.get("provider", "")
+        downloader = _CloudDownloader.create(file_detail)
+
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+
+        with httpx.Client(timeout=FILE_DOWNLOAD_TIMEOUT) as http:
+            resp = http.get(file_detail["url"])
+            resp.raise_for_status()
+            manifest_data = resp.content
+
+        manifest = json_mod.loads(manifest_data)
+        entries = manifest.get("entries", [])
+        if not entries:
+            raise KeboolaApiError(
+                message="Sliced file manifest has no entries",
+                status_code=500,
+                error_code="EXPORT_EMPTY_MANIFEST",
+                retryable=False,
+            )
+
+        # Persist the manifest alongside slices for traceability.
+        (out / "_manifest.json").write_bytes(manifest_data)
+
+        logger.info("Downloading %d slices to %s (provider=%s)", len(entries), out, provider)
+
+        base_url = downloader.resolve_base_url(file_detail)
+        slices: list[dict[str, Any]] = []
+        total = 0
+
+        for idx, entry in enumerate(entries):
+            entry_url = entry.get("url", "")
+            slice_url = downloader.resolve_slice_url(base_url, entry_url, file_detail)
+            raw = downloader.download_bytes(slice_url)
+
+            clean_url = entry_url.split("?")[0]
+            basename = clean_url.rsplit("/", 1)[-1]
+
+            if clean_url.endswith(".gz"):
+                raw = gzip.decompress(raw)
+                basename = basename.removesuffix(".gz")
+
+            if not basename:
+                basename = f"part-{idx:05d}"
+
+            slice_path = out / basename
+            slice_path.write_bytes(raw)
+            slices.append({"path": str(slice_path.resolve()), "size_bytes": len(raw)})
+            total += len(raw)
+
+        return {
+            "output_dir": str(out.resolve()),
+            "slice_count": len(slices),
+            "total_bytes": total,
+            "slices": slices,
+        }
 
     def download_file(self, url: str, output_path: str) -> int:
         """Download a non-sliced file from a presigned URL.

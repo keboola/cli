@@ -1020,9 +1020,31 @@ class StorageService(BaseService):
 
             file_detail = client.get_file_info(file_id)
             file_name = file_detail.get("name", f"file_{file_id}")
-            effective_output = output_path or file_name
 
-            if file_detail.get("isSliced"):
+            # Auto-detect parquet: sliced + filename ends in .parquet. Such
+            # files must be saved as individual slices, not concatenated --
+            # each parquet slice has its own footer and concatenation produces
+            # an invalid file.
+            is_sliced = bool(file_detail.get("isSliced"))
+            is_parquet = is_sliced and file_name.endswith(".parquet")
+
+            if is_parquet:
+                effective_output = output_path or f"{file_name}.d"
+                slice_info = client.download_sliced_file_to_dir(file_detail, effective_output)
+                result: dict[str, Any] = {
+                    "project_alias": alias,
+                    "file_id": file_id,
+                    "file_name": file_name,
+                    "output_path": slice_info["output_dir"],
+                    "file_size_bytes": slice_info["total_bytes"],
+                    "is_sliced": True,
+                    "slice_count": slice_info["slice_count"],
+                    "slices": slice_info["slices"],
+                }
+                return result
+
+            effective_output = output_path or file_name
+            if is_sliced:
                 bytes_written = client.download_sliced_file(file_detail, effective_output)
             else:
                 download_url = file_detail.get("url")
@@ -1043,7 +1065,7 @@ class StorageService(BaseService):
             "file_name": file_name,
             "output_path": str(Path(effective_output).resolve()),
             "file_size_bytes": bytes_written,
-            "is_sliced": file_detail.get("isSliced", False),
+            "is_sliced": is_sliced,
         }
 
     def delete_files(
@@ -1213,6 +1235,7 @@ class StorageService(BaseService):
         download: bool = False,
         output_path: str | None = None,
         branch_id: int | None = None,
+        file_type: str = "csv",
     ) -> dict[str, Any]:
         """Export a table to a Storage File.
 
@@ -1225,14 +1248,27 @@ class StorageService(BaseService):
             columns: Optional list of column names.
             limit: Optional max rows.
             tags: Tags to apply to the exported file.
-            download: If True, also download the file locally.
+            download: If True, also download the file locally (CSV only for now).
             output_path: Local output path (only used when download=True).
             branch_id: If set, target a specific dev branch.
+            file_type: "csv" (default) or "parquet". Parquet output is sliced;
+                use the returned file_id with 'kbagent storage file-detail' to
+                work with the slices directly. Parquet + download is not
+                supported yet (slices cannot be concatenated into a single
+                valid parquet file).
 
         Returns:
             Dict with export metadata and file info.
         """
         from ..errors import KeboolaApiError
+
+        if file_type not in ("csv", "parquet"):
+            raise KeboolaApiError(
+                message=f"file_type must be 'csv' or 'parquet', got {file_type!r}",
+                status_code=400,
+                error_code="VALIDATION_ERROR",
+                retryable=False,
+            )
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -1245,6 +1281,7 @@ class StorageService(BaseService):
                 columns=columns,
                 limit=limit,
                 branch_id=branch_id,
+                file_type=file_type,
             )
 
             # Step 2: Get file ID from job results
@@ -1273,28 +1310,46 @@ class StorageService(BaseService):
                 "file_size_bytes": file_detail.get("sizeBytes"),
                 "is_sliced": file_detail.get("isSliced", False),
                 "tags": file_detail.get("tags", []),
+                "file_type": file_type,
             }
 
             # Step 5: Download if requested
             if download:
-                effective_output = output_path or f"{table_id.rsplit('.', 1)[-1]}.csv"
+                table_short = table_id.rsplit(".", 1)[-1]
 
-                if file_detail.get("isSliced"):
-                    bytes_written = client.download_sliced_file(file_detail, effective_output)
+                if file_type == "parquet":
+                    # Parquet slices cannot be concatenated -- save each as its
+                    # own file in a directory (manifest.json is also preserved).
+                    # Default layout mirrors Keboola's project+table addressing:
+                    #   ./{project_alias}/{table_id}.parquet/
+                    # which stays unambiguous across multiple exports and reads
+                    # natively as a Parquet dataset in pyarrow/Spark/DuckDB.
+                    effective_output = output_path or f"{alias}/{table_id}.parquet"
+                    slice_info = client.download_sliced_file_to_dir(file_detail, effective_output)
+                    result["downloaded"] = True
+                    result["output_path"] = slice_info["output_dir"]
+                    result["downloaded_bytes"] = slice_info["total_bytes"]
+                    result["slice_count"] = slice_info["slice_count"]
+                    result["slices"] = slice_info["slices"]
                 else:
-                    download_url = file_detail.get("url")
-                    if not download_url:
-                        raise KeboolaApiError(
-                            message=f"No download URL for file {file_id}",
-                            status_code=500,
-                            error_code="FILE_NO_URL",
-                            retryable=False,
-                        )
-                    bytes_written = client.download_file(download_url, effective_output)
+                    effective_output = output_path or f"{table_short}.csv"
 
-                result["downloaded"] = True
-                result["output_path"] = str(Path(effective_output).resolve())
-                result["downloaded_bytes"] = bytes_written
+                    if file_detail.get("isSliced"):
+                        bytes_written = client.download_sliced_file(file_detail, effective_output)
+                    else:
+                        download_url = file_detail.get("url")
+                        if not download_url:
+                            raise KeboolaApiError(
+                                message=f"No download URL for file {file_id}",
+                                status_code=500,
+                                error_code="FILE_NO_URL",
+                                retryable=False,
+                            )
+                        bytes_written = client.download_file(download_url, effective_output)
+
+                    result["downloaded"] = True
+                    result["output_path"] = str(Path(effective_output).resolve())
+                    result["downloaded_bytes"] = bytes_written
             else:
                 result["downloaded"] = False
         finally:

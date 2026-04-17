@@ -1686,13 +1686,32 @@ def storage_unload_table(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    file_type: str = typer.Option(
+        "csv",
+        "--file-type",
+        help="Output format: 'csv' (default) or 'parquet'. Parquet output is "
+        "always sliced; with --download each slice is saved as its own file "
+        "under --output (treated as a directory).",
+    ),
 ) -> None:
     """Export a table to a Storage File.
 
     Creates a file in Storage that can be downloaded or consumed by other
     components. Use --tag to tag the output file and --download to also
-    save it locally.
+    save it locally. Use --file-type parquet to export as Parquet (sliced;
+    --download produces a directory with per-slice .parquet files and a
+    _manifest.json sidecar).
+
+    Default parquet download layout: ./{project}/{table_id}.parquet/
+    Override with --output DIR to choose a different location.
     """
+    if file_type not in ("csv", "parquet"):
+        formatter = get_formatter(ctx)
+        formatter.error(
+            message=f"--file-type must be 'csv' or 'parquet', got {file_type!r}",
+            error_code="VALIDATION_ERROR",
+        )
+        raise typer.Exit(code=2) from None
     if should_hint(ctx):
         emit_hint(
             ctx,
@@ -1705,6 +1724,7 @@ def storage_unload_table(
             download=download,
             output=output,
             branch=branch,
+            file_type=file_type,
         )
 
     formatter = get_formatter(ctx)
@@ -1729,6 +1749,7 @@ def storage_unload_table(
             download=download,
             output_path=output,
             branch_id=effective_branch,
+            file_type=file_type,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
@@ -1744,10 +1765,12 @@ def storage_unload_table(
         tags_str = ", ".join(result.get("tags", []))
         formatter.console.print(
             f"[bold green]Exported:[/bold green] {result['table_id']} -> "
-            f"file ID {result['file_id']} ({size_str})"
+            f"file ID {result['file_id']} ({size_str}, {result.get('file_type', 'csv')})"
         )
         if tags_str:
             formatter.console.print(f"  Tags: {tags_str}")
         if result.get("downloaded"):
             dl_size = _format_file_size(result.get("downloaded_bytes"))
-            formatter.console.print(f"  Downloaded to: {result['output_path']} ({dl_size})")
+            slice_count = result.get("slice_count")
+            suffix = f", {slice_count} slices" if slice_count else ""
+            formatter.console.print(f"  Downloaded to: {result['output_path']} ({dl_size}{suffix})")

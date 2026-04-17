@@ -242,6 +242,41 @@ class TestDownloadFileService:
         assert result["file_size_bytes"] == 2048
         mock_client.download_sliced_file.assert_called_once()
 
+    def test_download_parquet_file_routes_to_slice_dir(self, tmp_path: Path) -> None:
+        """file-download auto-detects sliced .parquet and saves per-slice files."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_file_info.return_value = {
+            **SAMPLE_FILE,
+            "name": "users.parquet",
+            "isSliced": True,
+        }
+        out_dir = tmp_path / "parq"
+        mock_client.download_sliced_file_to_dir.return_value = {
+            "output_dir": str(out_dir.resolve()),
+            "slice_count": 2,
+            "total_bytes": 4096,
+            "slices": [
+                {"path": str(out_dir / "a.parquet"), "size_bytes": 2048},
+                {"path": str(out_dir / "b.parquet"), "size_bytes": 2048},
+            ],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.download_file(
+            alias="test",
+            file_id=12345,
+            output_path=str(out_dir),
+        )
+
+        assert result["is_sliced"] is True
+        assert result["slice_count"] == 2
+        assert result["file_size_bytes"] == 4096
+        assert len(result["slices"]) == 2
+        mock_client.download_sliced_file_to_dir.assert_called_once()
+        # CSV concat must not be called for parquet
+        mock_client.download_sliced_file.assert_not_called()
+
     def test_download_requires_id_or_tags(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
@@ -479,6 +514,98 @@ class TestUnloadTableToFileService:
         assert result["downloaded"] is True
         assert result["downloaded_bytes"] == 2048
         mock_client.download_file.assert_called_once()
+
+    def test_unload_parquet_without_download(self, tmp_path: Path) -> None:
+        """Parquet export forwards fileType=parquet to export-async."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.export_table_async.return_value = {
+            "results": {"file": {"id": 77}},
+        }
+        mock_client.get_file_info.return_value = {
+            "id": 77,
+            "name": "export.parquet",
+            "sizeBytes": 10240,
+            "isSliced": True,
+            "tags": [],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.unload_table_to_file(
+            alias="test",
+            table_id="in.c-data.users",
+            file_type="parquet",
+        )
+
+        assert result["file_id"] == 77
+        assert result["file_type"] == "parquet"
+        assert result["is_sliced"] is True
+        assert result["downloaded"] is False
+        # Verify fileType reached the client
+        _, kwargs = mock_client.export_table_async.call_args
+        assert kwargs["file_type"] == "parquet"
+
+    def test_unload_parquet_with_download_saves_slices_to_dir(self, tmp_path: Path) -> None:
+        """Parquet + download stores each slice as its own file in a directory."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.export_table_async.return_value = {
+            "results": {"file": {"id": 77}},
+        }
+        mock_client.get_file_info.return_value = {
+            "id": 77,
+            "name": "users.parquet",
+            "sizeBytes": 20000,
+            "isSliced": True,
+            "tags": [],
+        }
+        out_dir = tmp_path / "parquet_out"
+        mock_client.download_sliced_file_to_dir.return_value = {
+            "output_dir": str(out_dir.resolve()),
+            "slice_count": 3,
+            "total_bytes": 18000,
+            "slices": [
+                {"path": str(out_dir / "part-1.parquet"), "size_bytes": 6000},
+                {"path": str(out_dir / "part-2.parquet"), "size_bytes": 6000},
+                {"path": str(out_dir / "part-3.parquet"), "size_bytes": 6000},
+            ],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.unload_table_to_file(
+            alias="test",
+            table_id="in.c-data.users",
+            file_type="parquet",
+            download=True,
+            output_path=str(out_dir),
+        )
+
+        assert result["downloaded"] is True
+        assert result["slice_count"] == 3
+        assert result["downloaded_bytes"] == 18000
+        assert len(result["slices"]) == 3
+        mock_client.download_sliced_file_to_dir.assert_called_once()
+        # CSV concat path must NOT be used for parquet
+        mock_client.download_sliced_file.assert_not_called()
+
+    def test_unload_invalid_file_type_rejected(self, tmp_path: Path) -> None:
+        """Unknown file_type must raise validation error before any API call."""
+        import pytest
+
+        from keboola_agent_cli.errors import KeboolaApiError
+
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.unload_table_to_file(
+                alias="test",
+                table_id="in.c-data.users",
+                file_type="json",
+            )
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
+        mock_client.export_table_async.assert_not_called()
 
 
 # ------------------------------------------------------------------
@@ -1186,6 +1313,146 @@ class TestUnloadTableToFileBranchService:
             columns=None,
             limit=None,
             branch_id=33,
+            file_type="csv",
         )
         mock_client.tag_file.assert_called_once_with(99, "export", branch_id=33)
         mock_client.get_file_info.assert_called_once_with(99, branch_id=33)
+
+
+class TestClientDownloadSlicedFileToDir:
+    """Tests for KeboolaClient.download_sliced_file_to_dir()."""
+
+    def test_writes_each_slice_as_separate_file(self, tmp_path: Path, httpx_mock) -> None:
+        """Manifest entries become individual files + _manifest.json is kept."""
+        import json as json_mod
+
+        from keboola_agent_cli.client import KeboolaClient
+
+        manifest = {
+            "entries": [
+                {"url": "s3://bucket/export/part-1.parquet"},
+                {"url": "s3://bucket/export/part-2.parquet"},
+            ]
+        }
+        file_detail = {
+            "id": 42,
+            "name": "users.parquet",
+            "isSliced": True,
+            "url": "https://storage.example.com/manifest?sig=abc",
+            "provider": "aws",
+        }
+        httpx_mock.add_response(
+            url="https://storage.example.com/manifest?sig=abc",
+            content=json_mod.dumps(manifest).encode(),
+        )
+
+        # Stub the cloud downloader to avoid real S3/GCS calls
+        fake_downloader = MagicMock()
+        fake_downloader.resolve_base_url.return_value = "https://bucket.s3.amazonaws.com/export"
+        fake_downloader.resolve_slice_url.side_effect = lambda base, entry_url, fd: entry_url
+        fake_downloader.download_bytes.side_effect = [b"PAR1_slice_1", b"PAR1_slice_2"]
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token=TEST_TOKEN,
+        )
+
+        out_dir = tmp_path / "parquet_slices"
+        with patch(
+            "keboola_agent_cli.client._CloudDownloader.create",
+            return_value=fake_downloader,
+        ):
+            result = client.download_sliced_file_to_dir(file_detail, str(out_dir))
+
+        assert result["slice_count"] == 2
+        assert result["total_bytes"] == len(b"PAR1_slice_1") + len(b"PAR1_slice_2")
+        # Each slice ended up as its own file with the original basename
+        assert (out_dir / "part-1.parquet").read_bytes() == b"PAR1_slice_1"
+        assert (out_dir / "part-2.parquet").read_bytes() == b"PAR1_slice_2"
+        # Manifest is preserved for traceability
+        assert (out_dir / "_manifest.json").exists()
+        assert json_mod.loads((out_dir / "_manifest.json").read_text()) == manifest
+
+        client.close()
+
+    def test_gunzips_gz_slices_and_strips_suffix(self, tmp_path: Path, httpx_mock) -> None:
+        """CSV slices are often .gz; we decompress and drop the suffix."""
+        import gzip
+        import json as json_mod
+
+        from keboola_agent_cli.client import KeboolaClient
+
+        payload = b"col1,col2\n1,2\n3,4\n"
+        gz_payload = gzip.compress(payload)
+
+        manifest = {"entries": [{"url": "s3://bucket/export/part-0.csv.gz"}]}
+        file_detail = {
+            "id": 43,
+            "name": "data.csv.gz",
+            "isSliced": True,
+            "url": "https://storage.example.com/manifest2",
+            "provider": "aws",
+        }
+        httpx_mock.add_response(
+            url="https://storage.example.com/manifest2",
+            content=json_mod.dumps(manifest).encode(),
+        )
+
+        fake_downloader = MagicMock()
+        fake_downloader.resolve_base_url.return_value = "https://bucket.s3.amazonaws.com/export"
+        fake_downloader.resolve_slice_url.side_effect = lambda base, entry_url, fd: entry_url
+        fake_downloader.download_bytes.return_value = gz_payload
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token=TEST_TOKEN,
+        )
+
+        out_dir = tmp_path / "csv_slices"
+        with patch(
+            "keboola_agent_cli.client._CloudDownloader.create",
+            return_value=fake_downloader,
+        ):
+            result = client.download_sliced_file_to_dir(file_detail, str(out_dir))
+
+        assert result["slice_count"] == 1
+        # .gz suffix stripped, content decompressed
+        assert (out_dir / "part-0.csv").read_bytes() == payload
+        assert not (out_dir / "part-0.csv.gz").exists()
+
+        client.close()
+
+    def test_empty_manifest_raises(self, tmp_path: Path, httpx_mock) -> None:
+        """Empty manifest is a server-side problem -- surface it loudly."""
+        import json as json_mod
+
+        from keboola_agent_cli.client import KeboolaClient
+
+        file_detail = {
+            "id": 44,
+            "name": "empty.parquet",
+            "isSliced": True,
+            "url": "https://storage.example.com/empty-manifest",
+            "provider": "aws",
+        }
+        httpx_mock.add_response(
+            url="https://storage.example.com/empty-manifest",
+            content=json_mod.dumps({"entries": []}).encode(),
+        )
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token=TEST_TOKEN,
+        )
+
+        with (
+            patch(
+                "keboola_agent_cli.client._CloudDownloader.create",
+                return_value=MagicMock(),
+            ),
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.download_sliced_file_to_dir(file_detail, str(tmp_path / "out"))
+
+        assert exc_info.value.error_code == "EXPORT_EMPTY_MANIFEST"
+        client.close()
