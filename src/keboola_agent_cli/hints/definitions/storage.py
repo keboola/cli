@@ -308,6 +308,7 @@ HintRegistry.register(
                         "columns": "{columns}",
                         "limit": "{limit}",
                         "branch_id": "{branch}",
+                        "keep_slices": "{keep_slices}",
                     },
                 ),
             ),
@@ -315,6 +316,7 @@ HintRegistry.register(
         notes=[
             "Client layer: export_table_async -> get_file_info -> download_file.",
             "Service layer handles the full flow including CSV header prepending.",
+            "keep_slices=True writes per-slice files into a directory (DuckDB/polars-friendly).",
         ],
     )
 )
@@ -668,10 +670,14 @@ HintRegistry.register(
                         "output_path": "{output}",
                         "branch_id": "{branch}",
                         "file_type": "{file_type}",
+                        "keep_slices": "{keep_slices}",
                     },
                 ),
             ),
         ],
-        notes=["Service layer handles optional tagging and local download."],
+        notes=[
+            "Service layer handles optional tagging and local download.",
+            "keep_slices=True (CSV only) preserves slices in a directory.",
+        ],
     )
 )
