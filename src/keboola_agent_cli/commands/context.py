@@ -484,6 +484,31 @@ Use `kbagent <command> --help` for full flag details and examples.
      Works on all API-backed commands (45 total). No API calls are made.
      Use this when building Python scripts that automate Keboola operations.
 
+11. Parquet export (typed analytics data, no CSV round-trip):
+     # Export + download as Parquet dataset (default layout mirrors Keboola addressing)
+     kbagent storage unload-table --project prod \\
+       --table-id in.c-my-bucket.my-table \\
+       --file-type parquet --download
+     # -> ./prod/in.c-my-bucket.my-table.parquet/
+     #      ├── <slice>.parquet
+     #      └── _manifest.json   (underscore -> skipped by pyarrow/Spark/DuckDB)
+
+     # Read the whole dataset in one line -- directory is a valid Parquet dataset:
+     # python: pyarrow.parquet.read_table("./prod/in.c-my-bucket.my-table.parquet/")
+
+     # Export only (stays in Keboola Storage Files, no local copy):
+     kbagent --json storage unload-table --project prod \\
+       --table-id in.c-bucket.t --file-type parquet --tag daily
+     # -> {{"file_id": 123, "file_type": "parquet", "is_sliced": true, ...}}
+
+     # Download an existing sliced .parquet Storage File (auto-detected):
+     kbagent storage file-download --project prod --file-id 123 --output ./dir/
+
+     Notes:
+     - Parquet output is ALWAYS sliced -> directory, never a single file.
+     - Default download path: ./{{project_alias}}/{{table_id}}.parquet/ -- override with --output.
+     - CSV concat logic is never used for parquet; slices have their own footers.
+
 ## Exit Codes
 
   0  Success
