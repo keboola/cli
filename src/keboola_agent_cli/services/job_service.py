@@ -280,7 +280,25 @@ class JobService(BaseService):
                 status_code=0,
                 error_code="NO_VARIABLE_ROWS",
             )
-        return str(rows[0].get("id", ""))
+
+        # Defense against a malformed Storage API response: a row without a
+        # usable `id` would otherwise be returned as `""`, which the client
+        # treats as "omit from Queue body" -- silently running the job with
+        # empty variable bindings. Fail loud instead (same silent-skip class
+        # as the PR1 encryption asymmetry bug).
+        first_row = rows[0] if isinstance(rows[0], dict) else {}
+        first_row_id = first_row.get("id")
+        if not first_row_id:
+            raise KeboolaApiError(
+                message=(
+                    f"First row of variables config {variables_id} has no 'id' -- "
+                    f"malformed Storage API response. Refusing to submit a job "
+                    f"with empty variable bindings."
+                ),
+                status_code=0,
+                error_code="MALFORMED_VARIABLES_ROW",
+            )
+        return str(first_row_id)
 
     def resolve_job_ids_by_filter(
         self,

@@ -244,6 +244,16 @@ def job_run(
     service = get_service(ctx, "job_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
+    if variable_values_id is not None and not variable_values_id.strip():
+        formatter.error(
+            message=(
+                "--variable-values-id cannot be empty or whitespace. "
+                "Pass a row id, or omit the flag to auto-resolve the default row."
+            ),
+            error_code="INVALID_ARGUMENT",
+        )
+        raise typer.Exit(code=2)
+
     if variable_values_id and no_variables:
         formatter.error(
             message=(

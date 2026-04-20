@@ -1957,6 +1957,45 @@ class TestJobServiceVariableValuesResolution:
             )
         assert excinfo.value.error_code == "NO_VARIABLE_ROWS"
 
+    def test_resolve_raises_when_first_row_has_no_id(self) -> None:
+        """Malformed first row (no ``id`` field) -> MALFORMED_VARIABLES_ROW.
+
+        Locks the fail-loud contract: if the Storage API ever returns a row
+        without a usable ``id``, the resolver must refuse rather than
+        returning ``""`` and letting the Queue body quietly omit
+        ``variableValuesId`` -- same silent-skip class as the PR1
+        encryption-asymmetry bug.
+        """
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {
+            "configuration": {"variables_id": "vars-cfg-42"}
+        }
+        mock_client.list_config_rows.return_value = [{"name": "default"}]
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            JobService.resolve_variable_values_id(
+                client=mock_client,
+                component_id="keboola.snowflake-transformation",
+                config_id="100",
+            )
+        assert excinfo.value.error_code == "MALFORMED_VARIABLES_ROW"
+
+    def test_resolve_raises_when_first_row_id_is_empty_string(self) -> None:
+        """Row with ``id=""`` also triggers MALFORMED_VARIABLES_ROW."""
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {
+            "configuration": {"variables_id": "vars-cfg-42"}
+        }
+        mock_client.list_config_rows.return_value = [{"id": "", "name": "default"}]
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            JobService.resolve_variable_values_id(
+                client=mock_client,
+                component_id="keboola.snowflake-transformation",
+                config_id="100",
+            )
+        assert excinfo.value.error_code == "MALFORMED_VARIABLES_ROW"
+
     def test_run_job_auto_resolves_values_id(self, tmp_config_dir: Path) -> None:
         """run_job dispatches resolver output to create_job's variable_values_id."""
         store = self._store(tmp_config_dir)

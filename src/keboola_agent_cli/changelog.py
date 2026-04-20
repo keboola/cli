@@ -13,6 +13,8 @@ CHANGELOG: dict[str, list[str]] = {
         "New: `--variable-values-id ID` to override the auto-resolved values row.",
         "New: `--no-variables` to skip resolution entirely (mutually exclusive with `--variable-values-id`).",
         "New: `NO_VARIABLE_ROWS` error code when a linked variables config has zero rows (misconfiguration; surface via `--json` error payload or fix via `kbagent config variables-set`).",
+        "New: `MALFORMED_VARIABLES_ROW` error code when the Storage API returns a first row without a usable `id` -- fails loud rather than submitting a job with empty variable bindings.",
+        'Reject: `--variable-values-id ""` (empty or whitespace) returns exit 2 / `INVALID_ARGUMENT` instead of silently skipping the Queue body field.',
         "Client: `create_job` gained `variable_values_id` parameter; omitted from body when unset so existing callers retain wire-level compatibility.",
     ],
     "0.20.6": [

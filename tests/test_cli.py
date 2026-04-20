@@ -2375,6 +2375,96 @@ class TestJobRun:
         job_service.run_job.assert_not_called()
         assert "INVALID_ARGUMENT" in result.output
 
+    def test_job_run_rejects_empty_variable_values_id(self, tmp_path: Path) -> None:
+        """`--variable-values-id ""` exits 2 with INVALID_ARGUMENT.
+
+        Locks the fail-loud contract: an empty string must not fall through
+        to create_job(variable_values_id="") where it would silently be
+        omitted from the Queue body (same silent-skip class as the PR1
+        encryption asymmetry).
+        """
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            job_service = MagicMock()
+            MockJobService.return_value = job_service
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "job",
+                    "run",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-http",
+                    "--config-id",
+                    "42",
+                    "--variable-values-id",
+                    "",
+                ],
+            )
+
+        assert result.exit_code == 2
+        job_service.run_job.assert_not_called()
+        assert "INVALID_ARGUMENT" in result.output
+        assert "empty" in result.output.lower()
+
+    def test_job_run_rejects_whitespace_variable_values_id(self, tmp_path: Path) -> None:
+        """Whitespace-only `--variable-values-id "   "` also rejected."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            job_service = MagicMock()
+            MockJobService.return_value = job_service
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "job",
+                    "run",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-http",
+                    "--config-id",
+                    "42",
+                    "--variable-values-id",
+                    "   ",
+                ],
+            )
+
+        assert result.exit_code == 2
+        job_service.run_job.assert_not_called()
+
     def test_job_run_no_variable_rows_error(self, tmp_path: Path) -> None:
         """Service raises NO_VARIABLE_ROWS → CLI exits 1 with error_code surfaced."""
         from keboola_agent_cli.errors import KeboolaApiError
