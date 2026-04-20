@@ -1,7 +1,8 @@
 """Tests for KeboolaClient - verify_token, retries, timeouts, error handling."""
 
+import json
 from unittest.mock import patch
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote
 
 import httpx
 import pytest
@@ -1645,6 +1646,206 @@ class TestDeleteConfigBranch:
             token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
         ) as client:
             client.delete_config("keboola.sandboxes", "cfg-1", branch_id=200)
+
+
+class TestConfigRowMethods:
+    """Tests for create_config_row / update_config_row / delete_config_row.
+
+    These methods are wired into ``sync push`` for row-level deployment (FIIA's
+    primary use case: deploying ``keboola.variables`` values rows). They were
+    previously unreachable from the service layer -- these tests lock the
+    HTTP contract: URL, method, form-encoding, ``configuration`` JSON-stringified.
+    """
+
+    TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+
+    @staticmethod
+    def _parse_form_body(request: httpx.Request) -> dict[str, str]:
+        """Parse form-encoded request body to a flat str->str dict."""
+        parsed = parse_qs(request.content.decode("utf-8"), keep_blank_values=True)
+        return {k: v[0] for k, v in parsed.items()}
+
+    def test_create_config_row_no_branch(self, httpx_mock) -> None:
+        """POST to /v2/storage/components/{c}/configs/{id}/rows with configuration JSON-stringified."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components/keboola.variables/configs/vars-1/rows",
+            method="POST",
+            json={"id": "row-new", "name": "Main", "configuration": {"values": []}},
+            status_code=201,
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            result = client.create_config_row(
+                component_id="keboola.variables",
+                config_id="vars-1",
+                name="Main",
+                configuration={"values": [{"name": "year_start", "value": "2016"}]},
+                description="default values",
+            )
+
+        assert result["id"] == "row-new"
+        body = self._parse_form_body(httpx_mock.get_requests()[0])
+        assert body["name"] == "Main"
+        assert body["description"] == "default values"
+        # configuration must be JSON-stringified, not nested form-fields
+        assert json.loads(body["configuration"]) == {
+            "values": [{"name": "year_start", "value": "2016"}]
+        }
+
+    def test_create_config_row_with_branch(self, httpx_mock) -> None:
+        """branch_id routes the POST to /v2/storage/branch/{id}/components/.../rows."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/200/components/keboola.variables/configs/vars-1/rows",
+            method="POST",
+            json={"id": "row-new"},
+            status_code=201,
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            client.create_config_row(
+                component_id="keboola.variables",
+                config_id="vars-1",
+                name="dev",
+                configuration={"values": []},
+                branch_id=200,
+            )
+
+    def test_create_config_row_api_error_propagates(self, httpx_mock) -> None:
+        """HTTP 400 from the row-create endpoint surfaces as KeboolaApiError."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components/keboola.variables/configs/vars-1/rows",
+            method="POST",
+            json={"error": "Validation", "code": "validation", "message": "bad row"},
+            status_code=400,
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.create_config_row(
+                    component_id="keboola.variables",
+                    config_id="vars-1",
+                    name="bad",
+                    configuration={"values": "not-a-list"},
+                )
+            assert excinfo.value.status_code == 400
+
+    def test_update_config_row_full_payload(self, httpx_mock) -> None:
+        """PUT with all fields: name, description, configuration, changeDescription."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components/keboola.variables/configs/vars-1/rows/row-1",
+            method="PUT",
+            json={"id": "row-1", "name": "Updated"},
+            status_code=200,
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            client.update_config_row(
+                component_id="keboola.variables",
+                config_id="vars-1",
+                row_id="row-1",
+                name="Updated",
+                configuration={"values": [{"name": "year", "value": "2025"}]},
+                description="new",
+                change_description="Deployed via kbagent sync push",
+            )
+
+        body = self._parse_form_body(httpx_mock.get_requests()[0])
+        assert body["name"] == "Updated"
+        assert body["description"] == "new"
+        assert body["changeDescription"] == "Deployed via kbagent sync push"
+        assert json.loads(body["configuration"]) == {"values": [{"name": "year", "value": "2025"}]}
+
+    def test_update_config_row_partial_omits_unset_fields(self, httpx_mock) -> None:
+        """None-valued fields are NOT included in the form body (partial update)."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components/keboola.variables/configs/vars-1/rows/row-1",
+            method="PUT",
+            json={"id": "row-1"},
+            status_code=200,
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            client.update_config_row(
+                component_id="keboola.variables",
+                config_id="vars-1",
+                row_id="row-1",
+                configuration={"values": []},
+                # name, description, change_description intentionally omitted
+            )
+
+        body = self._parse_form_body(httpx_mock.get_requests()[0])
+        assert "configuration" in body
+        assert "name" not in body
+        assert "description" not in body
+        assert "changeDescription" not in body
+
+    def test_update_config_row_with_branch(self, httpx_mock) -> None:
+        """branch_id routes the PUT to the dev-branch endpoint."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/200/components/keboola.variables/configs/vars-1/rows/row-1",
+            method="PUT",
+            json={"id": "row-1"},
+            status_code=200,
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            client.update_config_row(
+                component_id="keboola.variables",
+                config_id="vars-1",
+                row_id="row-1",
+                name="dev-version",
+                branch_id=200,
+            )
+
+    def test_delete_config_row_no_branch(self, httpx_mock) -> None:
+        """DELETE to /v2/storage/components/.../rows/{row_id} returns None."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components/keboola.variables/configs/vars-1/rows/row-1",
+            method="DELETE",
+            status_code=204,
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            result = client.delete_config_row(
+                component_id="keboola.variables",
+                config_id="vars-1",
+                row_id="row-1",
+            )
+        assert result is None
+
+    def test_delete_config_row_with_branch(self, httpx_mock) -> None:
+        """branch_id routes the DELETE to the dev-branch endpoint."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/200/components/keboola.variables/configs/vars-1/rows/row-1",
+            method="DELETE",
+            status_code=204,
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            client.delete_config_row(
+                component_id="keboola.variables",
+                config_id="vars-1",
+                row_id="row-1",
+                branch_id=200,
+            )
+
+    def test_delete_config_row_not_found_raises(self, httpx_mock) -> None:
+        """HTTP 404 on DELETE surfaces as KeboolaApiError with status 404."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components/keboola.variables/configs/vars-1/rows/missing",
+            method="DELETE",
+            json={"error": "Not found", "code": "notFound"},
+            status_code=404,
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.delete_config_row(
+                    component_id="keboola.variables",
+                    config_id="vars-1",
+                    row_id="missing",
+                )
+            assert excinfo.value.status_code == 404
 
 
 class TestLoadWorkspaceTablesPreserve:

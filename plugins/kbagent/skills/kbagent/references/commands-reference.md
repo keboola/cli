@@ -35,6 +35,9 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `config rename --project NAME --component-id ID --config-id ID --name "New Name" [--branch ID] [--directory DIR]` -- rename a configuration (API update + local sync directory rename with git mv support)
 - `config delete --project NAME --component-id ID --config-id ID [--branch ID]` -- delete a configuration
 - `config new --component-id ID [--project NAME] [--name NAME] [--output-dir DIR]` -- scaffold new config from component schema
+- `config variables-set --project NAME --component-id ID --config-id ID --var KEY=VALUE [--var ...] [--replace] [--variables-id ID] [--values-id ID] [--branch ID] [--dry-run] [--allow-plaintext-on-encrypt-failure] [--yes]` -- attach variable values to a config. Auto-creates a sibling `keboola.variables` config + default row on first use and links it via the parent's `runtime.variables_id` / `variables_values_id`. Defaults to merge; `--replace` drops keys not in `--var`. `#`-prefixed values encrypt via the Encryption API (fail-closed; exit non-zero on `ENCRYPTION_FAILED`). See `variables-workflow.md`
+- `config variables-get --project NAME --component-id ID --config-id ID [--branch ID]` -- resolve `variables_id` + `values_id` from the parent config and fetch the current KEY=VALUE map. Returns `{linked: bool, variables_id, values_id, values}`; `linked=false` means the parent has no variables attached
+- `config variables-clear --project NAME --component-id ID --config-id ID [--branch ID] [--yes]` -- unlink variables from the parent config (strips `variables_id` + `variables_values_id`). **Does NOT delete** the backing `keboola.variables` config -- use `config delete` explicitly if you've verified nothing else references it
 
 ## Job History
 - `job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N]` -- list jobs (default 50, max 500)

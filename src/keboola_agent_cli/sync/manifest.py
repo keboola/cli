@@ -70,12 +70,20 @@ class ManifestBranch(BaseModel):
 
 
 class ManifestConfigRow(BaseModel):
-    """A single configuration row reference."""
+    """A single configuration row reference.
+
+    ``metadata`` mirrors :class:`ManifestConfiguration.metadata` and stores
+    pull-time hashes (``pull_hash``, ``pull_config_hash``) so the row-level
+    diff can distinguish local-changed, remote-changed, and conflict states.
+    Older manifests that lack the field load with an empty dict and upgrade
+    on the next successful pull.
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     id: str
     path: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ManifestConfiguration(BaseModel):
@@ -97,7 +105,7 @@ class ManifestConfiguration(BaseModel):
 
 
 class Manifest(BaseModel):
-    """Root model for .keboola/manifest.json (schema version 2)."""
+    """Root model for .keboola/manifest.json (schema version 3)."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 

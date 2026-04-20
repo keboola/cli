@@ -160,3 +160,129 @@ HintRegistry.register(
         ],
     )
 )
+
+# ── config variables-set ───────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.variables-set",
+        description="Assign variables to a config (auto-creates keboola.variables if absent)",
+        steps=[
+            HintStep(
+                comment="Set variable values on a config; creates or updates the backing keboola.variables",
+                client=ClientCall(
+                    method="get_config_detail",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="parent",
+                    result_hint="dict",
+                ),
+                service=ServiceCall(
+                    service_class="VariablesService",
+                    service_module="variables_service",
+                    method="set_variables",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "variables": "{variable}",
+                        "replace": "{replace}",
+                        "variables_id": "{variables_id}",
+                        "values_id": "{values_id}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "--var takes KEY=VALUE, repeatable. Prefix KEY with # to auto-encrypt as secret.",
+            "Without --variables-id, a sibling keboola.variables config named "
+            "'<parent-name>-vars' is created on first call and the parent is linked.",
+            "Subsequent calls update the same default row; --replace overwrites instead of merging.",
+        ],
+    )
+)
+
+# ── config variables-get ───────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.variables-get",
+        description="Read variable values attached to a config",
+        steps=[
+            HintStep(
+                comment="Resolve variables_id + values_id from parent, fetch the row",
+                client=ClientCall(
+                    method="get_config_detail",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="parent",
+                    result_hint="dict",
+                ),
+                service=ServiceCall(
+                    service_class="VariablesService",
+                    service_module="variables_service",
+                    method="get_variables",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Response: {'linked': bool, 'variables_id': str|None, 'values_id': str|None, "
+            "'values': {name: value}}.",
+            "linked=False means the parent has no variables_id set.",
+        ],
+    )
+)
+
+# ── config variables-clear ─────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.variables-clear",
+        description="Unlink variables from a config (underlying keboola.variables is NOT deleted)",
+        steps=[
+            HintStep(
+                comment="Strip variables_id + variables_values_id from parent config",
+                client=ClientCall(
+                    method="update_config",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "configuration": "<parent config with variables_id/variables_values_id removed>",
+                        "branch_id": "{branch}",
+                        "change_description": "Unlinked variables via kbagent",
+                    },
+                    result_var="result",
+                    result_hint="dict",
+                ),
+                service=ServiceCall(
+                    service_class="VariablesService",
+                    service_module="variables_service",
+                    method="clear_variables",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Clear unlinks only -- the keboola.variables config remains in the project "
+            "(may be shared). Use 'kbagent config delete' to remove it explicitly.",
+        ],
+    )
+)

@@ -69,6 +69,31 @@ COMPONENT_TYPE_MAP: dict[str, str] = {
 # Orchestrator-like components that have special handling
 ORCHESTRATOR_COMPONENTS: set[str] = {"keboola.orchestrator", "keboola.flow"}
 
+# Row-bearing components whose `configuration` top-level keys do NOT fit the
+# standard `parameters` / `storage` / `processors` shape. For these, the
+# non-standard keys (e.g. `values` for variables, `code_content` for shared-code)
+# are hoisted to the top level of the local YAML instead of being hidden inside
+# `_configuration_extra`, so that humans and agents can edit them directly
+# (matching `kbc push` convention — FIIA scaffold kit relies on this).
+ROW_HOIST_COMPONENTS: set[str] = {"keboola.variables", "keboola.shared-code"}
+
+# Top-level keys in the local row YAML that are never part of the API
+# `configuration` body. Used by `local_row_to_api` to separate editable payload
+# keys from local metadata when the component is in ROW_HOIST_COMPONENTS.
+_ROW_LOCAL_RESERVED_KEYS: frozenset[str] = frozenset(
+    {
+        "version",
+        "name",
+        "description",
+        "parameters",
+        "input",
+        "output",
+        "processors",
+        "_configuration_extra",
+        "_keboola",
+    }
+)
+
 
 def classify_component_type(api_type: str) -> str:
     """Map an API component type string to its filesystem directory name.
@@ -187,7 +212,11 @@ def local_config_to_api(
 def api_row_to_local(row_data: dict[str, Any], component_id: str) -> dict[str, Any]:
     """Convert an API configuration row to a local row ``_config.yml``.
 
-    Follows the same promotion rules as :func:`api_config_to_local`.
+    Follows the same promotion rules as :func:`api_config_to_local`, with one
+    exception: for components in :data:`ROW_HOIST_COMPONENTS`, non-standard
+    top-level ``configuration`` keys (e.g. ``values`` for ``keboola.variables``)
+    are hoisted directly into the local YAML instead of being wrapped under
+    ``_configuration_extra``, so users can edit them naturally.
     """
     configuration: dict[str, Any] = row_data.get("configuration") or {}
 
@@ -212,7 +241,11 @@ def api_row_to_local(row_data: dict[str, Any], component_id: str) -> dict[str, A
     promoted_keys = {"parameters", "storage", "processors"}
     extras = {k: v for k, v in configuration.items() if k not in promoted_keys}
     if extras:
-        local["_configuration_extra"] = extras
+        if component_id in ROW_HOIST_COMPONENTS:
+            for key, value in extras.items():
+                local[key] = value
+        else:
+            local["_configuration_extra"] = extras
 
     local["_keboola"] = {
         "component_id": component_id,
@@ -227,8 +260,23 @@ def local_row_to_api(
 ) -> tuple[str, str, dict[str, Any]]:
     """Convert a local row ``_config.yml`` back to API format.
 
+    For components in :data:`ROW_HOIST_COMPONENTS`, hoisted top-level keys
+    (outside the reserved set) are pulled back into the API ``configuration``
+    body. For all other components this behaves identically to
+    :func:`local_config_to_api`.
+
     Returns:
         A tuple of ``(name, description, configuration_dict)``.
     """
-    # Reuse the same logic -- the structure is identical
-    return local_config_to_api(row_yml)
+    keboola_meta: dict[str, Any] = row_yml.get("_keboola") or {}
+    component_id: str = keboola_meta.get("component_id", "")
+
+    name, description, configuration = local_config_to_api(row_yml)
+
+    if component_id in ROW_HOIST_COMPONENTS:
+        for key, value in row_yml.items():
+            if key in _ROW_LOCAL_RESERVED_KEYS:
+                continue
+            configuration.setdefault(key, value)
+
+    return name, description, configuration

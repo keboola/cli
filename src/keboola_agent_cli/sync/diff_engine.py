@@ -22,27 +22,33 @@ _IGNORED_KEYS: frozenset[str] = frozenset({"_keboola", "version"})
 
 
 class ConfigChange:
-    """Represents a single configuration change.
+    """Represents a single configuration or configuration-row change.
 
     ``change_type`` values:
 
-    - ``"added"`` -- new local config not yet in remote
+    - ``"added"`` -- new local config/row not yet in remote
     - ``"modified"`` -- local changed, remote unchanged (safe to push)
     - ``"remote_modified"`` -- remote changed, local unchanged (run pull)
     - ``"conflict"`` -- both sides changed since last pull
     - ``"deleted"`` -- local file removed, wants to delete from remote
+
+    Row changes set ``is_row=True`` and carry ``parent_config_id`` so
+    ``sync push`` can dispatch them to the row-specific client methods
+    (``create_config_row`` / ``update_config_row`` / ``delete_config_row``).
     """
 
     def __init__(
         self,
         change_type: str,
         component_id: str,
-        config_id: str,  # empty string for new configs
+        config_id: str,  # empty string for new configs/rows
         config_name: str,
         path: str,
         local_data: dict[str, Any] | None = None,
         remote_data: dict[str, Any] | None = None,
         details: list[str] | None = None,
+        is_row: bool = False,
+        parent_config_id: str = "",
     ):
         self.change_type = change_type
         self.component_id = component_id
@@ -52,10 +58,12 @@ class ConfigChange:
         self.local_data = local_data
         self.remote_data = remote_data
         self.details = details or []
+        self.is_row = is_row
+        self.parent_config_id = parent_config_id
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for JSON output."""
-        return {
+        data: dict[str, Any] = {
             "change_type": self.change_type,
             "component_id": self.component_id,
             "config_id": self.config_id,
@@ -63,6 +71,10 @@ class ConfigChange:
             "path": self.path,
             "details": self.details,
         }
+        if self.is_row:
+            data["is_row"] = True
+            data["parent_config_id"] = self.parent_config_id
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +422,138 @@ def compute_changeset(
                 config_name=remote_data.get("name", ""),
                 path="",
                 remote_data=remote_data,
+            )
+        )
+
+    return changes
+
+
+def compute_row_changeset(
+    local_rows: list[dict[str, Any]],
+    remote_rows: dict[str, dict[str, Any]],
+    tracked_row_keys: set[str] | None = None,
+    base_hashes: dict[str, str] | None = None,
+) -> list[ConfigChange]:
+    """3-way diff for configuration rows, parallel to :func:`compute_changeset`.
+
+    Row keys are ``"{component_id}/{parent_config_id}/rows/{row_id}"`` so they
+    cannot collide with parent-config keys. Results carry ``is_row=True`` and
+    ``parent_config_id`` so ``sync push`` can route them to
+    ``client.create_config_row`` / ``update_config_row`` / ``delete_config_row``.
+
+    Args:
+        local_rows: List of dicts with keys:
+            ``component_id``, ``parent_config_id``, ``row_id``,
+            ``row_name``, ``path``, ``data``.
+        remote_rows: Dict keyed by ``"{component_id}/{parent_config_id}/rows/{row_id}"``
+            with API row data (already converted to local format via
+            :func:`api_row_to_local`).
+        tracked_row_keys: Optional set of row keys from the manifest.
+            Only manifest-tracked remote rows can be flagged as ``"deleted"``.
+        base_hashes: Optional dict of row_key -> normalized config hash at last
+            pull time. Enables 3-way diff (same semantics as parent configs).
+
+    Returns:
+        List of :class:`ConfigChange` objects, each with ``is_row=True``.
+    """
+    changes: list[ConfigChange] = []
+    seen_remote_keys: set[str] = set()
+
+    for entry in local_rows:
+        component_id: str = entry["component_id"]
+        parent_config_id: str = entry.get("parent_config_id", "")
+        row_id: str = entry.get("row_id", "")
+        row_name: str = entry.get("row_name", "")
+        path: str = entry.get("path", "")
+        local_data: dict[str, Any] = entry.get("data", {})
+
+        remote_key = (
+            f"{component_id}/{parent_config_id}/rows/{row_id}"
+            if row_id and parent_config_id
+            else ""
+        )
+
+        # New row (no id yet, or not in remote)
+        if not row_id or remote_key not in remote_rows:
+            changes.append(
+                ConfigChange(
+                    change_type="added",
+                    component_id=component_id,
+                    config_id=row_id,
+                    config_name=row_name,
+                    path=path,
+                    local_data=local_data,
+                    is_row=True,
+                    parent_config_id=parent_config_id,
+                )
+            )
+            if remote_key:
+                seen_remote_keys.add(remote_key)
+            continue
+
+        seen_remote_keys.add(remote_key)
+        remote_data: dict[str, Any] = remote_rows[remote_key]
+
+        local_h = config_hash(local_data)
+        remote_h = config_hash(remote_data)
+
+        if local_h == remote_h:
+            continue
+
+        base_h = (base_hashes or {}).get(remote_key)
+        if base_h is not None:
+            local_changed = local_h != base_h
+            remote_changed = remote_h != base_h
+        else:
+            local_changed = True
+            remote_changed = False
+
+        if local_changed and remote_changed:
+            change_type = "conflict"
+            details = deep_diff(local_data, remote_data)
+        elif remote_changed and not local_changed:
+            change_type = "remote_modified"
+            details = deep_diff(remote_data, local_data)
+        else:
+            change_type = "modified"
+            details = deep_diff(local_data, remote_data)
+
+        changes.append(
+            ConfigChange(
+                change_type=change_type,
+                component_id=component_id,
+                config_id=row_id,
+                config_name=row_name,
+                path=path,
+                local_data=local_data,
+                remote_data=remote_data,
+                details=details,
+                is_row=True,
+                parent_config_id=parent_config_id,
+            )
+        )
+
+    # Deleted rows: tracked in manifest but missing from local filesystem
+    for remote_key, remote_data in remote_rows.items():
+        if remote_key in seen_remote_keys:
+            continue
+        if tracked_row_keys is not None and remote_key not in tracked_row_keys:
+            continue
+
+        # remote_key shape: "{component_id}/{parent_config_id}/rows/{row_id}"
+        comp_and_parent, _, row_id = remote_key.rpartition("/rows/")
+        component_id, _, parent_config_id = comp_and_parent.partition("/")
+
+        changes.append(
+            ConfigChange(
+                change_type="deleted",
+                component_id=component_id,
+                config_id=row_id,
+                config_name=remote_data.get("name", ""),
+                path="",
+                remote_data=remote_data,
+                is_row=True,
+                parent_config_id=parent_config_id,
             )
         )
 

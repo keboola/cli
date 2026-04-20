@@ -1,27 +1,81 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
-## `job run` now auto-resolves variable values
+## Variables: attach, don't manage (since 0.21.0)
 
-Transformations with linked `keboola.variables` used to run against empty strings
-unless the caller hand-wired a `variableValuesId` at the HTTP layer. `kbagent job run`
-now auto-resolves it: reads `configuration.variables_id` from the parent config
-(root of the configuration body — same key `VariablesService` writes), picks
-`configuration.variables_values_id` if set, else the first row of the linked
-variables config.
+- `keboola.variables` is an implementation detail. Use
+  `kbagent config variables-set/get/clear` -- you never need to create,
+  list, or link variables configs manually.
+- First `variables-set` auto-creates a sibling `keboola.variables` config
+  named `<parent-name>-vars` and links the parent. Subsequent sets update
+  the same default row.
+- **`variables-clear` does NOT delete the backing variables config** -- it
+  may be shared across multiple configs. To actually remove it, run
+  `kbagent config delete --component-id keboola.variables --config-id <id>`
+  after verifying nothing else references it.
+- `--var #KEY=plain` -> encrypted via Encryption API before reaching Storage.
+  Fail-closed: encryption failure aborts with `ENCRYPTION_FAILED`. Use
+  `--allow-plaintext-on-encrypt-failure` only for bootstrap/debug.
+- `--replace` drops any existing keys not in the current `--var` set.
+  Default is merge.
+- Full workflow + response shapes: see
+  [variables-workflow.md](variables-workflow.md).
 
-**Override knobs:**
-- `--variable-values-id ROW_ID` -- use a specific values row (CI runs, what-if analysis).
-- `--no-variables` -- skip resolution entirely (components without variables, or
-  intentionally running with empty bindings).
+## `job run` auto-resolves variable values (since 0.21.0)
 
-**Error cases:**
-- `NO_VARIABLE_ROWS` -- the linked `keboola.variables` config exists but has zero
-  rows. Fix: `kbagent config variables-set --project X --component-id C --config-id I --var KEY=VALUE`.
-- The JSON response now carries `resolvedVariableValuesId` when the resolver fired,
-  so you can verify the job bound to the right row.
+Transformations with linked `keboola.variables` used to run against empty
+strings unless the caller hand-wired a `variableValuesId` at the HTTP
+layer. `kbagent job run` now auto-resolves it: reads
+`configuration.variables_id` from the parent config (root of the
+configuration body -- same key `VariablesService` writes), picks
+`configuration.variables_values_id` if set, else the first row of the
+linked variables config.
 
-`--variable-values-id` and `--no-variables` are mutually exclusive; passing both
-returns exit 2 / `INVALID_ARGUMENT` before any API call.
+- **Override knobs**: `--variable-values-id ROW_ID` pins a specific row
+  (CI runs, what-if analysis); `--no-variables` skips resolution
+  entirely. Mutually exclusive -- passing both returns exit 2 /
+  `INVALID_ARGUMENT` before any API call.
+- **`NO_VARIABLE_ROWS`** -- the linked `keboola.variables` config exists
+  but has zero rows. Fix:
+  `kbagent config variables-set --project X --component-id C --config-id I --var KEY=VALUE`.
+- **`MALFORMED_VARIABLES_ROW`** -- Storage API returned a first row
+  without a usable `id`. Fails loud rather than silently submitting with
+  empty bindings.
+- **Empty `--variable-values-id ""`** (or whitespace) rejected at CLI
+  layer with `INVALID_ARGUMENT` -- same silent-omission class as the
+  above, caught at a different layer.
+- JSON response carries `resolvedVariableValuesId` when the resolver
+  fired, so callers verify the binding without a second `job detail`
+  round-trip.
+
+## Sync: row deploy & manifest v3 (since 0.21.0)
+
+- `sync push` **does** deploy config rows now (previously silently skipped).
+  Row changes in the `pushed_details` array carry `"is_row": true` and
+  `"parent_config_id": "..."` so you can distinguish them from parent config ops.
+- For `keboola.variables` and `keboola.shared-code` rows, the row's
+  `configuration` keys are **hoisted** to the top level of the local YAML
+  (`values:`, `code_content:`, etc.) -- NOT wrapped under
+  `_configuration_extra`. Edit them directly at the top level.
+- `.keboola/manifest.json` auto-upgrades from v2 to v3 on the next successful
+  pull or push. v3 adds `rows[].metadata` with per-row pull hashes. v2
+  manifests still load cleanly; a downgrade to an older kbagent still reads
+  the file via `extra="allow"`.
+- Encryption failure on a row push raises `ENCRYPTION_FAILED` from the
+  service. If it escapes the per-change handler it maps to CLI exit 1
+  (general); if caught per-change it lands in `result["errors"][]` with the
+  same code. Fail-closed either way. Use
+  `--allow-plaintext-on-encrypt-failure` ONLY for debugging.
+- **`keboola.variables` row secrets live in `{name, value}` list
+  elements**, not dict keys. An early version of the encryption walker
+  only scanned `#`-prefixed dict keys and silently shipped plaintext for
+  `values: [{name: '#x', value: '...'}]`; fixed before 0.21.0 shipped
+  via `_is_secret_name_value_pair`. (`keboola.shared-code` rows carry
+  `code_content: [string]` and have no secrets, so the walker correctly
+  never fires there.) If you add a new row-hoist component with yet
+  another secret shape, extend the walker -- don't patch callers.
+- Row-level deployment internals (manifest v3 hashes, 3-way diff, untracked
+  row detection, `ROW_HOIST_COMPONENTS`): see
+  [`sync-rows-workflow.md`](sync-rows-workflow.md).
 
 ## Response structure varies by command
 

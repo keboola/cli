@@ -119,6 +119,18 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [-i] [-r] [--branch ID]
     Search config bodies for string/regex. Reports match location in JSON tree. Branch-aware.
 
+  kbagent config variables-set --project NAME --component-id ID --config-id ID --var KEY=VALUE [--var ...] [--replace] [--variables-id ID] [--values-id ID] [--branch ID] [--dry-run]
+    Assign variables to any config. Auto-creates the backing keboola.variables + default row
+    on first call and links the parent; subsequent calls update the same row (merge by default;
+    --replace for full overwrite). Prefix KEY with # to auto-encrypt as a secret.
+
+  kbagent config variables-get --project NAME --component-id ID --config-id ID [--branch ID]
+    Read variable values attached to a config. Returns linked, variables_id, values_id, values.
+
+  kbagent config variables-clear --project NAME --component-id ID --config-id ID [--branch ID] [--yes]
+    Unlink variables from a config. Does NOT delete the underlying keboola.variables config
+    (it may be shared). Delete it explicitly via `kbagent config delete` if needed.
+
 ### Job History
 
   kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N]
