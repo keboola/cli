@@ -32,11 +32,13 @@ def is_already_encrypted(value: Any) -> bool:
 def _is_secret_name_value_pair(item: Any) -> bool:
     """True if ``item`` is a row-hoisted secret entry like ``{"name": "#x", "value": "..."}``.
 
-    ``keboola.variables`` / ``keboola.shared-code`` rows store each variable as
-    ``{name, value}`` inside a ``values`` list, so a ``#secret`` lives in the
-    ``name`` field rather than as a dict key. This helper lets the walkers
-    recognize that shape so the encryption contract holds for row-hoisted
-    components without every caller having to pre-flatten.
+    ``keboola.variables`` rows store each variable as ``{name, value}`` inside
+    a ``values`` list, so a ``#secret`` lives in the ``name`` field rather
+    than as a dict key. This helper lets the walkers recognize that shape so
+    the encryption contract holds for row-hoisted components without every
+    caller having to pre-flatten. (``keboola.shared-code`` also hoists rows
+    but its payload is ``code_content`` -- no ``name``/``value`` pairs --
+    so this check never fires there, which is correct.)
     """
     return (
         isinstance(item, dict)
@@ -55,7 +57,7 @@ def collect_secrets(obj: Any, path_prefix: str, result: dict[str, str]) -> None:
     ``#parameters.#api_token`` with the outer ``#`` added.
 
     Also recognizes the row-hoisted ``{"name": "#x", "value": "..."}`` list
-    element shape used by ``keboola.variables`` / ``keboola.shared-code``; see
+    element shape used by ``keboola.variables``; see
     :func:`_is_secret_name_value_pair`.
     """
     if isinstance(obj, dict):

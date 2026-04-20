@@ -93,7 +93,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Rename a configuration (update name via API + rename local sync directory) | `kbagent config rename --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Delete a configuration from a project | `kbagent config delete --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Generate boilerplate configuration files for a Keboola component | `kbagent config new --component-id COMPONENT-ID` |
-| Assign variables to a config. | `kbagent config variables-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Assign variables to a config (auto-creates backing keboola.variables on first call) | `kbagent config variables-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Read the current variable values attached to a config | `kbagent config variables-get --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Unlink variables from a config (does NOT delete the underlying keboola.variables) | `kbagent config variables-clear --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | List jobs from connected projects | `kbagent job list` |

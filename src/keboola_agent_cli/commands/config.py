@@ -889,7 +889,7 @@ def config_variables_set(
         help="Fall back to plaintext if encryption fails (NOT recommended).",
     ),
 ) -> None:
-    """Assign variables to a config. Auto-creates the backing keboola.variables on first call.
+    """Assign variables to a config (auto-creates backing keboola.variables on first call).
 
     Variables are presented as a flat KEY=VALUE dict. The implementation detail
     that Keboola stores them as a separate keboola.variables configuration with
