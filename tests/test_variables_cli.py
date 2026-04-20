@@ -260,6 +260,62 @@ class TestVariablesSet:
         assert data["would_write"] == {"region": "us-west", "year_start": "2016"}
         mock_vars.set_variables.assert_not_called()
 
+    def test_dry_run_replace_masks_dropped_hash_keys(self, tmp_path: Path) -> None:
+        """``--replace --dry-run`` must mask ``#``-prefixed dropped rows as <encrypted>.
+
+        Other branches (``+``/``~``/``=``) already mask; the ``-`` branch was
+        missing the same mask and leaked full ``KBC::ProjectSecure::...``
+        ciphertext. Flagged in PR #190 review.
+        """
+        store = _setup_config(tmp_path / "config")
+        mock_vars = MagicMock()
+        mock_vars.get_variables.return_value = {
+            "project_alias": "prod",
+            "parent_component_id": "keboola.x",
+            "parent_config_id": "cfg-1",
+            "variables_id": "vars-1",
+            "values_id": "row-1",
+            "values": {
+                "#old_secret": "KBC::ProjectSecure::eJwOld",
+                "region": "eu",
+            },
+            "linked": True,
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProj,
+            patch("keboola_agent_cli.cli.VariablesService") as MockVars,
+        ):
+            MockStore.return_value = store
+            MockProj.return_value = ProjectService(config_store=store)
+            MockVars.return_value = mock_vars
+
+            result = runner.invoke(
+                app,
+                [
+                    "config",
+                    "variables-set",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.x",
+                    "--config-id",
+                    "cfg-1",
+                    "--var",
+                    "region=us-west",
+                    "--replace",
+                    "--dry-run",
+                ],
+            )
+
+        assert result.exit_code == 0
+        stripped = _strip_ansi(result.output)
+        # Dropped #-key must be masked, never leak ciphertext.
+        assert "KBC::" not in stripped
+        assert "- #old_secret" in stripped
+        assert "<encrypted>" in stripped
+
     def test_human_output_shows_action_and_values(self, tmp_path: Path) -> None:
         """Human mode prints 'created'/'updated' + final values (ANSI stripped)."""
         store = _setup_config(tmp_path / "config")

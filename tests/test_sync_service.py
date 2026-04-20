@@ -1354,6 +1354,134 @@ class TestPushRows:
         new_row_ids = [r.id for r in parent_after.rows if r.path == "rows/hand-crafted-row"]
         assert new_row_ids == ["row-new-001"]
 
+    def _build_variables_row_dir(self, tmp_path: Path) -> Path:
+        """Write a minimal ``keboola.variables`` row YAML with a hoisted ``values`` list."""
+        from keboola_agent_cli.constants import CONFIG_FILENAME, CONFIG_YML_VERSION
+
+        row_dir = tmp_path / "rows" / "default"
+        row_dir.mkdir(parents=True)
+        (row_dir / CONFIG_FILENAME).write_text(
+            yaml.dump(
+                {
+                    "version": CONFIG_YML_VERSION,
+                    "name": "default",
+                    "description": "",
+                    "values": [{"name": "#api_key", "value": "plain-secret-xyz"}],
+                    "_keboola": {
+                        "component_id": "keboola.variables",
+                        "row_id": "vals-default",
+                    },
+                },
+                default_flow_style=False,
+            ),
+            encoding="utf-8",
+        )
+        return row_dir
+
+    def test_push_variables_row_encrypts_hash_prefixed_name(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """``keboola.variables`` rows with ``#``-prefixed names encrypt before PUT.
+
+        Locks the PR #190 review fix: the row-hoisted ``values: [{name, value}]``
+        shape must flow through the Encryption API, not bypass it.
+        """
+        from keboola_agent_cli.sync.manifest import ManifestConfigRow, ManifestConfiguration
+
+        row_dir = self._build_variables_row_dir(tmp_path)
+
+        push_client = _make_sync_mock_client()
+        push_client.update_config_row.return_value = {"id": "vals-default"}
+
+        def fake_encrypt(*, project_id, component_id, data):
+            return {k: "KBC::ProjectSecure::ciphertext" for k in data}
+
+        push_client.encrypt_values.side_effect = fake_encrypt
+
+        store = setup_single_project(tmp_config_dir)
+        push_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client,
+        )
+
+        parent = ManifestConfiguration(
+            branch_id=12345,
+            component_id="keboola.variables",
+            id="vars-001",
+            path="other/keboola.variables/shared-variables",
+            rows=[ManifestConfigRow(id="vals-default", path="rows/default", metadata={})],
+        )
+
+        push_svc._push_update_row(
+            push_client,
+            component_id="keboola.variables",
+            parent_config_id="vars-001",
+            row_id="vals-default",
+            row_dir=row_dir,
+            parent=parent,
+            branch_id=None,
+            project_id=258,
+            allow_plaintext_fallback=False,
+        )
+
+        push_client.encrypt_values.assert_called_once()
+        enc_kwargs = push_client.encrypt_values.call_args.kwargs
+        assert enc_kwargs["component_id"] == "keboola.variables"
+        assert any(v == "plain-secret-xyz" for v in enc_kwargs["data"].values())
+
+        put_kwargs = push_client.update_config_row.call_args.kwargs
+        assert put_kwargs["component_id"] == "keboola.variables"
+        assert put_kwargs["row_id"] == "vals-default"
+        assert (
+            put_kwargs["configuration"]["values"][0]["value"]
+            == "KBC::ProjectSecure::ciphertext"
+        )
+        assert put_kwargs["configuration"]["values"][0]["name"] == "#api_key"
+
+    def test_push_variables_row_encrypt_failure_aborts(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """Encryption failure on a variables row aborts fail-closed.
+
+        ``update_config_row`` must not be called, so plaintext never hits Storage.
+        """
+        from keboola_agent_cli.errors import KeboolaApiError
+        from keboola_agent_cli.sync.manifest import ManifestConfigRow, ManifestConfiguration
+
+        row_dir = self._build_variables_row_dir(tmp_path)
+
+        push_client = _make_sync_mock_client()
+        push_client.encrypt_values.side_effect = Exception("encryption service down")
+
+        store = setup_single_project(tmp_config_dir)
+        push_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client,
+        )
+
+        parent = ManifestConfiguration(
+            branch_id=12345,
+            component_id="keboola.variables",
+            id="vars-001",
+            path="other/keboola.variables/shared-variables",
+            rows=[ManifestConfigRow(id="vals-default", path="rows/default", metadata={})],
+        )
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            push_svc._push_update_row(
+                push_client,
+                component_id="keboola.variables",
+                parent_config_id="vars-001",
+                row_id="vals-default",
+                row_dir=row_dir,
+                parent=parent,
+                branch_id=None,
+                project_id=258,
+                allow_plaintext_fallback=False,
+            )
+        assert excinfo.value.error_code == "ENCRYPTION_FAILED"
+        push_client.update_config_row.assert_not_called()
+
 
 # ===================================================================
 # branch_link tests
