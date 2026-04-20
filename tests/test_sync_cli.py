@@ -980,6 +980,220 @@ class TestSyncPushCli:
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         assert "No changes to push" in result.output
 
+    def test_sync_push_with_row_changes_json(self, tmp_path: Path) -> None:
+        """JSON output reflects row-level push results (P0-1).
+
+        Mocks a push that deploys one new row, one updated row, one deleted
+        row; asserts the ``pushed_details`` entries preserve ``is_row`` +
+        ``parent_config_id`` so ``--json`` consumers can distinguish row ops
+        from parent-config ops.
+        """
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.push.return_value = {
+            "status": "pushed",
+            "created": 1,
+            "updated": 1,
+            "deleted": 1,
+            "errors": [],
+            "pushed_details": [
+                {
+                    "change_type": "added",
+                    "component_id": "keboola.variables",
+                    "config_id": "row-new",
+                    "config_name": "new-row",
+                    "path": "values/new",
+                    "is_row": True,
+                    "parent_config_id": "vars-1",
+                },
+                {
+                    "change_type": "modified",
+                    "component_id": "keboola.variables",
+                    "config_id": "row-1",
+                    "config_name": "main",
+                    "path": "values/main",
+                    "is_row": True,
+                    "parent_config_id": "vars-1",
+                },
+                {
+                    "change_type": "deleted",
+                    "component_id": "keboola.variables",
+                    "config_id": "row-old",
+                    "config_name": "old",
+                    "path": "values/old",
+                    "is_row": True,
+                    "parent_config_id": "vars-1",
+                },
+            ],
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "push",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        data = output["data"]
+        assert data["status"] == "pushed"
+        assert data["created"] == 1
+        assert data["updated"] == 1
+        assert data["deleted"] == 1
+        # Row changes carry is_row + parent_config_id so downstream agents can
+        # distinguish row ops from parent config ops in the response.
+        row_details = [d for d in data["pushed_details"] if d.get("is_row")]
+        assert len(row_details) == 3
+        assert all(d["parent_config_id"] == "vars-1" for d in row_details)
+
+    def test_sync_push_row_encryption_failure_exits_nonzero(self, tmp_path: Path) -> None:
+        """Encryption failure surfaced by the service exits non-zero (exit 1).
+
+        Bundled P1-5 contract: if the service raises ``KeboolaApiError`` with
+        ``ENCRYPTION_FAILED`` (e.g. Encryption API unreachable and
+        ``--allow-plaintext-on-encrypt-failure`` not set), the CLI maps it to
+        exit 1 and emits the error code in the JSON response.
+        """
+        from keboola_agent_cli.errors import KeboolaApiError
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.push.side_effect = KeboolaApiError(
+            message="Encryption failed for keboola.variables: network error",
+            status_code=0,
+            error_code="ENCRYPTION_FAILED",
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "push",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        # ENCRYPTION_FAILED is an "everything else" error_code in
+        # map_error_to_exit_code -> exit 1 (general). Lock that contract.
+        assert result.exit_code == 1
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["error"]["code"] == "ENCRYPTION_FAILED"
+
+    def test_sync_push_with_row_changes_human(self, tmp_path: Path) -> None:
+        """Human-mode row push prints per-row action labels + summary counts.
+
+        Complements :meth:`test_sync_push_with_row_changes_json` so the CLI
+        layer has both output modes covered per best_practices.md §5. Strips
+        ANSI so the assertion is stable on CI.
+        """
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.push.return_value = {
+            "status": "pushed",
+            "created": 1,
+            "updated": 1,
+            "deleted": 0,
+            "errors": [],
+            "pushed_details": [
+                {
+                    "change_type": "added",
+                    "component_id": "keboola.variables",
+                    "config_id": "row-new",
+                    "config_name": "new-row",
+                    "path": "values/new",
+                    "is_row": True,
+                    "parent_config_id": "vars-1",
+                },
+                {
+                    "change_type": "modified",
+                    "component_id": "keboola.variables",
+                    "config_id": "row-1",
+                    "config_name": "main",
+                    "path": "values/main",
+                    "is_row": True,
+                    "parent_config_id": "vars-1",
+                },
+            ],
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "push",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        text = _strip_ansi(result.output)
+        assert "Pushed: 1 created, 1 updated" in text
+        assert "ADDED keboola.variables/values/new" in text
+        assert "MODIFIED keboola.variables/values/main" in text
+
 
 # ===================================================================
 # sync branch-link / branch-unlink / branch-status CLI tests

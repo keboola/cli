@@ -412,8 +412,9 @@ class TestPull:
         config_files = list(project_root.rglob(CONFIG_FILENAME))
         assert len(config_files) == 3  # 2 configs + 1 row _config.yml
 
-        # Find the row config file (under rows/ subdirectory relative to project_root)
-        row_config_files = [f for f in config_files if "/rows/" in str(f.relative_to(project_root))]
+        # Find the row config file (under rows/ subdirectory relative to project_root).
+        # Use Path.parts so the test is OS-agnostic (Windows uses '\' separators).
+        row_config_files = [f for f in config_files if "rows" in f.relative_to(project_root).parts]
         assert len(row_config_files) == 1
 
         row_data = yaml.safe_load(row_config_files[0].read_text(encoding="utf-8"))
@@ -1053,6 +1054,247 @@ class TestPush:
         assert result["errors"] == []
         # Verify the client.update_config was actually called
         push_client.update_config.assert_called()
+
+
+class TestPushRows:
+    """Row-level push tests: create/update/delete + encryption.
+
+    These lock the P0-1 + P1-5 contract: sync push must deploy variable rows
+    via the Storage API ``/rows`` endpoint and encrypt ``#``-prefixed secrets
+    before transmission.
+    """
+
+    def _init_and_pull(
+        self,
+        tmp_config_dir: Path,
+        project_root: Path,
+    ) -> tuple[ConfigStore, SyncService]:
+        """init + pull with SAMPLE_COMPONENTS (includes one row)."""
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        init_svc.init_sync(alias="prod", project_root=project_root)
+
+        pull_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        pull_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+        pull_svc.pull(alias="prod", project_root=project_root)
+        return store, pull_svc
+
+    def test_push_row_update_calls_update_config_row(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """Editing a row YAML triggers client.update_config_row with the new configuration."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+
+        # Locate the row file (SAMPLE_COMPONENTS has one row under cfg-001).
+        config_files = list(project_root.rglob(CONFIG_FILENAME))
+        row_files = [f for f in config_files if "rows" in f.relative_to(project_root).parts]
+        assert len(row_files) == 1, f"Expected exactly one row file, got {row_files}"
+
+        row_file = row_files[0]
+        row_data = yaml.safe_load(row_file.read_text(encoding="utf-8"))
+        row_data["parameters"]["path"] = "/users/changed"
+        row_file.write_text(yaml.dump(row_data, default_flow_style=False), encoding="utf-8")
+
+        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_client.update_config_row.return_value = {"id": "row-001"}
+        push_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client,
+        )
+
+        result = push_svc.push(alias="prod", project_root=project_root)
+
+        assert result["status"] == "pushed"
+        assert result["updated"] == 1
+        assert result["errors"] == []
+        push_client.update_config_row.assert_called_once()
+        call_kwargs = push_client.update_config_row.call_args.kwargs
+        assert call_kwargs["component_id"] == "keboola.ex-http"
+        assert call_kwargs["config_id"] == "cfg-001"
+        assert call_kwargs["row_id"] == "row-001"
+        # configuration dict passed in has the edited value
+        assert call_kwargs["configuration"]["parameters"]["path"] == "/users/changed"
+
+    def test_push_row_delete_calls_delete_config_row(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """Removing a row YAML file triggers client.delete_config_row + manifest pruning."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+
+        row_files = [
+            f
+            for f in project_root.rglob(CONFIG_FILENAME)
+            if "rows" in f.relative_to(project_root).parts
+        ]
+        assert len(row_files) == 1
+        row_files[0].unlink()
+
+        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_client.delete_config_row.return_value = None
+        push_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client,
+        )
+
+        result = push_svc.push(alias="prod", project_root=project_root)
+
+        assert result["status"] == "pushed"
+        assert result["deleted"] == 1
+        push_client.delete_config_row.assert_called_once()
+        call_kwargs = push_client.delete_config_row.call_args.kwargs
+        assert call_kwargs["component_id"] == "keboola.ex-http"
+        assert call_kwargs["config_id"] == "cfg-001"
+        assert call_kwargs["row_id"] == "row-001"
+
+        # Manifest should no longer list the deleted row
+        manifest = load_manifest(project_root)
+        parent = next(c for c in manifest.configurations if c.id == "cfg-001")
+        assert all(r.id != "row-001" for r in parent.rows)
+
+    def test_push_row_encrypts_hash_secrets_before_api_call(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """#-prefixed secrets in row YAML are sent through the Encryption API first.
+
+        Locks P1-5: the PUT body contains KBC::-prefixed ciphertext, never the
+        plaintext the user wrote locally.
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+
+        row_files = [
+            f
+            for f in project_root.rglob(CONFIG_FILENAME)
+            if "rows" in f.relative_to(project_root).parts
+        ]
+        row_file = row_files[0]
+        row_data = yaml.safe_load(row_file.read_text(encoding="utf-8"))
+        row_data["parameters"]["#api_token"] = "plain-secret"
+        row_file.write_text(yaml.dump(row_data, default_flow_style=False), encoding="utf-8")
+
+        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_client.update_config_row.return_value = {"id": "row-001"}
+
+        # Real encryption API returns the SAME keys the caller sent, with values
+        # replaced by ciphertext. _collect_secrets flattens the path, so the key
+        # the caller sends is "#parameters.#api_token". Mirror that here so
+        # _apply_encrypted successfully replaces the leaf value on round-trip.
+        def fake_encrypt(*, project_id, component_id, data):
+            return {k: "KBC::ComponentSecure::ciphertext" for k in data}
+
+        push_client.encrypt_values.side_effect = fake_encrypt
+        push_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client,
+        )
+
+        result = push_svc.push(alias="prod", project_root=project_root)
+
+        assert result["status"] == "pushed"
+        assert result["updated"] == 1
+        push_client.encrypt_values.assert_called_once()
+        enc_kwargs = push_client.encrypt_values.call_args.kwargs
+        assert enc_kwargs["component_id"] == "keboola.ex-http"
+        # Plaintext was collected and sent; key is path-prefixed so the API can
+        # encrypt it under the right scope.
+        assert any(v == "plain-secret" for v in enc_kwargs["data"].values())
+
+        put_kwargs = push_client.update_config_row.call_args.kwargs
+        assert (
+            put_kwargs["configuration"]["parameters"]["#api_token"]
+            == "KBC::ComponentSecure::ciphertext"
+        )
+
+    def test_push_row_update_error_accumulates(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """Row push failure is captured in result['errors'], other changes still pushed."""
+        from keboola_agent_cli.errors import KeboolaApiError
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+
+        row_files = [
+            f
+            for f in project_root.rglob(CONFIG_FILENAME)
+            if "rows" in f.relative_to(project_root).parts
+        ]
+        row_file = row_files[0]
+        row_data = yaml.safe_load(row_file.read_text(encoding="utf-8"))
+        row_data["parameters"]["path"] = "/users/changed"
+        row_file.write_text(yaml.dump(row_data, default_flow_style=False), encoding="utf-8")
+
+        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_client.update_config_row.side_effect = KeboolaApiError(
+            message="validation failed",
+            status_code=400,
+            error_code="validation",
+        )
+        push_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client,
+        )
+
+        result = push_svc.push(alias="prod", project_root=project_root)
+
+        assert result["status"] == "pushed"
+        assert result["updated"] == 0
+        assert len(result["errors"]) == 1
+        assert result["errors"][0]["config_id"] == "row-001"
+        assert "validation failed" in result["errors"][0]["message"]
+
+    def test_push_encryption_failure_aborts_fail_closed(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """ENCRYPTION_FAILED on a per-change row push aborts the whole push.
+
+        Not buried in ``result["errors"]`` -- the exception propagates so the
+        CLI exits non-zero. A plaintext secret must never reach the wire, and
+        the caller must NEVER see ``status=pushed`` when any ``#``-secret
+        failed to encrypt.
+        """
+        from keboola_agent_cli.errors import KeboolaApiError
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+
+        row_files = [
+            f
+            for f in project_root.rglob(CONFIG_FILENAME)
+            if "rows" in f.relative_to(project_root).parts
+        ]
+        row_file = row_files[0]
+        row_data = yaml.safe_load(row_file.read_text(encoding="utf-8"))
+        row_data["parameters"]["#api_token"] = "plain-secret"
+        row_file.write_text(yaml.dump(row_data, default_flow_style=False), encoding="utf-8")
+
+        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_client.encrypt_values.side_effect = Exception("encryption service unreachable")
+        push_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client,
+        )
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            push_svc.push(alias="prod", project_root=project_root)
+        assert excinfo.value.error_code == "ENCRYPTION_FAILED"
+        # No row mutation on the server: update_config_row must never have been called.
+        push_client.update_config_row.assert_not_called()
 
 
 # ===================================================================

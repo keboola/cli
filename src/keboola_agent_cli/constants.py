@@ -149,7 +149,7 @@ KEBOOLA_DIR_NAME: str = ".keboola"
 MANIFEST_FILENAME: str = "manifest.json"
 BRANCH_MAPPING_FILENAME: str = "branch-mapping.json"
 CONFIG_FILENAME: str = "_config.yml"
-MANIFEST_VERSION: int = 2
+MANIFEST_VERSION: int = 3
 DEFAULT_NAMING_BRANCH: str = "{branch_name}"
 DEFAULT_NAMING_CONFIG: str = "{component_type}/{component_id}/{config_name}"
 DEFAULT_NAMING_CONFIG_ROW: str = "rows/{config_row_name}"
@@ -159,8 +159,10 @@ DEFAULT_NAMING_SHARED_CODE_ROW: str = "codes/{config_row_name}"
 DEFAULT_NAMING_VARIABLES: str = "variables"
 DEFAULT_NAMING_VARIABLES_VALUES: str = "values/{config_row_name}"
 DEFAULT_NAMING_DATA_APP: str = "app/{component_id}/{config_name}"
-# Aliases used by sync subsystem
-CONFIG_YML_VERSION: int = MANIFEST_VERSION
+# _config.yml file-format version is independent of the manifest schema version.
+# Manifest v3 introduces ManifestConfigRow.metadata (row-level pull hashes) but does
+# not change the on-disk YAML shape, so CONFIG_YML_VERSION stays at 2.
+CONFIG_YML_VERSION: int = 2
 SANITIZE_NAME_MAX_LENGTH: int = 100
 
 # --- Sync Pull: Storage & Jobs ---
