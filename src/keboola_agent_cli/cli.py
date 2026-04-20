@@ -47,6 +47,7 @@ from .services.project_service import ProjectService
 from .services.sharing_service import SharingService
 from .services.storage_service import StorageService
 from .services.sync_service import SyncService
+from .services.variables_service import VariablesService
 from .services.version_service import VersionService
 from .services.workspace_service import WorkspaceService
 
@@ -189,6 +190,7 @@ def main(
     sharing_service = SharingService(config_store=config_store)
     storage_service = StorageService(config_store=config_store)
     sync_service = SyncService(config_store=config_store)
+    variables_service = VariablesService(config_store=config_store)
     encrypt_service = EncryptService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
     kai_service = KaiService(config_store=config_store)
@@ -229,6 +231,7 @@ def main(
     ctx.obj["sharing_service"] = sharing_service
     ctx.obj["storage_service"] = storage_service
     ctx.obj["sync_service"] = sync_service
+    ctx.obj["variables_service"] = variables_service
     ctx.obj["encrypt_service"] = encrypt_service
     ctx.obj["workspace_service"] = workspace_service
     ctx.obj["kai_service"] = kai_service

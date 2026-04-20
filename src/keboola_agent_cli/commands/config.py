@@ -8,8 +8,10 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 import typer
+from rich.markup import escape
 from rich.syntax import Syntax
 
 from ..config_store import ConfigStore
@@ -832,3 +834,395 @@ def config_new(
                 )
                 formatter.console.print(syntax)
                 formatter.console.print()
+
+
+def _parse_kv_var(raw: str) -> tuple[str, str]:
+    """Split a ``KEY=VALUE`` token into ``(key, value)``; ``#``-prefix preserved."""
+    if "=" not in raw:
+        raise typer.BadParameter(
+            f"Invalid --var: '{raw}'. Expected KEY=VALUE (use # prefix for secrets)."
+        )
+    key, _, value = raw.partition("=")
+    key = key.strip()
+    if not key:
+        raise typer.BadParameter(f"Invalid --var: '{raw}'. Empty key.")
+    return key, value
+
+
+@config_app.command("variables-set")
+def config_variables_set(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    component_id: str = typer.Option(
+        ..., "--component-id", help="Component ID of the config to attach variables to"
+    ),
+    config_id: str = typer.Option(
+        ..., "--config-id", help="Configuration ID to attach variables to"
+    ),
+    variable: list[str] | None = typer.Option(
+        None,
+        "--var",
+        help="Variable as KEY=VALUE (repeatable). Prefix key with # to mark as a secret (auto-encrypted).",
+    ),
+    replace: bool = typer.Option(
+        False,
+        "--replace",
+        help="Replace ALL variable values instead of merging (drops any keys not in --var).",
+    ),
+    variables_id: str | None = typer.Option(
+        None,
+        "--variables-id",
+        help="Attach parent to an existing keboola.variables config (skips auto-create).",
+    ),
+    values_id: str | None = typer.Option(
+        None,
+        "--values-id",
+        help="Attach to a specific values row (defaults to the first row).",
+    ),
+    branch: int | None = typer.Option(None, "--branch", help="Development branch ID (per-project)"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview the change without writing to Keboola."
+    ),
+    allow_plaintext: bool = typer.Option(
+        False,
+        "--allow-plaintext-on-encrypt-failure",
+        help="Fall back to plaintext if encryption fails (NOT recommended).",
+    ),
+) -> None:
+    """Assign variables to a config. Auto-creates the backing keboola.variables on first call.
+
+    Variables are presented as a flat KEY=VALUE dict. The implementation detail
+    that Keboola stores them as a separate keboola.variables configuration with
+    rows is hidden: first call creates the sibling config named
+    <parent-name>-vars + default row; subsequent calls update the same row.
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.variables-set",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            variable=variable,
+            replace=replace,
+            variables_id=variables_id,
+            values_id=values_id,
+            branch=branch,
+        )
+        return
+
+    formatter = get_formatter(ctx)
+    config_store: ConfigStore = ctx.obj["config_store"]
+
+    raw_vars = variable or []
+    if not raw_vars:
+        formatter.error(
+            message="At least one --var KEY=VALUE is required.",
+            error_code="INVALID_ARGUMENT",
+        )
+        raise typer.Exit(code=2)
+
+    variables_dict: dict[str, str] = {}
+    for raw in raw_vars:
+        try:
+            key, value = _parse_kv_var(raw)
+        except typer.BadParameter as exc:
+            formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+            raise typer.Exit(code=2) from None
+        variables_dict[key] = value
+
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    service = get_service(ctx, "variables_service")
+
+    if dry_run:
+        try:
+            current = service.get_variables(
+                alias=project,
+                component_id=component_id,
+                config_id=config_id,
+                branch_id=effective_branch,
+            )
+        except KeboolaApiError as exc:
+            formatter.error(
+                message=exc.message,
+                error_code=exc.error_code,
+                retryable=exc.retryable,
+            )
+            raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+        except ConfigError as exc:
+            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            raise typer.Exit(code=5) from None
+
+        preview_values = (
+            dict(variables_dict) if replace else {**current["values"], **variables_dict}
+        )
+        result = {
+            "dry_run": True,
+            "project_alias": project,
+            "parent_component_id": component_id,
+            "parent_config_id": config_id,
+            "was_linked": current["linked"],
+            "current_variables_id": current["variables_id"],
+            "current_values": current["values"],
+            "would_write": preview_values,
+            "action": "would_create" if not current["linked"] else "would_update",
+        }
+        if formatter.json_mode:
+            formatter.output(result)
+        else:
+            _format_variables_dry_run(formatter, result)
+        return
+
+    try:
+        result = service.set_variables(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            variables=variables_dict,
+            replace=replace,
+            variables_id=variables_id,
+            values_id=values_id,
+            branch_id=effective_branch,
+            allow_plaintext_fallback=allow_plaintext,
+        )
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        _format_variables_set(formatter, result)
+
+
+@config_app.command("variables-get")
+def config_variables_get(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    component_id: str = typer.Option(
+        ..., "--component-id", help="Component ID of the config whose variables to read"
+    ),
+    config_id: str = typer.Option(
+        ..., "--config-id", help="Configuration ID whose variables to read"
+    ),
+    branch: int | None = typer.Option(None, "--branch", help="Development branch ID (per-project)"),
+) -> None:
+    """Read the current variable values attached to a config."""
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.variables-get",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            branch=branch,
+        )
+        return
+
+    formatter = get_formatter(ctx)
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    service = get_service(ctx, "variables_service")
+    try:
+        result = service.get_variables(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            branch_id=effective_branch,
+        )
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        _format_variables_get(formatter, result)
+
+
+@config_app.command("variables-clear")
+def config_variables_clear(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    component_id: str = typer.Option(
+        ..., "--component-id", help="Component ID of the config to unlink"
+    ),
+    config_id: str = typer.Option(
+        ..., "--config-id", help="Configuration ID to unlink variables from"
+    ),
+    branch: int | None = typer.Option(None, "--branch", help="Development branch ID (per-project)"),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompt.",
+    ),
+) -> None:
+    """Unlink variables from a config (does NOT delete the underlying keboola.variables)."""
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.variables-clear",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            branch=branch,
+        )
+        return
+
+    formatter = get_formatter(ctx)
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    if not yes and not formatter.json_mode:
+        confirmed = typer.confirm(
+            f"Unlink variables from {component_id}/{config_id}? "
+            "(The underlying variables config will NOT be deleted.)"
+        )
+        if not confirmed:
+            formatter.console.print("[yellow]Aborted.[/yellow]")
+            raise typer.Exit(code=0)
+
+    service = get_service(ctx, "variables_service")
+    try:
+        result = service.clear_variables(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            branch_id=effective_branch,
+        )
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        _format_variables_clear(formatter, result)
+
+
+def _format_variables_get(formatter: Any, result: dict) -> None:
+    if not result.get("linked"):
+        formatter.console.print(
+            "[yellow]No variables linked[/yellow] to "
+            f"[cyan]{escape(result['parent_component_id'])}[/cyan]/"
+            f"[cyan]{escape(result['parent_config_id'])}[/cyan]."
+        )
+        return
+
+    formatter.console.print(
+        f"[bold]Variables on[/bold] "
+        f"[cyan]{escape(result['parent_component_id'])}[/cyan]/"
+        f"[cyan]{escape(result['parent_config_id'])}[/cyan] "
+        f"[dim](variables_id={escape(result['variables_id'] or '')}, "
+        f"values_id={escape(result['values_id'] or '')})[/dim]"
+    )
+    if not result["values"]:
+        formatter.console.print("  [dim](no values set)[/dim]")
+        return
+    for k in sorted(result["values"]):
+        v = result["values"][k]
+        display_v = "<encrypted>" if k.startswith("#") else escape(str(v))
+        formatter.console.print(f"  [green]{escape(k)}[/green] = {display_v}")
+
+
+def _format_variables_set(formatter: Any, result: dict) -> None:
+    action_label = (
+        "[green]created[/green]" if result["action"] == "created" else "[yellow]updated[/yellow]"
+    )
+    formatter.console.print(
+        f"Variables {action_label} on "
+        f"[cyan]{escape(result['parent_component_id'])}[/cyan]/"
+        f"[cyan]{escape(result['parent_config_id'])}[/cyan]"
+    )
+    formatter.console.print(f"  variables_id: [cyan]{escape(result['variables_id'])}[/cyan]")
+    formatter.console.print(f"  values_id:    [cyan]{escape(result['values_id'])}[/cyan]")
+    if result.get("encrypted_keys"):
+        joined = ", ".join(escape(k) for k in result["encrypted_keys"])
+        formatter.console.print(f"  [dim]encrypted: {joined}[/dim]")
+    formatter.console.print("[bold]Final values:[/bold]")
+    for k in sorted(result["values"]):
+        v = result["values"][k]
+        display_v = "<encrypted>" if k.startswith("#") else escape(str(v))
+        formatter.console.print(f"  [green]{escape(k)}[/green] = {display_v}")
+
+
+def _format_variables_clear(formatter: Any, result: dict) -> None:
+    if not result["was_linked"]:
+        formatter.console.print(
+            f"[yellow]Nothing to clear[/yellow]: "
+            f"[cyan]{escape(result['parent_component_id'])}[/cyan]/"
+            f"[cyan]{escape(result['parent_config_id'])}[/cyan] had no variables linked."
+        )
+        return
+    formatter.console.print(
+        f"[green]Unlinked[/green] variables from "
+        f"[cyan]{escape(result['parent_component_id'])}[/cyan]/"
+        f"[cyan]{escape(result['parent_config_id'])}[/cyan] "
+        f"[dim](was variables_id={escape(result['unlinked_variables_id'] or '')}, "
+        f"values_id={escape(result['unlinked_values_id'] or '')})[/dim]"
+    )
+    formatter.console.print(
+        "[dim]The underlying keboola.variables config was NOT deleted. "
+        "Use 'kbagent config delete' to remove it if no other config references it.[/dim]"
+    )
+
+
+def _format_variables_dry_run(formatter: Any, result: dict) -> None:
+    verb = "create" if result["action"] == "would_create" else "update"
+    formatter.console.print(
+        f"[yellow]DRY RUN[/yellow]: would {verb} variables on "
+        f"[cyan]{escape(result['parent_component_id'])}[/cyan]/"
+        f"[cyan]{escape(result['parent_config_id'])}[/cyan]"
+    )
+    if result["was_linked"]:
+        formatter.console.print(
+            f"  current variables_id: [cyan]{escape(result['current_variables_id'] or '')}[/cyan]"
+        )
+    else:
+        formatter.console.print("  [dim]no variables currently linked[/dim]")
+
+    current_keys = set(result["current_values"])
+    proposed_keys = set(result["would_write"])
+    for k in sorted(current_keys | proposed_keys):
+        current_v = result["current_values"].get(k)
+        proposed_v = result["would_write"].get(k)
+        if k not in proposed_keys:
+            formatter.console.print(
+                f"  [red]- {escape(k)}[/red] = {escape(str(current_v))} [dim](dropped)[/dim]"
+            )
+        elif k not in current_keys:
+            display = "<encrypted>" if k.startswith("#") else escape(str(proposed_v))
+            formatter.console.print(f"  [green]+ {escape(k)}[/green] = {display}")
+        elif current_v != proposed_v:
+            display_cur = "<encrypted>" if k.startswith("#") else escape(str(current_v))
+            display_new = "<encrypted>" if k.startswith("#") else escape(str(proposed_v))
+            formatter.console.print(
+                f"  [yellow]~ {escape(k)}[/yellow] = {display_cur} -> {display_new}"
+            )
+        else:
+            display = "<encrypted>" if k.startswith("#") else escape(str(current_v))
+            formatter.console.print(f"  [dim]= {escape(k)} = {display}[/dim]")
