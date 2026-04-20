@@ -20,6 +20,33 @@
 - Full workflow + response shapes: see
   [variables-workflow.md](variables-workflow.md).
 
+## `job run` auto-resolves variable values (since 0.21.0)
+
+Transformations with linked `keboola.variables` used to run against empty
+strings unless the caller hand-wired a `variableValuesId` at the HTTP
+layer. `kbagent job run` now auto-resolves it: reads
+`configuration.variables_id` from the parent config (root of the
+configuration body -- same key `VariablesService` writes), picks
+`configuration.variables_values_id` if set, else the first row of the
+linked variables config.
+
+- **Override knobs**: `--variable-values-id ROW_ID` pins a specific row
+  (CI runs, what-if analysis); `--no-variables` skips resolution
+  entirely. Mutually exclusive -- passing both returns exit 2 /
+  `INVALID_ARGUMENT` before any API call.
+- **`NO_VARIABLE_ROWS`** -- the linked `keboola.variables` config exists
+  but has zero rows. Fix:
+  `kbagent config variables-set --project X --component-id C --config-id I --var KEY=VALUE`.
+- **`MALFORMED_VARIABLES_ROW`** -- Storage API returned a first row
+  without a usable `id`. Fails loud rather than silently submitting with
+  empty bindings.
+- **Empty `--variable-values-id ""`** (or whitespace) rejected at CLI
+  layer with `INVALID_ARGUMENT` -- same silent-omission class as the
+  above, caught at a different layer.
+- JSON response carries `resolvedVariableValuesId` when the resolver
+  fired, so callers verify the binding without a second `job detail`
+  round-trip.
+
 ## Sync: row deploy & manifest v3 (since 0.21.0)
 
 - `sync push` **does** deploy config rows now (previously silently skipped).
@@ -39,10 +66,10 @@
   same code. Fail-closed either way. Use
   `--allow-plaintext-on-encrypt-failure` ONLY for debugging.
 - **`keboola.variables` row secrets live in `{name, value}` list
-  elements**, not dict keys. Before 0.21.1, the encryption walker only
-  scanned `#`-prefixed dict keys and silently shipped plaintext for
-  `values: [{name: '#x', value: '...'}]`. Fixed in 0.21.1 via
-  `_is_secret_name_value_pair`. (`keboola.shared-code` rows carry
+  elements**, not dict keys. An early version of the encryption walker
+  only scanned `#`-prefixed dict keys and silently shipped plaintext for
+  `values: [{name: '#x', value: '...'}]`; fixed before 0.21.0 shipped
+  via `_is_secret_name_value_pair`. (`keboola.shared-code` rows carry
   `code_content: [string]` and have no secrets, so the walker correctly
   never fires there.) If you add a new row-hoist component with yet
   another secret shape, extend the walker -- don't patch callers.

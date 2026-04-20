@@ -2409,6 +2409,48 @@ class TestCreateJob:
         assert body["branchId"] == "123"
         assert body["configRowIds"] == ["row1", "row2"]
 
+    def test_create_job_with_variable_values_id(self, httpx_mock) -> None:
+        """create_job() with variable_values_id forwards it as ``variableValuesId``."""
+        httpx_mock.add_response(
+            url="https://queue.keboola.com/jobs",
+            method="POST",
+            json={"id": 600, "status": "waiting"},
+            status_code=201,
+        )
+
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client.create_job(
+                component_id="keboola.snowflake-transformation",
+                config_id="100",
+                variable_values_id="row-vars-001",
+            )
+
+        import json
+
+        body = json.loads(httpx_mock.get_request().content)
+        assert body["variableValuesId"] == "row-vars-001"
+
+    def test_create_job_without_variable_values_id_omits_field(self, httpx_mock) -> None:
+        """Default call path does not include ``variableValuesId`` in the body.
+
+        Locks the "only send when set" contract so configs without linked
+        variables do not trip validation on the Queue API side.
+        """
+        httpx_mock.add_response(
+            url="https://queue.keboola.com/jobs",
+            method="POST",
+            json={"id": 601, "status": "waiting"},
+            status_code=201,
+        )
+
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client.create_job(component_id="keboola.ex-http", config_id="42")
+
+        import json
+
+        body = json.loads(httpx_mock.get_request().content)
+        assert "variableValuesId" not in body
+
 
 class TestKillJob:
     """Tests for kill_job() - Queue API POST /jobs/{id}/kill."""

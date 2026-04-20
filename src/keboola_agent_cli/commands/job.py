@@ -191,6 +191,26 @@ def job_run(
         "--branch",
         help="Dev branch ID (overrides active branch)",
     ),
+    variable_values_id: str | None = typer.Option(
+        None,
+        "--variable-values-id",
+        help=(
+            "Explicit keboola.variables values-row ID to bind. Use when the "
+            "linked variables config has multiple rows and auto-resolution "
+            "(first row) picks the wrong one. Mutually exclusive with "
+            "--no-variables."
+        ),
+    ),
+    no_variables: bool = typer.Option(
+        False,
+        "--no-variables",
+        help=(
+            "Skip variable-values resolution entirely. Use for components "
+            "that do not support variables, or when intentionally running "
+            "against empty bindings. Mutually exclusive with "
+            "--variable-values-id."
+        ),
+    ),
 ) -> None:
     """Run a job for a component configuration.
 
@@ -199,6 +219,11 @@ def job_run(
 
     When a dev branch is active (via 'branch use'), the job automatically
     runs on that branch. Use --branch to override.
+
+    When the config has linked variables (configuration.variables_id),
+    kbagent auto-resolves a variableValuesId so the job binds to the
+    deployed values row. Override with --variable-values-id or skip
+    with --no-variables.
     """
     if should_hint(ctx):
         emit_hint(
@@ -211,11 +236,34 @@ def job_run(
             wait=wait,
             timeout=timeout,
             branch=branch,
+            variable_values_id=variable_values_id,
+            no_variables=no_variables,
         )
         return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "job_service")
     config_store: ConfigStore = ctx.obj["config_store"]
+
+    if variable_values_id is not None and not variable_values_id.strip():
+        formatter.error(
+            message=(
+                "--variable-values-id cannot be empty or whitespace. "
+                "Pass a row id, or omit the flag to auto-resolve the default row."
+            ),
+            error_code="INVALID_ARGUMENT",
+        )
+        raise typer.Exit(code=2)
+
+    if variable_values_id and no_variables:
+        formatter.error(
+            message=(
+                "--variable-values-id and --no-variables are mutually exclusive. "
+                "Pass --variable-values-id to bind a specific values row, or "
+                "--no-variables to skip resolution, but not both."
+            ),
+            error_code="INVALID_ARGUMENT",
+        )
+        raise typer.Exit(code=2)
 
     validate_branch_requires_project(formatter, branch, project)
     _, effective_branch = resolve_branch(config_store, formatter, project, branch)
@@ -230,6 +278,14 @@ def job_run(
             msg += f" [dim](waiting up to {timeout:.0f}s)[/dim]"
         msg += "..."
         formatter.console.print(msg)
+        if variable_values_id:
+            from rich.markup import escape
+
+            formatter.console.print(
+                f"[dim]Using variable values row: {escape(variable_values_id)}[/dim]"
+            )
+        elif no_variables:
+            formatter.console.print("[dim]Skipping variable-values resolution.[/dim]")
 
     try:
         result = service.run_job(
@@ -240,6 +296,8 @@ def job_run(
             wait=wait,
             timeout=timeout,
             branch_id=effective_branch,
+            variable_values_id=variable_values_id,
+            no_variables=no_variables,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")

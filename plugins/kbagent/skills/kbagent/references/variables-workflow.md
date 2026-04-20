@@ -184,3 +184,93 @@ Both are supported; pick whichever fits your workflow:
 
 They converge on the same API calls; `sync push` just routes through local YAML
 first.
+
+## Running jobs against deployed values
+
+Deploying values is only half the loop. The other half is making sure the
+Queue job actually *binds* to them at runtime. `kbagent job run` auto-resolves
+a `variableValuesId` and passes it to the Queue API -- without this, a
+transformation linked to a `keboola.variables` config runs against empty
+`{{ placeholder }}` strings (the most common silent-fail mode in pipelines
+that use variables).
+
+### End-to-end example
+
+```bash
+# 1. Deploy values
+kbagent config variables-set --project prod \
+  --component-id keboola.snowflake-transformation --config-id 15815157 \
+  --var year_start=2025 --var region=eu
+
+# 2. Run the job -- kbagent auto-resolves values row from the parent's link
+kbagent --json job run --project prod \
+  --component-id keboola.snowflake-transformation --config-id 15815157 \
+  --wait
+```
+
+Inspect the JSON output for `resolvedVariableValuesId` to verify the binding
+without a second `job detail` round-trip.
+
+### Resolution order
+
+`JobService.resolve_variable_values_id` picks, in this order:
+
+1. **Explicit `--variable-values-id ROW_ID`** -- hand-picks a values row.
+   Use for CI matrix runs ("run this job against each of our 5 environment
+   values rows") or what-if analysis.
+2. **`configuration.variables_values_id`** on the parent config -- if set,
+   this is the pin that `variables-set` and the Keboola UI both write.
+3. **First row** of the linked `keboola.variables` config -- the default-row
+   convention.
+
+The link is read from the **root** of the `configuration` body as
+`variables_id` / `variables_values_id` (snake_case). NOT nested under a
+`runtime` key -- that's a misconception an earlier draft of this feature had.
+
+### Override knobs
+
+- `--variable-values-id ROW_ID` -- pin a specific values row (overrides
+  steps 2 and 3 above).
+- `--no-variables` -- skip resolution entirely. Use for components that have
+  no linked variables config (no-op), or when you intentionally want the job
+  to run with empty bindings.
+
+They are **mutually exclusive**. Passing both returns exit 2 /
+`INVALID_ARGUMENT` before any API call.
+
+Empty or whitespace-only `--variable-values-id ""` is rejected at the CLI
+layer with the same `INVALID_ARGUMENT`; passing through as `""` would
+silently drop `variableValuesId` from the Queue body and reintroduce the
+empty-bindings silent failure.
+
+### Error codes
+
+| Code | When | Recovery |
+|---|---|---|
+| `NO_VARIABLE_ROWS` | Linked `keboola.variables` config exists but has zero rows | `kbagent config variables-set --var KEY=VALUE` |
+| `MALFORMED_VARIABLES_ROW` | Storage API returned a first row without a usable `id` | Inspect the backing config; fix or pin a specific row via `--variable-values-id` |
+| `INVALID_ARGUMENT` | Mutually-exclusive flags, empty `--variable-values-id ""` | Fix CLI args |
+
+`NO_VARIABLE_ROWS` is the common-case signal that deploy is missing: the
+parent was linked (via `sync push` or legacy UI) but the values config was
+never populated. The fix is always `variables-set` on the parent.
+
+### Response shape (`--json`)
+
+```json
+{
+  "status": "ok",
+  "data": {
+    "project_alias": "prod",
+    "job_id": "9876543210",
+    "status": "processing",
+    "resolvedVariableValuesId": "01kpn7sat48jmhvx20svaqdnf9",
+    ...
+  }
+}
+```
+
+`resolvedVariableValuesId` is present only when the resolver actually fired
+(i.e., not for `--no-variables`, and not for configs without a
+`variables_id` link). Absence of the field in the response is unambiguous
+signal that the job ran without variables bindings.
