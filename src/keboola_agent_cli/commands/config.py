@@ -1212,9 +1212,7 @@ def _format_variables_dry_run(formatter: Any, result: dict) -> None:
         proposed_v = result["would_write"].get(k)
         if k not in proposed_keys:
             display = "<encrypted>" if k.startswith("#") else escape(str(current_v))
-            formatter.console.print(
-                f"  [red]- {escape(k)}[/red] = {display} [dim](dropped)[/dim]"
-            )
+            formatter.console.print(f"  [red]- {escape(k)}[/red] = {display} [dim](dropped)[/dim]")
         elif k not in current_keys:
             display = "<encrypted>" if k.startswith("#") else escape(str(proposed_v))
             formatter.console.print(f"  [green]+ {escape(k)}[/green] = {display}")

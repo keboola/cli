@@ -1432,10 +1432,7 @@ class TestPushRows:
         put_kwargs = push_client.update_config_row.call_args.kwargs
         assert put_kwargs["component_id"] == "keboola.variables"
         assert put_kwargs["row_id"] == "vals-default"
-        assert (
-            put_kwargs["configuration"]["values"][0]["value"]
-            == "KBC::ProjectSecure::ciphertext"
-        )
+        assert put_kwargs["configuration"]["values"][0]["value"] == "KBC::ProjectSecure::ciphertext"
         assert put_kwargs["configuration"]["values"][0]["name"] == "#api_key"
 
     def test_push_variables_row_encrypt_failure_aborts(

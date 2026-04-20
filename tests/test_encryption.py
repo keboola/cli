@@ -83,9 +83,7 @@ class TestApplyEncryptedNameValueShape:
 
         apply_encrypted(config, "", encrypted)
 
-        assert config == {
-            "values": [{"name": "#api_key", "value": "KBC::ProjectSecure::xyz"}]
-        }
+        assert config == {"values": [{"name": "#api_key", "value": "KBC::ProjectSecure::xyz"}]}
 
     def test_only_replaces_targeted_entries(self) -> None:
         config = {
@@ -116,9 +114,7 @@ class TestApplyEncryptedToLocalNameValueShape:
 
         apply_encrypted_to_local(local, pushed)
 
-        assert local == {
-            "values": [{"name": "#api_key", "value": "KBC::ProjectSecure::xyz"}]
-        }
+        assert local == {"values": [{"name": "#api_key", "value": "KBC::ProjectSecure::xyz"}]}
 
     def test_skips_when_names_diverge(self) -> None:
         """Defensive: if server reordered or renamed, don't blindly overwrite."""
@@ -196,9 +192,7 @@ class TestEncryptSecretsInConfigNameValueShape:
 
     def test_noop_when_all_already_encrypted(self) -> None:
         client = MagicMock()
-        config = {
-            "values": [{"name": "#api_key", "value": "KBC::ProjectSecure::already"}]
-        }
+        config = {"values": [{"name": "#api_key", "value": "KBC::ProjectSecure::already"}]}
 
         encrypt_secrets_in_config(
             client=client,
