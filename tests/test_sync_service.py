@@ -1296,6 +1296,64 @@ class TestPushRows:
         # No row mutation on the server: update_config_row must never have been called.
         push_client.update_config_row.assert_not_called()
 
+    def test_push_untracked_row_dir_calls_create_config_row(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """A hand-crafted row dir under a tracked config gets POSTed via create_config_row.
+
+        Locks the `_find_untracked_rows` contract: dropping a
+        ``rows/new-row/_config.yml`` into a tracked config's ``rows/``
+        directory must be detected as an added row and pushed via the
+        row-create endpoint.
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+
+        manifest = load_manifest(project_root)
+        parent_cfg = next(c for c in manifest.configurations if c.id == "cfg-001")
+        branch_path = manifest.branches[0].path
+        parent_dir = project_root / branch_path / parent_cfg.path
+        new_row_dir = parent_dir / "rows" / "hand-crafted-row"
+        new_row_dir.mkdir(parents=True)
+        new_row_file = new_row_dir / CONFIG_FILENAME
+        new_row_file.write_text(
+            yaml.dump(
+                {
+                    "name": "Hand crafted row",
+                    "parameters": {"path": "/new/endpoint"},
+                    "_keboola": {"component_id": "keboola.ex-http"},
+                },
+                default_flow_style=False,
+            ),
+            encoding="utf-8",
+        )
+
+        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_client.create_config_row.return_value = {"id": "row-new-001"}
+        push_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client,
+        )
+
+        result = push_svc.push(alias="prod", project_root=project_root)
+
+        assert result["status"] == "pushed"
+        assert result["created"] == 1
+        assert result["errors"] == []
+        push_client.create_config_row.assert_called_once()
+        call_kwargs = push_client.create_config_row.call_args.kwargs
+        assert call_kwargs["component_id"] == "keboola.ex-http"
+        assert call_kwargs["config_id"] == "cfg-001"
+        assert call_kwargs["name"] == "Hand crafted row"
+        assert call_kwargs["configuration"]["parameters"]["path"] == "/new/endpoint"
+
+        # Manifest should now track the newly created row with the API-assigned id.
+        post_manifest = load_manifest(project_root)
+        parent_after = next(c for c in post_manifest.configurations if c.id == "cfg-001")
+        new_row_ids = [r.id for r in parent_after.rows if r.path == "rows/hand-crafted-row"]
+        assert new_row_ids == ["row-new-001"]
+
 
 # ===================================================================
 # branch_link tests

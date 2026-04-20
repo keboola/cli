@@ -918,6 +918,21 @@ class SyncService(BaseService):
                 if pch:
                     row_base_hashes[row_key] = pch
 
+        # Also add untracked local rows (new row dirs dropped under a tracked
+        # config). They have no row_id yet so compute_row_changeset flags
+        # them as "added" and push dispatches them via create_config_row.
+        for untracked in self._find_untracked_rows(project_root, manifest):
+            local_rows.append(
+                {
+                    "component_id": untracked["component_id"],
+                    "parent_config_id": untracked["parent_config_id"],
+                    "row_id": "",
+                    "row_name": untracked["row_name"],
+                    "path": untracked["path"],
+                    "data": untracked["data"],
+                }
+            )
+
         row_changeset = compute_row_changeset(
             local_rows,
             remote_rows,
@@ -1261,15 +1276,14 @@ class SyncService(BaseService):
         project_id = manifest.project.id if manifest.project else None
 
         if change_type == "deleted":
-            client.delete_config_row(
+            self._push_delete_row(
+                client,
                 component_id=component_id,
-                config_id=parent_config_id,
+                parent_config_id=parent_config_id,
                 row_id=row_id,
+                parent=parent,
                 branch_id=branch_id,
             )
-            if parent is not None:
-                parent.rows = [r for r in parent.rows if r.id != row_id]
-            logger.info("Deleted row %s/%s/%s", component_id, parent_config_id, row_id)
             return
 
         # added / modified both read a local row file and encrypt-then-push.
@@ -1413,6 +1427,27 @@ class SyncService(BaseService):
                 r.metadata["pull_hash"] = new_file_hash
                 r.metadata["pull_config_hash"] = cfg_hash_value
                 break
+
+    def _push_delete_row(
+        self,
+        client: Any,
+        *,
+        component_id: str,
+        parent_config_id: str,
+        row_id: str,
+        parent: ManifestConfiguration | None,
+        branch_id: int | None,
+    ) -> None:
+        """DELETE a row; prune it from the parent's row list in the manifest."""
+        client.delete_config_row(
+            component_id=component_id,
+            config_id=parent_config_id,
+            row_id=row_id,
+            branch_id=branch_id,
+        )
+        if parent is not None:
+            parent.rows = [r for r in parent.rows if r.id != row_id]
+        logger.info("Deleted row %s/%s/%s", component_id, parent_config_id, row_id)
 
     def _push_create(
         self,
@@ -2546,4 +2581,46 @@ class SyncService(BaseService):
                         }
                     )
 
+        return added
+
+    def _find_untracked_rows(self, project_root: Path, manifest: Manifest) -> list[dict[str, Any]]:
+        """Scan tracked config dirs for ``rows/*/_config.yml`` not in manifest.
+
+        Paralleling :meth:`_find_untracked_configs` at the row level. A user
+        can drop a hand-crafted row directory under a tracked config's
+        ``rows/`` folder; this surfaces it so :meth:`diff` can flag it as
+        ``"added"`` and :meth:`push` can POST it via ``create_config_row``.
+
+        Each entry contains ``component_id``, ``parent_config_id``,
+        ``row_name`` (from the loaded YAML), ``path`` (relative to the parent
+        config dir, e.g. ``rows/new-row``), and ``data`` (the loaded dict).
+        """
+        added: list[dict[str, Any]] = []
+        for cfg in manifest.configurations:
+            branch_path = self._find_branch_path(manifest, cfg.branch_id)
+            parent_dir = project_root / branch_path / cfg.path
+            rows_dir = parent_dir / "rows"
+            if not rows_dir.is_dir():
+                continue
+            tracked_row_paths = {row.path for row in cfg.rows}
+            for row_subdir in rows_dir.iterdir():
+                if not row_subdir.is_dir():
+                    continue
+                row_rel_path = f"rows/{row_subdir.name}"
+                if row_rel_path in tracked_row_paths:
+                    continue
+                if not (row_subdir / CONFIG_FILENAME).exists():
+                    continue
+                local_data = self._read_config_file(row_subdir)
+                if local_data is None:
+                    continue
+                added.append(
+                    {
+                        "component_id": cfg.component_id,
+                        "parent_config_id": cfg.id,
+                        "row_name": local_data.get("name", ""),
+                        "path": row_rel_path,
+                        "data": local_data,
+                    }
+                )
         return added
