@@ -29,6 +29,23 @@ def is_already_encrypted(value: Any) -> bool:
     return isinstance(value, str) and value.startswith(_ENCRYPTED_PREFIX)
 
 
+def _is_secret_name_value_pair(item: Any) -> bool:
+    """True if ``item`` is a row-hoisted secret entry like ``{"name": "#x", "value": "..."}``.
+
+    ``keboola.variables`` / ``keboola.shared-code`` rows store each variable as
+    ``{name, value}`` inside a ``values`` list, so a ``#secret`` lives in the
+    ``name`` field rather than as a dict key. This helper lets the walkers
+    recognize that shape so the encryption contract holds for row-hoisted
+    components without every caller having to pre-flatten.
+    """
+    return (
+        isinstance(item, dict)
+        and isinstance(item.get("name"), str)
+        and is_secret_key(item["name"])
+        and isinstance(item.get("value"), str)
+    )
+
+
 def collect_secrets(obj: Any, path_prefix: str, result: dict[str, str]) -> None:
     """Recursively collect unencrypted ``#``-prefixed secret values.
 
@@ -36,6 +53,10 @@ def collect_secrets(obj: Any, path_prefix: str, result: dict[str, str]) -> None:
     Encryption API. The Encryption API requires every key to start with
     ``#``, so a nested key ``parameters.#api_token`` is flattened into
     ``#parameters.#api_token`` with the outer ``#`` added.
+
+    Also recognizes the row-hoisted ``{"name": "#x", "value": "..."}`` list
+    element shape used by ``keboola.variables`` / ``keboola.shared-code``; see
+    :func:`_is_secret_name_value_pair`.
     """
     if isinstance(obj, dict):
         for key, value in obj.items():
@@ -47,8 +68,11 @@ def collect_secrets(obj: Any, path_prefix: str, result: dict[str, str]) -> None:
                 collect_secrets(value, child_prefix, result)
     elif isinstance(obj, list):
         for i, item in enumerate(obj):
-            child_prefix = f"{path_prefix}[{i}]."
-            collect_secrets(item, child_prefix, result)
+            if _is_secret_name_value_pair(item) and not is_already_encrypted(item["value"]):
+                encrypt_key = f"#{path_prefix}[{i}].{item['name']}"
+                result[encrypt_key] = item["value"]
+            else:
+                collect_secrets(item, f"{path_prefix}[{i}].", result)
 
 
 def apply_encrypted(obj: Any, path_prefix: str, encrypted: dict[str, str]) -> None:
@@ -65,8 +89,12 @@ def apply_encrypted(obj: Any, path_prefix: str, encrypted: dict[str, str]) -> No
                 apply_encrypted(value, child_prefix, encrypted)
     elif isinstance(obj, list):
         for i, item in enumerate(obj):
-            child_prefix = f"{path_prefix}[{i}]."
-            apply_encrypted(item, child_prefix, encrypted)
+            if _is_secret_name_value_pair(item) and not is_already_encrypted(item["value"]):
+                encrypt_key = f"#{path_prefix}[{i}].{item['name']}"
+                if encrypt_key in encrypted:
+                    item["value"] = encrypted[encrypt_key]
+            else:
+                apply_encrypted(item, f"{path_prefix}[{i}].", encrypted)
 
 
 def apply_encrypted_to_local(local: Any, pushed: Any) -> None:
@@ -74,7 +102,8 @@ def apply_encrypted_to_local(local: Any, pushed: Any) -> None:
 
     Walks both dicts in parallel. Where ``pushed`` has an encrypted value for a
     ``#``-key, replaces the ``local`` plaintext with it so the on-disk file
-    matches server state after a successful push.
+    matches server state after a successful push. Also handles the row-hoisted
+    ``{"name": "#x", "value": "..."}`` list element shape.
     """
     if isinstance(local, dict) and isinstance(pushed, dict):
         for key in local:
@@ -86,7 +115,17 @@ def apply_encrypted_to_local(local: Any, pushed: Any) -> None:
                 apply_encrypted_to_local(local[key], pushed[key])
             elif isinstance(local[key], list) and isinstance(pushed[key], list):
                 for i in range(min(len(local[key]), len(pushed[key]))):
-                    apply_encrypted_to_local(local[key][i], pushed[key][i])
+                    lo = local[key][i]
+                    pu = pushed[key][i]
+                    if (
+                        _is_secret_name_value_pair(lo)
+                        and isinstance(pu, dict)
+                        and pu.get("name") == lo["name"]
+                        and is_already_encrypted(pu.get("value"))
+                    ):
+                        lo["value"] = pu["value"]
+                    else:
+                        apply_encrypted_to_local(lo, pu)
 
 
 def encrypt_secrets_in_config(

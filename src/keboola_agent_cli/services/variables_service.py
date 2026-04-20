@@ -269,13 +269,12 @@ class VariablesService(BaseService):
         )
         variables_id = new_var_cfg["id"]
 
-        encrypted_values = self._encrypt_variable_values(
+        row_config = self._build_encrypted_row_configuration(
             client=client,
             project_id=project_id,
             variables=variables,
             allow_plaintext_fallback=allow_plaintext_fallback,
         )
-        row_config = self._build_row_configuration(encrypted_values)
 
         new_row = client.create_config_row(
             component_id=VARIABLES_COMPONENT_ID,
@@ -307,13 +306,12 @@ class VariablesService(BaseService):
 
         if target_row is None:
             # Linked variables_id exists but no values row -- create the default.
-            encrypted_values = self._encrypt_variable_values(
+            row_config = self._build_encrypted_row_configuration(
                 client=client,
                 project_id=project_id,
                 variables=variables,
                 allow_plaintext_fallback=allow_plaintext_fallback,
             )
-            row_config = self._build_row_configuration(encrypted_values)
             new_row = client.create_config_row(
                 component_id=VARIABLES_COMPONENT_ID,
                 config_id=variables_id,
@@ -340,14 +338,13 @@ class VariablesService(BaseService):
             final_values.update(variables)
 
         # Encrypt only the NEW values -- existing #-keys are already KBC::-
-        # prefixed and _encrypt_secrets_in_config is a no-op on them.
-        encrypted_values = self._encrypt_variable_values(
+        # prefixed and collect_secrets skips already-encrypted entries.
+        row_config = self._build_encrypted_row_configuration(
             client=client,
             project_id=project_id,
             variables=final_values,
             allow_plaintext_fallback=allow_plaintext_fallback,
         )
-        row_config = self._build_row_configuration(encrypted_values)
 
         client.update_config_row(
             component_id=VARIABLES_COMPONENT_ID,
@@ -367,32 +364,31 @@ class VariablesService(BaseService):
         return target_row["id"], final_values
 
     @staticmethod
-    def _encrypt_variable_values(
+    def _build_encrypted_row_configuration(
         *,
         client: Any,
         project_id: int,
         variables: dict[str, str],
         allow_plaintext_fallback: bool,
-    ) -> dict[str, str]:
-        """Encrypt ``#``-prefixed entries in a flat variables dict.
+    ) -> dict[str, Any]:
+        """Shape a ``{values: [...]}`` row config and encrypt ``#``-prefixed entries.
 
-        keboola.variables stores each variable as ``{name, value}`` inside a
-        ``values`` list, so a ``#secret`` lives in ``name`` (a value of a dict
-        field) rather than as a dict key. That shape is invisible to
-        :func:`encrypt_secrets_in_config`, which scans for ``#``-prefixed
-        keys. We pre-encrypt by feeding it a flat ``{key: value}`` dict
-        (where the ``#`` IS a dict key), then the caller rebuilds the values
-        list from the encrypted result.
+        ``#``-prefixed names keep the prefix (the Encryption API and the
+        transformation runner both key off it). :func:`encrypt_secrets_in_config`
+        recognizes the ``{name, value}`` list shape directly, so no pre-flatten
+        dance is needed.
         """
-        flat = dict(variables)
+        row_config: dict[str, Any] = {
+            "values": [{"name": k, "value": v} for k, v in variables.items()],
+        }
         encrypt_secrets_in_config(
             client,
             project_id,
             VARIABLES_COMPONENT_ID,
-            flat,
+            row_config,
             allow_plaintext_fallback=allow_plaintext_fallback,
         )
-        return flat
+        return row_config
 
     @staticmethod
     def _resolve_values_row(
@@ -405,17 +401,6 @@ class VariablesService(BaseService):
         if values_id:
             return next((r for r in rows if r["id"] == values_id), None)
         return rows[0]
-
-    @staticmethod
-    def _build_row_configuration(variables: dict[str, str]) -> dict[str, Any]:
-        """Shape a ``{values: [...]}`` row configuration from a flat dict.
-
-        ``#``-prefixed keys keep the prefix (the Encryption API and the
-        transformation runner both key off the prefix to find secrets).
-        """
-        return {
-            "values": [{"name": k, "value": v} for k, v in variables.items()],
-        }
 
     def _extend_schema_if_new_keys(
         self,
