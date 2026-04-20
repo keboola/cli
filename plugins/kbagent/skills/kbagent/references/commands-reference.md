@@ -39,7 +39,7 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 ## Job History
 - `job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N]` -- list jobs (default 50, max 500)
 - `job detail --project NAME --job-id ID` -- full job detail with timing and result message
-- `job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID]` -- run a job, optionally wait for completion (branch-aware)
+- `job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--variable-values-id ID] [--no-variables]` -- run a job, optionally wait for completion (branch-aware). For configs with linked `keboola.variables` (root-level `configuration.variables_id`), kbagent auto-resolves a `variableValuesId` so transformations bind to the deployed values row. `--variable-values-id` overrides; `--no-variables` skips resolution. `NO_VARIABLE_ROWS` when the linked variables config has zero rows -- fix via `kbagent config variables-set`.
 - `job terminate --project NAME (--job-id ID [--job-id ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]` -- kill running Queue API jobs. Use to stop runaway loops or clean up pile-ups from repeated `job run` calls. Two modes: by ID (single/batch) or by filter (`--status any` catches every killable state). Response partitions IDs into `killed / already_finished / not_found / failed`; safe to re-run idempotently. Kill is async -- poll `job detail` for `isFinished=true`.
 
 ## Storage

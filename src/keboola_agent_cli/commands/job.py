@@ -269,7 +269,11 @@ def job_run(
         msg += "..."
         formatter.console.print(msg)
         if variable_values_id:
-            formatter.console.print(f"[dim]Using variable values row: {variable_values_id}[/dim]")
+            from rich.markup import escape
+
+            formatter.console.print(
+                f"[dim]Using variable values row: {escape(variable_values_id)}[/dim]"
+            )
         elif no_variables:
             formatter.console.print("[dim]Skipping variable-values resolution.[/dim]")
 
