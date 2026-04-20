@@ -40,8 +40,9 @@ from ..sync.config_format import (
     api_row_to_local,
     classify_component_type,
     local_config_to_api,
+    local_row_to_api,
 )
-from ..sync.diff_engine import compute_changeset, config_hash
+from ..sync.diff_engine import compute_changeset, compute_row_changeset, config_hash
 from ..sync.git_utils import get_default_branch, is_git_repo
 from ..sync.manifest import (
     Manifest,
@@ -55,6 +56,7 @@ from ..sync.manifest import (
     save_manifest,
 )
 from ..sync.naming import config_path, config_row_path, sanitize_name
+from ._encryption import apply_encrypted_to_local, encrypt_secrets_in_config
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
@@ -302,6 +304,17 @@ class SyncService(BaseService):
         existing_branch_ids: dict[str, int] = {
             f"{c.component_id}/{c.id}": c.branch_id for c in manifest.configurations
         }
+        # Row-level state lookup, keyed by "{component_id}/{config_id}/{row_id}".
+        # Values: dict with path, pull_hash, pull_config_hash (all optional).
+        existing_rows: dict[str, dict[str, str]] = {}
+        for c in manifest.configurations:
+            for r in c.rows:
+                row_key = f"{c.component_id}/{c.id}/{r.id}"
+                existing_rows[row_key] = {
+                    "path": r.path,
+                    "pull_hash": r.metadata.get("pull_hash", ""),
+                    "pull_config_hash": r.metadata.get("pull_config_hash", ""),
+                }
 
         for component in components:
             component_id = component.get("id", "")
@@ -467,33 +480,81 @@ class SyncService(BaseService):
                                 }
                             )
 
-                # Handle rows -- skip writing if config is unchanged or
-                # locally modified (rows inherit the parent config's state).
-                skip_rows = locally_modified or remote_unchanged
+                # Row-level pull: each row gets its own 3-way diff state
+                # (pull_hash, pull_config_hash) so ``sync push`` can detect
+                # per-row local modifications and push only changed rows.
                 row_manifests: list[ManifestConfigRow] = []
                 used_row_paths: set[str] = set()
                 for row in cfg.get("rows", []):
                     row_id = str(row.get("id", ""))
                     row_name = row.get("name", "untitled")
 
-                    row_rel_path = config_row_path(
-                        manifest.naming.config_row,
-                        row_name,
-                    )
-                    if row_rel_path in used_row_paths:
-                        suffix = row_id[:8] if len(row_id) > 8 else row_id
-                        row_rel_path = f"{row_rel_path}-{suffix}"
+                    # Reuse existing row path (stable) if already tracked.
+                    row_lookup_key = f"{component_id}/{config_id}/{row_id}"
+                    existing_row = existing_rows.get(row_lookup_key)
+                    if existing_row:
+                        row_rel_path = existing_row["path"]
+                    else:
+                        row_rel_path = config_row_path(
+                            manifest.naming.config_row,
+                            row_name,
+                        )
+                        if row_rel_path in used_row_paths:
+                            suffix = row_id[:8] if len(row_id) > 8 else row_id
+                            row_rel_path = f"{row_rel_path}-{suffix}"
                     used_row_paths.add(row_rel_path)
                     row_dir = config_dir / row_rel_path
 
-                    if not skip_rows:
-                        row_local = api_row_to_local(row, component_id)
+                    row_local = api_row_to_local(row, component_id)
+                    row_api_cfg_hash = config_hash(row_local)
+
+                    row_file = row_dir / CONFIG_FILENAME
+                    old_row_file_hash = existing_row["pull_hash"] if existing_row else ""
+                    old_row_cfg_hash = existing_row["pull_config_hash"] if existing_row else ""
+                    row_locally_modified = False
+                    if existing_row and not force and old_row_file_hash and row_file.exists():
+                        row_locally_modified = self._file_hash(row_file) != old_row_file_hash
+
+                    if row_locally_modified:
+                        # Preserve local edits; keep old hashes as the 3-way base.
+                        row_file_hash = old_row_file_hash
+                        row_pull_cfg_hash = old_row_cfg_hash
+                        pull_details.append(
+                            {
+                                "action": "skipped",
+                                "component_id": component_id,
+                                "config_name": f"{config_name}/{row_name}",
+                                "path": f"{rel_path}/{row_rel_path}",
+                                "reason": "row locally modified",
+                            }
+                        )
+                    elif existing_row and old_row_cfg_hash and old_row_cfg_hash == row_api_cfg_hash:
+                        # Idempotent: remote unchanged since last pull, file untouched.
+                        row_file_hash = (
+                            self._file_hash(row_file) if row_file.exists() else old_row_file_hash
+                        )
+                        row_pull_cfg_hash = row_api_cfg_hash
+                    else:
+                        # New or remote-changed row: write the file.
                         if not dry_run:
                             self._write_config_file(row_dir, row_local)
+                            row_file_hash = self._file_hash(row_file) if row_file.exists() else ""
+                        else:
+                            row_file_hash = ""
+                        row_pull_cfg_hash = row_api_cfg_hash
                         files_written += 1
                         rows_pulled += 1
 
-                    row_manifests.append(ManifestConfigRow(id=row_id, path=row_rel_path))
+                    row_manifests.append(
+                        ManifestConfigRow(
+                            id=row_id,
+                            path=row_rel_path,
+                            metadata={
+                                "pull_hash": row_file_hash,
+                                "pull_config_hash": row_pull_cfg_hash,
+                            },
+                        )
+                    )
 
                 # Record in manifest (store file hash for change detection).
                 # For skipped configs: keep existing pull_hash (file untouched)
@@ -706,8 +767,11 @@ class SyncService(BaseService):
             components = client.list_components_with_configs(branch_id=branch_id)
             self._ensure_branch_registered(manifest, branch_id, client)
 
-        # Build remote configs lookup: "{component_id}/{config_id}" -> API data
+        # Build remote lookups:
+        #   remote_configs: "{component_id}/{config_id}" -> parent config data
+        #   remote_rows:    "{component_id}/{parent_config_id}/rows/{row_id}" -> row data
         remote_configs: dict[str, dict[str, Any]] = {}
+        remote_rows: dict[str, dict[str, Any]] = {}
         for component in components:
             component_id = component.get("id", "")
             if component_id in ALWAYS_IGNORED_COMPONENTS:
@@ -715,8 +779,11 @@ class SyncService(BaseService):
             for cfg in component.get("configurations", []):
                 config_id = str(cfg.get("id", ""))
                 key = f"{component_id}/{config_id}"
-                # Convert remote to local format for apples-to-apples comparison
                 remote_configs[key] = api_config_to_local(component_id, cfg, config_id)
+                for row in cfg.get("rows", []):
+                    row_id = str(row.get("id", ""))
+                    row_key = f"{component_id}/{config_id}/rows/{row_id}"
+                    remote_rows[row_key] = api_row_to_local(row, component_id)
 
         # Build local configs list from manifest.
         # For files unchanged since pull, use the stored pull_config_hash
@@ -820,6 +887,59 @@ class SyncService(BaseService):
             base_hashes or None,
             local_override_hashes or None,
         )
+
+        # Row-level diff: walk manifest rows, load local YAML, feed into
+        # compute_row_changeset alongside remote_rows built above.
+        local_rows: list[dict[str, Any]] = []
+        tracked_row_keys: set[str] = set()
+        row_base_hashes: dict[str, str] = {}
+        for cfg in manifest.configurations:
+            branch_path = self._find_branch_path(manifest, cfg.branch_id)
+            parent_dir = project_root / branch_path / cfg.path
+            for row in cfg.rows:
+                row_key = f"{cfg.component_id}/{cfg.id}/rows/{row.id}"
+                tracked_row_keys.add(row_key)
+                row_dir = parent_dir / row.path
+                row_local = self._read_config_file(row_dir)
+                if row_local is None:
+                    # File missing -> "deleted" detected via tracked_row_keys.
+                    continue
+                local_rows.append(
+                    {
+                        "component_id": cfg.component_id,
+                        "parent_config_id": cfg.id,
+                        "row_id": row.id,
+                        "row_name": row_local.get("name", ""),
+                        "path": row.path,
+                        "data": row_local,
+                    }
+                )
+                pch = row.metadata.get("pull_config_hash") if row.metadata else ""
+                if pch:
+                    row_base_hashes[row_key] = pch
+
+        # Also add untracked local rows (new row dirs dropped under a tracked
+        # config). They have no row_id yet so compute_row_changeset flags
+        # them as "added" and push dispatches them via create_config_row.
+        for untracked in self._find_untracked_rows(project_root, manifest):
+            local_rows.append(
+                {
+                    "component_id": untracked["component_id"],
+                    "parent_config_id": untracked["parent_config_id"],
+                    "row_id": "",
+                    "row_name": untracked["row_name"],
+                    "path": untracked["path"],
+                    "data": untracked["data"],
+                }
+            )
+
+        row_changeset = compute_row_changeset(
+            local_rows,
+            remote_rows,
+            tracked_row_keys,
+            row_base_hashes or None,
+        )
+        changeset.extend(row_changeset)
 
         added = [c for c in changeset if c.change_type == "added"]
         modified = [c for c in changeset if c.change_type == "modified"]
@@ -944,8 +1064,33 @@ class SyncService(BaseService):
                 component_id = change["component_id"]
                 config_id = change["config_id"]
                 config_path_str = change.get("path", "")
+                is_row = bool(change.get("is_row"))
+                parent_config_id = change.get("parent_config_id", "")
 
                 try:
+                    if is_row:
+                        self._push_row_change(
+                            client,
+                            change_type=change_type,
+                            component_id=component_id,
+                            parent_config_id=parent_config_id,
+                            row_id=config_id,
+                            row_path_str=config_path_str,
+                            project_root=project_root,
+                            manifest=manifest,
+                            branch_id=branch_id,
+                            allow_plaintext_fallback=allow_plaintext_fallback,
+                        )
+                        manifest_dirty = True
+                        if change_type == "added":
+                            created += 1
+                        elif change_type == "modified":
+                            updated += 1
+                        elif change_type == "deleted":
+                            deleted += 1
+                        pushed_details.append(change)
+                        continue
+
                     if change_type == "added":
                         result = self._push_create(
                             client,
@@ -1045,6 +1190,13 @@ class SyncService(BaseService):
                         pushed_details.append(change)
 
                 except Exception as exc:
+                    # Fail-closed on encryption failures: a partial push that
+                    # omits the failed change would leave a plaintext secret
+                    # elsewhere or a caller believing the push "mostly succeeded".
+                    # Surface to the CLI (exit non-zero) rather than burying in
+                    # result["errors"].
+                    if isinstance(exc, KeboolaApiError) and exc.error_code == "ENCRYPTION_FAILED":
+                        raise
                     logger.warning(
                         "Failed to push %s %s/%s: %s",
                         change_type,
@@ -1077,68 +1229,225 @@ class SyncService(BaseService):
             result_data["name_drift_warnings"] = name_drift_warnings
         return result_data
 
-    @staticmethod
-    def _encrypt_secrets_in_config(
+    # Kept for test compatibility: tests exercise fail-closed encryption via
+    # ``SyncService._encrypt_secrets_in_config(...)``. Production code uses
+    # :func:`encrypt_secrets_in_config` directly.
+    _encrypt_secrets_in_config = staticmethod(encrypt_secrets_in_config)
+
+    def _push_row_change(
+        self,
         client: Any,
-        project_id: int | None,
-        component_id: str,
-        configuration: dict[str, Any],
         *,
+        change_type: str,
+        component_id: str,
+        parent_config_id: str,
+        row_id: str,
+        row_path_str: str,
+        project_root: Path,
+        manifest: Manifest,
+        branch_id: int | None,
         allow_plaintext_fallback: bool = False,
-    ) -> dict[str, Any]:
-        """Encrypt #-prefixed secret values in configuration before push.
+    ) -> None:
+        """Dispatch a single row-level change (added/modified/deleted) to the API.
 
-        Walks the configuration dict recursively, collects all #-prefixed keys
-        with unencrypted string values, sends them to the Encryption API,
-        and replaces plaintext values with encrypted ones.
-
-        Args:
-            client: HTTP client with encrypt_values method.
-            project_id: Keboola project ID (encryption skipped if None).
-            component_id: Component ID for encryption context.
-            configuration: Config dict to encrypt in-place.
-            allow_plaintext_fallback: When False (default), encryption failure
-                raises KeboolaApiError. When True, logs a warning and continues
-                with plaintext values (escape hatch).
+        ``#``-prefixed secrets in the row's configuration are encrypted via
+        :func:`encrypt_secrets_in_config` before POST/PUT (same fail-closed
+        semantics as parent configs). Mutates ``manifest`` in place; the
+        caller is responsible for persisting it.
         """
-        if not project_id:
-            return configuration
-
-        # Collect all unencrypted secret values
-        secrets: dict[str, str] = {}
-        _collect_secrets(configuration, "", secrets)
-
-        if not secrets:
-            return configuration
-
-        try:
-            encrypted = client.encrypt_values(
-                project_id=project_id,
-                component_id=component_id,
-                data=secrets,
+        parent = next(
+            (
+                c
+                for c in manifest.configurations
+                if c.component_id == component_id and c.id == parent_config_id
+            ),
+            None,
+        )
+        if parent is None and change_type != "deleted":
+            raise KeboolaApiError(
+                message=(
+                    f"Cannot push row {row_id}: parent config {component_id}/"
+                    f"{parent_config_id} is not tracked in the manifest."
+                ),
+                status_code=0,
+                error_code="PARENT_CONFIG_NOT_TRACKED",
             )
-            # Apply encrypted values back into configuration
-            _apply_encrypted(configuration, "", encrypted)
-            logger.info("Encrypted %d secret value(s) for %s", len(encrypted), component_id)
-        except Exception as exc:
-            if allow_plaintext_fallback:
-                logger.warning(
-                    "Failed to encrypt secrets for %s: %s (plaintext fallback allowed)",
-                    component_id,
-                    exc,
-                )
-            else:
-                raise KeboolaApiError(
-                    message=(
-                        f"Encryption failed for {component_id}: {exc}. "
-                        f"Refusing to push plaintext secrets. "
-                        f"Use --allow-plaintext-on-encrypt-failure to override."
-                    ),
-                    status_code=0,
-                    error_code="ENCRYPTION_FAILED",
-                ) from exc
 
-        return configuration
+        project_id = manifest.project.id if manifest.project else None
+
+        if change_type == "deleted":
+            self._push_delete_row(
+                client,
+                component_id=component_id,
+                parent_config_id=parent_config_id,
+                row_id=row_id,
+                parent=parent,
+                branch_id=branch_id,
+            )
+            return
+
+        # added / modified both read a local row file and encrypt-then-push.
+        assert parent is not None  # guarded above for non-deleted change_types
+        row_dir = (
+            project_root / self._find_branch_path(manifest, branch_id) / parent.path / row_path_str
+        )
+
+        if change_type == "added":
+            self._push_create_row(
+                client,
+                component_id=component_id,
+                parent_config_id=parent_config_id,
+                row_dir=row_dir,
+                parent=parent,
+                row_path_str=row_path_str,
+                branch_id=branch_id,
+                project_id=project_id,
+                allow_plaintext_fallback=allow_plaintext_fallback,
+            )
+            return
+
+        if change_type == "modified":
+            self._push_update_row(
+                client,
+                component_id=component_id,
+                parent_config_id=parent_config_id,
+                row_id=row_id,
+                row_dir=row_dir,
+                parent=parent,
+                branch_id=branch_id,
+                project_id=project_id,
+                allow_plaintext_fallback=allow_plaintext_fallback,
+            )
+            return
+
+        raise ValueError(f"Unsupported row change_type: {change_type}")
+
+    def _push_create_row(
+        self,
+        client: Any,
+        *,
+        component_id: str,
+        parent_config_id: str,
+        row_dir: Path,
+        parent: ManifestConfiguration,
+        row_path_str: str,
+        branch_id: int | None,
+        project_id: int | None,
+        allow_plaintext_fallback: bool,
+    ) -> None:
+        """POST a new row; record API-assigned id + hashes in the parent's row list."""
+        local_data = self._read_config_file(row_dir)
+        if local_data is None:
+            raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
+
+        pristine_data = copy.deepcopy(local_data)
+        name, description, configuration = local_row_to_api(local_data)
+        configuration = encrypt_secrets_in_config(
+            client,
+            project_id,
+            component_id,
+            configuration,
+            allow_plaintext_fallback=allow_plaintext_fallback,
+        )
+
+        result = client.create_config_row(
+            component_id=component_id,
+            config_id=parent_config_id,
+            name=name,
+            configuration=configuration,
+            description=description,
+            branch_id=branch_id,
+        )
+        new_row_id = str(result.get("id", ""))
+        logger.info("Created row %s/%s/%s", component_id, parent_config_id, new_row_id)
+
+        # Write-back: encrypted secrets land in the local file so a subsequent
+        # diff sees local == remote. ``config_id=""`` tells the shared helper
+        # to skip writing a config_id into ``_keboola`` (rows use ``row_id``).
+        self._writeback_after_push(pristine_data, row_dir, "", configuration)
+
+        row_file = row_dir / CONFIG_FILENAME
+        new_file_hash = self._file_hash(row_file) if row_file.exists() else ""
+        cfg_hash_value = config_hash(pristine_data)
+        parent.rows.append(
+            ManifestConfigRow(
+                id=new_row_id,
+                path=row_path_str,
+                metadata={"pull_hash": new_file_hash, "pull_config_hash": cfg_hash_value},
+            )
+        )
+
+    def _push_update_row(
+        self,
+        client: Any,
+        *,
+        component_id: str,
+        parent_config_id: str,
+        row_id: str,
+        row_dir: Path,
+        parent: ManifestConfiguration,
+        branch_id: int | None,
+        project_id: int | None,
+        allow_plaintext_fallback: bool,
+    ) -> None:
+        """PUT an existing row; refresh its hashes in the parent's row list."""
+        local_data = self._read_config_file(row_dir)
+        if local_data is None:
+            raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
+
+        pristine_data = copy.deepcopy(local_data)
+        name, description, configuration = local_row_to_api(local_data)
+        configuration = encrypt_secrets_in_config(
+            client,
+            project_id,
+            component_id,
+            configuration,
+            allow_plaintext_fallback=allow_plaintext_fallback,
+        )
+
+        client.update_config_row(
+            component_id=component_id,
+            config_id=parent_config_id,
+            row_id=row_id,
+            name=name,
+            configuration=configuration,
+            description=description,
+            change_description="Updated via kbagent sync push",
+            branch_id=branch_id,
+        )
+        logger.info("Updated row %s/%s/%s", component_id, parent_config_id, row_id)
+
+        self._writeback_after_push(pristine_data, row_dir, "", configuration)
+
+        row_file = row_dir / CONFIG_FILENAME
+        new_file_hash = self._file_hash(row_file) if row_file.exists() else ""
+        cfg_hash_value = config_hash(pristine_data)
+        for r in parent.rows:
+            if r.id == row_id:
+                r.metadata["pull_hash"] = new_file_hash
+                r.metadata["pull_config_hash"] = cfg_hash_value
+                break
+
+    def _push_delete_row(
+        self,
+        client: Any,
+        *,
+        component_id: str,
+        parent_config_id: str,
+        row_id: str,
+        parent: ManifestConfiguration | None,
+        branch_id: int | None,
+    ) -> None:
+        """DELETE a row; prune it from the parent's row list in the manifest."""
+        client.delete_config_row(
+            component_id=component_id,
+            config_id=parent_config_id,
+            row_id=row_id,
+            branch_id=branch_id,
+        )
+        if parent is not None:
+            parent.rows = [r for r in parent.rows if r.id != row_id]
+        logger.info("Deleted row %s/%s/%s", component_id, parent_config_id, row_id)
 
     def _push_create(
         self,
@@ -1170,7 +1479,7 @@ class SyncService(BaseService):
 
         # Encrypt #-prefixed secrets before sending to API
         project_id = manifest.project.id if manifest.project else None
-        configuration = self._encrypt_secrets_in_config(
+        configuration = encrypt_secrets_in_config(
             client,
             project_id,
             component_id,
@@ -1230,7 +1539,7 @@ class SyncService(BaseService):
 
         # Encrypt #-prefixed secrets before sending to API
         project_id = manifest.project.id if manifest.project else None
-        configuration = self._encrypt_secrets_in_config(
+        configuration = encrypt_secrets_in_config(
             client,
             project_id,
             component_id,
@@ -1275,7 +1584,7 @@ class SyncService(BaseService):
         pushed_params = pushed_configuration.get("parameters", {})
         local_params = local_data.get("parameters", {})
         if pushed_params and local_params:
-            _apply_encrypted_to_local(local_params, pushed_params)
+            apply_encrypted_to_local(local_params, pushed_params)
 
         self._write_config_file(config_dir, local_data)
         logger.debug("Updated local config at %s after push", config_dir)
@@ -2070,7 +2379,13 @@ class SyncService(BaseService):
         return output.getvalue()
 
     def _write_config_file(self, config_dir: Path, config_data: dict[str, Any]) -> str:
-        """Write a ``_config.yml`` file and return its SHA256 hash."""
+        """Write a ``_config.yml`` file and return its SHA256 hash.
+
+        Uses ``newline=""`` so Windows does NOT translate ``\\n`` into ``\\r\\n``
+        on write -- without that, the in-memory ``content`` hash diverges from
+        the on-disk byte hash (:meth:`_file_hash`) and every post-pull
+        ``status`` would report the file as modified.
+        """
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / CONFIG_FILENAME
         content = yaml.dump(
@@ -2080,7 +2395,7 @@ class SyncService(BaseService):
             sort_keys=False,
             width=120,
         )
-        config_file.write_text(content, encoding="utf-8")
+        config_file.write_text(content, encoding="utf-8", newline="")
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     def _file_hash(self, file_path: Path) -> str:
@@ -2268,78 +2583,44 @@ class SyncService(BaseService):
 
         return added
 
+    def _find_untracked_rows(self, project_root: Path, manifest: Manifest) -> list[dict[str, Any]]:
+        """Scan tracked config dirs for ``rows/*/_config.yml`` not in manifest.
 
-# ---------------------------------------------------------------------------
-# Module-level helpers for secret encryption
-# ---------------------------------------------------------------------------
+        Paralleling :meth:`_find_untracked_configs` at the row level. A user
+        can drop a hand-crafted row directory under a tracked config's
+        ``rows/`` folder; this surfaces it so :meth:`diff` can flag it as
+        ``"added"`` and :meth:`push` can POST it via ``create_config_row``.
 
-_ENCRYPTED_PREFIX = "KBC::"
-
-
-def _is_secret_key(key: str) -> bool:
-    """Check if a YAML key represents a secret (starts with #)."""
-    return isinstance(key, str) and key.startswith("#")
-
-
-def _is_already_encrypted(value: Any) -> bool:
-    """Check if a value is already encrypted (KBC::*Secure::* prefix)."""
-    return isinstance(value, str) and value.startswith(_ENCRYPTED_PREFIX)
-
-
-def _collect_secrets(obj: Any, path_prefix: str, result: dict[str, str]) -> None:
-    """Recursively collect unencrypted #-prefixed secret values.
-
-    Builds a flat dict of {#path_key: plaintext_value} suitable for
-    the Encryption API. The Encryption API requires all keys to start
-    with '#'.
-    """
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if _is_secret_key(key) and isinstance(value, str) and not _is_already_encrypted(value):
-                # Use the key directly for the encrypt API
-                encrypt_key = f"#{path_prefix}{key}" if path_prefix else key
-                result[encrypt_key] = value
-            elif isinstance(value, (dict, list)):
-                child_prefix = f"{path_prefix}{key}." if path_prefix else f"{key}."
-                _collect_secrets(value, child_prefix, result)
-    elif isinstance(obj, list):
-        for i, item in enumerate(obj):
-            child_prefix = f"{path_prefix}[{i}]."
-            _collect_secrets(item, child_prefix, result)
-
-
-def _apply_encrypted(obj: Any, path_prefix: str, encrypted: dict[str, str]) -> None:
-    """Recursively apply encrypted values back into the configuration dict."""
-    if isinstance(obj, dict):
-        for key in list(obj.keys()):
-            value = obj[key]
-            if _is_secret_key(key) and isinstance(value, str) and not _is_already_encrypted(value):
-                encrypt_key = f"#{path_prefix}{key}" if path_prefix else key
-                if encrypt_key in encrypted:
-                    obj[key] = encrypted[encrypt_key]
-            elif isinstance(value, (dict, list)):
-                child_prefix = f"{path_prefix}{key}." if path_prefix else f"{key}."
-                _apply_encrypted(value, child_prefix, encrypted)
-    elif isinstance(obj, list):
-        for i, item in enumerate(obj):
-            child_prefix = f"{path_prefix}[{i}]."
-            _apply_encrypted(item, child_prefix, encrypted)
-
-
-def _apply_encrypted_to_local(local: Any, pushed: Any) -> None:
-    """Copy encrypted secret values from pushed config back into local data.
-
-    Walks both dicts in parallel. Where pushed has an encrypted value
-    for a #-key, replaces the local plaintext with it.
-    """
-    if isinstance(local, dict) and isinstance(pushed, dict):
-        for key in local:
-            if key not in pushed:
+        Each entry contains ``component_id``, ``parent_config_id``,
+        ``row_name`` (from the loaded YAML), ``path`` (relative to the parent
+        config dir, e.g. ``rows/new-row``), and ``data`` (the loaded dict).
+        """
+        added: list[dict[str, Any]] = []
+        for cfg in manifest.configurations:
+            branch_path = self._find_branch_path(manifest, cfg.branch_id)
+            parent_dir = project_root / branch_path / cfg.path
+            rows_dir = parent_dir / "rows"
+            if not rows_dir.is_dir():
                 continue
-            if _is_secret_key(key) and _is_already_encrypted(pushed[key]):
-                local[key] = pushed[key]
-            elif isinstance(local[key], dict) and isinstance(pushed[key], dict):
-                _apply_encrypted_to_local(local[key], pushed[key])
-            elif isinstance(local[key], list) and isinstance(pushed[key], list):
-                for i in range(min(len(local[key]), len(pushed[key]))):
-                    _apply_encrypted_to_local(local[key][i], pushed[key][i])
+            tracked_row_paths = {row.path for row in cfg.rows}
+            for row_subdir in rows_dir.iterdir():
+                if not row_subdir.is_dir():
+                    continue
+                row_rel_path = f"rows/{row_subdir.name}"
+                if row_rel_path in tracked_row_paths:
+                    continue
+                if not (row_subdir / CONFIG_FILENAME).exists():
+                    continue
+                local_data = self._read_config_file(row_subdir)
+                if local_data is None:
+                    continue
+                added.append(
+                    {
+                        "component_id": cfg.component_id,
+                        "parent_config_id": cfg.id,
+                        "row_name": local_data.get("name", ""),
+                        "path": row_rel_path,
+                        "data": local_data,
+                    }
+                )
+        return added

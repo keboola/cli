@@ -269,3 +269,129 @@ class TestRowConversion:
         assert description == "A test row"
         assert configuration["parameters"]["query"] == "SELECT 1"
         assert configuration["storage"]["output"]["tables"][0]["destination"] == "out.c-main.data"
+
+
+class TestVariablesRowRoundTrip:
+    """Round-trip for keboola.variables / keboola.shared-code rows.
+
+    These components use non-standard top-level configuration keys
+    (``values`` for variables, ``code`` for shared-code) that the API accepts
+    as the row ``configuration`` body verbatim. The local YAML MUST preserve
+    those keys at the top level -- wrapping them under ``_configuration_extra``
+    breaks the FIIA convention of direct edits (``values: [...]`` at top level)
+    and diverges from ``kbc push`` behaviour.
+    """
+
+    def test_variables_row_api_to_local_hoists_values_to_top_level(self) -> None:
+        """keboola.variables values row: ``values`` key appears at top level of YAML.
+
+        When a user edits a variables row locally, they expect to see and write
+        ``values:`` directly -- not nested under ``_configuration_extra``.
+        """
+        api_row = {
+            "id": "row-main",
+            "name": "Main",
+            "description": "",
+            "configuration": {
+                "values": [
+                    {"name": "year_start", "value": "2016", "type": "string"},
+                    {"name": "region", "value": "eu", "type": "string"},
+                ]
+            },
+        }
+
+        local = api_row_to_local(api_row, "keboola.variables")
+
+        assert local["values"] == api_row["configuration"]["values"]
+        assert "_configuration_extra" not in local
+
+    def test_variables_row_local_to_api_reads_top_level_values(self) -> None:
+        """User-authored top-level ``values:`` in local YAML flows to API configuration.
+
+        FIIA writes row files with ``values:`` at the top level and expects
+        ``sync push`` to PUT that verbatim to
+        ``/components/keboola.variables/configs/{id}/rows/{rowId}``.
+        """
+        local = {
+            "version": 2,
+            "name": "Main",
+            "description": "",
+            "values": [{"name": "year_start", "value": "2016", "type": "string"}],
+            "_keboola": {"component_id": "keboola.variables", "row_id": "row-1"},
+        }
+
+        name, description, configuration = local_row_to_api(local)
+
+        assert name == "Main"
+        assert description == ""
+        assert configuration == {
+            "values": [{"name": "year_start", "value": "2016", "type": "string"}]
+        }
+
+    def test_variables_row_byte_for_byte_round_trip(self) -> None:
+        """api→local→api returns the identical configuration dict for a variables row.
+
+        This is the FIIA contract: the row body the user sees in Keboola after push
+        must equal the row body they wrote locally, byte-for-byte (deep equality).
+        """
+        api_row = {
+            "id": "row-main",
+            "name": "Main",
+            "description": "default values",
+            "configuration": {
+                "values": [
+                    {"name": "year_start", "value": "2016", "type": "string"},
+                    {"name": "flag", "value": "true", "type": "string"},
+                ]
+            },
+        }
+
+        local = api_row_to_local(api_row, "keboola.variables")
+        _, _, configuration = local_row_to_api(local)
+
+        assert configuration == api_row["configuration"]
+
+    def test_shared_code_row_hoists_code_to_top_level(self) -> None:
+        """keboola.shared-code rows: ``code_content`` / ``componentId`` keys hoisted.
+
+        Shared-code rows use ``componentId`` + ``code_content`` at top level;
+        they must round-trip the same way as variables ``values`` rows.
+        """
+        api_row = {
+            "id": "row-1",
+            "name": "Reusable snippet",
+            "description": "",
+            "configuration": {
+                "componentId": "keboola.snowflake-transformation",
+                "code_content": ["SELECT * FROM my_table;"],
+            },
+        }
+
+        local = api_row_to_local(api_row, "keboola.shared-code")
+
+        assert local["componentId"] == "keboola.snowflake-transformation"
+        assert local["code_content"] == ["SELECT * FROM my_table;"]
+        assert "_configuration_extra" not in local
+
+        _, _, configuration = local_row_to_api(local)
+        assert configuration == api_row["configuration"]
+
+    def test_non_hoisted_component_still_uses_configuration_extra(self) -> None:
+        """Non-variables/shared-code rows keep ``_configuration_extra`` wrapping.
+
+        The hoist-to-top-level behaviour is opt-in per component. Generic
+        extractor/writer rows with unusual top-level keys (e.g. a component
+        that stores ``foo`` at the configuration root) must not regress.
+        """
+        api_row = {
+            "id": "row-1",
+            "name": "Test",
+            "description": "",
+            "configuration": {"parameters": {"q": "SELECT 1"}, "foo": {"bar": 1}},
+        }
+
+        local = api_row_to_local(api_row, "keboola.ex-db-snowflake")
+
+        assert "_configuration_extra" in local
+        assert local["_configuration_extra"] == {"foo": {"bar": 1}}
+        assert "foo" not in local

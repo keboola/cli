@@ -2,6 +2,46 @@
 
 Sync lets you manage Keboola configurations as local files with full git integration.
 
+## Variable values deployment (since v0.21.0)
+
+`sync push` now deploys **config rows**, not just parent configs. This unlocks the
+most common GitOps use case: deploying `keboola.variables` values through git.
+
+```bash
+# 1. Pull a project that contains a keboola.variables config + values row.
+kbagent sync pull --project prod
+
+# 2. Edit the row YAML directly. For keboola.variables and keboola.shared-code
+#    rows, the configuration keys (`values`, `code_content`, etc.) are hoisted
+#    to the top level of the YAML so edits are natural.
+cat > main/variables/<name>/values/main/_config.yml <<EOF
+version: 2
+name: main
+description: ""
+values:
+  - {name: year_start, value: "2025", type: string}
+  - {name: region, value: "us-west", type: string}
+_keboola:
+  component_id: keboola.variables
+  row_id: <row_id>
+EOF
+
+# 3. Push -- the row is written to
+#    PUT /v2/storage/components/keboola.variables/configs/{id}/rows/{rowId}
+#    with the configuration set to {"values": [...]} verbatim.
+kbagent sync push --project prod
+```
+
+`#`-prefixed secret keys inside row YAMLs are encrypted via the Encryption API
+before push, same as parent configs. Encryption failure aborts the push
+(fail-closed); use `--allow-plaintext-on-encrypt-failure` only for debugging.
+
+For the row-level internals (manifest v3, per-row hashes, hoisted payloads,
+untracked row detection, secret encryption contract), see
+[`sync-rows-workflow.md`](./sync-rows-workflow.md). For the ergonomic
+alternative that skips the YAML round-trip entirely, see
+[`variables-workflow.md`](./variables-workflow.md).
+
 ## All-projects workflow (recommended)
 
 ```bash

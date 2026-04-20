@@ -97,6 +97,17 @@ class TestManifestConfiguration:
         assert len(config.rows) == 1
         assert config.rows[0].id == "row-1"
         assert config.rows[0].path == "rows/my-row"
+        assert config.rows[0].metadata == {}
+
+    def test_manifest_config_row_with_metadata(self) -> None:
+        """ManifestConfigRow stores pull-time hashes in the metadata dict."""
+        row = ManifestConfigRow(
+            id="row-1",
+            path="rows/my-row",
+            metadata={"pull_hash": "abc123", "pull_config_hash": "def456"},
+        )
+        assert row.metadata["pull_hash"] == "abc123"
+        assert row.metadata["pull_config_hash"] == "def456"
 
 
 class TestManifestRoundTrip:
@@ -198,6 +209,41 @@ class TestLoadManifest:
         """FileNotFoundError raised when manifest.json does not exist."""
         with pytest.raises(FileNotFoundError, match="Manifest not found"):
             load_manifest(tmp_path)
+
+    def test_load_v2_manifest_tolerates_missing_row_metadata(self, tmp_path) -> None:
+        """v2 manifests (rows without metadata) load cleanly and default metadata to {}.
+
+        Covers the v2→v3 upgrade path: existing on-disk manifests pre-date the
+        row-level metadata field introduced for row-push hashing.
+        """
+        keboola_dir = tmp_path / ".keboola"
+        keboola_dir.mkdir()
+        v2_manifest_data = {
+            "version": 2,
+            "project": {"id": 1, "apiHost": "connection.keboola.com"},
+            "allowTargetEnv": True,
+            "gitBranching": {"enabled": False, "defaultBranch": "main"},
+            "sortBy": "id",
+            "naming": {"branch": "{branch_name}"},
+            "branches": [],
+            "configurations": [
+                {
+                    "branchId": 1,
+                    "componentId": "keboola.variables",
+                    "id": "vars-1",
+                    "path": "variables",
+                    "rows": [{"id": "row-1", "path": "values/main"}],
+                }
+            ],
+        }
+        (keboola_dir / "manifest.json").write_text(json.dumps(v2_manifest_data))
+
+        loaded = load_manifest(tmp_path)
+
+        assert loaded.version == 2
+        row = loaded.configurations[0].rows[0]
+        assert row.id == "row-1"
+        assert row.metadata == {}
 
 
 class TestManifestExtraFields:

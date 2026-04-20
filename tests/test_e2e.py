@@ -2731,6 +2731,282 @@ class TestE2ESyncWorkflow:
         )
         assert data["status"] == "ok"
 
+    def test_sync_push_variable_row_round_trip(self) -> None:
+        """PR1 P0-1 acceptance: edit a keboola.variables values row, push, pull back.
+
+        Locks the row-deploy contract: after sync push, the API's row
+        ``configuration`` dict must equal what we wrote locally (byte-equal
+        deep comparison). Creates + cleans up a dedicated ``keboola.variables``
+        config + row so the test is idempotent across runs.
+        """
+        import yaml as _yaml
+
+        from keboola_agent_cli.client import KeboolaClient
+        from keboola_agent_cli.constants import CONFIG_FILENAME
+
+        component_id = "keboola.variables"
+        var_cfg: dict = {}
+        row_id: str = ""
+
+        # Wrap setup + body in a single try/finally so the cleanup still
+        # runs if create_config_row fails after create_config succeeded --
+        # otherwise we leak a variables config on every failed run.
+        try:
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                var_cfg = api.create_config(
+                    component_id=component_id,
+                    name=f"e2e-pr1-{RUN_ID}",
+                    description="FIIA row-push E2E fixture",
+                    configuration={
+                        "variables": [
+                            {"name": "year_start", "type": "string"},
+                            {"name": "region", "type": "string"},
+                        ]
+                    },
+                )
+                row = api.create_config_row(
+                    component_id=component_id,
+                    config_id=var_cfg["id"],
+                    name="main",
+                    configuration={
+                        "values": [
+                            {"name": "year_start", "value": "2016"},
+                            {"name": "region", "value": "eu"},
+                        ]
+                    },
+                )
+                row_id = row["id"]
+
+            # --- step A: sync init + pull ---
+            _step("6a", "sync init + pull (row-push setup)")
+            self._run_ok(
+                "sync",
+                "init",
+                "--project",
+                self.alias,
+                "--directory",
+                str(self.project_dir),
+            )
+            self._run_ok(
+                "sync",
+                "pull",
+                "--project",
+                self.alias,
+                "--directory",
+                str(self.project_dir),
+            )
+
+            # --- step B: locate the row YAML file on disk ---
+            row_files = [
+                p
+                for p in self.project_dir.rglob(CONFIG_FILENAME)
+                if "rows" in p.relative_to(self.project_dir).parts
+                and _yaml.safe_load(p.read_text(encoding="utf-8")).get("_keboola", {}).get("row_id")
+                == row_id
+            ]
+            assert len(row_files) == 1, f"Row YAML not found after pull. Candidates: {row_files}"
+            row_file = row_files[0]
+
+            # --- step C: edit the row values locally (FIIA's primary use case) ---
+            _step("6b", "edit values row locally + sync push")
+            local_data = _yaml.safe_load(row_file.read_text(encoding="utf-8"))
+            # Hoisted top-level `values` key (see config_format.ROW_HOIST_COMPONENTS).
+            assert "values" in local_data, f"Expected hoisted 'values' key: {list(local_data)}"
+            local_data["values"] = [
+                {"name": "year_start", "value": "2025"},
+                {"name": "region", "value": "us-west"},
+            ]
+            row_file.write_text(
+                _yaml.dump(local_data, default_flow_style=False, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            push_data = self._run_ok(
+                "sync",
+                "push",
+                "--project",
+                self.alias,
+                "--directory",
+                str(self.project_dir),
+            )
+            push_result = push_data["data"]
+            assert push_result["status"] == "pushed"
+            assert push_result["updated"] == 1, f"Expected 1 update (the row), got {push_result}"
+
+            # --- step D: pull fresh state back and assert byte-equal ---
+            _step("6c", "sync pull + verify row round-trip byte-equal")
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                remote_row = api.get_config_detail(
+                    component_id=component_id,
+                    config_id=var_cfg["id"],
+                )
+                remote_rows = remote_row.get("rows", [])
+                updated_row = next(r for r in remote_rows if r["id"] == row_id)
+                assert updated_row["configuration"] == {
+                    "values": [
+                        {"name": "year_start", "value": "2025"},
+                        {"name": "region", "value": "us-west"},
+                    ]
+                }
+        finally:
+            # --- cleanup: delete the variables config we created ---
+            # Guard on var_cfg["id"] so a failure before create_config returned
+            # doesn't turn into a KeyError inside the cleanup handler.
+            cfg_id = var_cfg.get("id") if var_cfg else None
+            if cfg_id:
+                try:
+                    with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                        api.delete_config(component_id=component_id, config_id=cfg_id)
+                except Exception as exc:
+                    print(f"  [cleanup] Failed to delete {component_id}/{cfg_id}: {exc}")
+
+    def test_config_variables_round_trip(self) -> None:
+        """CLAUDE.md rule 16: every new CLI command needs an E2E test.
+
+        Exercises ``config variables-{set,get,clear}`` end-to-end against a
+        real parent config: auto-create path, merge path, replace path,
+        readback, and clear. Locks the happy-path contract so agents can
+        trust the response shape from real Storage API responses (not just
+        mocks). Cleans up both the parent test config and the auto-created
+        ``keboola.variables`` sibling.
+        """
+        parent_cfg: dict = {}
+        auto_vars_id: str | None = None
+        try:
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                parent_cfg = api.create_config(
+                    component_id=TEST_COMPONENT_ID,
+                    name=f"{RUN_ID}-vars-parent",
+                    description="E2E variables round-trip parent config",
+                    configuration={"parameters": {"db": {"host": "test.example.com"}}},
+                )
+            parent_id = str(parent_cfg["id"])
+
+            # --- step A: variables-set (AUTO-CREATE) ---
+            _step("7a", "config variables-set (auto-create path)")
+            data = self._run_ok(
+                "config",
+                "variables-set",
+                "--project",
+                self.alias,
+                "--component-id",
+                TEST_COMPONENT_ID,
+                "--config-id",
+                parent_id,
+                "--var",
+                "year_start=2016",
+                "--var",
+                "region=eu",
+            )["data"]
+            assert data["action"] == "created"
+            assert data["values"] == {"year_start": "2016", "region": "eu"}
+            auto_vars_id = data["variables_id"]
+            assert auto_vars_id, "auto-create path must return a variables_id"
+
+            # --- step B: variables-get (readback) ---
+            _step("7b", "config variables-get (readback after set)")
+            data = self._run_ok(
+                "config",
+                "variables-get",
+                "--project",
+                self.alias,
+                "--component-id",
+                TEST_COMPONENT_ID,
+                "--config-id",
+                parent_id,
+            )["data"]
+            assert data["linked"] is True
+            assert data["values"] == {"year_start": "2016", "region": "eu"}
+            assert data["variables_id"] == auto_vars_id
+
+            # --- step C: variables-set (MERGE) ---
+            _step("7c", "config variables-set (merge: adds year_end)")
+            data = self._run_ok(
+                "config",
+                "variables-set",
+                "--project",
+                self.alias,
+                "--component-id",
+                TEST_COMPONENT_ID,
+                "--config-id",
+                parent_id,
+                "--var",
+                "year_end=2024",
+            )["data"]
+            assert data["action"] == "updated"
+            assert data["values"] == {
+                "year_start": "2016",
+                "region": "eu",
+                "year_end": "2024",
+            }
+
+            # --- step D: variables-set --replace ---
+            _step("7d", "config variables-set --replace (drops prior keys)")
+            data = self._run_ok(
+                "config",
+                "variables-set",
+                "--project",
+                self.alias,
+                "--component-id",
+                TEST_COMPONENT_ID,
+                "--config-id",
+                parent_id,
+                "--var",
+                "only_key=only_value",
+                "--replace",
+            )["data"]
+            assert data["values"] == {"only_key": "only_value"}
+
+            # --- step E: variables-clear ---
+            _step("7e", "config variables-clear (unlink)")
+            data = self._run_ok(
+                "config",
+                "variables-clear",
+                "--project",
+                self.alias,
+                "--component-id",
+                TEST_COMPONENT_ID,
+                "--config-id",
+                parent_id,
+                "--yes",
+            )["data"]
+            assert data["was_linked"] is True
+            assert data["unlinked_variables_id"] == auto_vars_id
+
+            # Post-clear: variables-get must report linked=False
+            data = self._run_ok(
+                "config",
+                "variables-get",
+                "--project",
+                self.alias,
+                "--component-id",
+                TEST_COMPONENT_ID,
+                "--config-id",
+                parent_id,
+            )["data"]
+            assert data["linked"] is False
+            assert data["values"] == {}
+        finally:
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                parent_id_cleanup = parent_cfg.get("id") if parent_cfg else None
+                if parent_id_cleanup:
+                    try:
+                        api.delete_config(
+                            component_id=TEST_COMPONENT_ID, config_id=str(parent_id_cleanup)
+                        )
+                    except Exception as exc:
+                        print(
+                            f"  [cleanup] Failed to delete "
+                            f"{TEST_COMPONENT_ID}/{parent_id_cleanup}: {exc}"
+                        )
+                if auto_vars_id:
+                    try:
+                        api.delete_config(component_id="keboola.variables", config_id=auto_vars_id)
+                    except Exception as exc:
+                        print(
+                            f"  [cleanup] Failed to delete keboola.variables/{auto_vars_id}: {exc}"
+                        )
+
 
 # ---------------------------------------------------------------------------
 # Tool command tests (requires MCP server)
