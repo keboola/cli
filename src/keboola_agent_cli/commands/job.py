@@ -195,16 +195,20 @@ def job_run(
         None,
         "--variable-values-id",
         help=(
-            "Row id of the linked keboola.variables values row. Overrides "
-            "auto-resolution. Mutually exclusive with --no-variables."
+            "Explicit keboola.variables values-row ID to bind. Use when the "
+            "linked variables config has multiple rows and auto-resolution "
+            "(first row) picks the wrong one. Mutually exclusive with "
+            "--no-variables."
         ),
     ),
     no_variables: bool = typer.Option(
         False,
         "--no-variables",
         help=(
-            "Skip variable-values resolution. Use for configs without linked "
-            "variables or when intentionally running against empty bindings."
+            "Skip variable-values resolution entirely. Use for components "
+            "that do not support variables, or when intentionally running "
+            "against empty bindings. Mutually exclusive with "
+            "--variable-values-id."
         ),
     ),
 ) -> None:
@@ -216,10 +220,10 @@ def job_run(
     When a dev branch is active (via 'branch use'), the job automatically
     runs on that branch. Use --branch to override.
 
-    When the config has linked variables (runtime.variables_id), kbagent
-    auto-resolves a variableValuesId so the job binds to the deployed
-    values row. Override with --variable-values-id or skip with
-    --no-variables.
+    When the config has linked variables (configuration.variables_id),
+    kbagent auto-resolves a variableValuesId so the job binds to the
+    deployed values row. Override with --variable-values-id or skip
+    with --no-variables.
     """
     if should_hint(ctx):
         emit_hint(
@@ -242,7 +246,11 @@ def job_run(
 
     if variable_values_id and no_variables:
         formatter.error(
-            message="--variable-values-id and --no-variables are mutually exclusive.",
+            message=(
+                "--variable-values-id and --no-variables are mutually exclusive. "
+                "Pass --variable-values-id to bind a specific values row, or "
+                "--no-variables to skip resolution, but not both."
+            ),
             error_code="INVALID_ARGUMENT",
         )
         raise typer.Exit(code=2)
@@ -260,6 +268,10 @@ def job_run(
             msg += f" [dim](waiting up to {timeout:.0f}s)[/dim]"
         msg += "..."
         formatter.console.print(msg)
+        if variable_values_id:
+            formatter.console.print(f"[dim]Using variable values row: {variable_values_id}[/dim]")
+        elif no_variables:
+            formatter.console.print("[dim]Skipping variable-values resolution.[/dim]")
 
     try:
         result = service.run_job(

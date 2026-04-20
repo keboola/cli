@@ -2803,7 +2803,7 @@ class TestE2EJobRunVariableValues:
     """Prove `kbagent job run` auto-resolves variableValuesId against a live API.
 
     Sets up a real `keboola.variables` config with one row and a parent
-    ex-http config whose `configuration.runtime.variables_id` points at it,
+    ex-http config whose `configuration.variables_id` points at it,
     then runs `kbagent --json job run --no-wait` and asserts the
     response's `resolvedVariableValuesId` matches the created row id.
 
@@ -2885,7 +2885,7 @@ class TestE2EJobRunVariableValues:
             description="E2E PR2 linked parent",
             configuration={
                 "parameters": {"baseUrl": "https://example.com"},
-                "runtime": {"variables_id": vars_cfg_id},
+                "variables_id": vars_cfg_id,
             },
         )
         parent_cfg_id = str(parent_cfg["id"])
@@ -2894,7 +2894,7 @@ class TestE2EJobRunVariableValues:
         return vars_cfg_id, vars_row_id, parent_cfg_id
 
     def test_resolve_variable_values_id_live(self) -> None:
-        """Resolver reads runtime.variables_id + falls back to first row."""
+        """Resolver reads configuration.variables_id + falls back to first row."""
         from keboola_agent_cli.services.job_service import JobService
 
         _step(1, "create variables + linked parent fixture")
@@ -2949,3 +2949,191 @@ class TestE2EJobRunVariableValues:
         if job_id:
             with contextlib.suppress(Exception):
                 self.client.kill_job(str(job_id))
+
+    def test_job_run_explicit_override_wins_over_resolver(self) -> None:
+        """`--variable-values-id ROW_ID` bypasses the resolver and lands in the job.
+
+        Creates a fixture with TWO values rows (default + alt). Without
+        --variable-values-id, the resolver picks the first row. With
+        --variable-values-id set to the SECOND row's id, the service must
+        use the user's choice, and we assert `resolvedVariableValuesId`
+        (really: echoed-back) matches the override, not the first row.
+        """
+        import contextlib
+
+        _step(1, "create variables + 2 values rows + linked parent")
+        vars_cfg_id, default_row_id, parent_id = self._create_fixture()
+
+        # Add a second row and use its id as the override.
+        alt_row = self.client.create_config_row(
+            component_id="keboola.variables",
+            config_id=vars_cfg_id,
+            name="alt",
+            configuration={"values": [{"name": "year_start", "value": "2020"}]},
+        )
+        alt_row_id = str(alt_row["id"])
+        assert alt_row_id != default_row_id
+
+        _step(2, "kbagent job run --variable-values-id <alt>")
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                parent_id,
+                "--variable-values-id",
+                alt_row_id,
+            ],
+        )
+
+        data = _json(result)
+        payload = data.get("data", data)
+        assert payload.get("resolvedVariableValuesId") == alt_row_id
+        job_id = payload.get("id")
+        if job_id:
+            with contextlib.suppress(Exception):
+                self.client.kill_job(str(job_id))
+
+    def test_job_run_no_variables_skips_resolution(self) -> None:
+        """`--no-variables` suppresses the resolver; no `resolvedVariableValuesId` surfaces.
+
+        Locks the opt-out contract: a component that happens to have a
+        linked variables config can still be run without variable binding
+        when the caller explicitly asks (e.g. manual debug runs).
+        """
+        import contextlib
+
+        _step(1, "create variables + linked parent fixture")
+        _vars_id, _row_id, parent_id = self._create_fixture()
+
+        _step(2, "kbagent job run --no-variables")
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                parent_id,
+                "--no-variables",
+            ],
+        )
+
+        data = _json(result)
+        payload = data.get("data", data)
+        # Key omitted entirely when resolution was skipped.
+        assert "resolvedVariableValuesId" not in payload
+        job_id = payload.get("id")
+        if job_id:
+            with contextlib.suppress(Exception):
+                self.client.kill_job(str(job_id))
+
+    def test_job_run_no_variable_rows_surfaces_error_code(self) -> None:
+        """Linked variables config with zero rows exits with `NO_VARIABLE_ROWS`.
+
+        Agent-facing contract: when a transformation is hooked up to a
+        variables config that has not yet had any row created, kbagent
+        must fail fast rather than submitting a job that will silently
+        bind empty strings at runtime.
+        """
+        _step(1, "create empty variables config + linked parent (no rows)")
+        # Variables config WITHOUT any row.
+        vars_cfg = self.client.create_config(
+            component_id="keboola.variables",
+            name=f"{RUN_ID}-empty-vars",
+            description="E2E PR2: empty values",
+            configuration={"variables": [{"name": "year_start", "type": "string"}]},
+        )
+        vars_cfg_id = str(vars_cfg["id"])
+        self._created.append(("keboola.variables", vars_cfg_id))
+
+        parent_cfg = self.client.create_config(
+            component_id="keboola.ex-http",
+            name=f"{RUN_ID}-http-empty-link",
+            description="E2E PR2: parent with empty-variables link",
+            configuration={
+                "parameters": {"baseUrl": "https://example.com"},
+                "variables_id": vars_cfg_id,
+            },
+        )
+        parent_id = str(parent_cfg["id"])
+        self._created.append(("keboola.ex-http", parent_id))
+
+        _step(2, "kbagent job run -> expect NO_VARIABLE_ROWS")
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                parent_id,
+            ],
+        )
+
+        assert result.exit_code != 0
+        try:
+            data = json.loads(result.output)
+        except json.JSONDecodeError:
+            pytest.fail(f"Expected JSON error output, got: {result.output}")
+        assert data.get("status") == "error"
+        assert data.get("error", {}).get("code") == "NO_VARIABLE_ROWS"
+
+    def test_resolver_prefers_explicit_values_id_over_first_row(self) -> None:
+        """`configuration.variables_values_id` wins over first-row fallback.
+
+        Directly tests the resolver short-circuit path without touching the
+        Queue API. If a config has pinned a specific values row via the
+        Keboola UI or sync push, kbagent must honor that selection even
+        when additional rows exist.
+        """
+        from keboola_agent_cli.services.job_service import JobService
+
+        _step(1, "create variables + 2 rows; parent pins the SECOND row")
+        vars_cfg_id, first_row_id, _ = self._create_fixture()
+
+        alt_row = self.client.create_config_row(
+            component_id="keboola.variables",
+            config_id=vars_cfg_id,
+            name="pinned",
+            configuration={"values": [{"name": "year_start", "value": "2025"}]},
+        )
+        pinned_row_id = str(alt_row["id"])
+        assert pinned_row_id != first_row_id
+
+        # Patch the parent to point at the pinned row explicitly.
+        pinned_parent = self.client.create_config(
+            component_id="keboola.ex-http",
+            name=f"{RUN_ID}-http-pinned",
+            description="E2E PR2: parent pinned to specific values row",
+            configuration={
+                "parameters": {"baseUrl": "https://example.com"},
+                "variables_id": vars_cfg_id,
+                "variables_values_id": pinned_row_id,
+            },
+        )
+        pinned_parent_id = str(pinned_parent["id"])
+        self._created.append(("keboola.ex-http", pinned_parent_id))
+
+        _step(2, "resolver returns the pinned row, NOT the first row")
+        resolved = JobService.resolve_variable_values_id(
+            client=self.client,
+            component_id="keboola.ex-http",
+            config_id=pinned_parent_id,
+        )
+        print(f"  {_DIM}resolved={resolved} pinned={pinned_row_id} first={first_row_id}{_RESET}")
+        assert resolved == pinned_row_id

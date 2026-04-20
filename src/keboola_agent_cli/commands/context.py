@@ -130,10 +130,10 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--variable-values-id ID] [--no-variables]
     Run a Queue API job. --row-id selects specific config rows (repeatable; omit to run entire config).
     --wait polls until job finishes. --timeout sets max wait in seconds (default 300). Branch-aware.
-    When the config has linked variables (runtime.variables_id), kbagent auto-resolves a
-    variableValuesId so the job binds to the deployed values row. --variable-values-id overrides;
-    --no-variables skips resolution. Error code NO_VARIABLE_ROWS when the linked variables
-    config has zero rows (run `kbagent config variables-set` to create one).
+    When the config has linked variables (configuration.variables_id), kbagent auto-resolves
+    a variableValuesId so the job binds to the deployed values row. --variable-values-id
+    overrides; --no-variables skips resolution. Error code NO_VARIABLE_ROWS when the linked
+    variables config has zero rows (run `kbagent config variables-set` to create one).
 
   kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
     Kill running jobs via Queue API (POST /jobs/{id}/kill). Use to stop runaway loops or pile-ups.

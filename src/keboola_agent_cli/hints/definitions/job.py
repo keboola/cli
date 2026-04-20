@@ -96,7 +96,7 @@ HintRegistry.register(
                     method="list_config_rows",
                     args={
                         "component_id": '"keboola.variables"',
-                        "config_id": 'detail["configuration"]["runtime"]["variables_id"]',
+                        "config_id": 'detail["configuration"]["variables_id"]',
                     },
                     result_var="var_rows",
                     result_hint="list",
@@ -149,10 +149,15 @@ HintRegistry.register(
             "Service layer handles both resolve + create + optional poll in one call.",
             (
                 "Service auto-resolves variableValuesId from "
-                "configuration.runtime.variables_id; the client hint shows "
+                "configuration.variables_id; the client hint shows "
                 "the underlying two-request pattern."
             ),
             "Pass --no-variables to skip resolution entirely.",
+            (
+                "NO_VARIABLE_ROWS (exit 1) means the linked variables config "
+                "has zero rows; fix via `kbagent config variables-set` or "
+                "pass --no-variables."
+            ),
         ],
     )
 )

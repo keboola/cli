@@ -4,8 +4,9 @@
 
 Transformations with linked `keboola.variables` used to run against empty strings
 unless the caller hand-wired a `variableValuesId` at the HTTP layer. `kbagent job run`
-now auto-resolves it: reads `configuration.runtime.variables_id` from the parent
-config, picks `variables_values_id` if set, else the first row of the linked
+now auto-resolves it: reads `configuration.variables_id` from the parent config
+(root of the configuration body — same key `VariablesService` writes), picks
+`configuration.variables_values_id` if set, else the first row of the linked
 variables config.
 
 **Override knobs:**

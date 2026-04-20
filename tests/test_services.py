@@ -1884,14 +1884,12 @@ class TestJobServiceVariableValuesResolution:
         )
 
     def test_resolve_uses_explicit_values_id_when_set(self) -> None:
-        """runtime.variables_values_id wins over first-row fallback."""
+        """configuration.variables_values_id wins over first-row fallback."""
         mock_client = MagicMock()
         mock_client.get_config_detail.return_value = {
             "configuration": {
-                "runtime": {
-                    "variables_id": "vars-cfg-42",
-                    "variables_values_id": "row-explicit",
-                }
+                "variables_id": "vars-cfg-42",
+                "variables_values_id": "row-explicit",
             }
         }
 
@@ -1905,10 +1903,10 @@ class TestJobServiceVariableValuesResolution:
         mock_client.list_config_rows.assert_not_called()
 
     def test_resolve_falls_back_to_first_row(self) -> None:
-        """When runtime.variables_id is set but values_id absent, use first row."""
+        """When configuration.variables_id is set but values_id absent, use first row."""
         mock_client = MagicMock()
         mock_client.get_config_detail.return_value = {
-            "configuration": {"runtime": {"variables_id": "vars-cfg-42"}}
+            "configuration": {"variables_id": "vars-cfg-42"}
         }
         mock_client.list_config_rows.return_value = [
             {"id": "row-first"},
@@ -1930,9 +1928,9 @@ class TestJobServiceVariableValuesResolution:
         )
 
     def test_resolve_returns_none_when_no_variables_link(self) -> None:
-        """Config without runtime.variables_id → None (skip variableValuesId)."""
+        """Config without configuration.variables_id → None (skip variableValuesId)."""
         mock_client = MagicMock()
-        mock_client.get_config_detail.return_value = {"configuration": {"runtime": {}}}
+        mock_client.get_config_detail.return_value = {"configuration": {}}
 
         result = JobService.resolve_variable_values_id(
             client=mock_client,
@@ -1947,7 +1945,7 @@ class TestJobServiceVariableValuesResolution:
         """Linked variables config with no rows → NO_VARIABLE_ROWS (fail fast)."""
         mock_client = MagicMock()
         mock_client.get_config_detail.return_value = {
-            "configuration": {"runtime": {"variables_id": "vars-cfg-42"}}
+            "configuration": {"variables_id": "vars-cfg-42"}
         }
         mock_client.list_config_rows.return_value = []
 
@@ -1964,7 +1962,7 @@ class TestJobServiceVariableValuesResolution:
         store = self._store(tmp_config_dir)
         mock_client = MagicMock()
         mock_client.get_config_detail.return_value = {
-            "configuration": {"runtime": {"variables_id": "vars-cfg-42"}}
+            "configuration": {"variables_id": "vars-cfg-42"}
         }
         mock_client.list_config_rows.return_value = [{"id": "row-first"}]
         mock_client.create_job.return_value = {"id": 700, "status": "waiting"}
@@ -2017,6 +2015,31 @@ class TestJobServiceVariableValuesResolution:
 
         mock_client.get_config_detail.assert_not_called()
         assert mock_client.create_job.call_args.kwargs["variable_values_id"] is None
+
+    def test_run_job_closes_client_when_resolver_raises(self, tmp_config_dir: Path) -> None:
+        """NO_VARIABLE_ROWS raised by the resolver inside run_job still closes the client.
+
+        Locks the try/finally contract (best_practices.md §3): every error path
+        that flows out of run_job -- including the resolver raising before
+        create_job -- must release the HTTP client.
+        """
+        store = self._store(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {
+            "configuration": {"variables_id": "vars-cfg-42"}
+        }
+        mock_client.list_config_rows.return_value = []  # triggers NO_VARIABLE_ROWS
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            self._service(store, mock_client).run_job(
+                alias="prod",
+                component_id="keboola.snowflake-transformation",
+                config_id="100",
+            )
+
+        assert excinfo.value.error_code == "NO_VARIABLE_ROWS"
+        mock_client.create_job.assert_not_called()
+        mock_client.close.assert_called_once()
 
 
 def _make_job_store_and_project(tmp_config_dir: Path, alias: str = "prod") -> ConfigStore:

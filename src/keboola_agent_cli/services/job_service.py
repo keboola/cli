@@ -1,7 +1,8 @@
-"""Job listing service - business logic for listing jobs from Queue API.
+"""Job service - business logic for Queue API jobs.
 
-Orchestrates multi-project job retrieval in parallel, filtering,
-and aggregation without knowing about CLI or HTTP details.
+Covers listing (multi-project parallel retrieval + filtering), detail
+fetch, creation with optional wait, termination, and variable-values
+resolution. Stays agnostic of CLI and HTTP transport details.
 """
 
 from typing import Any
@@ -13,7 +14,7 @@ from .base import BaseService
 
 
 class JobService(BaseService):
-    """Business logic for listing Keboola jobs from the Queue API.
+    """Business logic for Keboola jobs (list, detail, run, terminate).
 
     Supports multi-project aggregation: queries multiple projects in parallel
     using ThreadPoolExecutor, collects results, and reports per-project errors
@@ -162,7 +163,7 @@ class JobService(BaseService):
     ) -> dict[str, Any]:
         """Create and optionally wait for a Queue API job.
 
-        When the config has linked variables (``configuration.runtime.variables_id``),
+        When the config has linked variables (``configuration.variables_id``),
         auto-resolve a ``variableValuesId`` via :meth:`resolve_variable_values_id`
         so the job runs against the deployed values row instead of empty
         strings. Pass ``variable_values_id`` to override, or ``no_variables=True``
@@ -230,15 +231,20 @@ class JobService(BaseService):
     ) -> str | None:
         """Resolve the variables values row id to pass to ``create_job``.
 
-        Reads the parent config's ``configuration.runtime.variables_id`` to
-        find the linked ``keboola.variables`` config. Prefers the explicit
-        ``configuration.runtime.variables_values_id`` when set; otherwise
-        falls back to the first row of the linked variables config (the
-        default-row convention).
+        Reads the parent config's ``configuration.variables_id`` to find the
+        linked ``keboola.variables`` config. Prefers the explicit
+        ``configuration.variables_values_id`` when set; otherwise falls back
+        to the first row of the linked variables config (the default-row
+        convention).
+
+        Note the snake_case keys: Keboola stores the variables link at the
+        root of the ``configuration`` body as ``variables_id`` /
+        ``variables_values_id`` (matching the on-disk format written by
+        ``VariablesService``), NOT nested under a ``runtime`` object.
 
         Returns:
             The values row id, or ``None`` if the parent config has no
-            linked variables (no ``runtime.variables_id``).
+            linked variables (no ``variables_id``).
 
         Raises:
             KeboolaApiError: ``NO_VARIABLE_ROWS`` when the linked variables
@@ -250,12 +256,12 @@ class JobService(BaseService):
             config_id=config_id,
             branch_id=branch_id,
         )
-        runtime = (detail.get("configuration") or {}).get("runtime") or {}
-        variables_id = runtime.get("variables_id")
+        configuration = detail.get("configuration") or {}
+        variables_id = configuration.get("variables_id")
         if not variables_id:
             return None
 
-        explicit_values_id = runtime.get("variables_values_id")
+        explicit_values_id = configuration.get("variables_values_id")
         if explicit_values_id:
             return str(explicit_values_id)
 
