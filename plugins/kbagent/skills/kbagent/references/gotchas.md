@@ -38,6 +38,17 @@
   (general); if caught per-change it lands in `result["errors"][]` with the
   same code. Fail-closed either way. Use
   `--allow-plaintext-on-encrypt-failure` ONLY for debugging.
+- **`keboola.variables` row secrets live in `{name, value}` list
+  elements**, not dict keys. Before 0.21.1, the encryption walker only
+  scanned `#`-prefixed dict keys and silently shipped plaintext for
+  `values: [{name: '#x', value: '...'}]`. Fixed in 0.21.1 via
+  `_is_secret_name_value_pair`. (`keboola.shared-code` rows carry
+  `code_content: [string]` and have no secrets, so the walker correctly
+  never fires there.) If you add a new row-hoist component with yet
+  another secret shape, extend the walker -- don't patch callers.
+- Row-level deployment internals (manifest v3 hashes, 3-way diff, untracked
+  row detection, `ROW_HOIST_COMPONENTS`): see
+  [`sync-rows-workflow.md`](sync-rows-workflow.md).
 
 ## Response structure varies by command
 

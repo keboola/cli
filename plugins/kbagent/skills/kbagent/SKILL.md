@@ -207,6 +207,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
 | Encrypting secrets for MCP tools | [encrypt-workflow](references/encrypt-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
+| Sync row-level internals (manifest v3, hoist, encryption) | [sync-rows-workflow](references/sync-rows-workflow.md) |
 | **Variables (attach to any config)** | [variables-workflow](references/variables-workflow.md) |
 | Reading synced data | [reading-synced-data](references/reading-synced-data.md) |
 | SQL migration (input mapping removal) | [sql-migration-workflow](references/sql-migration-workflow.md) |

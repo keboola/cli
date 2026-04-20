@@ -36,6 +36,12 @@ kbagent sync push --project prod
 before push, same as parent configs. Encryption failure aborts the push
 (fail-closed); use `--allow-plaintext-on-encrypt-failure` only for debugging.
 
+For the row-level internals (manifest v3, per-row hashes, hoisted payloads,
+untracked row detection, secret encryption contract), see
+[`sync-rows-workflow.md`](./sync-rows-workflow.md). For the ergonomic
+alternative that skips the YAML round-trip entirely, see
+[`variables-workflow.md`](./variables-workflow.md).
+
 ## All-projects workflow (recommended)
 
 ```bash
