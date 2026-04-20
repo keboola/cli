@@ -1741,6 +1741,8 @@ class TestJobServiceRunJob:
             "status": "waiting",
             "component": "keboola.ex-http",
         }
+        # Parent config has no linked variables -- resolver returns None
+        mock_client.get_config_detail.return_value = {}
 
         service = JobService(
             config_store=store,
@@ -1760,6 +1762,7 @@ class TestJobServiceRunJob:
             config_id="42",
             config_row_ids=None,
             branch_id=None,
+            variable_values_id=None,
         )
         mock_client.close.assert_called_once()
 
@@ -1782,6 +1785,7 @@ class TestJobServiceRunJob:
             "status": "waiting",
             "branchId": "789",
         }
+        mock_client.get_config_detail.return_value = {}
 
         service = JobService(
             config_store=store,
@@ -1802,6 +1806,7 @@ class TestJobServiceRunJob:
             config_id="100",
             config_row_ids=None,
             branch_id=789,
+            variable_values_id=None,
         )
 
     def test_run_job_with_branch_and_wait(self, tmp_config_dir: Path) -> None:
@@ -1824,6 +1829,7 @@ class TestJobServiceRunJob:
             "status": "success",
             "isFinished": True,
         }
+        mock_client.get_config_detail.return_value = {}
 
         service = JobService(
             config_store=store,
@@ -1846,8 +1852,171 @@ class TestJobServiceRunJob:
             config_id="42",
             config_row_ids=None,
             branch_id=123,
+            variable_values_id=None,
         )
         mock_client.wait_for_queue_job.assert_called_once_with("557", max_wait=60.0)
+
+
+class TestJobServiceVariableValuesResolution:
+    """Tests for `resolve_variable_values_id` + auto-resolution in `run_job`.
+
+    Locks the P0-2 contract: transformations with linked variables must
+    run against the deployed values row, not empty strings.
+    """
+
+    def _store(self, tmp_config_dir: Path) -> ConfigStore:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-abc-defghijklmnopqrst",
+                project_name="Production",
+                project_id=1234,
+            ),
+        )
+        return store
+
+    def _service(self, store: ConfigStore, mock_client: MagicMock) -> JobService:
+        return JobService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+    def test_resolve_uses_explicit_values_id_when_set(self) -> None:
+        """runtime.variables_values_id wins over first-row fallback."""
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {
+            "configuration": {
+                "runtime": {
+                    "variables_id": "vars-cfg-42",
+                    "variables_values_id": "row-explicit",
+                }
+            }
+        }
+
+        result = JobService.resolve_variable_values_id(
+            client=mock_client,
+            component_id="keboola.snowflake-transformation",
+            config_id="100",
+        )
+
+        assert result == "row-explicit"
+        mock_client.list_config_rows.assert_not_called()
+
+    def test_resolve_falls_back_to_first_row(self) -> None:
+        """When runtime.variables_id is set but values_id absent, use first row."""
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {
+            "configuration": {"runtime": {"variables_id": "vars-cfg-42"}}
+        }
+        mock_client.list_config_rows.return_value = [
+            {"id": "row-first"},
+            {"id": "row-second"},
+        ]
+
+        result = JobService.resolve_variable_values_id(
+            client=mock_client,
+            component_id="keboola.snowflake-transformation",
+            config_id="100",
+            branch_id=789,
+        )
+
+        assert result == "row-first"
+        mock_client.list_config_rows.assert_called_once_with(
+            component_id="keboola.variables",
+            config_id="vars-cfg-42",
+            branch_id=789,
+        )
+
+    def test_resolve_returns_none_when_no_variables_link(self) -> None:
+        """Config without runtime.variables_id → None (skip variableValuesId)."""
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {"configuration": {"runtime": {}}}
+
+        result = JobService.resolve_variable_values_id(
+            client=mock_client,
+            component_id="keboola.ex-http",
+            config_id="42",
+        )
+
+        assert result is None
+        mock_client.list_config_rows.assert_not_called()
+
+    def test_resolve_raises_when_variables_has_zero_rows(self) -> None:
+        """Linked variables config with no rows → NO_VARIABLE_ROWS (fail fast)."""
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {
+            "configuration": {"runtime": {"variables_id": "vars-cfg-42"}}
+        }
+        mock_client.list_config_rows.return_value = []
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            JobService.resolve_variable_values_id(
+                client=mock_client,
+                component_id="keboola.snowflake-transformation",
+                config_id="100",
+            )
+        assert excinfo.value.error_code == "NO_VARIABLE_ROWS"
+
+    def test_run_job_auto_resolves_values_id(self, tmp_config_dir: Path) -> None:
+        """run_job dispatches resolver output to create_job's variable_values_id."""
+        store = self._store(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {
+            "configuration": {"runtime": {"variables_id": "vars-cfg-42"}}
+        }
+        mock_client.list_config_rows.return_value = [{"id": "row-first"}]
+        mock_client.create_job.return_value = {"id": 700, "status": "waiting"}
+
+        result = self._service(store, mock_client).run_job(
+            alias="prod",
+            component_id="keboola.snowflake-transformation",
+            config_id="100",
+        )
+
+        assert result["resolvedVariableValuesId"] == "row-first"
+        mock_client.create_job.assert_called_once_with(
+            component_id="keboola.snowflake-transformation",
+            config_id="100",
+            config_row_ids=None,
+            branch_id=None,
+            variable_values_id="row-first",
+        )
+
+    def test_run_job_explicit_override_wins(self, tmp_config_dir: Path) -> None:
+        """User-supplied --variable-values-id bypasses resolution entirely."""
+        store = self._store(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 701, "status": "waiting"}
+
+        self._service(store, mock_client).run_job(
+            alias="prod",
+            component_id="keboola.snowflake-transformation",
+            config_id="100",
+            variable_values_id="row-user-picked",
+        )
+
+        # Resolver short-circuited; no config detail fetch.
+        mock_client.get_config_detail.assert_not_called()
+        mock_client.list_config_rows.assert_not_called()
+        assert mock_client.create_job.call_args.kwargs["variable_values_id"] == "row-user-picked"
+
+    def test_run_job_no_variables_skips_resolution(self, tmp_config_dir: Path) -> None:
+        """--no-variables short-circuits the resolver (no detail fetch)."""
+        store = self._store(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 702, "status": "waiting"}
+
+        self._service(store, mock_client).run_job(
+            alias="prod",
+            component_id="keboola.snowflake-transformation",
+            config_id="100",
+            no_variables=True,
+        )
+
+        mock_client.get_config_detail.assert_not_called()
+        assert mock_client.create_job.call_args.kwargs["variable_values_id"] is None
 
 
 def _make_job_store_and_project(tmp_config_dir: Path, alias: str = "prod") -> ConfigStore:

@@ -191,6 +191,22 @@ def job_run(
         "--branch",
         help="Dev branch ID (overrides active branch)",
     ),
+    variable_values_id: str | None = typer.Option(
+        None,
+        "--variable-values-id",
+        help=(
+            "Row id of the linked keboola.variables values row. Overrides "
+            "auto-resolution. Mutually exclusive with --no-variables."
+        ),
+    ),
+    no_variables: bool = typer.Option(
+        False,
+        "--no-variables",
+        help=(
+            "Skip variable-values resolution. Use for configs without linked "
+            "variables or when intentionally running against empty bindings."
+        ),
+    ),
 ) -> None:
     """Run a job for a component configuration.
 
@@ -199,6 +215,11 @@ def job_run(
 
     When a dev branch is active (via 'branch use'), the job automatically
     runs on that branch. Use --branch to override.
+
+    When the config has linked variables (runtime.variables_id), kbagent
+    auto-resolves a variableValuesId so the job binds to the deployed
+    values row. Override with --variable-values-id or skip with
+    --no-variables.
     """
     if should_hint(ctx):
         emit_hint(
@@ -211,11 +232,20 @@ def job_run(
             wait=wait,
             timeout=timeout,
             branch=branch,
+            variable_values_id=variable_values_id,
+            no_variables=no_variables,
         )
         return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "job_service")
     config_store: ConfigStore = ctx.obj["config_store"]
+
+    if variable_values_id and no_variables:
+        formatter.error(
+            message="--variable-values-id and --no-variables are mutually exclusive.",
+            error_code="INVALID_ARGUMENT",
+        )
+        raise typer.Exit(code=2)
 
     validate_branch_requires_project(formatter, branch, project)
     _, effective_branch = resolve_branch(config_store, formatter, project, branch)
@@ -240,6 +270,8 @@ def job_run(
             wait=wait,
             timeout=timeout,
             branch_id=effective_branch,
+            variable_values_id=variable_values_id,
+            no_variables=no_variables,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")

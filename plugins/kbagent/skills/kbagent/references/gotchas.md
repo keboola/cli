@@ -1,5 +1,27 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## `job run` now auto-resolves variable values
+
+Transformations with linked `keboola.variables` used to run against empty strings
+unless the caller hand-wired a `variableValuesId` at the HTTP layer. `kbagent job run`
+now auto-resolves it: reads `configuration.runtime.variables_id` from the parent
+config, picks `variables_values_id` if set, else the first row of the linked
+variables config.
+
+**Override knobs:**
+- `--variable-values-id ROW_ID` -- use a specific values row (CI runs, what-if analysis).
+- `--no-variables` -- skip resolution entirely (components without variables, or
+  intentionally running with empty bindings).
+
+**Error cases:**
+- `NO_VARIABLE_ROWS` -- the linked `keboola.variables` config exists but has zero
+  rows. Fix: `kbagent config variables-set --project X --component-id C --config-id I --var KEY=VALUE`.
+- The JSON response now carries `resolvedVariableValuesId` when the resolver fired,
+  so you can verify the job bound to the right row.
+
+`--variable-values-id` and `--no-variables` are mutually exclusive; passing both
+returns exit 2 / `INVALID_ARGUMENT` before any API call.
+
 ## Response structure varies by command
 
 Not all commands return data the same way. Key differences:

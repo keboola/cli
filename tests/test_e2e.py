@@ -2790,3 +2790,162 @@ class TestE2EToolCommands:
             self.alias,
         )
         assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# Job run variable values resolution (PR2 / P0-2)
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EJobRunVariableValues:
+    """Prove `kbagent job run` auto-resolves variableValuesId against a live API.
+
+    Sets up a real `keboola.variables` config with one row and a parent
+    ex-http config whose `configuration.runtime.variables_id` points at it,
+    then runs `kbagent --json job run --no-wait` and asserts the
+    response's `resolvedVariableValuesId` matches the created row id.
+
+    Also spot-checks the client path directly via `JobService.resolve_variable_values_id`
+    (pure resolver, no Queue dispatch) so a Queue outage would not mask a
+    resolver regression.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-jobvars"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        # Client for fixture setup / teardown.
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+
+        # Track created configs so teardown can delete them even on assert fail.
+        self._created: list[tuple[str, str]] = []
+
+        yield
+
+        for component_id, config_id in reversed(self._created):
+            try:
+                self.client.delete_config(component_id=component_id, config_id=config_id)
+            except Exception as exc:
+                print(
+                    f"  {_DIM}(teardown) delete_config {component_id}/{config_id} failed: {exc}{_RESET}"
+                )
+        self.client.close()
+
+    def _create_fixture(self) -> tuple[str, str, str]:
+        """Create variables config + row + linked parent ex-http config.
+
+        Returns ``(variables_config_id, variables_row_id, parent_config_id)``.
+        """
+        vars_cfg = self.client.create_config(
+            component_id="keboola.variables",
+            name=f"{RUN_ID}-vars",
+            description="E2E PR2 fixture",
+            configuration={
+                "variables": [{"name": "year_start", "type": "string"}],
+            },
+        )
+        vars_cfg_id = str(vars_cfg["id"])
+        self._created.append(("keboola.variables", vars_cfg_id))
+
+        vars_row = self.client.create_config_row(
+            component_id="keboola.variables",
+            config_id=vars_cfg_id,
+            name="default",
+            configuration={"values": [{"name": "year_start", "value": "2016"}]},
+        )
+        vars_row_id = str(vars_row["id"])
+
+        parent_cfg = self.client.create_config(
+            component_id="keboola.ex-http",
+            name=f"{RUN_ID}-http-linked",
+            description="E2E PR2 linked parent",
+            configuration={
+                "parameters": {"baseUrl": "https://example.com"},
+                "runtime": {"variables_id": vars_cfg_id},
+            },
+        )
+        parent_cfg_id = str(parent_cfg["id"])
+        self._created.append(("keboola.ex-http", parent_cfg_id))
+
+        return vars_cfg_id, vars_row_id, parent_cfg_id
+
+    def test_resolve_variable_values_id_live(self) -> None:
+        """Resolver reads runtime.variables_id + falls back to first row."""
+        from keboola_agent_cli.services.job_service import JobService
+
+        _step(1, "create variables + linked parent fixture")
+        _vars_id, vars_row_id, parent_id = self._create_fixture()
+
+        _step(2, "resolve values row id via JobService")
+        resolved = JobService.resolve_variable_values_id(
+            client=self.client,
+            component_id="keboola.ex-http",
+            config_id=parent_id,
+        )
+        print(f"  {_DIM}resolved={resolved} expected={vars_row_id}{_RESET}")
+        assert resolved == vars_row_id
+
+    def test_job_run_surfaces_resolved_variable_values_id(self) -> None:
+        """`kbagent job run --no-wait` returns resolvedVariableValuesId in --json.
+
+        The job itself may fail at execution time (test token may not have
+        rights to run HTTP jobs or the URL may be unreachable). That is OK:
+        what we assert is that the resolver picked up the values row and
+        kbagent surfaced it before/with job submission.
+        """
+        _step(1, "create variables + linked parent fixture")
+        _vars_id, vars_row_id, parent_id = self._create_fixture()
+
+        _step(2, "kbagent --json job run (no --wait)")
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                parent_id,
+            ],
+        )
+
+        data = _json(result)
+        payload = data.get("data", data)
+        print(f"  {_DIM}resolvedVariableValuesId={payload.get('resolvedVariableValuesId')}{_RESET}")
+        assert payload.get("resolvedVariableValuesId") == vars_row_id
+
+        # Clean up the job we just created (avoid wasted compute) if the
+        # Queue accepted it. Best-effort: ignore "not killable" transitions.
+        import contextlib
+
+        job_id = payload.get("id")
+        if job_id:
+            with contextlib.suppress(Exception):
+                self.client.kill_job(str(job_id))

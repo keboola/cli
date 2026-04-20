@@ -253,7 +253,7 @@ kbagent config rename --project NAME --component-id ID --config-id ID --name "Ne
 
 kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
 kbagent job detail --project NAME --job-id ID
-kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID]
+kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--variable-values-id ID] [--no-variables]
 kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
 
 kbagent storage buckets [--project NAME] [--branch ID]

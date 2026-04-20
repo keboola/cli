@@ -157,8 +157,16 @@ class JobService(BaseService):
         wait: bool = False,
         timeout: float = 300.0,
         branch_id: int | None = None,
+        variable_values_id: str | None = None,
+        no_variables: bool = False,
     ) -> dict[str, Any]:
         """Create and optionally wait for a Queue API job.
+
+        When the config has linked variables (``configuration.runtime.variables_id``),
+        auto-resolve a ``variableValuesId`` via :meth:`resolve_variable_values_id`
+        so the job runs against the deployed values row instead of empty
+        strings. Pass ``variable_values_id`` to override, or ``no_variables=True``
+        to skip the resolution entirely.
 
         Args:
             alias: Project alias.
@@ -169,6 +177,12 @@ class JobService(BaseService):
             timeout: Max seconds to wait (only used when wait=True).
             branch_id: Optional dev branch ID. When set, the job runs
                 on that branch instead of the default (production) branch.
+            variable_values_id: Optional explicit values row id. When set,
+                bypasses auto-resolution and goes straight into the Queue
+                body. Mutually exclusive with ``no_variables``.
+            no_variables: If True, skip variable-values resolution entirely
+                (useful for components that do not support variables, or
+                when the caller intentionally wants empty-string binding).
 
         Returns:
             Job dict with project_alias. If wait=True, returns the
@@ -179,11 +193,21 @@ class JobService(BaseService):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
+            resolved_values_id = variable_values_id
+            if resolved_values_id is None and not no_variables:
+                resolved_values_id = self.resolve_variable_values_id(
+                    client=client,
+                    component_id=component_id,
+                    config_id=config_id,
+                    branch_id=branch_id,
+                )
+
             job = client.create_job(
                 component_id=component_id,
                 config_id=config_id,
                 config_row_ids=config_row_ids,
                 branch_id=branch_id,
+                variable_values_id=resolved_values_id,
             )
             job_id = str(job.get("id", ""))
 
@@ -193,7 +217,64 @@ class JobService(BaseService):
             client.close()
 
         job["project_alias"] = alias
+        if resolved_values_id:
+            job["resolvedVariableValuesId"] = resolved_values_id
         return job
+
+    @staticmethod
+    def resolve_variable_values_id(
+        client: Any,
+        component_id: str,
+        config_id: str,
+        branch_id: int | None = None,
+    ) -> str | None:
+        """Resolve the variables values row id to pass to ``create_job``.
+
+        Reads the parent config's ``configuration.runtime.variables_id`` to
+        find the linked ``keboola.variables`` config. Prefers the explicit
+        ``configuration.runtime.variables_values_id`` when set; otherwise
+        falls back to the first row of the linked variables config (the
+        default-row convention).
+
+        Returns:
+            The values row id, or ``None`` if the parent config has no
+            linked variables (no ``runtime.variables_id``).
+
+        Raises:
+            KeboolaApiError: ``NO_VARIABLE_ROWS`` when the linked variables
+                config has zero rows (misconfiguration — the config exists
+                but no values row has been set).
+        """
+        detail = client.get_config_detail(
+            component_id=component_id,
+            config_id=config_id,
+            branch_id=branch_id,
+        )
+        runtime = (detail.get("configuration") or {}).get("runtime") or {}
+        variables_id = runtime.get("variables_id")
+        if not variables_id:
+            return None
+
+        explicit_values_id = runtime.get("variables_values_id")
+        if explicit_values_id:
+            return str(explicit_values_id)
+
+        rows = client.list_config_rows(
+            component_id="keboola.variables",
+            config_id=str(variables_id),
+            branch_id=branch_id,
+        )
+        if not rows:
+            raise KeboolaApiError(
+                message=(
+                    f"Linked variables config {variables_id} has no rows. "
+                    f"Create one via `kbagent config variables-set` or pass "
+                    f"`--no-variables` to skip resolution."
+                ),
+                status_code=0,
+                error_code="NO_VARIABLE_ROWS",
+            )
+        return str(rows[0].get("id", ""))
 
     def resolve_job_ids_by_filter(
         self,

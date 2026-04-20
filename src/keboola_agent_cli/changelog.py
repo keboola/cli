@@ -8,6 +8,13 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.22.0": [
+        "New: `kbagent job run` auto-resolves `variableValuesId` for configs with linked `keboola.variables` -- transformations now run against deployed values instead of empty strings.",
+        "New: `--variable-values-id ID` to override the auto-resolved values row.",
+        "New: `--no-variables` to skip resolution entirely (mutually exclusive with `--variable-values-id`).",
+        "New: `NO_VARIABLE_ROWS` error code when a linked variables config has zero rows (misconfiguration; surface via `--json` error payload or fix via `kbagent config variables-set`).",
+        "Client: `create_job` gained `variable_values_id` parameter; omitted from body when unset so existing callers retain wire-level compatibility.",
+    ],
     "0.20.6": [
         "Fix: storage download-table / unload-table no longer OOM on multi-GB tables -- streamed downloads cap RAM at ~1 MiB regardless of table size (#187)",
         "Fix: _prepend_csv_header() no longer loads the full CSV into RAM (was the second OOM source after slice download)",

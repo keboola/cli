@@ -2245,6 +2245,182 @@ class TestJobRun:
         # --project is required, so typer returns exit code 2 (usage error)
         assert result.exit_code == 2
 
+    def test_job_run_explicit_variable_values_id_forwarded(self, tmp_path: Path) -> None:
+        """--variable-values-id lands in service call as variable_values_id."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            job_service = MagicMock()
+            job_service.run_job.return_value = {"id": 700, "status": "waiting"}
+            MockJobService.return_value = job_service
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "job",
+                    "run",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.snowflake-transformation",
+                    "--config-id",
+                    "100",
+                    "--variable-values-id",
+                    "row-user-picked",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        kwargs = job_service.run_job.call_args.kwargs
+        assert kwargs["variable_values_id"] == "row-user-picked"
+        assert kwargs["no_variables"] is False
+
+    def test_job_run_no_variables_flag_forwarded(self, tmp_path: Path) -> None:
+        """--no-variables sets no_variables=True on the service call."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            job_service = MagicMock()
+            job_service.run_job.return_value = {"id": 701, "status": "waiting"}
+            MockJobService.return_value = job_service
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "job",
+                    "run",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-http",
+                    "--config-id",
+                    "42",
+                    "--no-variables",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        kwargs = job_service.run_job.call_args.kwargs
+        assert kwargs["no_variables"] is True
+        assert kwargs["variable_values_id"] is None
+
+    def test_job_run_mutually_exclusive_flags_rejected(self, tmp_path: Path) -> None:
+        """--variable-values-id + --no-variables is an invalid combination (exit 2)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            job_service = MagicMock()
+            MockJobService.return_value = job_service
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "job",
+                    "run",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-http",
+                    "--config-id",
+                    "42",
+                    "--variable-values-id",
+                    "row-1",
+                    "--no-variables",
+                ],
+            )
+
+        assert result.exit_code == 2
+        job_service.run_job.assert_not_called()
+        assert "INVALID_ARGUMENT" in result.output
+
+    def test_job_run_no_variable_rows_error(self, tmp_path: Path) -> None:
+        """Service raises NO_VARIABLE_ROWS → CLI exits 1 with error_code surfaced."""
+        from keboola_agent_cli.errors import KeboolaApiError
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            job_service = MagicMock()
+            job_service.run_job.side_effect = KeboolaApiError(
+                message="Linked variables config vars-42 has no rows.",
+                status_code=0,
+                error_code="NO_VARIABLE_ROWS",
+            )
+            MockJobService.return_value = job_service
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "job",
+                    "run",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.snowflake-transformation",
+                    "--config-id",
+                    "100",
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "NO_VARIABLE_ROWS" in result.output
+
 
 class TestJobTerminate:
     """Tests for `kbagent job terminate` command."""
