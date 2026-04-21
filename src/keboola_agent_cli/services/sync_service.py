@@ -528,8 +528,16 @@ class SyncService(BaseService):
                                 "reason": "row locally modified",
                             }
                         )
-                    elif existing_row and old_row_cfg_hash and old_row_cfg_hash == row_api_cfg_hash:
+                    elif (
+                        existing_row
+                        and old_row_cfg_hash
+                        and old_row_cfg_hash == row_api_cfg_hash
+                        and row_file.exists()
+                    ):
                         # Idempotent: remote unchanged since last pull, file untouched.
+                        # Guard: row_file.exists() ensures we don't skip writing when
+                        # the directory is new (e.g. first pull of a dev branch that
+                        # clones main -- same hash but no file on disk yet).
                         row_file_hash = (
                             self._file_hash(row_file) if row_file.exists() else old_row_file_hash
                         )

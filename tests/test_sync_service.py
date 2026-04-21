@@ -696,6 +696,54 @@ class TestPull:
         assert renamed_details[0]["old_path"] == "extractor/keboola.ex-http/my-http-extractor"
         assert renamed_details[0]["path"] == "extractor/keboola.ex-http/renamed-http-extractor"
 
+    def test_pull_dev_branch_writes_rows(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """Regression: first pull of a new dev branch must write config rows (issue #193).
+
+        A fresh branch is a clone of main -- API hashes are identical. The idempotent
+        skip guard must NOT fire when the row file doesn't exist on disk yet.
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        # Init with both main + dev branch registered
+        store = self._init_project(
+            tmp_config_dir, project_root, branches_response=SAMPLE_BRANCHES_WITH_DEV
+        )
+
+        # Pull main (branch_id 12345) first so manifest carries rows from main
+        main_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS,
+        )
+        main_client.list_dev_branches.return_value = SAMPLE_BRANCHES_WITH_DEV
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: main_client,
+        )
+        result_main = svc.pull(alias="prod", project_root=project_root)
+        assert result_main["rows_pulled"] == 1
+
+        # Switch active branch to the dev branch (branch_id 99999)
+        store.set_project_branch("prod", 99999)
+
+        # Pull dev branch -- same API payload (clone of main, identical hashes)
+        dev_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS,
+        )
+        dev_client.list_dev_branches.return_value = SAMPLE_BRANCHES_WITH_DEV
+        svc2 = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: dev_client,
+        )
+        result_dev = svc2.pull(alias="prod", project_root=project_root)
+
+        # Row files must be written for the dev branch directory
+        assert result_dev["rows_pulled"] == 1, (
+            "Dev branch pull must write row files even when API hash matches main"
+        )
+        dev_branch_dir = project_root / result_dev["branch_dir"]
+        row_files = [f for f in dev_branch_dir.rglob(CONFIG_FILENAME) if "rows" in f.parts]
+        assert len(row_files) >= 1, "Row _config.yml files must exist under dev branch dir"
+
 
 # ===================================================================
 # status tests
