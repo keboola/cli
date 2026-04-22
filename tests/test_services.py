@@ -2152,6 +2152,114 @@ class TestJobServiceQueuePollingParity:
         assert exc_info.value.error_code == "QUEUE_JOB_FAILED"
         assert "logTail" not in exc_info.value.details
 
+    def test_run_job_unhandled_wait_code_bubbles_up_unchanged(self, tmp_config_dir: Path) -> None:
+        """A wait error that is neither QUEUE_JOB_FAILED nor QUEUE_JOB_TIMEOUT
+        must re-raise the original instance with no mutation and no kill attempt.
+        Locks the observability fall-through path added in the review loop."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 708, "status": "waiting"}
+        mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="token rotated mid-run",
+            status_code=401,
+            error_code="INVALID_TOKEN",
+        )
+        mock_client.get_config_detail.return_value = {}
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                wait=True,
+                no_variables=True,
+            )
+        assert exc_info.value.error_code == "INVALID_TOKEN"
+        # No tail fetch, no kill -- this path is for errors we don't specialise.
+        mock_client.fetch_job_events.assert_not_called()
+        mock_client.kill_job.assert_not_called()
+        # exc passes through without a logTail (mutation would be a bug).
+        assert "logTail" not in exc_info.value.details
+
+    def test_run_job_failure_exception_chaining_does_not_mutate_original(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """QUEUE_JOB_FAILED produces a NEW exception chained from the original.
+
+        Guarantees we do not mutate a caught exception's .details dict
+        (which would contaminate any shared instance / retry harness).
+        """
+        original_details: dict = {}
+        original = KeboolaApiError(
+            message="Queue job 709 failed: SQL error",
+            status_code=500,
+            error_code="QUEUE_JOB_FAILED",
+            details=original_details,
+        )
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 709, "status": "waiting"}
+        mock_client.wait_for_queue_job.side_effect = original
+        mock_client.get_job_detail.return_value = {
+            "id": "709",
+            "runId": "709",
+            "status": "error",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+        mock_client.fetch_job_events.return_value = [{"uuid": "u1", "message": "err"}]
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                wait=True,
+                no_variables=True,
+            )
+        raised = exc_info.value
+        # Raised instance is NEW, not the one side_effect handed us.
+        assert raised is not original
+        # Chain is explicit (raise ... from original).
+        assert raised.__cause__ is original
+        # Original details dict was NOT mutated.
+        assert original_details == {}
+        assert "logTail" not in original.details
+        # But the new exception carries the tail.
+        assert raised.details["logTail"][0]["uuid"] == "u1"
+
+
+class TestSafeFetchLogTailDefensiveSort:
+    """Ensure _safe_fetch_log_tail enforces newest-first ordering regardless of
+    what the API returned (PR4 review round 1 finding)."""
+
+    def test_sorts_events_by_created_desc(self) -> None:
+        """API returns events in arbitrary order -> we still emit newest first."""
+        from keboola_agent_cli.services.job_service import _safe_fetch_log_tail
+
+        mock_client = MagicMock()
+        # Deliberately shuffled order from the "API"
+        mock_client.fetch_job_events.return_value = [
+            {"uuid": "a", "created": "2026-04-22T09:54:27+0200", "message": "middle"},
+            {"uuid": "b", "created": "2026-04-22T09:54:30+0200", "message": "newest"},
+            {"uuid": "c", "created": "2026-04-22T09:54:10+0200", "message": "oldest"},
+        ]
+        tail = _safe_fetch_log_tail(mock_client, {"id": "x", "runId": "x"}, limit=10)
+        assert [e["uuid"] for e in tail] == ["b", "a", "c"]
+
+    def test_missing_created_sorts_last(self) -> None:
+        """Events without `created` should not jump to the top of the tail."""
+        from keboola_agent_cli.services.job_service import _safe_fetch_log_tail
+
+        mock_client = MagicMock()
+        mock_client.fetch_job_events.return_value = [
+            {"uuid": "no_created", "message": "missing"},
+            {"uuid": "timestamped", "created": "2026-04-22T09:54:30+0200", "message": "ok"},
+        ]
+        tail = _safe_fetch_log_tail(mock_client, {"id": "x", "runId": "x"}, limit=10)
+        assert tail[0]["uuid"] == "timestamped"
+        assert tail[1]["uuid"] == "no_created"
+
 
 class TestJobServiceVariableValuesResolution:
     """Tests for `resolve_variable_values_id` + auto-resolution in `run_job`.

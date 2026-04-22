@@ -3442,11 +3442,15 @@ class TestE2EJobRunQueuePollingParity:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
+    def setup(self, tmp_path: Path, request: pytest.FixtureRequest) -> None:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
-        self.alias = f"{RUN_ID}-queuepoll"
+        # Per-test alias suffix so parallel pytest-xdist runs don't share a
+        # project alias across workers. `request.node.name` is stable per test
+        # and includes any parametrize id.
+        safe = request.node.name.replace("[", "-").replace("]", "")
+        self.alias = f"{RUN_ID}-queuepoll-{safe}"[:60]
 
         self.config_dir = tmp_path / "config"
         self.config_dir.mkdir()

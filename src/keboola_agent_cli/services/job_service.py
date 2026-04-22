@@ -65,16 +65,33 @@ def _safe_fetch_log_tail(client: Any, job: dict[str, Any], limit: int) -> list[d
     except Exception as exc:  # defensive: do not let tail fetch tank the run
         logger.debug("fetch_job_events(%s) raised %r; surfacing empty logTail", run_id, exc)
         return []
-    # Storage Events API already returns newest -> oldest; cap at limit
-    # defensively in case the server ignored our ?limit param.
-    return list(events)[:limit]
+    # Storage Events API returns newest -> oldest today, but we do not
+    # rely on that: sort defensively by `created` DESC so a future API
+    # ordering change cannot silently invert the tail. Events without a
+    # `created` key sort last (they lose the race to timestamped peers).
+    events_list = list(events)
+    events_list.sort(key=lambda e: e.get("created") or "", reverse=True)
+    # Cap at limit in case the server ignored ?limit.
+    return events_list[:limit]
 
 
-def _attach_log_tail(exc: KeboolaApiError, tail: list[dict[str, Any]]) -> None:
-    """Attach a non-empty logTail to exc.details, preserving existing keys."""
-    if not tail:
-        return
-    exc.details = {**exc.details, "logTail": tail}
+def _enrich_with_tail(
+    base_details: dict[str, Any] | None,
+    tail: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Return a fresh details dict with ``logTail`` merged in, or None if empty.
+
+    We never mutate a caught exception's ``.details`` in place; we construct
+    a new dict and let the caller wrap it in a new KeboolaApiError. That
+    keeps exception identity clean and makes the chain explicit via
+    ``raise ... from exc``.
+    """
+    if not tail and not base_details:
+        return None
+    merged: dict[str, Any] = dict(base_details or {})
+    if tail:
+        merged["logTail"] = tail
+    return merged or None
 
 
 def _terminate_and_wait(
@@ -114,15 +131,20 @@ def _terminate_and_wait(
         return None
 
     deadline = time.monotonic() + grace_seconds
-    while time.monotonic() < deadline:
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
             job = client.get_job_detail(job_id)
         except Exception:
-            time.sleep(1.0)
+            time.sleep(min(1.0, remaining))
             continue
         if job.get("isFinished"):
             return job
-        time.sleep(1.0)
+        # Cap the sleep so we never overshoot the grace deadline by a
+        # full poll interval (caller may be latency-sensitive).
+        time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
 
     # Remote still wasn't terminal within the grace window; return whatever
     # the last GET saw so callers can surface the actual state.
@@ -438,8 +460,14 @@ class JobService(BaseService):
             except Exception:
                 failed_job = {"id": job_id}
             tail = _safe_fetch_log_tail(client, failed_job, log_tail_lines)
-            _attach_log_tail(exc, tail)
-            raise exc
+            details = _enrich_with_tail(exc.details, tail)
+            raise KeboolaApiError(
+                message=exc.message,
+                status_code=exc.status_code,
+                error_code=exc.error_code,
+                retryable=exc.retryable,
+                details=details or {},
+            ) from exc
 
         if code == "QUEUE_JOB_TIMEOUT":
             cancelled = _terminate_and_wait(
@@ -457,10 +485,16 @@ class JobService(BaseService):
                     error_code="JOB_TIMEOUT_TERMINATED",
                     retryable=False,
                     details={"job": cancelled, "logTail": tail},
-                )
+                ) from exc
             # kill failed: surface the original timeout but keep the tail.
-            _attach_log_tail(exc, tail)
-            raise exc
+            details = _enrich_with_tail(exc.details, tail)
+            raise KeboolaApiError(
+                message=exc.message,
+                status_code=exc.status_code,
+                error_code=exc.error_code,
+                retryable=exc.retryable,
+                details=details or {},
+            ) from exc
 
         # Anything else (network, auth, a future Queue error code we
         # don't specialise) bubbles up unchanged so the command layer
@@ -469,7 +503,7 @@ class JobService(BaseService):
             "run_job: unhandled wait error code=%s; bubbling up unchanged",
             code,
         )
-        raise exc
+        raise
 
     @staticmethod
     def resolve_variable_values_id(

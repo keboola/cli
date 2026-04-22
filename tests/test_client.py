@@ -1,5 +1,6 @@
 """Tests for KeboolaClient - verify_token, retries, timeouts, error handling."""
 
+import contextlib
 import json
 from unittest.mock import patch
 from urllib.parse import parse_qs, quote
@@ -2661,10 +2662,19 @@ class TestWaitForQueueJob:
             json={"id": "slow-1", "status": "processing", "isFinished": False},
         )
 
-        # call 1: deadline setup (0.0, deadline=5.0)
-        # call 2: remaining check after first poll (6.0, remaining=-1.0 -> break)
-        calls = iter([0.0, 6.0])
-        monkeypatch.setattr("keboola_agent_cli.client.time.monotonic", lambda: next(calls))
+        # Use a stepped clock that stays at the final value if production
+        # calls monotonic() more times than we expected. This makes the
+        # test robust to refactors that add observability calls without
+        # changing the behaviour under test.
+        values = iter([0.0, 6.0])
+        last = [0.0]
+
+        def fake_monotonic() -> float:
+            with contextlib.suppress(StopIteration):
+                last[0] = next(values)
+            return last[0]
+
+        monkeypatch.setattr("keboola_agent_cli.client.time.monotonic", fake_monotonic)
         monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: None)
 
         with self._mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
@@ -2688,9 +2698,17 @@ class TestWaitForQueueJob:
 
         # First monotonic() sets deadline at 100.0; the second (after the
         # first get) returns 99.0 so remaining=1.0 < interval=2.0; the third
-        # (after sleep) returns 101.0 so loop exits.
+        # (after sleep) returns 101.0 so loop exits. Clamp on exhaustion
+        # so a refactor adding observability calls doesn't crash the test.
         times = iter([0.0, 99.0, 101.0])
-        monkeypatch.setattr("keboola_agent_cli.client.time.monotonic", lambda: next(times))
+        last = [0.0]
+
+        def fake_monotonic() -> float:
+            with contextlib.suppress(StopIteration):
+                last[0] = next(times)
+            return last[0]
+
+        monkeypatch.setattr("keboola_agent_cli.client.time.monotonic", fake_monotonic)
         sleeps: list[float] = []
         monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: sleeps.append(s))
 
