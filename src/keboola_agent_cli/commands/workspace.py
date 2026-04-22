@@ -468,6 +468,10 @@ def workspace_gc(
 
     try:
         result = service.gc_workspaces(aliases=project, dry_run=dry_run)
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None
