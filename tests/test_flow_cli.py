@@ -115,6 +115,44 @@ class TestFlowList:
 
         assert result.exit_code == 5
 
+    def test_list_all_projects_no_project_flag(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}, "dev": {}})
+        mock_flow = MagicMock()
+        mock_flow.list_flows.return_value = {
+            "flows": [
+                {
+                    "project_alias": "prod",
+                    "component_id": "keboola.orchestrator",
+                    "config_id": "111",
+                    "name": "Flow A",
+                    "description": "",
+                    "is_disabled": False,
+                },
+                {
+                    "project_alias": "dev",
+                    "component_id": "keboola.flow",
+                    "config_id": "222",
+                    "name": "Flow B",
+                    "description": "",
+                    "is_disabled": False,
+                },
+            ],
+            "errors": [],
+        }
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.FlowService") as MockFlowService,
+        ):
+            MockStore.return_value = store
+            MockFlowService.return_value = mock_flow
+            result = runner.invoke(app, ["--json", "flow", "list"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert len(data["data"]["flows"]) == 2
+        # aliases=None means all projects
+        mock_flow.list_flows.assert_called_once_with(aliases=None, branch_id=None)
+
     def test_branch_without_project_fails(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         mock_flow = MagicMock()
@@ -166,6 +204,36 @@ class TestFlowDetail:
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert data["data"]["phase_count"] == 1
+
+    def test_detail_explicit_component_id(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.get_flow_detail.return_value = self._mock_detail()
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.FlowService") as MockFlowService,
+        ):
+            MockStore.return_value = store
+            MockFlowService.return_value = mock_flow
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "flow",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--flow-id",
+                    "flow-1",
+                    "--component-id",
+                    "keboola.flow",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        mock_flow.get_flow_detail.assert_called_once_with(
+            alias="prod", component_id="keboola.flow", config_id="flow-1", branch_id=None
+        )
 
     def test_detail_not_found(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
@@ -454,6 +522,50 @@ class TestFlowSchedule:
         data = json.loads(result.output)
         assert data["data"]["schedule_id"] == "sched-99"
         mock_flow.set_flow_schedule.assert_called_once()
+
+    def test_schedule_with_timezone_and_disabled(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.set_flow_schedule.return_value = {
+            "status": "created",
+            "project_alias": "prod",
+            "schedule_id": "sched-tz",
+            "schedule_name": "Flow (Schedule)",
+            "component_id": "keboola.orchestrator",
+            "config_id": "flow-1",
+            "cron_tab": "0 8 * * 1-5",
+            "timezone": "Europe/Prague",
+            "state": "disabled",
+            "branch_id": None,
+        }
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.FlowService") as MockFlowService,
+        ):
+            MockStore.return_value = store
+            MockFlowService.return_value = mock_flow
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "flow",
+                    "schedule",
+                    "--project",
+                    "prod",
+                    "--flow-id",
+                    "flow-1",
+                    "--cron",
+                    "0 8 * * 1-5",
+                    "--timezone",
+                    "Europe/Prague",
+                    "--disabled",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = mock_flow.set_flow_schedule.call_args.kwargs
+        assert call_kwargs["timezone"] == "Europe/Prague"
+        assert call_kwargs["enabled"] is False
 
 
 # ---------------------------------------------------------------------------
