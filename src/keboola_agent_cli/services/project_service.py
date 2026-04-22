@@ -3,9 +3,11 @@
 Orchestrates config persistence and API calls without knowing about CLI or HTTP details.
 """
 
+import os
 import time
 from typing import Any
 
+from ..constants import ENV_KBAGENT_PROJECT
 from ..errors import ConfigError, KeboolaApiError, mask_token
 from ..models import ProjectConfig
 from .base import BaseService
@@ -249,3 +251,141 @@ class ProjectService(BaseService):
         results.sort(key=lambda r: r.get("alias", ""))
 
         return results
+
+    def use_project(self, alias: str) -> dict[str, Any]:
+        """Pin an alias as the persistent default project.
+
+        The pin is stored as ``config.default_project`` in config.json.
+        It is overridden at runtime by the ``KBAGENT_PROJECT`` env var and by
+        explicit ``--project`` flags.
+
+        Args:
+            alias: The project alias to pin.
+
+        Returns:
+            Dict with the new pin, previous pin, and source.
+
+        Raises:
+            ConfigError: If the alias does not exist.
+        """
+        config = self._config_store.load()
+        if alias not in config.projects:
+            raise ConfigError(f"Project '{alias}' not found.")
+
+        previous = config.default_project or None
+        config.default_project = alias
+        self._config_store.save(config)
+
+        env_override = os.environ.get(ENV_KBAGENT_PROJECT)
+        return {
+            "alias": alias,
+            "previous": previous,
+            "source": "pin",
+            "env_override": env_override or None,
+        }
+
+    def current_project(self) -> dict[str, Any]:
+        """Report the effective default project and its source.
+
+        Resolution:
+        - If ``KBAGENT_PROJECT`` is set, it wins (source=env).
+        - Otherwise the persisted pin wins (source=pin).
+        - If neither is set, ``alias`` is ``None``.
+
+        The env override is reported even when it points at a project that is
+        not (yet) registered in config.json -- callers get the true effective
+        alias plus an ``env_points_to_configured_project`` flag to reason about
+        it. This avoids silently masking misconfigurations.
+
+        Returns:
+            Dict with keys: alias, source ('env' | 'pin' | 'none'), pinned,
+            env_override, env_points_to_configured_project.
+        """
+        config = self._config_store.load()
+        pinned = config.default_project or None
+        # Treat KBAGENT_PROJECT="" the same as unset (Unix shell convention:
+        # empty env is commonly produced by `unset` substitutes / blank
+        # exports). Strict rejection would surprise CI users who export it
+        # conditionally. Apply consistently in resolve_pinned_alias().
+        env_value = os.environ.get(ENV_KBAGENT_PROJECT)
+        env_override = env_value if env_value else None
+
+        if env_override is not None:
+            return {
+                "alias": env_override,
+                "source": "env",
+                "pinned": pinned,
+                "env_override": env_override,
+                "env_points_to_configured_project": env_override in config.projects,
+            }
+
+        return {
+            "alias": pinned,
+            "source": "pin" if pinned else "none",
+            "pinned": pinned,
+            "env_override": None,
+            "env_points_to_configured_project": None,
+        }
+
+    def resolve_pinned_alias(self, explicit: str | None = None) -> tuple[str, str]:
+        """Resolve the effective project alias for a single-project operation.
+
+        Precedence (first match wins):
+        1. ``explicit`` argument (typically the CLI ``--project`` flag)
+        2. ``KBAGENT_PROJECT`` env var
+        3. Persisted ``default_project`` pin
+        4. If exactly one project is registered, fall back to it (source=sole)
+        5. Fail hard with ConfigError
+
+        This is the single-project analog of ``resolve_projects()`` (which
+        fans out to all projects). Use this from write/destructive command
+        paths where fan-out would be surprising or unsafe.
+
+        Args:
+            explicit: Explicit alias from a CLI flag, or None.
+
+        Returns:
+            Tuple of (alias, source).
+
+        Raises:
+            ConfigError: If the resolved alias is not registered, or if none
+                can be resolved.
+        """
+        config = self._config_store.load()
+
+        if explicit:
+            if explicit not in config.projects:
+                raise ConfigError(f"Project '{explicit}' not found.")
+            return explicit, "explicit"
+
+        env_value = os.environ.get(ENV_KBAGENT_PROJECT)
+        if env_value:
+            if env_value not in config.projects:
+                raise ConfigError(
+                    f"{ENV_KBAGENT_PROJECT}='{env_value}' points to a project "
+                    "that is not registered. Use 'kbagent project add' or "
+                    "unset the env var."
+                )
+            return env_value, "env"
+
+        pinned = config.default_project
+        if pinned:
+            if pinned not in config.projects:
+                raise ConfigError(
+                    f"Pinned default project '{pinned}' is not registered. "
+                    "Run 'kbagent project use <alias>' to repair."
+                )
+            return pinned, "pin"
+
+        if len(config.projects) == 1:
+            (sole,) = config.projects.keys()
+            return sole, "sole"
+
+        if not config.projects:
+            raise ConfigError("No projects configured. Run 'kbagent project add' first.")
+
+        raise ConfigError(
+            "Multiple projects configured and no default pinned. "
+            "Pass --project <alias>, set KBAGENT_PROJECT, or run "
+            "'kbagent project use <alias>'."
+        )

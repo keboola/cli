@@ -470,6 +470,390 @@ class TestProjectStatus:
         assert "Project Status" in result.output
 
 
+class TestProjectUse:
+    """Tests for `kbagent project use <alias>` (pin default project)."""
+
+    def _seed(self, config_dir: Path, *aliases: str) -> None:
+        """Seed a ConfigStore with one or more projects via the live add path."""
+        mock_client = make_mock_client()
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
+        ):
+            store = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store
+            MockService.return_value = ProjectService(
+                config_store=store,
+                client_factory=lambda url, token: mock_client,
+            )
+            for alias in aliases:
+                runner.invoke(app, ["project", "add", "--project", alias])
+
+    def test_project_use_pins_alias(self, tmp_path: Path) -> None:
+        """project use ALIAS persists default_project to config.json."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod", "stage")
+
+        # default_project should be the first-added (prod); now pin stage.
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            store = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store
+            result = runner.invoke(app, ["--json", "project", "use", "stage"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert data["alias"] == "stage"
+        assert data["previous"] == "prod"
+        # Verify persistence: re-load the store and check default_project.
+        persisted = ConfigStore(config_dir=config_dir).load()
+        assert persisted.default_project == "stage"
+
+    def test_project_use_unknown_alias_exit_5(self, tmp_path: Path) -> None:
+        """project use on an unregistered alias returns exit code 5."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod")
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["--json", "project", "use", "does-not-exist"])
+
+        assert result.exit_code == 5
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+        assert data["error"]["code"] == "CONFIG_ERROR"
+
+    def test_project_use_human_mode_confirms_pin(self, tmp_path: Path) -> None:
+        """project use in human mode prints the new pin."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod")
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["project", "use", "prod"])
+
+        assert result.exit_code == 0
+        assert "prod" in result.output
+        assert "Pinned" in result.output or "pinned" in result.output
+
+    def test_project_current_with_pin(self, tmp_path: Path) -> None:
+        """project current reports the persisted pin when no env is set."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod")
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch.dict(os.environ, {}, clear=False),
+        ):
+            os.environ.pop("KBAGENT_PROJECT", None)
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["--json", "project", "current"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert data["alias"] == "prod"
+        assert data["source"] == "pin"
+        assert data["env_override"] is None
+
+    def test_project_current_env_overrides_pin(self, tmp_path: Path) -> None:
+        """KBAGENT_PROJECT wins over persisted pin; env presence is reported."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod", "stage")
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch.dict(os.environ, {"KBAGENT_PROJECT": "stage"}),
+        ):
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["--json", "project", "current"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert data["alias"] == "stage"
+        assert data["source"] == "env"
+        assert data["pinned"] == "prod"
+        assert data["env_points_to_configured_project"] is True
+
+    def test_project_current_env_points_to_unknown(self, tmp_path: Path) -> None:
+        """Unregistered KBAGENT_PROJECT value is still reported, with a flag."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod")
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch.dict(os.environ, {"KBAGENT_PROJECT": "mystery"}),
+        ):
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["--json", "project", "current"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert data["alias"] == "mystery"
+        assert data["source"] == "env"
+        assert data["env_points_to_configured_project"] is False
+
+    def test_project_current_human_mode_with_pin(self, tmp_path: Path) -> None:
+        """project current in human mode prints alias + source label."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod")
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch.dict(os.environ, {}, clear=False),
+        ):
+            os.environ.pop("KBAGENT_PROJECT", None)
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["project", "current"])
+
+        assert result.exit_code == 0
+        assert "prod" in result.output
+        # Rich output should mention the source.
+        assert "pin" in result.output.lower()
+
+    def test_project_current_human_mode_env_warns_unknown(self, tmp_path: Path) -> None:
+        """Human-mode project current warns when env points to unregistered alias."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod")
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch.dict(os.environ, {"KBAGENT_PROJECT": "ghost"}),
+        ):
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["project", "current"])
+
+        assert result.exit_code == 0
+        assert "ghost" in result.output
+        # Output should warn the alias is not registered.
+        assert "Warning" in result.output or "NOT" in result.output
+
+    def test_project_use_blocked_by_persisted_deny_writes(self, tmp_path: Path) -> None:
+        """A persisted policy denying cli:write must block project use (it's a write op)."""
+        from keboola_agent_cli.models import PermissionPolicy
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod", "stage")
+
+        # Persist a default-allow policy that denies cli:write.
+        store = ConfigStore(config_dir=config_dir)
+        cfg = store.load()
+        cfg.permissions = PermissionPolicy(mode="allow", allow=[], deny=["cli:write"])
+        store.save(cfg)
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["--json", "project", "use", "stage"])
+
+        assert result.exit_code == 6, result.output
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "PERMISSION_DENIED"
+
+    def test_project_current_allowed_under_deny_writes(self, tmp_path: Path) -> None:
+        """project current is classified read, so cli:write deny must NOT block it."""
+        from keboola_agent_cli.models import PermissionPolicy
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod")
+
+        store = ConfigStore(config_dir=config_dir)
+        cfg = store.load()
+        cfg.permissions = PermissionPolicy(mode="allow", allow=[], deny=["cli:write"])
+        store.save(cfg)
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["--json", "project", "current"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+
+    def test_project_current_none_set(self, tmp_path: Path) -> None:
+        """With no projects and no env, current reports alias=None source=none."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch.dict(os.environ, {}, clear=False),
+        ):
+            os.environ.pop("KBAGENT_PROJECT", None)
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["--json", "project", "current"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert data["alias"] is None
+        assert data["source"] == "none"
+
+
+class TestFirewallFlags:
+    """Tests for top-level --deny-writes / --deny-destructive session flags."""
+
+    def _seed(self, config_dir: Path) -> None:
+        mock_client = make_mock_client()
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
+        ):
+            store = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store
+            MockService.return_value = ProjectService(
+                config_store=store,
+                client_factory=lambda url, token: mock_client,
+            )
+            runner.invoke(app, ["project", "add", "--project", "prod"])
+
+    def test_deny_writes_blocks_project_add(self, tmp_path: Path) -> None:
+        """--deny-writes blocks project.add (admin is a superset of cli:write)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
+        ):
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(
+                app,
+                [
+                    "--deny-writes",
+                    "--json",
+                    "project",
+                    "add",
+                    "--project",
+                    "foo",
+                    "--url",
+                    "https://connection.keboola.com",
+                    "--token",
+                    TEST_TOKEN,
+                ],
+            )
+
+        assert result.exit_code == 6
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "PERMISSION_DENIED"
+
+    def test_deny_writes_allows_read(self, tmp_path: Path) -> None:
+        """--deny-writes must not block read operations."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir)
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["--deny-writes", "--json", "project", "list"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+
+    def test_deny_destructive_blocks_delete_table(self, tmp_path: Path) -> None:
+        """--deny-destructive blocks storage.delete-table at the permission callback."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir)
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(
+                app,
+                [
+                    "--deny-destructive",
+                    "--json",
+                    "storage",
+                    "delete-table",
+                    "--project",
+                    "prod",
+                    "--table-id",
+                    "in.c-x.y",
+                    "--yes",
+                ],
+            )
+
+        assert result.exit_code == 6
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "PERMISSION_DENIED"
+
+    def test_deny_destructive_allows_write(self, tmp_path: Path) -> None:
+        """--deny-destructive must NOT block pure 'write' (non-destructive) ops.
+
+        Uses 'permissions check' which evaluates against the PERSISTED policy,
+        so the session-only --deny-destructive does not apply there. We instead
+        attempt a write op and assert it is not blocked by the permission gate
+        (any later error must not be PERMISSION_DENIED).
+        """
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir)
+
+        # storage.create-bucket is classified 'write', so --deny-destructive alone
+        # does not block it. The command will fail for other reasons (mock client),
+        # but the failure code must not be PERMISSION_DENIED.
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(
+                app,
+                [
+                    "--deny-destructive",
+                    "--json",
+                    "storage",
+                    "create-bucket",
+                    "--project",
+                    "prod",
+                    "--stage",
+                    "in",
+                    "--name",
+                    "b",
+                ],
+            )
+
+        # The permission check must not fire.
+        assert result.exit_code != 6 or "PERMISSION_DENIED" not in result.output
+
+    def test_deny_writes_and_destructive_merge_with_persisted(self, tmp_path: Path) -> None:
+        """Flags merge with persisted policy; never persist to disk."""
+        from keboola_agent_cli.models import AppConfig, PermissionPolicy
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir)
+
+        # Persist a policy that only denies branch.delete
+        store = ConfigStore(config_dir=config_dir)
+        cfg = store.load()
+        cfg.permissions = PermissionPolicy(mode="allow", allow=[], deny=["branch.delete"])
+        store.save(cfg)
+
+        # Run once with --deny-writes: project.add must be blocked
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
+        ):
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(
+                app,
+                ["--deny-writes", "--json", "project", "add", "--project", "new"],
+            )
+        assert result.exit_code == 6
+
+        # The persisted policy on disk must NOT have been mutated.
+        reloaded: AppConfig = ConfigStore(config_dir=config_dir).load()
+        assert reloaded.permissions is not None
+        assert reloaded.permissions.deny == ["branch.delete"]
+
+
 class TestProjectEdit:
     """Tests for `kbagent project edit` command."""
 

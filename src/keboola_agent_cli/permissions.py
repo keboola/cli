@@ -22,6 +22,8 @@ OPERATION_REGISTRY: dict[str, str] = {
     "project.refresh": "admin",
     "project.description-get": "read",
     "project.description-set": "write",
+    "project.use": "write",
+    "project.current": "read",
     # Config browsing & management
     "config.list": "read",
     "config.detail": "read",

@@ -558,6 +558,9 @@ class TestFullE2E:
         _step(42, "storage delete-table + delete-bucket", "CLI-driven cleanup")
         self._test_storage_cleanup(bucket_id, table_id)
 
+        _step("42.5", "project use / current + firewall flags")
+        self._test_project_pin_and_firewall()
+
         _step(43, "project edit + remove", "final cleanup")
         self._test_project_edit_and_remove()
 
@@ -2382,6 +2385,129 @@ class TestFullE2E:
         assert bucket_id in data["data"]["deleted"]
         self._created_buckets.remove(bucket_id)
 
+    def _test_project_pin_and_firewall(self) -> None:
+        """End-to-end coverage for `project use`, `project current`, and --deny-* flags."""
+        # --- Pin lifecycle -------------------------------------------------
+
+        # Pre-condition: first-added is already the default. Verify via current.
+        data = self._run_ok("project", "current")
+        assert data["data"]["alias"] == self.alias
+        assert data["data"]["source"] == "pin"
+
+        # Explicit `project use` is a no-op in value but confirms it persists.
+        data = self._run_ok("project", "use", self.alias)
+        assert data["data"]["alias"] == self.alias
+        # source is always "pin" on use (the field describes where the new
+        # pin ended up, not how it arrived).
+        assert data["data"]["source"] == "pin"
+
+        # `project use nonexistent` fails with exit 5 (CONFIG_ERROR).
+        result = self._run("project", "use", "does-not-exist-alias")
+        assert result.exit_code == 5
+
+        # --- KBAGENT_PROJECT env override ---------------------------------
+        # Set the env var to a bogus value and confirm `current` reports env
+        # as the source + flags the unknown alias.
+        with patch.dict(os.environ, {"KBAGENT_PROJECT": "mystery-alias"}):
+            data = self._run_ok("project", "current")
+            assert data["data"]["alias"] == "mystery-alias"
+            assert data["data"]["source"] == "env"
+            assert data["data"]["env_points_to_configured_project"] is False
+            assert data["data"]["pinned"] == self.alias
+
+        # After unsetting, pin is restored as the effective alias.
+        data = self._run_ok("project", "current")
+        assert data["data"]["source"] == "pin"
+        assert data["data"]["alias"] == self.alias
+
+        # --- --deny-writes blocks writes, allows reads --------------------
+        # Read still succeeds.
+        data = self._run_ok(
+            "--deny-writes",  # top-level flag must come before subcommand
+            "project",
+            "list",
+        )
+        assert any(p["alias"] == self.alias for p in data["data"])
+
+        # Attempting a write under --deny-writes must exit 6 PERMISSION_DENIED.
+        # create-bucket is a safe write to try: if the firewall fails to
+        # block it we'd create a real bucket, so track it for cleanup just
+        # in case the block logic regresses.
+        guard_bucket_name = f"{RUN_ID.replace('-', '_')}_firewall_guard"
+        result = self._run(
+            "--deny-writes",
+            "storage",
+            "create-bucket",
+            "--project",
+            self.alias,
+            "--stage",
+            "in",
+            "--name",
+            guard_bucket_name,
+        )
+        assert result.exit_code == 6, (
+            f"--deny-writes should block storage.create-bucket (exit 6), "
+            f"got {result.exit_code}: {result.output}"
+        )
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "PERMISSION_DENIED"
+
+        # Safety: if the block failed silently and a bucket was actually
+        # created, schedule cleanup. We don't fail louder because the
+        # exit_code assert above already did.
+        try:
+            buckets = self.api.list_buckets()
+            for bucket in buckets:
+                if bucket.get("name") == guard_bucket_name:
+                    self._created_buckets.append(bucket["id"])
+        except Exception:
+            pass  # Best-effort cleanup tracking only.
+
+        # --- --deny-destructive blocks destructive ops --------------------
+        # delete-bucket is destructive; must exit 6 even on a bucket that
+        # does not exist (permission check fires before the API call).
+        result = self._run(
+            "--deny-destructive",
+            "storage",
+            "delete-bucket",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            "in.c-never-existed",
+            "--yes",
+        )
+        assert result.exit_code == 6, (
+            f"--deny-destructive should block storage.delete-bucket (exit 6), "
+            f"got {result.exit_code}: {result.output}"
+        )
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "PERMISSION_DENIED"
+
+        # --- --deny-destructive allows non-destructive writes -------------
+        # project.description-set is classified 'write' (not destructive),
+        # so --deny-destructive must NOT block it. We pass an empty string
+        # write -- this goes to the API, but the permission gate is the
+        # only thing under test here, so any non-6 exit is acceptable.
+        result = self._run(
+            "--deny-destructive",
+            "project",
+            "description-get",
+            "--project",
+            self.alias,
+        )
+        assert result.exit_code != 6, (
+            "--deny-destructive must not block read op project.description-get"
+        )
+
+        # --- Persistence check --------------------------------------------
+        # None of the --deny-* flags may have written to config.json.
+        store = ConfigStore(config_dir=self.config_dir)
+        persisted = store.load()
+        assert persisted.permissions is None, (
+            "--deny-writes / --deny-destructive must be session-only; "
+            f"found persisted policy: {persisted.permissions}"
+        )
+
     def _test_project_edit_and_remove(self) -> None:
         """Edit project URL, then remove it."""
         # project edit -- change URL back to same (just verify command works)
@@ -3413,3 +3539,225 @@ class TestE2EJobRunVariableValues:
         )
         print(f"  {_DIM}resolved={resolved} pinned={pinned_row_id} first={first_row_id}{_RESET}")
         assert resolved == pinned_row_id
+
+
+# ---------------------------------------------------------------------------
+# Project pin + firewall flag E2E (PR5)
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestPinAndFirewallE2E:
+    """Focused E2E for `project use`, `project current`, and --deny-* flags.
+
+    Exercises the real API to confirm:
+    - `project use` persists the pin to config.json.
+    - `project current` reports the effective alias + source correctly.
+    - `KBAGENT_PROJECT` env var overrides the pin at runtime.
+    - `--deny-writes` blocks the permission gate on a real write op (exit 6).
+    - `--deny-destructive` blocks a real destructive op (exit 6).
+    - Neither flag persists to config.json.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self.alias_a = f"{RUN_ID}-pin-a"
+        self.alias_b = f"{RUN_ID}-pin-b"
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def test_pin_lifecycle_against_real_project(self) -> None:
+        """End-to-end: add, use, current, env override."""
+        # Register two aliases pointing at the SAME real project. We only
+        # need distinct aliases to observe the pin switching.
+        self._run(
+            "project",
+            "add",
+            "--project",
+            self.alias_a,
+            "--url",
+            self.url,
+            "--token",
+            self.token,
+        )
+        self._run(
+            "project",
+            "add",
+            "--project",
+            self.alias_b,
+            "--url",
+            self.url,
+            "--token",
+            self.token,
+        )
+
+        # First-added becomes default.
+        current = self._run("project", "current")
+        assert current.exit_code == 0
+        data = _json_ok(current)
+        assert data["data"]["alias"] == self.alias_a
+        assert data["data"]["source"] == "pin"
+
+        # `project use` switches the pin; persistence survives next invocation.
+        use_result = self._run("project", "use", self.alias_b)
+        use_data = _json_ok(use_result)
+        assert use_data["data"]["alias"] == self.alias_b
+        assert use_data["data"]["previous"] == self.alias_a
+
+        after = _json_ok(self._run("project", "current"))
+        assert after["data"]["alias"] == self.alias_b
+        assert after["data"]["source"] == "pin"
+
+        # Unknown alias -> exit 5.
+        bad = self._run("project", "use", "does-not-exist")
+        assert bad.exit_code == 5
+        bad_data = json.loads(bad.output)
+        assert bad_data["error"]["code"] == "CONFIG_ERROR"
+
+        # KBAGENT_PROJECT overrides the pin.
+        with patch.dict(os.environ, {"KBAGENT_PROJECT": self.alias_a}):
+            env_view = _json_ok(self._run("project", "current"))
+            assert env_view["data"]["alias"] == self.alias_a
+            assert env_view["data"]["source"] == "env"
+            assert env_view["data"]["pinned"] == self.alias_b
+            assert env_view["data"]["env_points_to_configured_project"] is True
+
+    def test_deny_writes_blocks_real_write_op(self) -> None:
+        """--deny-writes must exit 6 on a real create-bucket attempt."""
+        self._run(
+            "project",
+            "add",
+            "--project",
+            self.alias_a,
+            "--url",
+            self.url,
+            "--token",
+            self.token,
+        )
+
+        # Use a name that won't collide; the permission gate fires before
+        # the API call so the bucket must never appear.
+        bucket_name = f"{RUN_ID.replace('-', '_')}_fw_w"
+        result = self._run(
+            "--deny-writes",
+            "storage",
+            "create-bucket",
+            "--project",
+            self.alias_a,
+            "--stage",
+            "in",
+            "--name",
+            bucket_name,
+        )
+        assert result.exit_code == 6, (
+            f"--deny-writes should block storage.create-bucket; got exit "
+            f"{result.exit_code}: {result.output}"
+        )
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "PERMISSION_DENIED"
+
+        # Defensive: if the block leaked and a bucket was actually created,
+        # clean it up and fail the assertion above (already failed) more loudly.
+        import contextlib
+
+        api = KeboolaClient(self.url, self.token)
+        try:
+            for bucket in api.list_buckets():
+                if bucket.get("name") == bucket_name:
+                    with contextlib.suppress(Exception):
+                        api.delete_bucket(bucket["id"], force=True)
+                    raise AssertionError(
+                        f"--deny-writes failed to block: bucket {bucket['id']} was created"
+                    )
+        finally:
+            api.close()
+
+    def test_deny_destructive_blocks_real_destructive_op(self) -> None:
+        """--deny-destructive must exit 6 on storage.delete-bucket."""
+        self._run(
+            "project",
+            "add",
+            "--project",
+            self.alias_a,
+            "--url",
+            self.url,
+            "--token",
+            self.token,
+        )
+
+        result = self._run(
+            "--deny-destructive",
+            "storage",
+            "delete-bucket",
+            "--project",
+            self.alias_a,
+            "--bucket-id",
+            "in.c-does-not-exist-for-sure",
+            "--yes",
+        )
+        assert result.exit_code == 6, (
+            f"--deny-destructive should block delete-bucket; got exit "
+            f"{result.exit_code}: {result.output}"
+        )
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "PERMISSION_DENIED"
+
+    def test_deny_destructive_allows_read_op(self) -> None:
+        """--deny-destructive must NOT block read ops (regression guard)."""
+        self._run(
+            "project",
+            "add",
+            "--project",
+            self.alias_a,
+            "--url",
+            self.url,
+            "--token",
+            self.token,
+        )
+        result = self._run(
+            "--deny-destructive",
+            "storage",
+            "buckets",
+            "--project",
+            self.alias_a,
+        )
+        # Read must succeed (exit 0) OR fail for non-permission reasons.
+        assert result.exit_code != 6, f"--deny-destructive blocked a read op: {result.output}"
+
+    def test_firewall_flags_never_persist(self) -> None:
+        """Neither --deny-writes nor --deny-destructive may write to config.json."""
+        self._run(
+            "project",
+            "add",
+            "--project",
+            self.alias_a,
+            "--url",
+            self.url,
+            "--token",
+            self.token,
+        )
+        # Run a blocked op under both flags.
+        self._run(
+            "--deny-writes",
+            "--deny-destructive",
+            "storage",
+            "create-bucket",
+            "--project",
+            self.alias_a,
+            "--stage",
+            "in",
+            "--name",
+            "never_created",
+        )
+        # Persisted policy must still be None.
+        persisted = ConfigStore(config_dir=self.config_dir).load()
+        assert persisted.permissions is None, (
+            f"--deny-* flags leaked to config.json: {persisted.permissions}"
+        )

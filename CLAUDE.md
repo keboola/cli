@@ -233,7 +233,7 @@ Note: `SKILL.md` instructs Claude to run `kbagent context` as its first step, wh
 ## All CLI Commands
 
 ```
-# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service
+# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service, --deny-writes, --deny-destructive
 
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list
@@ -244,6 +244,8 @@ kbagent project refresh --project ALIAS [--dry-run] [--force] [--yes] [--token-d
 kbagent project refresh --all [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
 kbagent project description-get --project NAME
 kbagent project description-set --project NAME [--text STR | --file PATH | --stdin]
+kbagent project use ALIAS
+kbagent project current
 
 kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID]
 kbagent config detail --project NAME --component-id ID --config-id ID [--branch ID]

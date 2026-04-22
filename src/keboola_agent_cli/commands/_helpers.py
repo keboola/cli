@@ -153,6 +153,43 @@ def check_cli_permission(ctx: typer.Context, group_name: str) -> None:
         raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
 
 
+def resolve_project_alias(
+    ctx: typer.Context,
+    formatter: OutputFormatter,
+    explicit: str | None,
+) -> str:
+    """Resolve the effective project alias for a single-project operation.
+
+    Precedence (first match wins):
+    1. ``explicit`` (typically the CLI ``--project`` flag)
+    2. ``KBAGENT_PROJECT`` env var
+    3. Persisted pin (``config.default_project`` set by ``kbagent project use``)
+    4. Sole registered project when exactly one exists (convenience)
+    5. Exit code 5 with a CONFIG_ERROR if none of the above resolves
+
+    Use this from write/destructive command paths where implicit fan-out
+    (``resolve_projects(None)`` returning every project) would be surprising
+    or unsafe. Read paths should keep their existing fan-out behavior.
+
+    Args:
+        ctx: Typer context (must contain ``project_service``).
+        formatter: Output formatter for structured error emission.
+        explicit: The value of the CLI --project flag, or None.
+
+    Returns:
+        The resolved project alias (guaranteed to be registered).
+    """
+    from ..errors import ConfigError as _ConfigError
+
+    service = get_service(ctx, "project_service")
+    try:
+        alias, _source = service.resolve_pinned_alias(explicit=explicit)
+    except _ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+    return alias
+
+
 def validate_branch_requires_project(
     formatter: OutputFormatter,
     branch: int | None,
