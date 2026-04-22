@@ -133,6 +133,14 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Ask Kai a one-shot question and get the full response | `kbagent kai ask --message MESSAGE` |
 | Send a message to Kai in a chat session | `kbagent kai chat --message MESSAGE` |
 | List recent Kai chat sessions | `kbagent kai history` |
+| List all flows (keboola.orchestrator + keboola.flow) across projects | `kbagent flow list` |
+| Show detailed flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |
+| Print the YAML format expected by 'flow new' and 'flow update' | `kbagent flow schema` |
+| Create a new flow configuration | `kbagent flow new --project PROJECT --name NAME` |
+| Update a flow's name, description, or phases/tasks | `kbagent flow update --project PROJECT --flow-id FLOW-ID` |
+| Delete a flow configuration | `kbagent flow delete --project PROJECT --flow-id FLOW-ID` |
+| Bind a cron schedule to a flow (creates a keboola.scheduler config) | `kbagent flow schedule --project PROJECT --flow-id FLOW-ID --cron CRON` |
+| Remove all schedules bound to a flow (deletes keboola.scheduler configs) | `kbagent flow schedule-remove --project PROJECT --flow-id FLOW-ID` |
 | List development branches from connected projects | `kbagent branch list` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |

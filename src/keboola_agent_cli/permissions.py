@@ -117,6 +117,15 @@ OPERATION_REGISTRY: dict[str, str] = {
     "sync.branch-link": "write",
     "sync.branch-unlink": "write",
     "sync.branch-status": "read",
+    # Flow operations
+    "flow.list": "read",
+    "flow.detail": "read",
+    "flow.schema": "read",
+    "flow.new": "write",
+    "flow.update": "write",
+    "flow.delete": "destructive",
+    "flow.schedule": "write",
+    "flow.schedule-remove": "destructive",
     # Top-level commands
     "init": "admin",
     "doctor": "read",
