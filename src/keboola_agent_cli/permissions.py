@@ -33,6 +33,11 @@ OPERATION_REGISTRY: dict[str, str] = {
     "config.variables-set": "write",
     "config.variables-get": "read",
     "config.variables-clear": "destructive",
+    "config.metadata-list": "read",
+    "config.get-metadata": "read",
+    "config.set-metadata": "write",
+    "config.delete-metadata": "destructive",
+    "config.set-folder": "write",
     # Job history
     "job.list": "read",
     "job.detail": "read",
@@ -72,6 +77,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "workspace.load": "write",
     "workspace.query": "write",
     "workspace.from-transformation": "write",
+    "workspace.gc": "destructive",
     # MCP tools
     "tool.list": "read",
     "tool.call": "write",

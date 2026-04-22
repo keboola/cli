@@ -28,6 +28,7 @@ Run:
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import json
 import os
@@ -419,6 +420,9 @@ class TestFullE2E:
         _step("18b", "config rename", "rename config via API")
         self._test_config_rename(config_id)
 
+        _step("18c", "config metadata CRUD + set-folder", "metadata round-trip")
+        self._test_config_metadata(config_id)
+
         _step(19, "config new scaffold", "generate boilerplate for component")
         self._test_config_new_scaffold()
 
@@ -454,6 +458,9 @@ class TestFullE2E:
 
             _step(27, "workspace delete")
             self._test_workspace_delete(workspace_id)
+
+        _step("27b", "workspace list --orphaned + workspace gc", "orphan GC round-trip")
+        self._test_workspace_gc()
 
         # ==============================================================
         # PHASE 7: Transformation job run (Snowflake SQL)
@@ -1280,6 +1287,137 @@ class TestFullE2E:
             "E2E Test Config",
         )
 
+    def _test_config_metadata(self, config_id: str) -> None:
+        """Config metadata CRUD round-trip + set-folder sugar."""
+        custom_key = f"E2E.{RUN_ID}.meta"
+
+        # metadata-list on fresh config -- should be empty
+        data = self._run_ok(
+            "config",
+            "metadata-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        initial_entries = data["data"]["metadata"]
+        assert isinstance(initial_entries, list)
+
+        # set-metadata -- upsert a custom key
+        data = self._run_ok(
+            "config",
+            "set-metadata",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--key",
+            custom_key,
+            "--value",
+            "e2e-value",
+        )
+        assert data["data"]["key"] == custom_key
+        assert data["data"]["value"] == "e2e-value"
+
+        # get-metadata -- verify the value round-trips
+        data = self._run_ok(
+            "config",
+            "get-metadata",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--key",
+            custom_key,
+        )
+        assert data["data"]["value"] == "e2e-value"
+
+        # metadata-list -- custom key should now appear
+        data = self._run_ok(
+            "config",
+            "metadata-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        entries = data["data"]["metadata"]
+        match = next((e for e in entries if e.get("key") == custom_key), None)
+        assert match is not None, f"{custom_key} not in metadata list"
+        metadata_id = str(match["id"])
+
+        # set-folder -- sugar over KBC.configuration.folderName
+        folder_name = f"E2E-folder-{RUN_ID}"
+        data = self._run_ok(
+            "config",
+            "set-folder",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--name",
+            folder_name,
+        )
+        assert data["data"]["folder"] == folder_name
+
+        # verify folder key is visible in list
+        data = self._run_ok(
+            "config",
+            "metadata-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        folder_entry = next(
+            (e for e in data["data"]["metadata"] if e.get("key") == "KBC.configuration.folderName"),
+            None,
+        )
+        assert folder_entry is not None
+        assert folder_entry["value"] == folder_name
+
+        # delete-metadata -- remove the custom key by its ID
+        data = self._run_ok(
+            "config",
+            "delete-metadata",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--metadata-id",
+            metadata_id,
+            "--yes",
+        )
+        assert metadata_id in data["data"]["message"]
+
+        # verify it's gone
+        data = self._run_ok(
+            "config",
+            "metadata-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        remaining_keys = {e.get("key") for e in data["data"]["metadata"]}
+        assert custom_key not in remaining_keys
+
     def _test_config_new_scaffold(self) -> None:
         """Test config new -- generate scaffold for a component."""
         scaffold_dir = self.data_dir / "scaffold"
@@ -1432,6 +1570,78 @@ class TestFullE2E:
         )
         assert data["status"] == "ok"
         self._created_workspace_ids.remove(workspace_id)
+
+    def _test_workspace_gc(self) -> None:
+        """workspace list --orphaned + workspace gc orphan GC round-trip.
+
+        Creates a workspace, then manually deletes the backing sandbox config
+        via direct API call to manufacture an orphan, then verifies that:
+          - workspace list --orphaned reports it
+          - workspace gc --dry-run counts but does not delete
+          - workspace gc --yes deletes it
+        """
+        # Create a workspace to orphan
+        result = self._run(
+            "workspace",
+            "create",
+            "--project",
+            self.alias,
+        )
+        if result.exit_code != 0:
+            print(
+                f"  {_YELLOW}SKIP: workspace create failed "
+                f"(exit {result.exit_code}), skipping workspace GC test{_RESET}"
+            )
+            return
+
+        data = _json_ok(result)
+        ws_id = data["data"]["workspace_id"]
+        assert ws_id > 0
+        # Track for cleanup in case the test fails mid-way
+        self._created_workspace_ids.append(ws_id)
+
+        # Retrieve the workspace detail to find its config_id
+        ws_data = self.api.get_workspace(ws_id)
+        config_id = str(ws_data.get("configurationId") or ws_data.get("config_id") or "")
+
+        if not config_id:
+            # Cannot manufacture orphan without config_id; just clean up and skip
+            print(f"  {_YELLOW}SKIP: workspace has no config_id, cannot manufacture orphan{_RESET}")
+            self.api.delete_workspace(ws_id)
+            self._created_workspace_ids.remove(ws_id)
+            return
+
+        # Delete the sandbox config directly (bypassing workspace delete) to create an orphan
+        try:
+            self.api.delete_config("keboola.sandboxes", config_id)
+        except Exception as exc:
+            print(f"  {_YELLOW}SKIP: could not delete sandbox config: {exc}{_RESET}")
+            self.api.delete_workspace(ws_id)
+            self._created_workspace_ids.remove(ws_id)
+            return
+
+        # workspace list --orphaned -- the workspace should now appear
+        data = self._run_ok("workspace", "list", "--project", self.alias, "--orphaned")
+        orphan_ids = [w["id"] for w in data["data"]["workspaces"]]
+        assert ws_id in orphan_ids, f"ws {ws_id} not listed as orphan; got: {orphan_ids}"
+
+        # workspace gc --dry-run -- count but do not delete
+        data = self._run_ok("workspace", "gc", "--project", self.alias, "--dry-run")
+        gc_data = data["data"]
+        assert gc_data["dry_run"] is True
+        would_delete_ids = [w["id"] for w in gc_data.get("would_delete", [])]
+        assert ws_id in would_delete_ids
+
+        # workspace gc --yes -- actually delete orphans
+        data = self._run_ok("workspace", "gc", "--project", self.alias, "--yes")
+        gc_data = data["data"]
+        assert gc_data["dry_run"] is False
+        deleted_ids = [w["id"] for w in gc_data.get("deleted", [])]
+        assert ws_id in deleted_ids
+
+        # workspace no longer tracked for cleanup (GC deleted it)
+        if ws_id in self._created_workspace_ids:
+            self._created_workspace_ids.remove(ws_id)
 
     # ------------------------------------------------------------------
     # Transformation job run
@@ -3413,3 +3623,354 @@ class TestE2EJobRunVariableValues:
         )
         print(f"  {_DIM}resolved={resolved} pinned={pinned_row_id} first={first_row_id}{_RESET}")
         assert resolved == pinned_row_id
+
+
+# ---------------------------------------------------------------------------
+# PR8: Config metadata + Workspace GC (standalone, no storage dependency)
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EPR8ConfigMetadata:
+    """End-to-end tests for config metadata CRUD commands (PR8).
+
+    Creates a real keboola.ex-db-snowflake config, exercises the full
+    metadata round-trip (metadata-list / set-metadata / get-metadata /
+    delete-metadata / set-folder), then deletes the config.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-meta"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        self.api = KeboolaClient(self.url, self.token)
+        self._created_config_ids: list[tuple[str, str]] = []
+
+        # Register project
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self) -> Any:
+        yield
+        for comp_id, cfg_id in self._created_config_ids:
+            with contextlib.suppress(Exception):
+                self.api.delete_config(comp_id, cfg_id)
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_config_metadata_crud_roundtrip(self) -> None:
+        """Full metadata CRUD: list (empty) → set → get → list (present) → delete → list (gone)."""
+        # Create a config to attach metadata to
+        cfg = self.api.create_config(
+            component_id=TEST_COMPONENT_ID,
+            name=f"{RUN_ID}-meta-test",
+            configuration={},
+            description="E2E PR8 metadata test",
+        )
+        config_id = str(cfg["id"])
+        self._created_config_ids.append((TEST_COMPONENT_ID, config_id))
+
+        custom_key = f"E2E.PR8.{RUN_ID}"
+
+        _step(1, "metadata-list on fresh config -- should be empty")
+        data = self._run_ok(
+            "config",
+            "metadata-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        assert isinstance(data["data"]["metadata"], list)
+        initial_count = len(data["data"]["metadata"])
+
+        _step(2, "set-metadata -- upsert custom key")
+        data = self._run_ok(
+            "config",
+            "set-metadata",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--key",
+            custom_key,
+            "--value",
+            "pr8-value",
+        )
+        assert data["data"]["key"] == custom_key
+        assert data["data"]["value"] == "pr8-value"
+
+        _step(3, "get-metadata -- value round-trips")
+        data = self._run_ok(
+            "config",
+            "get-metadata",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--key",
+            custom_key,
+        )
+        assert data["data"]["value"] == "pr8-value"
+
+        _step(4, "metadata-list -- custom key appears")
+        data = self._run_ok(
+            "config",
+            "metadata-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        entries = data["data"]["metadata"]
+        assert len(entries) == initial_count + 1
+        match = next((e for e in entries if e.get("key") == custom_key), None)
+        assert match is not None
+        metadata_id = str(match["id"])
+
+        _step(5, "delete-metadata -- remove by ID")
+        data = self._run_ok(
+            "config",
+            "delete-metadata",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--metadata-id",
+            metadata_id,
+            "--yes",
+        )
+        assert metadata_id in data["data"]["message"]
+
+        _step(6, "metadata-list after delete -- key is gone")
+        data = self._run_ok(
+            "config",
+            "metadata-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        remaining = {e.get("key") for e in data["data"]["metadata"]}
+        assert custom_key not in remaining
+
+    def test_set_folder_sugar(self) -> None:
+        """set-folder writes KBC.configuration.folderName metadata."""
+        cfg = self.api.create_config(
+            component_id=TEST_COMPONENT_ID,
+            name=f"{RUN_ID}-folder-test",
+            configuration={},
+            description="E2E PR8 set-folder test",
+        )
+        config_id = str(cfg["id"])
+        self._created_config_ids.append((TEST_COMPONENT_ID, config_id))
+
+        folder_name = f"PR8-Folder-{RUN_ID}"
+
+        _step(1, "set-folder -- write KBC.configuration.folderName")
+        data = self._run_ok(
+            "config",
+            "set-folder",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--name",
+            folder_name,
+        )
+        assert data["data"]["folder"] == folder_name
+        assert data["data"]["key"] == "KBC.configuration.folderName"
+
+        _step(2, "metadata-list -- folder key is visible")
+        data = self._run_ok(
+            "config",
+            "metadata-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        folder_entry = next(
+            (e for e in data["data"]["metadata"] if e.get("key") == "KBC.configuration.folderName"),
+            None,
+        )
+        assert folder_entry is not None
+        assert folder_entry["value"] == folder_name
+
+    def test_get_metadata_missing_key_exits_1(self) -> None:
+        """get-metadata for a non-existent key returns exit code 1."""
+        cfg = self.api.create_config(
+            component_id=TEST_COMPONENT_ID,
+            name=f"{RUN_ID}-meta-missing",
+            configuration={},
+            description="E2E PR8 missing key test",
+        )
+        config_id = str(cfg["id"])
+        self._created_config_ids.append((TEST_COMPONENT_ID, config_id))
+
+        result = self._run(
+            "config",
+            "get-metadata",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--key",
+            "does.not.exist",
+        )
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EPR8WorkspaceGC:
+    """End-to-end tests for workspace list --orphaned and workspace gc (PR8).
+
+    Creates a real workspace, deletes its backing sandbox config via direct API
+    call to manufacture an orphan, then verifies the GC commands detect and
+    remove it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-gc"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        self.api = KeboolaClient(self.url, self.token)
+        self._created_workspace_ids: list[int] = []
+
+        # Register project
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self) -> Any:
+        yield
+        for ws_id in self._created_workspace_ids:
+            with contextlib.suppress(Exception):
+                self.api.delete_workspace(ws_id)
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_workspace_gc_orphan_roundtrip(self) -> None:
+        """Create workspace, orphan it by deleting sandbox config, verify GC finds and removes it."""
+        _step(1, "workspace create")
+        result = self._run("workspace", "create", "--project", self.alias)
+        if result.exit_code != 0:
+            pytest.skip(f"workspace create not supported: {result.output}")
+
+        data = _json_ok(result)
+        ws_id = data["data"]["workspace_id"]
+        assert ws_id > 0
+        self._created_workspace_ids.append(ws_id)
+
+        _step(2, "retrieve workspace to find sandbox config_id")
+        ws_data = self.api.get_workspace(ws_id)
+        config_id = str(ws_data.get("configurationId") or ws_data.get("config_id") or "")
+        if not config_id:
+            pytest.skip("workspace has no configurationId, cannot manufacture orphan")
+
+        _step(3, "delete sandbox config to make the workspace orphaned")
+        try:
+            self.api.delete_config("keboola.sandboxes", config_id)
+        except Exception as exc:
+            pytest.skip(f"could not delete sandbox config: {exc}")
+
+        _step(4, "workspace list --orphaned -- workspace should appear")
+        data = self._run_ok("workspace", "list", "--project", self.alias, "--orphaned")
+        orphan_ids = [w["id"] for w in data["data"]["workspaces"]]
+        assert ws_id in orphan_ids, f"ws {ws_id} not listed as orphan; got: {orphan_ids}"
+
+        _step(5, "workspace gc --dry-run -- counts but does not delete")
+        data = self._run_ok("workspace", "gc", "--project", self.alias, "--dry-run")
+        gc_data = data["data"]
+        assert gc_data["dry_run"] is True
+        would_delete_ids = [w["id"] for w in gc_data.get("would_delete", [])]
+        assert ws_id in would_delete_ids
+
+        # Verify workspace still exists after dry-run
+        remaining = self._run_ok("workspace", "list", "--project", self.alias, "--orphaned")
+        assert ws_id in [w["id"] for w in remaining["data"]["workspaces"]]
+
+        _step(6, "workspace gc --yes -- deletes the orphan")
+        data = self._run_ok("workspace", "gc", "--project", self.alias, "--yes")
+        gc_data = data["data"]
+        assert gc_data["dry_run"] is False
+        deleted_ids = [w["id"] for w in gc_data.get("deleted", [])]
+        assert ws_id in deleted_ids
+
+        # Remove from cleanup tracker since GC deleted it
+        if ws_id in self._created_workspace_ids:
+            self._created_workspace_ids.remove(ws_id)
+
+        _step(7, "workspace list --orphaned -- workspace is gone")
+        data = self._run_ok("workspace", "list", "--project", self.alias, "--orphaned")
+        remaining_ids = [w["id"] for w in data["data"]["workspaces"]]
+        assert ws_id not in remaining_ids

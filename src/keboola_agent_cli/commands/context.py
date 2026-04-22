@@ -131,6 +131,24 @@ Use `kbagent <command> --help` for full flag details and examples.
     Unlink variables from a config. Does NOT delete the underlying keboola.variables config
     (it may be shared). Delete it explicitly via `kbagent config delete` if needed.
 
+### Config Metadata (folder organisation + arbitrary key/value)
+
+  kbagent config metadata-list --project NAME --component-id ID --config-id ID [--branch ID]
+    List all metadata entries on a configuration. Each entry: id, key, value, provider, timestamp.
+
+  kbagent config get-metadata --project NAME --component-id ID --config-id ID --key KEY [--branch ID]
+    Read a single metadata value by key. Exits 1 (NOT_FOUND) if absent.
+
+  kbagent config set-metadata --project NAME --component-id ID --config-id ID --key KEY --value VALUE [--branch ID]
+    Set (upsert) a metadata key/value on a configuration.
+
+  kbagent config delete-metadata --project NAME --component-id ID --config-id ID --metadata-id ID [--branch ID] [--yes]
+    Delete a configuration metadata entry by numeric ID (from metadata-list).
+
+  kbagent config set-folder --project NAME --component-id ID --config-id ID --name "FolderName" [--branch ID]
+    Sugar: writes KBC.configuration.folderName metadata. Groups the config in the Keboola UI.
+    Pass --name "" to remove the folder assignment.
+
 ### Job History
 
   kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N]
@@ -318,8 +336,8 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
     Create workspace. Backend auto-detected from project (or override with --backend). Default: headless (~1s). --ui: visible in KBC UI (~15s).
 
-  kbagent workspace list [--project NAME]
-    List workspaces. --project repeatable.
+  kbagent workspace list [--project NAME] [--orphaned]
+    List workspaces. --orphaned shows only orphaned workspaces (sandboxes config missing).
 
   kbagent workspace detail --project ALIAS --workspace-id ID
     Workspace connection details (no password).
@@ -338,6 +356,9 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]
     Create workspace from transformation config. Loads input tables automatically.
+
+  kbagent workspace gc [--project NAME] [--dry-run] [--yes]
+    Garbage-collect orphaned workspaces (keboola.sandboxes config missing). Use --dry-run to preview.
 
 ### Project Sync
 

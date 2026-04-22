@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ..errors import KeboolaApiError
+from ..errors import ConfigError, KeboolaApiError
 from ..json_utils import compute_diff, deep_merge, set_nested_value
 from ..models import ProjectConfig
 from ..sync.manifest import Manifest, load_manifest, save_manifest
@@ -641,6 +641,178 @@ class ConfigService(BaseService):
         branch_path = manifest.branches[0].path
         branch_dir = project_root / branch_path
         return branch_dir if branch_dir.exists() else None
+
+    def _resolve_metadata_branch_id(
+        self, project: ProjectConfig, client: Any, branch_id: int | None
+    ) -> int:
+        """Resolve the branch ID required by the config metadata API.
+
+        Config metadata endpoints only support the branch-aware route
+        (/v2/storage/branch/{id}/...). This method resolves the effective
+        branch: explicit arg → active branch → default branch from API.
+
+        Raises ConfigError if no default branch can be found.
+        """
+        effective = branch_id or project.active_branch_id
+        if effective:
+            return int(effective)
+        branches = client.list_dev_branches()
+        default = next((b for b in branches if b.get("isDefault")), None)
+        if default:
+            return int(default["id"])
+        raise ConfigError(
+            "Could not determine a branch for config metadata. "
+            "Set an active branch with 'kbagent branch use' or pass --branch."
+        )
+
+    def list_config_metadata(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """List all metadata entries on a configuration.
+
+        Returns:
+            Dict with project_alias, component_id, config_id, branch_id,
+            and a key-sorted metadata list.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            effective_branch_id = self._resolve_metadata_branch_id(project, client, branch_id)
+            entries = client.list_config_metadata(
+                component_id, config_id, branch_id=effective_branch_id
+            )
+        finally:
+            client.close()
+        return {
+            "project_alias": alias,
+            "component_id": component_id,
+            "config_id": config_id,
+            "branch_id": effective_branch_id,
+            "metadata": sorted(entries, key=lambda e: e.get("key", "")),
+        }
+
+    def get_config_metadata_value(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        key: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Get a single metadata value by key.
+
+        Raises KeboolaApiError(NOT_FOUND) if the key is absent.
+        """
+        result = self.list_config_metadata(alias, component_id, config_id, branch_id=branch_id)
+        for entry in result["metadata"]:
+            if entry.get("key") == key:
+                return {
+                    "project_alias": alias,
+                    "component_id": component_id,
+                    "config_id": config_id,
+                    "branch_id": result["branch_id"],
+                    "key": key,
+                    "value": entry.get("value"),
+                    "metadata_id": entry.get("id"),
+                }
+        raise KeboolaApiError(
+            message=f"Metadata key '{key}' not found on config '{component_id}/{config_id}'.",
+            status_code=404,
+            error_code="NOT_FOUND",
+            retryable=False,
+        )
+
+    def set_config_metadata(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        key: str,
+        value: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Set a single metadata key/value on a configuration (upsert)."""
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            effective_branch_id = self._resolve_metadata_branch_id(project, client, branch_id)
+            result = client.set_config_metadata(
+                component_id, config_id, entries=[(key, value)], branch_id=effective_branch_id
+            )
+        finally:
+            client.close()
+        return {
+            "project_alias": alias,
+            "component_id": component_id,
+            "config_id": config_id,
+            "branch_id": effective_branch_id,
+            "key": key,
+            "value": value,
+            "result": result,
+            "message": (
+                f"Metadata '{key}' set on config '{component_id}/{config_id}' in project '{alias}'."
+            ),
+        }
+
+    def delete_config_metadata(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        metadata_id: int | str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Delete a metadata entry by its numeric ID."""
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            effective_branch_id = self._resolve_metadata_branch_id(project, client, branch_id)
+            client.delete_config_metadata(
+                component_id, config_id, metadata_id, branch_id=effective_branch_id
+            )
+        finally:
+            client.close()
+        return {
+            "project_alias": alias,
+            "component_id": component_id,
+            "config_id": config_id,
+            "branch_id": effective_branch_id,
+            "metadata_id": metadata_id,
+            "message": (
+                f"Metadata ID {metadata_id} deleted from config "
+                f"'{component_id}/{config_id}' in project '{alias}'."
+            ),
+        }
+
+    def set_config_folder(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        folder_name: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Set the folder name on a configuration (KBC.configuration.folderName)."""
+        result = self.set_config_metadata(
+            alias,
+            component_id,
+            config_id,
+            key="KBC.configuration.folderName",
+            value=folder_name,
+            branch_id=branch_id,
+        )
+        result["folder"] = folder_name
+        result["message"] = (
+            f"Folder '{folder_name}' set on config '{component_id}/{config_id}' in project '{alias}'."
+        )
+        return result
 
     def search_configs(
         self,

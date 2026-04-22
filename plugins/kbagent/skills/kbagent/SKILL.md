@@ -93,6 +93,11 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Rename a configuration (update name via API + rename local sync directory) | `kbagent config rename --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Delete a configuration from a project | `kbagent config delete --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Generate boilerplate configuration files for a Keboola component | `kbagent config new --component-id COMPONENT-ID` |
+| List all metadata entries on a configuration | `kbagent config metadata-list --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Read a single metadata value by key | `kbagent config get-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --key KEY` |
+| Set a metadata key/value on a configuration (upsert) | `kbagent config set-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --key KEY --value VALUE` |
+| Delete a configuration metadata entry by its numeric ID | `kbagent config delete-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --metadata-id METADATA-ID` |
+| Set the folder (KBC.configuration.folderName) on a configuration | `kbagent config set-folder --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Assign variables to a config (auto-creates backing keboola.variables on first call) | `kbagent config variables-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Read the current variable values attached to a config | `kbagent config variables-get --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Unlink variables from a config (does NOT delete the underlying keboola.variables) | `kbagent config variables-clear --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -150,6 +155,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Reset workspace password and show the new one | `kbagent workspace password --project PROJECT --workspace-id WORKSPACE-ID` |
 | Load tables into a workspace | `kbagent workspace load --project PROJECT --workspace-id WORKSPACE-ID --tables TABLES` |
 | Execute SQL query in a workspace via Query Service | `kbagent workspace query --project PROJECT --workspace-id WORKSPACE-ID` |
+| Garbage-collect orphaned workspaces | `kbagent workspace gc` |
 | Create a workspace from a transformation config | `kbagent workspace from-transformation --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | List available MCP tools from the keboola-mcp-server | `kbagent tool list` |
 | Call an MCP tool on keboola-mcp-server | `kbagent tool call <TOOL-NAME>` |

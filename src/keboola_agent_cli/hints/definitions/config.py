@@ -286,3 +286,193 @@ HintRegistry.register(
         ],
     )
 )
+
+# ── config metadata-list ───────────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.metadata-list",
+        description="List all metadata entries on a configuration",
+        steps=[
+            HintStep(
+                comment="List configuration metadata",
+                client=ClientCall(
+                    method="list_config_metadata",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="entries",
+                    result_hint="list[dict]",
+                ),
+                service=ServiceCall(
+                    service_class="ConfigService",
+                    service_module="config_service",
+                    method="list_config_metadata",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=["Each entry has: id, key, value, provider, timestamp."],
+    )
+)
+
+# ── config get-metadata ────────────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.get-metadata",
+        description="Read a single metadata value by key from a configuration",
+        steps=[
+            HintStep(
+                comment="Get single metadata value",
+                client=ClientCall(
+                    method="list_config_metadata",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="entries",
+                    result_hint="list[dict]",
+                ),
+                service=ServiceCall(
+                    service_class="ConfigService",
+                    service_module="config_service",
+                    method="get_config_metadata_value",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "key": "{key}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=["Raises NOT_FOUND (exit 1) if key is absent."],
+    )
+)
+
+# ── config set-metadata ────────────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.set-metadata",
+        description="Set (upsert) a metadata key/value on a configuration",
+        steps=[
+            HintStep(
+                comment="Upsert metadata entry on configuration",
+                client=ClientCall(
+                    method="set_config_metadata",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "entries": "[({key}, {value})]",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="result",
+                    result_hint="list[dict]",
+                ),
+                service=ServiceCall(
+                    service_class="ConfigService",
+                    service_module="config_service",
+                    method="set_config_metadata",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "key": "{key}",
+                        "value": "{value}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+    )
+)
+
+# ── config delete-metadata ─────────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.delete-metadata",
+        description="Delete a configuration metadata entry by its numeric ID",
+        steps=[
+            HintStep(
+                comment="Delete metadata entry by ID",
+                client=ClientCall(
+                    method="delete_config_metadata",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "metadata_id": "{metadata_id}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var=None,
+                    result_hint="None",
+                ),
+                service=ServiceCall(
+                    service_class="ConfigService",
+                    service_module="config_service",
+                    method="delete_config_metadata",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "metadata_id": "{metadata_id}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=["Use metadata-list first to find the numeric metadata_id."],
+    )
+)
+
+# ── config set-folder ──────────────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.set-folder",
+        description="Set the folder (KBC.configuration.folderName) on a configuration",
+        steps=[
+            HintStep(
+                comment="Write KBC.configuration.folderName metadata",
+                client=ClientCall(
+                    method="set_config_metadata",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "entries": "[('KBC.configuration.folderName', {name})]",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="result",
+                    result_hint="list[dict]",
+                ),
+                service=ServiceCall(
+                    service_class="ConfigService",
+                    service_module="config_service",
+                    method="set_config_folder",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "folder_name": "{name}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Folder names appear in the Keboola UI to group configurations.",
+            "config list already shows folder names in the 'folder' column.",
+        ],
+    )
+)
