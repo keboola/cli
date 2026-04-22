@@ -504,8 +504,11 @@ class FlowService(BaseService):
                 existing = client.list_component_configs(
                     SCHEDULER_COMPONENT_ID, branch_id=effective_branch
                 )
-            except KeboolaApiError:
-                existing = []
+            except KeboolaApiError as exc:
+                if exc.error_code == "NOT_FOUND":
+                    existing = []
+                else:
+                    raise
 
             existing_id: str | None = None
             for sched in existing:

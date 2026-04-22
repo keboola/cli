@@ -422,6 +422,18 @@ class TestSetFlowSchedule:
         cfg = client.create_config.call_args.kwargs["configuration"]
         assert cfg["schedule"]["state"] == "disabled"
 
+    def test_non_404_error_on_list_schedules_propagates(self):
+        client = MagicMock()
+        client.get_config_detail.return_value = {"name": "F"}
+        client.list_component_configs.side_effect = KeboolaApiError(
+            message="Forbidden", status_code=403, error_code="INVALID_TOKEN", retryable=False
+        )
+        service = _make_flow_service(client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.set_flow_schedule("prod", "keboola.orchestrator", "1", "0 * * * *")
+        assert exc_info.value.error_code == "INVALID_TOKEN"
+        client.create_config.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # FlowService.remove_flow_schedule
