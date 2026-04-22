@@ -809,6 +809,70 @@ class TestFirewallFlags:
         data = json.loads(result.output)
         assert data["error"]["code"] == "PERMISSION_DENIED"
 
+    def test_deny_destructive_allows_admin_ops(self, tmp_path: Path) -> None:
+        """--deny-destructive must NOT block admin-tier ops (project.remove, org.setup).
+
+        Documented semantics: --deny-destructive is NARROW (data destruction
+        only). Admin operations fall through to --deny-writes, which is the
+        wide net. This test locks the contract so a future registry change
+        can't widen --deny-destructive's scope silently.
+        """
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir)
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            # project.remove is classified 'admin'; --deny-destructive must
+            # NOT block it (permission gate exits 6 if blocked). The command
+            # will succeed in removing 'prod' since the seed registers it.
+            result = runner.invoke(
+                app,
+                [
+                    "--deny-destructive",
+                    "--json",
+                    "project",
+                    "remove",
+                    "--project",
+                    "prod",
+                ],
+            )
+
+        assert result.exit_code != 6, (
+            f"--deny-destructive incorrectly blocked admin op project.remove "
+            f"(exit {result.exit_code}): {result.output}"
+        )
+        # Verify the actual operation also succeeded (not just the perm gate).
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+
+    def test_deny_writes_blocks_admin_ops(self, tmp_path: Path) -> None:
+        """Complement of the above: --deny-writes IS the wide net and DOES block admin."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir)
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(
+                app,
+                [
+                    "--deny-writes",
+                    "--json",
+                    "project",
+                    "remove",
+                    "--project",
+                    "prod",
+                ],
+            )
+
+        assert result.exit_code == 6, (
+            f"--deny-writes must block admin op project.remove (exit 6); "
+            f"got {result.exit_code}: {result.output}"
+        )
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "PERMISSION_DENIED"
+
     def test_deny_destructive_allows_write(self, tmp_path: Path) -> None:
         """--deny-destructive must NOT block pure 'write' (non-destructive) ops.
 

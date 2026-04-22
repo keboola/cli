@@ -48,8 +48,8 @@ observability -- all API requests will include the X-Conversation-ID header.
   --no-color        Disable colors (auto-disabled in non-TTY)
   --config-dir      Override config directory path
   --hint MODE       Generate Python code instead of executing (MODE: client or service)
-  --deny-writes     Session-only firewall: block all write operations for this invocation
-  --deny-destructive  Session-only firewall: block destructive (delete/kill) operations for this invocation
+  --deny-writes     Session-only firewall: block the WIDE NET -- every write, destructive, AND admin op (project add/remove/edit, org setup, all storage mutations)
+  --deny-destructive  Session-only firewall: NARROW -- block only data-destructive ops in Keboola (delete-table/bucket/column, terminate-job, branch delete). Admin ops (project remove, org setup) stay allowed -- use --deny-writes for those
 
 ## All Commands
 

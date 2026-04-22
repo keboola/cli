@@ -179,14 +179,17 @@ def main(
     deny_writes: bool = typer.Option(
         False,
         "--deny-writes",
-        help="Session-only firewall: block every write (and destructive/admin) operation "
-        "for this invocation. Merges with any persisted permission policy.",
+        help="Session-only firewall: block write, destructive, AND admin "
+        "operations (the wide net -- project add/remove/edit, org setup, "
+        "storage writes and deletes, etc.). Merges with any persisted policy.",
     ),
     deny_destructive: bool = typer.Option(
         False,
         "--deny-destructive",
-        help="Session-only firewall: block destructive operations (delete/kill/reset) "
-        "for this invocation. Merges with any persisted permission policy.",
+        help="Session-only firewall: block ONLY data-destructive operations "
+        "(storage delete-table/delete-bucket/delete-column, job terminate, "
+        "branch delete, etc.). Admin ops like 'project remove' and 'org setup' "
+        "are NOT blocked -- use --deny-writes for the wide net.",
     ),
 ) -> None:
     """Global options applied to all commands."""

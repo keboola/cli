@@ -153,6 +153,13 @@ class TestPermissionsShow:
         )
         assert data["persisted"] is None
         assert "--deny-writes" in data["session_flags"]
+        # Defensive: legacy top-level keys (mode/allow/deny) must NOT be
+        # present when there is no persisted policy. Downstream consumers
+        # that historically used `data["mode"]` should KeyError here and
+        # be forced to read the new `session_flags` / `persisted` shape.
+        assert "mode" not in data
+        assert "allow" not in data
+        assert "deny" not in data
 
     def test_show_reports_session_flags_alongside_persisted(self, tmp_path: Path) -> None:
         """Session flags are reported in addition to persisted policy."""
