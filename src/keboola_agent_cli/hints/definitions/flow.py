@@ -121,6 +121,125 @@ HintRegistry.register(
 
 HintRegistry.register(
     CommandHint(
+        cli_command="flow.update",
+        description="Update a flow's name, description, or phases/tasks",
+        steps=[
+            HintStep(
+                comment="Fetch current config, merge updates, write back",
+                client=ClientCall(
+                    method="update_config",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{flow_id}",
+                        "name": "{name}",
+                        "configuration": '{"phases": [...], "tasks": [...]}',
+                        "branch_id": "{branch}",
+                    },
+                    result_var="result",
+                    result_hint="dict",
+                ),
+                service=ServiceCall(
+                    service_class="FlowService",
+                    service_module="flow_service",
+                    method="update_flow",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{flow_id}",
+                        "name": "{name}",
+                        "description": "{description}",
+                        "phases": "list[dict] | None",
+                        "tasks": "list[dict] | None",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Omit --file to rename/describe only; supply --file to replace phases+tasks.",
+            "DAG validation runs before the write; INVALID_FLOW_DAG on cycle or bad ref.",
+            "component_id defaults to 'keboola.orchestrator'; override for keboola.flow flows.",
+        ],
+    )
+)
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="flow.delete",
+        description="Delete a flow configuration",
+        steps=[
+            HintStep(
+                comment="Delete the flow config by component_id + config_id",
+                client=ClientCall(
+                    method="delete_config",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{flow_id}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="result",
+                    result_hint="dict",
+                ),
+                service=ServiceCall(
+                    service_class="FlowService",
+                    service_module="flow_service",
+                    method="delete_flow",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{flow_id}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Associated keboola.scheduler configs are NOT removed automatically.",
+            "Run 'flow schedule-remove' first to clean up schedules before deleting.",
+        ],
+    )
+)
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="flow.schedule-remove",
+        description="Remove all keboola.scheduler configs bound to a flow (idempotent)",
+        steps=[
+            HintStep(
+                comment="List matching scheduler configs then delete each one",
+                client=ClientCall(
+                    method="delete_config",
+                    args={
+                        "component_id": "keboola.scheduler",
+                        "config_id": "{schedule_id}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="result",
+                    result_hint="dict",
+                ),
+                service=ServiceCall(
+                    service_class="FlowService",
+                    service_module="flow_service",
+                    method="remove_flow_schedule",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{flow_id}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Idempotent: safe to call even if no schedules exist.",
+            "Lists all keboola.scheduler configs, filters by target.configurationId == flow_id, "
+            "then deletes each match. Partial failures return successes with an errors list.",
+        ],
+    )
+)
+
+HintRegistry.register(
+    CommandHint(
         cli_command="flow.schedule",
         description="Bind a cron schedule to a flow (creates a keboola.scheduler config)",
         steps=[

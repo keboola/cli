@@ -440,6 +440,16 @@ def flow_update(
       # Replace phases + tasks from file
       kbagent flow update --project prod --flow-id 123 --file @flow.yaml
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "flow.update",
+            project=project,
+            flow_id=flow_id,
+            component_id=component_id,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
 
@@ -515,6 +525,16 @@ def flow_delete(
     Note: associated keboola.scheduler configs are NOT automatically removed.
     Run 'flow schedule-remove' first if you want to clean up schedules.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "flow.delete",
+            project=project,
+            flow_id=flow_id,
+            component_id=component_id,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
 
@@ -647,6 +667,16 @@ def flow_schedule_remove(
 
     Idempotent: safe to run even if no schedules exist.
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "flow.schedule-remove",
+            project=project,
+            flow_id=flow_id,
+            component_id=component_id,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
 
@@ -660,7 +690,7 @@ def flow_schedule_remove(
                 branch_id=branch,
             )
             schedules = sched_result.get("schedules", [])
-        except Exception:
+        except (ConfigError, KeboolaApiError):
             schedules = []
 
         if not schedules:
