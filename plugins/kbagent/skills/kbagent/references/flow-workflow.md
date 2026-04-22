@@ -68,7 +68,7 @@ kbagent --json flow update --project prod --flow-id 111 --file @updated.yaml
 
 ## Schedule a flow
 
-Schedules are stored as `keboola.scheduler` configs pointing at the flow. kbagent creates one per `flow schedule` call.
+Schedules are stored as `keboola.scheduler` configs pointing at the flow. `flow schedule` is an upsert — if a schedule already exists for the flow it is updated in-place; otherwise a new one is created. Calling it twice with different cron expressions replaces the existing schedule.
 
 ```bash
 # Daily at 06:00 UTC

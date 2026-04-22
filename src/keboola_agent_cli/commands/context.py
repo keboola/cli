@@ -304,7 +304,8 @@ Use `kbagent <command> --help` for full flag details and examples.
     Run 'flow schedule-remove' first if you want to clean up schedules.
 
   kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--component-id ID] [--timezone TZ] [--enabled/--disabled] [--name NAME] [--branch ID]
-    Bind a cron schedule by creating a keboola.scheduler config targeting the flow.
+    Upsert a cron schedule: updates the existing keboola.scheduler config if one exists, creates one
+    otherwise. Calling twice with a new cron replaces the old schedule — no duplicates created.
     Schedules are stored as Storage API configs, not a separate scheduler service.
 
   kbagent flow schedule-remove --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]

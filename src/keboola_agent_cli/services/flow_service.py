@@ -581,6 +581,7 @@ class FlowService(BaseService):
                     raise
 
             deleted: list[str] = []
+            errors: list[str] = []
             for sched in all_sched:
                 body = _parse_configuration(sched.get("configuration"))
                 target = body.get("target") or {}
@@ -588,12 +589,23 @@ class FlowService(BaseService):
                     target.get("configurationId", "")
                 ) == str(config_id):
                     sched_id = str(sched.get("id", ""))
-                    client.delete_config(
-                        SCHEDULER_COMPONENT_ID, sched_id, branch_id=effective_branch
-                    )
-                    deleted.append(sched_id)
+                    try:
+                        client.delete_config(
+                            SCHEDULER_COMPONENT_ID, sched_id, branch_id=effective_branch
+                        )
+                        deleted.append(sched_id)
+                    except KeboolaApiError as exc:
+                        errors.append(f"{sched_id}: {exc.message}")
         finally:
             client.close()
+
+        if errors and not deleted:
+            raise KeboolaApiError(
+                message=f"Failed to delete schedules: {'; '.join(errors)}",
+                status_code=0,
+                error_code="SCHEDULE_DELETE_FAILED",
+                retryable=False,
+            )
 
         return {
             "status": "removed",

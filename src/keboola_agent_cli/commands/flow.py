@@ -173,7 +173,8 @@ def flow_detail(
     component_id: str = typer.Option(
         "keboola.orchestrator",
         "--component-id",
-        help="Flow component ID (default: keboola.orchestrator)",
+        help="Flow component ID (default: keboola.orchestrator). "
+        "Use --component-id keboola.flow for flows listed with component_id=keboola.flow.",
     ),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
 ) -> None:

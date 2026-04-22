@@ -160,7 +160,8 @@ HintRegistry.register(
         notes=[
             "Schedules are stored as keboola.scheduler component configs -- no separate HTTP client.",
             "configurationId in the target must be the flow's config ID (string).",
-            "Multiple schedules per flow are supported; schedule-remove deletes all of them.",
+            "Upsert: if a schedule already exists for this flow it is updated; otherwise a new one is "
+            "created. schedule-remove deletes all matching schedules.",
         ],
     )
 )

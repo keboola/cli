@@ -470,3 +470,48 @@ class TestRemoveFlowSchedule:
         assert result["deleted_count"] == 0
         assert result["deleted_schedule_ids"] == []
         client.delete_config.assert_not_called()
+
+    def test_partial_delete_failure_returns_successes(self):
+        sched1 = {
+            "id": "sched-a",
+            "configuration": {
+                "target": {"componentId": "keboola.orchestrator", "configurationId": "flow-1"}
+            },
+        }
+        sched2 = {
+            "id": "sched-b",
+            "configuration": {
+                "target": {"componentId": "keboola.orchestrator", "configurationId": "flow-1"}
+            },
+        }
+        client = MagicMock()
+        client.list_component_configs.return_value = [sched1, sched2]
+        # first delete succeeds, second raises
+        client.delete_config.side_effect = [
+            None,
+            KeboolaApiError(
+                message="Server error", status_code=500, error_code="INTERNAL", retryable=True
+            ),
+        ]
+        service = _make_flow_service(client)
+        result = service.remove_flow_schedule("prod", "keboola.orchestrator", "flow-1")
+        # Partial success: first was deleted, second failed but is not re-raised when some succeeded
+        assert result["deleted_count"] == 1
+        assert "sched-a" in result["deleted_schedule_ids"]
+
+    def test_all_deletes_fail_raises(self):
+        sched1 = {
+            "id": "sched-x",
+            "configuration": {
+                "target": {"componentId": "keboola.orchestrator", "configurationId": "flow-1"}
+            },
+        }
+        client = MagicMock()
+        client.list_component_configs.return_value = [sched1]
+        client.delete_config.side_effect = KeboolaApiError(
+            message="Forbidden", status_code=403, error_code="INVALID_TOKEN", retryable=False
+        )
+        service = _make_flow_service(client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.remove_flow_schedule("prod", "keboola.orchestrator", "flow-1")
+        assert exc_info.value.error_code == "SCHEDULE_DELETE_FAILED"
