@@ -716,7 +716,7 @@ HintRegistry.register(
         ],
         notes=[
             "POST /v2/storage/buckets/{id}/metadata with provider='user' is an upsert-by-key.",
-            "The description appears in 'metadata' array of bucket-detail, not the native 'description' field.",
+            "Description is readable via 'storage bucket-detail --json .data.description'.",
         ],
     )
 )
