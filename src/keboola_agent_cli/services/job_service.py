@@ -105,6 +105,15 @@ def _terminate_and_wait(
     ``grace_seconds``; returns ``None`` if the kill call itself failed
     (network, auth, race against remote terminal state). Never raises --
     the caller decides how to surface the failure.
+
+    Idempotent under concurrent kill attempts: if the user runs
+    ``kbagent job terminate --job-id X`` while ``job run --wait`` is
+    auto-cancelling X on timeout, both paths land on Queue API's
+    ``POST /jobs/{id}/kill``. The second caller sees HTTP 400
+    "not in killable states" (or HTTP 500 with body 404 for already-final
+    jobs); the KeboolaApiError branch below still succeeds as long as a
+    follow-up GET confirms isFinished=True. No data loss, no double-kill
+    error surfaced.
     """
     try:
         client.kill_job(job_id)

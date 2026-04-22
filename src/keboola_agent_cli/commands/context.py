@@ -146,12 +146,19 @@ Use `kbagent <command> --help` for full flag details and examples.
     a variableValuesId so the job binds to the deployed values row. --variable-values-id
     overrides; --no-variables skips resolution. Error code NO_VARIABLE_ROWS when the linked
     variables config has zero rows (run `kbagent config variables-set` to create one).
-    Polling under --wait uses an exponential curve by default (2s x 30 -> 5s x 48 -> 15s, FIIA
-    + Go-CLI parity); --poll-strategy fixed keeps the legacy 1s interval. On FAILED/WARNING/TERMINATED,
-    the last --log-tail-lines events (default 200, 0 disables) are surfaced as `logTail` in --json
-    (`details.logTail` on errors). If --timeout expires, kbagent issues kill_job on the remote and
-    exits 7 (JOB_TIMEOUT_TERMINATED) with the cancelled job + logTail; if the kill itself fails,
-    exits 4 (QUEUE_JOB_TIMEOUT, retryable).
+    Polling under --wait uses an exponential curve by default (2s x 30 -> 5s x 48 -> 15s);
+    --poll-strategy fixed keeps a constant 1s interval. On FAILED/WARNING/TERMINATED, the last
+    --log-tail-lines events (default 200, 0 disables -- recommended for automation pipelines) are
+    surfaced as `logTail` in --json output.
+    --json response shapes by exit code:
+      - exit 0 (success): {{status:"ok", data:{{..., logTail?:[...]}}}}
+      - exit 1 (QUEUE_JOB_FAILED, remote job status=error):
+        {{status:"error", error:{{code:"QUEUE_JOB_FAILED", details:{{logTail:[...]}}}}}}
+      - exit 4 (QUEUE_JOB_TIMEOUT, local timeout + remote kill also failed):
+        {{status:"error", error:{{code:"QUEUE_JOB_TIMEOUT", retryable:true, details:{{logTail:[...]}}}}}}
+      - exit 7 (JOB_TIMEOUT_TERMINATED, local timeout + remote kill succeeded):
+        {{status:"error", error:{{code:"JOB_TIMEOUT_TERMINATED", details:{{job:{{...}}, logTail:[...]}}}}}}
+    jq pattern: `.error.details.logTail? // .data.logTail? // []` picks up the tail regardless of exit.
 
   kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
     Kill running jobs via Queue API (POST /jobs/{id}/kill). Use to stop runaway loops or pile-ups.

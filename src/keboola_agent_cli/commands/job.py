@@ -221,18 +221,21 @@ def job_run(
         "--poll-strategy",
         click_type=click.Choice(sorted(VALID_POLL_STRATEGIES)),
         help=(
-            "Polling cadence used with --wait. 'exponential' (default) matches "
-            "FIIA and keboola-as-code: 2s x 30 -> 5s x 48 -> 15s. 'fixed' keeps "
-            "the legacy 1s interval (useful for tests or very short jobs)."
+            "Polling cadence used with --wait. 'exponential' (default) "
+            "starts at 2s and relaxes toward 15s as a job runs long "
+            "(2s x 30 -> 5s x 48 -> 15s). 'fixed' keeps a constant 1s "
+            "interval (useful for tests or very short jobs)."
         ),
     ),
     log_tail_lines: int = typer.Option(
         DEFAULT_LOG_TAIL_LINES,
         "--log-tail-lines",
         help=(
-            "On FAILED/WARNING/TERMINATED jobs, fetch the last N events and "
-            f"surface them as 'logTail' (JSON mode) or a panel (human mode). "
-            f"0 disables; max {MAX_LOG_TAIL_LINES}. Only used with --wait."
+            "On FAILED/WARNING/TERMINATED jobs, fetch the last N job events "
+            f"(from Storage Events API) and surface them as 'logTail' in "
+            f"JSON output or a panel in human mode. Only used with --wait. "
+            f"0 disables (recommended for automation pipelines); max "
+            f"{MAX_LOG_TAIL_LINES}."
         ),
     ),
 ) -> None:
@@ -250,9 +253,11 @@ def job_run(
     with --no-variables.
 
     Queue polling uses an exponential curve by default (2s x 30 -> 5s x 48
-    -> 15s) matching FIIA and the Go CLI. If --timeout expires, kbagent
-    issues kill_job against the remote job and exits
-    EXIT_JOB_TIMEOUT_TERMINATED (7) with the cancelled job dict attached.
+    -> 15s, total 5min before the 15s tail). If --timeout expires, kbagent
+    issues kill_job on the remote and exits 7 (JOB_TIMEOUT_TERMINATED) with
+    the cancelled job + log tail attached. If the kill itself fails, exits
+    4 (QUEUE_JOB_TIMEOUT, retryable) so scripts can tell "we killed it"
+    from "local gave up, remote may still be running".
     """
     if should_hint(ctx):
         emit_hint(

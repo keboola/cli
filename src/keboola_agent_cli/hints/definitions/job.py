@@ -153,11 +153,16 @@ HintRegistry.register(
             HintStep(
                 comment=(
                     "On FAILED/WARNING/TERMINATED jobs, fetch the last N events "
-                    "to surface as logTail (skip when --log-tail-lines 0)."
+                    "to surface as logTail (skip when --log-tail-lines 0). "
+                    "fetch_job_events expects runId (not jobId); Queue v2 jobs "
+                    "usually have runId == id but we resolve defensively."
                 ),
                 client=ClientCall(
                     method="fetch_job_events",
-                    args={"job_id": 'str(job["id"])', "limit": "{log_tail_lines}"},
+                    args={
+                        "run_id": 'str(job.get("runId") or job["id"])',
+                        "limit": "{log_tail_lines}",
+                    },
                     result_var="events",
                     result_hint="list[dict]",
                 ),
