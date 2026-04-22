@@ -160,7 +160,7 @@ class TestClientRenderer:
     def test_job_run_hint_threads_branch_id_through_all_steps(self) -> None:
         """Branch is passed to all three client calls in the job.run hint.
 
-        Locks the PR3 contract: if branch_id is dropped from any of the
+        Locks the contract: if branch_id is dropped from any of the
         get_config_detail / list_config_rows / create_job calls, the rendered
         hint would silently hit the production branch even when --branch is
         supplied.

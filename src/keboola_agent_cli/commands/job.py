@@ -313,9 +313,7 @@ def job_run(
     else:
         resolved_id = result.get("resolvedVariableValuesId")
         if resolved_id:
-            formatter.console.print(
-                f"[dim]Bound variable values row: {escape(str(resolved_id))}[/dim]"
-            )
+            formatter.console.print(f"[dim]Bound variable values row: {escape(resolved_id)}[/dim]")
         job_id = result.get("id", "?")
         status = result.get("status", "unknown")
         if status in ("success", "terminated"):
