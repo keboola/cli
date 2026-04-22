@@ -46,7 +46,7 @@ def _setup_store(tmp_path: Path) -> ConfigStore:
     return store
 
 
-def _invoke(store: ConfigStore, mock_ws_svc: MagicMock, *args: str):
+def _invoke(store: ConfigStore, mock_ws_svc: MagicMock, *args: str, input: str | None = None):
     with (
         patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
         patch("keboola_agent_cli.cli.ProjectService") as MockProjSvc,
@@ -59,7 +59,7 @@ def _invoke(store: ConfigStore, mock_ws_svc: MagicMock, *args: str):
         MockCfgSvc.return_value = ConfigService(config_store=store)
         MockJobSvc.return_value = JobService(config_store=store)
         MockWsSvc.return_value = mock_ws_svc
-        return runner.invoke(app, list(args))
+        return runner.invoke(app, list(args), input=input)
 
 
 # ── _is_orphaned_workspace unit tests ─────────────────────────────────
@@ -201,32 +201,21 @@ class TestWorkspaceGc:
         assert data["data"]["dry_run"] is False
 
     def test_gc_no_confirmation_aborts(self, tmp_path: Path) -> None:
-        """Without --yes or --dry-run in non-JSON mode, user declining should exit 0."""
+        """In non-JSON mode without --yes, answering 'n' exits 0 without calling service."""
         store = _setup_store(tmp_path)
         mock_ws = MagicMock()
-        mock_ws.gc_workspaces.return_value = {
-            "dry_run": True,
-            "would_delete": [{"id": 5, "project_alias": "prod", "name": "orphan"}],
-            "count": 1,
-            "errors": [],
-            "message": "DRY RUN: 1 orphaned workspace(s) would be deleted.",
-        }
-        # In JSON mode the confirmation is always skipped (formatter.json_mode=True guard)
-        # so this test verifies --dry-run still works without --yes
         result = _invoke(
             store,
             mock_ws,
-            "--json",
             "workspace",
             "gc",
             "--project",
             "prod",
-            "--dry-run",
+            input="n\n",
         )
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
-        assert data["data"]["dry_run"] is True
-        mock_ws.gc_workspaces.assert_called_once_with(aliases=["prod"], dry_run=True)
+        assert "Aborted" in result.output
+        mock_ws.gc_workspaces.assert_not_called()
 
     def test_gc_nothing_to_delete(self, tmp_path: Path) -> None:
         store = _setup_store(tmp_path)
@@ -384,4 +373,4 @@ class TestWorkspaceServiceGc:
         result = svc.gc_workspaces(aliases=["prod"], dry_run=False)
         # Error should be accumulated, not raised
         assert result["count_deleted"] == 0
-        assert result["count_errors"] >= 1
+        assert result["count_errors"] == 1
