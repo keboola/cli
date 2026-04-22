@@ -5,6 +5,7 @@ No business logic belongs here.
 """
 
 import typer
+from rich.markup import escape
 
 from ..config_store import ConfigStore
 from ..constants import (
@@ -244,15 +245,17 @@ def job_run(
     service = get_service(ctx, "job_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
-    if variable_values_id is not None and not variable_values_id.strip():
-        formatter.error(
-            message=(
-                "--variable-values-id cannot be empty or whitespace. "
-                "Pass a row id, or omit the flag to auto-resolve the default row."
-            ),
-            error_code="INVALID_ARGUMENT",
-        )
-        raise typer.Exit(code=2)
+    if variable_values_id is not None:
+        variable_values_id = variable_values_id.strip()
+        if not variable_values_id:
+            formatter.error(
+                message=(
+                    "--variable-values-id cannot be empty or whitespace. "
+                    "Pass a row id, or omit the flag to auto-resolve the default row."
+                ),
+                error_code="INVALID_ARGUMENT",
+            )
+            raise typer.Exit(code=2)
 
     if variable_values_id and no_variables:
         formatter.error(
@@ -278,13 +281,7 @@ def job_run(
             msg += f" [dim](waiting up to {timeout:.0f}s)[/dim]"
         msg += "..."
         formatter.console.print(msg)
-        if variable_values_id:
-            from rich.markup import escape
-
-            formatter.console.print(
-                f"[dim]Using variable values row: {escape(variable_values_id)}[/dim]"
-            )
-        elif no_variables:
+        if no_variables:
             formatter.console.print("[dim]Skipping variable-values resolution.[/dim]")
 
     try:
@@ -314,6 +311,11 @@ def job_run(
     if formatter.json_mode:
         formatter.output(result)
     else:
+        resolved_id = result.get("resolvedVariableValuesId")
+        if resolved_id:
+            formatter.console.print(
+                f"[dim]Bound variable values row: {escape(str(resolved_id))}[/dim]"
+            )
         job_id = result.get("id", "?")
         status = result.get("status", "unknown")
         if status in ("success", "terminated"):
