@@ -98,12 +98,28 @@ def permissions_list(
         help="Filter by risk category: read, write, destructive, admin",
     ),
 ) -> None:
-    """List all operations with their risk category and current allowed/denied status."""
+    """List all operations with their risk category and current allowed/denied status.
+
+    The allowed/denied column reflects the EFFECTIVE policy for this
+    invocation -- i.e. the persisted policy merged with any top-level
+    session flags like ``--deny-writes`` / ``--deny-destructive``. This
+    matches what a command will actually do right now.
+    """
+    from ..cli import _apply_firewall_flags
+
     formatter = get_formatter(ctx)
     config_store: ConfigStore = get_service(ctx, "config_store")
     config = config_store.load()
 
-    engine = PermissionEngine(config.permissions)
+    deny_writes = bool(ctx.obj.get("deny_writes")) if ctx.obj else False
+    deny_destructive = bool(ctx.obj.get("deny_destructive")) if ctx.obj else False
+    effective_policy = _apply_firewall_flags(
+        config.permissions,
+        deny_writes=deny_writes,
+        deny_destructive=deny_destructive,
+    )
+
+    engine = PermissionEngine(effective_policy)
     ops = engine.list_operations()
 
     if formatter.json_mode:
@@ -116,44 +132,101 @@ def permissions_list(
             formatter.err_console.print(
                 "\n[dim]No permission policy active. All operations are allowed.[/dim]"
             )
+        elif deny_writes or deny_destructive:
+            active_flags = []
+            if deny_writes:
+                active_flags.append("--deny-writes")
+            if deny_destructive:
+                active_flags.append("--deny-destructive")
+            formatter.err_console.print(
+                f"\n[dim]Session firewall active: {' '.join(active_flags)} (not persisted).[/dim]"
+            )
 
 
 @permissions_app.command("show")
 def permissions_show(
     ctx: typer.Context,
 ) -> None:
-    """Show the current active permission policy."""
+    """Show the current active permission policy.
+
+    Reports both the PERSISTED policy (from config.json) and any SESSION
+    firewall layered on top via top-level ``--deny-writes`` /
+    ``--deny-destructive`` flags. Session flags are shown but are never
+    written to config.json -- they apply to this invocation only.
+    """
     formatter = get_formatter(ctx)
     config_store: ConfigStore = get_service(ctx, "config_store")
     config = config_store.load()
 
-    if config.permissions is None:
+    deny_writes = bool(ctx.obj.get("deny_writes")) if ctx.obj else False
+    deny_destructive = bool(ctx.obj.get("deny_destructive")) if ctx.obj else False
+    session_flags: list[str] = []
+    if deny_writes:
+        session_flags.append("--deny-writes")
+    if deny_destructive:
+        session_flags.append("--deny-destructive")
+
+    persisted = config.permissions
+
+    if persisted is None and not session_flags:
         if formatter.json_mode:
-            formatter.output({"active": False, "message": "No permission policy configured"})
+            formatter.output(
+                {
+                    "active": False,
+                    "message": "No permission policy configured",
+                    "session_flags": [],
+                }
+            )
         else:
             formatter.console.print("No permission policy configured. All operations are allowed.")
         return
 
-    policy_data = {
-        "active": True,
-        "mode": config.permissions.mode,
-        "allow": config.permissions.allow,
-        "deny": config.permissions.deny,
+    policy_data: dict[str, Any] = {
+        "active": persisted is not None or bool(session_flags),
+        "persisted": (
+            None
+            if persisted is None
+            else {
+                "mode": persisted.mode,
+                "allow": persisted.allow,
+                "deny": persisted.deny,
+            }
+        ),
+        "session_flags": session_flags,
     }
+
+    # Keep legacy top-level keys when a persisted policy exists so existing
+    # JSON consumers that read policy_data["mode"] / ["allow"] / ["deny"]
+    # remain compatible. Clients that need the new session-layer view read
+    # ``session_flags`` and ``persisted``.
+    if persisted is not None:
+        policy_data["mode"] = persisted.mode
+        policy_data["allow"] = persisted.allow
+        policy_data["deny"] = persisted.deny
 
     if formatter.json_mode:
         formatter.output(policy_data)
-    else:
+        return
+
+    if persisted is not None:
         mode_desc = (
             "default-allow (everything allowed unless denied)"
-            if config.permissions.mode == "allow"
+            if persisted.mode == "allow"
             else "default-deny (everything denied unless allowed)"
         )
         formatter.console.print(f"[bold]Mode:[/bold] {mode_desc}")
-        if config.permissions.allow:
-            formatter.console.print(f"[bold]Allow:[/bold] {', '.join(config.permissions.allow)}")
-        if config.permissions.deny:
-            formatter.console.print(f"[bold]Deny:[/bold] {', '.join(config.permissions.deny)}")
+        if persisted.allow:
+            formatter.console.print(f"[bold]Allow:[/bold] {', '.join(persisted.allow)}")
+        if persisted.deny:
+            formatter.console.print(f"[bold]Deny:[/bold] {', '.join(persisted.deny)}")
+    else:
+        formatter.console.print("[dim]No persisted permission policy (config.json is clean).[/dim]")
+
+    if session_flags:
+        formatter.console.print(
+            f"[bold yellow]Session firewall:[/bold yellow] {' '.join(session_flags)} "
+            "[dim](active for this invocation only; not persisted)[/dim]"
+        )
 
 
 @permissions_app.command("set")

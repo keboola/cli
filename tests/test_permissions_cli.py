@@ -76,6 +76,23 @@ class TestPermissionsList:
         for op in data:
             assert op["category"] == "destructive"
 
+    def test_list_reflects_session_deny_writes(self, tmp_path: Path) -> None:
+        """--deny-writes must flip 'allowed' -> 'denied' on write ops in the table."""
+        store = _make_store(tmp_path)
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = store
+            result = runner.invoke(app, ["--deny-writes", "--json", "permissions", "list"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        by_name = {op["name"]: op for op in data}
+
+        # Write-classified op should show denied under session --deny-writes.
+        assert by_name["project.add"]["status"] == "denied", (
+            "permissions list ignored session --deny-writes"
+        )
+        # Read-classified op should still be allowed.
+        assert by_name["project.list"]["status"] == "allowed"
+
     def test_list_includes_project_use_and_current(self, tmp_path: Path) -> None:
         """Registry entries for the PR5 commands are visible to the engine.
 
@@ -122,6 +139,53 @@ class TestPermissionsShow:
         assert data["mode"] == "allow"
         assert "cli:write" in data["deny"]
         assert "tool:write" in data["deny"]
+
+    def test_show_reports_session_flags_without_persisted_policy(self, tmp_path: Path) -> None:
+        """--deny-writes with no persisted policy must still report 'active'."""
+        store = _make_store(tmp_path)
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = store
+            result = runner.invoke(app, ["--deny-writes", "--json", "permissions", "show"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert data["active"] is True, (
+            "permissions show reported inactive despite --deny-writes being set"
+        )
+        assert data["persisted"] is None
+        assert "--deny-writes" in data["session_flags"]
+
+    def test_show_reports_session_flags_alongside_persisted(self, tmp_path: Path) -> None:
+        """Session flags are reported in addition to persisted policy."""
+        policy = PermissionPolicy(mode="allow", deny=["branch.delete"])
+        store = _make_store(tmp_path, policy)
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = store
+            result = runner.invoke(
+                app,
+                [
+                    "--deny-writes",
+                    "--deny-destructive",
+                    "--json",
+                    "permissions",
+                    "show",
+                ],
+            )
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        # Persisted policy still present + legacy top-level keys still there.
+        assert data["persisted"]["deny"] == ["branch.delete"]
+        assert data["deny"] == ["branch.delete"]  # legacy consumer compatibility
+        # Session flags both reported.
+        assert data["session_flags"] == ["--deny-writes", "--deny-destructive"]
+
+    def test_show_human_mode_no_policy_no_session(self, tmp_path: Path) -> None:
+        """Bare 'permissions show' still prints the legacy empty-state message."""
+        store = _make_store(tmp_path)
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = store
+            result = runner.invoke(app, ["permissions", "show"])
+        assert result.exit_code == 0
+        assert "No permission policy configured" in result.output
 
 
 class TestPermissionsSet:
