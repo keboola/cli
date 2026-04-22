@@ -172,8 +172,14 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Bucket detail with Snowflake direct access paths. Resolves linked bucket source DB.
     Uses production by default; pass --branch to query a dev branch explicitly.
 
-  kbagent storage tables --project NAME [--bucket-id BUCKET_ID] [--branch ID]
-    List storage tables, optionally filtered by bucket.
+  kbagent storage tables [--project NAME ...] [--bucket-id BUCKET_ID] [--branch ID]
+    List storage tables from one or more projects (in parallel). Omit --project
+    to query all connected projects. Repeat --project for a specific subset.
+    Multi-project by default, matching `storage buckets`, `config list`, `job list`.
+    Each row is tagged with project_alias; per-project errors accumulate in the
+    response envelope. --branch is only valid with a single --project.
+    --bucket-id is applied independently per project; missing buckets are
+    reported as per-project errors, not fatal.
     Uses production by default; pass --branch to query a dev branch explicitly.
 
   kbagent storage table-detail --project NAME --table-id TABLE_ID [--branch ID]
