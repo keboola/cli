@@ -328,6 +328,9 @@ class TestWorkspaceServiceGc:
         assert result["count_deleted"] == 1
         assert result["count_errors"] == 0
         mock_client.delete_workspace.assert_called_once_with(99, branch_id=100)
+        mock_client.delete_config.assert_called_once_with(
+            "keboola.sandboxes", "orphan-cfg", branch_id=100
+        )
 
     def test_gc_skips_non_sandbox_workspaces(self, tmp_path: Path) -> None:
         svc, mock_client = self._make_service(tmp_path)
@@ -364,9 +367,12 @@ class TestWorkspaceServiceGc:
             raw_workspaces=[orphan_ws],
             sandbox_configs=[],
         )
-        mock_client.get_workspace.side_effect = KeboolaApiError(
-            message="Workspace gone", status_code=404, error_code="NOT_FOUND", retryable=False
-        )
+        mock_client.get_workspace.return_value = {
+            "id": 77,
+            "component": "keboola.sandboxes",
+            "configurationId": "orphan-cfg",
+            "connection": {},
+        }
         mock_client.delete_workspace.side_effect = KeboolaApiError(
             message="Delete failed", status_code=500, error_code="INTERNAL_ERROR", retryable=True
         )

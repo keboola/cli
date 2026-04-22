@@ -560,6 +560,8 @@ class TestConfigSetFolder:
             "",
         )
         assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["data"]["folder"] == ""
         mock_svc.set_config_folder.assert_called_once_with(
             alias="prod",
             component_id=COMP_ID,
