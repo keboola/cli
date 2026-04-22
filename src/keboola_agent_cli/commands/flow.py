@@ -618,9 +618,7 @@ def flow_schedule(
     else:
         state_label = "[green]enabled[/green]" if enabled else "[yellow]disabled[/yellow]"
         action = result.get("status", "created")
-        formatter.success(
-            f"Schedule {action}: {escape(cron)} ({escape(timezone)}) — {state_label}"
-        )
+        formatter.success(f"Schedule {action}: {escape(cron)} ({escape(timezone)}) — {state_label}")
         formatter.console.print(
             f"  Scheduler config: {escape(result.get('schedule_name', ''))} "
             f"[dim](ID: {escape(result.get('schedule_id', ''))})[/dim]"
