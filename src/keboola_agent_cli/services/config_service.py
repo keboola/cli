@@ -656,7 +656,13 @@ class ConfigService(BaseService):
         effective = branch_id or project.active_branch_id
         if effective:
             return int(effective)
-        branches = client.list_dev_branches()
+        try:
+            branches = client.list_dev_branches()
+        except KeboolaApiError as exc:
+            raise ConfigError(
+                f"Could not list branches to resolve metadata branch: {exc.message}. "
+                "Pass --branch explicitly."
+            ) from exc
         default = next((b for b in branches if b.get("isDefault")), None)
         if default:
             return int(default["id"])
