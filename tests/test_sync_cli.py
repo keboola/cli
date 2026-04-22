@@ -1571,7 +1571,7 @@ class TestSyncInitAdoptExistingCli:
         """sync init --help shows --adopt-existing flag."""
         result = runner.invoke(app, ["sync", "init", "--help"])
         assert result.exit_code == 0
-        assert "--adopt-existing" in result.output
+        assert "--adopt-existing" in _strip_ansi(result.output)
 
     def test_adopt_existing_json_output(self, tmp_path: Path) -> None:
         """sync init --adopt-existing --json returns adopted status."""
