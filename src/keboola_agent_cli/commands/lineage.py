@@ -158,6 +158,9 @@ def lineage_build(
             formatter.console.print(
                 "  Next: let your AI agent process the tasks, then re-run this command."
             )
+        # Surface warnings (e.g. empty scan) so users notice layout issues.
+        for warning in result.get("warnings", []) or []:
+            formatter.console.print(f"\n[yellow]Warning:[/yellow] {warning}")
         formatter.console.print(f"\n  Saved to: {output}")
 
 

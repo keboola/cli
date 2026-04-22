@@ -15,6 +15,19 @@ kbagent sync pull --all-projects
 
 The sync'd directory structure is the input for lineage analysis.
 
+### Supported layouts
+
+`lineage build` auto-detects both layouts produced by `sync pull`:
+
+| Source command | Layout | Example manifest path |
+|----------------|--------|------------------------|
+| `sync pull --project X` | **Flat** -- CWD *is* the project | `./.keboola/manifest.json` |
+| `sync pull --all-projects` | **Nested** -- one subdir per project | `./<alias>/.keboola/manifest.json` |
+
+Pass the directory that *contains* the manifest (flat) or the parent of all
+project subdirs (nested). When the build finds zero projects it emits a
+warning with a hint rather than silently returning an empty graph.
+
 ## Build lineage
 
 ```bash
