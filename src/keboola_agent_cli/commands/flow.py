@@ -566,7 +566,11 @@ def flow_schedule(
     ),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
 ) -> None:
-    """Bind a cron schedule to a flow (creates a keboola.scheduler config).
+    """Bind a cron schedule to a flow (upsert: creates or updates).
+
+    If no schedule exists for this flow a new keboola.scheduler config is
+    created. If one already exists it is updated in-place — calling this
+    command a second time will not create duplicates.
 
     \b
     Examples:
@@ -612,7 +616,10 @@ def flow_schedule(
         formatter.output(result)
     else:
         state_label = "[green]enabled[/green]" if enabled else "[yellow]disabled[/yellow]"
-        formatter.success(f"Schedule created: {escape(cron)} ({escape(timezone)}) — {state_label}")
+        action = result.get("status", "created")
+        formatter.success(
+            f"Schedule {action}: {escape(cron)} ({escape(timezone)}) — {state_label}"
+        )
         formatter.console.print(
             f"  Scheduler config: {escape(result.get('schedule_name', ''))} "
             f"[dim](ID: {escape(result.get('schedule_id', ''))})[/dim]"
