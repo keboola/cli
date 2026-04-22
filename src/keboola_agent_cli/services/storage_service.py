@@ -1636,7 +1636,7 @@ class StorageService(BaseService):
             branch_id: If set, target a specific dev branch.
 
         Returns:
-            Dict with applied, skipped, errors, and results lists.
+            Dict with project_alias, applied, errors, applied_count, error_count.
         """
         import yaml
 
@@ -1660,7 +1660,7 @@ class StorageService(BaseService):
                 self.describe_bucket(alias, bucket_id, str(desc), branch_id=branch_id)
                 applied.append({"type": "bucket", "id": bucket_id, "description": desc})
                 logger.debug("describe_batch bucket %s: ok", bucket_id)
-            except (KeboolaApiError, Exception) as exc:
+            except Exception as exc:
                 msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
                 errors.append({"type": "bucket", "id": bucket_id, "error": msg})
 
@@ -1668,7 +1668,7 @@ class StorageService(BaseService):
             try:
                 self.describe_table(alias, table_id, str(desc), branch_id=branch_id)
                 applied.append({"type": "table", "id": table_id, "description": desc})
-            except (KeboolaApiError, Exception) as exc:
+            except Exception as exc:
                 msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
                 errors.append({"type": "table", "id": table_id, "error": msg})
 
@@ -1689,7 +1689,7 @@ class StorageService(BaseService):
                         "columns": {k: str(v) for k, v in col_map.items()},
                     }
                 )
-            except (KeboolaApiError, Exception) as exc:
+            except Exception as exc:
                 msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
                 errors.append({"type": "columns", "id": table_id, "error": msg})
 

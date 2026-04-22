@@ -39,17 +39,6 @@ def _setup_config(config_dir: Path, projects: dict[str, dict] | None = None) -> 
     return store
 
 
-def _patch_services(store: ConfigStore, mock_storage: MagicMock):
-    """Return a context-manager stack that wires the given mock as StorageService."""
-    return (
-        patch("keboola_agent_cli.cli.ConfigStore"),
-        patch("keboola_agent_cli.cli.ProjectService"),
-        patch("keboola_agent_cli.cli.ConfigService"),
-        patch("keboola_agent_cli.cli.JobService"),
-        patch("keboola_agent_cli.cli.StorageService"),
-    )
-
-
 class TestStorageDescribeBucket:
     """Tests for `kbagent storage describe-bucket`."""
 
