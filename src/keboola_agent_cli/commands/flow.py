@@ -309,7 +309,14 @@ def _load_flow_yaml(raw: str) -> dict[str, Any]:
         content = raw
 
     # Try YAML first (superset of JSON)
-    return yaml.safe_load(content) or {}
+    parsed = yaml.safe_load(content)
+    if parsed is None:
+        return {}
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            f"Flow definition must be a YAML/JSON object (mapping), got {type(parsed).__name__}"
+        )
+    return parsed
 
 
 @flow_app.command("new")

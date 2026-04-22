@@ -380,6 +380,35 @@ class TestFlowNew:
         call_kwargs = mock_flow.create_flow.call_args.kwargs
         assert len(call_kwargs["phases"]) == 1
 
+    def test_new_invalid_yaml_type_exits_2(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        bad_yaml = tmp_path / "bad.yaml"
+        bad_yaml.write_text("- just a list\n- not a mapping\n", encoding="utf-8")
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.FlowService") as MockFlowService,
+        ):
+            MockStore.return_value = store
+            MockFlowService.return_value = mock_flow
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "flow",
+                    "new",
+                    "--project",
+                    "prod",
+                    "--name",
+                    "Bad",
+                    "--file",
+                    f"@{bad_yaml}",
+                ],
+            )
+
+        assert result.exit_code == 2
+        mock_flow.create_flow.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # flow update

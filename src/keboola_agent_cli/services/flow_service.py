@@ -452,7 +452,11 @@ class FlowService(BaseService):
         schedule_name: str | None = None,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """Create a keboola.scheduler config that targets this flow.
+        """Upsert a keboola.scheduler config that targets this flow.
+
+        If a schedule already exists for this flow it is updated in-place
+        (idempotent). If none exists a new one is created. This prevents
+        duplicate schedules when called repeatedly.
 
         The schedule is stored as a keboola.scheduler configuration whose
         ``target`` points at the flow component + config.
@@ -495,19 +499,48 @@ class FlowService(BaseService):
                 },
             }
 
-            result = client.create_config(
-                component_id=SCHEDULER_COMPONENT_ID,
-                name=schedule_name,
-                configuration=configuration,
-                branch_id=effective_branch,
-            )
+            # Upsert: update existing schedule if one exists
+            try:
+                existing = client.list_component_configs(
+                    SCHEDULER_COMPONENT_ID, branch_id=effective_branch
+                )
+            except KeboolaApiError:
+                existing = []
+
+            existing_id: str | None = None
+            for sched in existing:
+                body = _parse_configuration(sched.get("configuration"))
+                target = body.get("target") or {}
+                if target.get("componentId") == component_id and str(
+                    target.get("configurationId", "")
+                ) == str(config_id):
+                    existing_id = str(sched.get("id", ""))
+                    break
+
+            if existing_id:
+                result = client.update_config(
+                    component_id=SCHEDULER_COMPONENT_ID,
+                    config_id=existing_id,
+                    name=schedule_name,
+                    configuration=configuration,
+                    branch_id=effective_branch,
+                )
+                status = "updated"
+            else:
+                result = client.create_config(
+                    component_id=SCHEDULER_COMPONENT_ID,
+                    name=schedule_name,
+                    configuration=configuration,
+                    branch_id=effective_branch,
+                )
+                status = "created"
         finally:
             client.close()
 
         return {
-            "status": "created",
+            "status": status,
             "project_alias": alias,
-            "schedule_id": str(result.get("id", "")),
+            "schedule_id": str(result.get("id", existing_id or "")),
             "schedule_name": schedule_name,
             "component_id": component_id,
             "config_id": config_id,

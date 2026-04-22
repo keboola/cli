@@ -369,9 +369,10 @@ class TestListFlowSchedules:
 
 
 class TestSetFlowSchedule:
-    def test_creates_scheduler_config(self):
+    def test_creates_scheduler_config_when_none_exists(self):
         client = MagicMock()
         client.get_config_detail.return_value = {"name": "My Flow"}
+        client.list_component_configs.return_value = []  # no existing schedules
         client.create_config.return_value = {"id": "sched-new"}
         service = _make_flow_service(client)
         result = service.set_flow_schedule(
@@ -388,9 +389,33 @@ class TestSetFlowSchedule:
         assert cfg["target"]["componentId"] == "keboola.orchestrator"
         assert cfg["target"]["configurationId"] == "flow-1"
 
+    def test_updates_existing_schedule_upsert(self):
+        existing_sched = {
+            "id": "sched-old",
+            "configuration": {
+                "schedule": {"cronTab": "0 1 * * *", "timezone": "UTC", "state": "enabled"},
+                "target": {"componentId": "keboola.orchestrator", "configurationId": "flow-1"},
+            },
+        }
+        client = MagicMock()
+        client.get_config_detail.return_value = {"name": "My Flow"}
+        client.list_component_configs.return_value = [existing_sched]
+        client.update_config.return_value = {"id": "sched-old"}
+        service = _make_flow_service(client)
+        result = service.set_flow_schedule(
+            "prod", "keboola.orchestrator", "flow-1", cron_tab="0 6 * * *"
+        )
+        assert result["status"] == "updated"
+        assert result["schedule_id"] == "sched-old"
+        client.create_config.assert_not_called()
+        call_kwargs = client.update_config.call_args.kwargs
+        assert call_kwargs["config_id"] == "sched-old"
+        assert call_kwargs["configuration"]["schedule"]["cronTab"] == "0 6 * * *"
+
     def test_enabled_state_in_body(self):
         client = MagicMock()
         client.get_config_detail.return_value = {"name": "F"}
+        client.list_component_configs.return_value = []
         client.create_config.return_value = {"id": "s1"}
         service = _make_flow_service(client)
         service.set_flow_schedule("prod", "keboola.orchestrator", "1", "0 * * * *", enabled=False)
