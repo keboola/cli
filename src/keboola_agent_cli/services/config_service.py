@@ -721,13 +721,20 @@ class ConfigService(BaseService):
         component_id: str | None = None,
         branch_id: int | None = None,
     ) -> tuple[str, dict[str, Any], bool] | tuple[str, dict[str, str]]:
-        """Search configs in a single project (worker thread)."""
+        """Search configs in a single project (worker thread).
+
+        Uses ``list_components_with_configs`` (``include=configuration,rows``)
+        so that row-level configuration (Snowflake writer rows, DB extractor
+        tables, Google Sheets sheets, etc.) is included in the search tree.
+        Without ``rows``, the API returns only the top-level configuration
+        body, and searches for row-only properties always miss (see #196).
+        """
         client = self._client_factory(project.stack_url, project.token)
         try:
             effective_branch_id = branch_id or project.active_branch_id
-            components = client.list_components(
-                component_type=component_type,
+            components = client.list_components_with_configs(
                 branch_id=effective_branch_id,
+                component_type=component_type,
             )
             matches: list[dict[str, Any]] = []
             configs_searched = 0

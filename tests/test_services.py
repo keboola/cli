@@ -1178,7 +1178,7 @@ class TestConfigServiceSearchConfigs:
     """Tests for ConfigService.search_configs() with branch_id support."""
 
     def test_search_configs_with_branch_id(self, tmp_config_dir: Path) -> None:
-        """search_configs passes branch_id to client.list_components."""
+        """search_configs passes branch_id to client.list_components_with_configs."""
         store = ConfigStore(config_dir=tmp_config_dir)
         store.add_project(
             "prod",
@@ -1188,7 +1188,10 @@ class TestConfigServiceSearchConfigs:
             ),
         )
 
-        mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
+        # search_configs uses list_components_with_configs (include=configuration,rows)
+        # so row-level properties are part of the search tree (see #196).
+        mock_client = MagicMock()
+        mock_client.list_components_with_configs.return_value = SAMPLE_COMPONENTS
         service = ConfigService(
             config_store=store,
             client_factory=lambda url, token: mock_client,
@@ -1201,7 +1204,9 @@ class TestConfigServiceSearchConfigs:
         assert len(matches) == 1
         assert matches[0]["config_name"] == "Production Load"
 
-        mock_client.list_components.assert_called_once_with(component_type=None, branch_id=123)
+        mock_client.list_components_with_configs.assert_called_once_with(
+            branch_id=123, component_type=None
+        )
         mock_client.close.assert_called_once()
 
     def test_search_configs_uses_active_branch(self, tmp_config_dir: Path) -> None:
@@ -1216,7 +1221,8 @@ class TestConfigServiceSearchConfigs:
             ),
         )
 
-        mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
+        mock_client = MagicMock()
+        mock_client.list_components_with_configs.return_value = SAMPLE_COMPONENTS
         service = ConfigService(
             config_store=store,
             client_factory=lambda url, token: mock_client,
@@ -1224,7 +1230,9 @@ class TestConfigServiceSearchConfigs:
 
         service.search_configs(query="nonexistent-query")
 
-        mock_client.list_components.assert_called_once_with(component_type=None, branch_id=88)
+        mock_client.list_components_with_configs.assert_called_once_with(
+            branch_id=88, component_type=None
+        )
         mock_client.close.assert_called_once()
 
 
