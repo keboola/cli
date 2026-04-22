@@ -10,6 +10,7 @@ Inherits shared retry/error logic from BaseHttpClient.
 import json
 import logging
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -21,23 +22,51 @@ from .constants import (
     DEFAULT_GROUPED_JOBS_LIMIT,
     DEFAULT_JOB_LIMIT,
     DEFAULT_JOBS_PER_CONFIG,
+    DEFAULT_POLL_STRATEGY,
     DEFAULT_TIMEOUT,
     EXPORT_JOB_MAX_WAIT,
     FILE_DOWNLOAD_CHUNK_SIZE,
     FILE_DOWNLOAD_TIMEOUT,
     FILE_UPLOAD_TIMEOUT,
     IMPORT_JOB_MAX_WAIT,
+    JOB_POLL_CURVE,
     METADATA_NOT_FOUND,
     QUERY_JOB_MAX_WAIT,
     QUERY_JOB_POLL_INTERVAL,
     STORAGE_JOB_MAX_WAIT,
     STORAGE_JOB_POLL_INTERVAL,
+    VALID_POLL_STRATEGIES,
 )
 from .errors import KeboolaApiError
 from .http_base import BaseHttpClient
 from .models import TokenVerifyResponse
 
 logger = logging.getLogger(__name__)
+
+
+def _iter_poll_intervals(strategy: str) -> Iterator[float]:
+    """Yield sleep intervals (seconds) for Queue job polling.
+
+    Two strategies:
+
+    - ``"exponential"`` walks ``JOB_POLL_CURVE``: each (interval, count)
+      segment yields ``count`` copies of ``interval``; a segment with
+      ``count == 0`` keeps yielding ``interval`` forever (valid only on
+      the last segment).
+    - ``"fixed"`` yields ``STORAGE_JOB_POLL_INTERVAL`` forever (legacy
+      behavior preserved for opt-out via ``--poll-strategy fixed``).
+
+    The deadline check in ``wait_for_queue_job`` stops iteration.
+    """
+    if strategy == "fixed":
+        while True:
+            yield STORAGE_JOB_POLL_INTERVAL
+    for interval, count in JOB_POLL_CURVE:
+        if count <= 0:
+            while True:
+                yield interval
+        for _ in range(count):
+            yield interval
 
 
 class KeboolaClient(BaseHttpClient):
@@ -1790,23 +1819,81 @@ class KeboolaClient(BaseHttpClient):
         response = self._queue_request("POST", f"/jobs/{safe_job_id}/kill")
         return response.json()
 
+    def fetch_job_events(self, run_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+        """Fetch events emitted during a job's run.
+
+        Wraps the Storage API's ``GET /v2/storage/events?runId={runId}``
+        endpoint -- NOT a Queue API path. Queue jobs (Queue API v2) expose a
+        ``runId`` on the job dict (typically equal to the job ``id``); the
+        Storage Events API is the canonical event feed for the job. Returns
+        the list in Storage API order (newest -> oldest; callers that want
+        a chronological "tail" should reverse the slice).
+
+        Args:
+            run_id: The job's ``runId`` (``job["runId"]``; falls back to
+                ``job["id"]`` on legacy records where they match).
+            limit: Optional server-side event cap. Storage API default is
+                about 100; pass an explicit value to cover long runs.
+
+        Returns:
+            List of event dicts. Each event typically has ``uuid``,
+            ``event``, ``component``, ``message``, ``type``, ``created``,
+            ``runId``, ``configurationId`` keys. Empty when the run emitted
+            no events yet.
+        """
+        params: dict[str, Any] = {"runId": run_id}
+        if limit is not None and limit > 0:
+            params["limit"] = limit
+        response = self._request("GET", "/v2/storage/events", params=params)
+        payload = response.json()
+        # Storage events returns a bare list. Tolerate a dict-wrapped
+        # future shape defensively.
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict) and isinstance(payload.get("events"), list):
+            return payload["events"]
+        return []
+
     def wait_for_queue_job(
-        self, job_id: str, max_wait: float = STORAGE_JOB_MAX_WAIT
+        self,
+        job_id: str,
+        max_wait: float = STORAGE_JOB_MAX_WAIT,
+        poll_strategy: str = DEFAULT_POLL_STRATEGY,
     ) -> dict[str, Any]:
         """Poll a Queue API job until it reaches a terminal state.
+
+        Uses the piecewise ``JOB_POLL_CURVE`` from constants for the
+        ``"exponential"`` strategy (2s x 30 -> 5s x 48 -> 15s forever) and
+        the legacy fixed ``STORAGE_JOB_POLL_INTERVAL`` for ``"fixed"``. The
+        curve matches the cadence used by FIIA and the official
+        ``keboola-as-code`` Go CLI.
 
         Args:
             job_id: The Queue job ID.
             max_wait: Maximum seconds to wait (default: STORAGE_JOB_MAX_WAIT).
+            poll_strategy: "exponential" (default) or "fixed". Any other
+                value raises ValueError before the first network call.
 
         Returns:
             Completed job dict.
 
         Raises:
-            KeboolaApiError: If the job fails or times out.
+            ValueError: If poll_strategy is not one of VALID_POLL_STRATEGIES.
+            KeboolaApiError: If the job fails (QUEUE_JOB_FAILED) or the
+                deadline elapses before the job finishes (QUEUE_JOB_TIMEOUT).
         """
+        if poll_strategy not in VALID_POLL_STRATEGIES:
+            # ValueError (not KeboolaApiError) because this is a programming
+            # error -- the caller passed an invalid literal, not a bad API
+            # response. JobService validates before reaching this layer, so
+            # hitting this path from the CLI would be a bug in kbagent.
+            raise ValueError(
+                f"Invalid poll_strategy {poll_strategy!r}. "
+                f"Expected one of: {sorted(VALID_POLL_STRATEGIES)}."
+            )
+
         deadline = time.monotonic() + max_wait
-        while time.monotonic() < deadline:
+        for interval in _iter_poll_intervals(poll_strategy):
             job = self.get_job_detail(job_id)
             if job.get("isFinished"):
                 if job.get("status") == "error":
@@ -1823,7 +1910,13 @@ class KeboolaClient(BaseHttpClient):
                         retryable=False,
                     )
                 return job
-            time.sleep(STORAGE_JOB_POLL_INTERVAL)
+
+            # Cap the sleep so we never blow past the deadline by more than
+            # one interval: trim to whatever time remains; if zero, break.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(interval, remaining))
 
         raise KeboolaApiError(
             message=f"Queue job {job_id} did not complete within {max_wait}s",

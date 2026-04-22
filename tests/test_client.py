@@ -2534,6 +2534,220 @@ class TestKillJob:
             client.kill_job("ab/cd")
 
 
+class TestIterPollIntervals:
+    """Tests for _iter_poll_intervals -- curve math and strategy dispatch."""
+
+    def test_exponential_curve_matches_constant(self) -> None:
+        """First 30 yields == 2.0, next 48 == 5.0, then infinite 15.0."""
+        from itertools import islice
+
+        from keboola_agent_cli.client import _iter_poll_intervals
+
+        seq = list(islice(_iter_poll_intervals("exponential"), 30 + 48 + 10))
+        assert seq[:30] == [2.0] * 30
+        assert seq[30:78] == [5.0] * 48
+        assert seq[78:] == [15.0] * 10
+
+    def test_fixed_yields_storage_interval_forever(self) -> None:
+        """'fixed' yields STORAGE_JOB_POLL_INTERVAL indefinitely."""
+        from itertools import islice
+
+        from keboola_agent_cli.client import _iter_poll_intervals
+        from keboola_agent_cli.constants import STORAGE_JOB_POLL_INTERVAL
+
+        seq = list(islice(_iter_poll_intervals("fixed"), 5))
+        assert seq == [STORAGE_JOB_POLL_INTERVAL] * 5
+
+
+class TestWaitForQueueJob:
+    """Tests for wait_for_queue_job -- strategy dispatch, deadline, failure."""
+
+    def _mk_client(self):
+        return KeboolaClient(stack_url=_BASE, token=_TOKEN)
+
+    def test_wait_success_on_first_poll(self, httpx_mock, monkeypatch) -> None:
+        """Finished job returns on the first poll; no sleep needed."""
+        httpx_mock.add_response(
+            url="https://queue.keboola.com/jobs/job-1",
+            method="GET",
+            json={"id": "job-1", "status": "success", "isFinished": True},
+        )
+        sleeps: list[float] = []
+        monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: sleeps.append(s))
+
+        with self._mk_client() as client:
+            job = client.wait_for_queue_job("job-1", max_wait=60.0)
+
+        assert job["status"] == "success"
+        assert sleeps == []
+
+    def test_wait_honors_exponential_intervals(self, httpx_mock, monkeypatch) -> None:
+        """Two unfinished polls then finished -- sleep args match the curve head."""
+        for _ in range(2):
+            httpx_mock.add_response(
+                url="https://queue.keboola.com/jobs/job-2",
+                method="GET",
+                json={"id": "job-2", "status": "processing", "isFinished": False},
+            )
+        httpx_mock.add_response(
+            url="https://queue.keboola.com/jobs/job-2",
+            method="GET",
+            json={"id": "job-2", "status": "success", "isFinished": True},
+        )
+        sleeps: list[float] = []
+        monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: sleeps.append(s))
+
+        with self._mk_client() as client:
+            client.wait_for_queue_job("job-2", max_wait=600.0, poll_strategy="exponential")
+
+        # Two polls -> two sleeps; both at the 2s phase of the curve.
+        assert sleeps == [2.0, 2.0]
+
+    def test_wait_honors_fixed_strategy(self, httpx_mock, monkeypatch) -> None:
+        """poll_strategy='fixed' sleeps STORAGE_JOB_POLL_INTERVAL between polls."""
+        from keboola_agent_cli.constants import STORAGE_JOB_POLL_INTERVAL
+
+        httpx_mock.add_response(
+            url="https://queue.keboola.com/jobs/job-3",
+            method="GET",
+            json={"id": "job-3", "status": "processing", "isFinished": False},
+        )
+        httpx_mock.add_response(
+            url="https://queue.keboola.com/jobs/job-3",
+            method="GET",
+            json={"id": "job-3", "status": "success", "isFinished": True},
+        )
+        sleeps: list[float] = []
+        monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: sleeps.append(s))
+
+        with self._mk_client() as client:
+            client.wait_for_queue_job("job-3", max_wait=600.0, poll_strategy="fixed")
+
+        assert sleeps == [STORAGE_JOB_POLL_INTERVAL]
+
+    def test_wait_rejects_unknown_strategy(self) -> None:
+        """Invalid strategy raises ValueError before any network call."""
+        with (
+            self._mk_client() as client,
+            pytest.raises(ValueError, match="Invalid poll_strategy"),
+        ):
+            client.wait_for_queue_job("job-4", poll_strategy="linear")
+
+    def test_wait_raises_on_status_error(self, httpx_mock, monkeypatch) -> None:
+        """status='error' produces QUEUE_JOB_FAILED with the job's error message."""
+        httpx_mock.add_response(
+            url="https://queue.keboola.com/jobs/bad-1",
+            method="GET",
+            json={
+                "id": "bad-1",
+                "status": "error",
+                "isFinished": True,
+                "result": {"message": "SQL compilation failed"},
+            },
+        )
+        monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: None)
+
+        with self._mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+            client.wait_for_queue_job("bad-1", max_wait=60.0)
+
+        assert exc_info.value.error_code == "QUEUE_JOB_FAILED"
+        assert "SQL compilation failed" in exc_info.value.message
+
+    def test_wait_raises_timeout_on_deadline(self, httpx_mock, monkeypatch) -> None:
+        """Deadline exceeded raises QUEUE_JOB_TIMEOUT."""
+        httpx_mock.add_response(
+            url="https://queue.keboola.com/jobs/slow-1",
+            method="GET",
+            json={"id": "slow-1", "status": "processing", "isFinished": False},
+        )
+
+        # call 1: deadline setup (0.0, deadline=5.0)
+        # call 2: remaining check after first poll (6.0, remaining=-1.0 -> break)
+        calls = iter([0.0, 6.0])
+        monkeypatch.setattr("keboola_agent_cli.client.time.monotonic", lambda: next(calls))
+        monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: None)
+
+        with self._mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+            client.wait_for_queue_job("slow-1", max_wait=5.0)
+
+        assert exc_info.value.error_code == "QUEUE_JOB_TIMEOUT"
+        assert exc_info.value.status_code == 504
+
+    def test_wait_caps_sleep_to_remaining_deadline(self, httpx_mock, monkeypatch) -> None:
+        """Last sleep before deadline is trimmed so we don't overshoot by one interval."""
+        httpx_mock.add_response(
+            url="https://queue.keboola.com/jobs/deadline-1",
+            method="GET",
+            json={"id": "deadline-1", "status": "processing", "isFinished": False},
+        )
+        httpx_mock.add_response(
+            url="https://queue.keboola.com/jobs/deadline-1",
+            method="GET",
+            json={"id": "deadline-1", "status": "processing", "isFinished": False},
+        )
+
+        # First monotonic() sets deadline at 100.0; the second (after the
+        # first get) returns 99.0 so remaining=1.0 < interval=2.0; the third
+        # (after sleep) returns 101.0 so loop exits.
+        times = iter([0.0, 99.0, 101.0])
+        monkeypatch.setattr("keboola_agent_cli.client.time.monotonic", lambda: next(times))
+        sleeps: list[float] = []
+        monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: sleeps.append(s))
+
+        with self._mk_client() as client, pytest.raises(KeboolaApiError):
+            client.wait_for_queue_job("deadline-1", max_wait=100.0)
+
+        assert sleeps == [1.0]  # trimmed from 2.0 to 1.0
+
+
+class TestFetchJobEvents:
+    """Tests for fetch_job_events -- runId-based Storage Events endpoint."""
+
+    def test_events_list_payload(self, httpx_mock) -> None:
+        payload = [
+            {"uuid": "u1", "type": "info", "message": "starting", "runId": "j-1"},
+            {"uuid": "u2", "type": "error", "message": "boom", "runId": "j-1"},
+        ]
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/events?runId=j-1",
+            method="GET",
+            json=payload,
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            events = client.fetch_job_events("j-1")
+        assert events == payload
+
+    def test_events_limit_query_param(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/events?runId=j-2&limit=50",
+            method="GET",
+            json=[],
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client.fetch_job_events("j-2", limit=50)
+
+    def test_events_dict_wrapped_payload(self, httpx_mock) -> None:
+        """Tolerant of a future dict shape {events: [...]}"""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/events?runId=j-3",
+            method="GET",
+            json={"events": [{"uuid": "u1"}], "total": 1},
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            events = client.fetch_job_events("j-3")
+        assert events == [{"uuid": "u1"}]
+
+    def test_events_unexpected_payload_returns_empty(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/events?runId=j-4",
+            method="GET",
+            json={"unexpected": "shape"},
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            events = client.fetch_job_events("j-4")
+        assert events == []
+
+
 _BRANCH_METADATA_SAMPLE = [
     {
         "id": 1001,

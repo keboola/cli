@@ -1854,7 +1854,303 @@ class TestJobServiceRunJob:
             branch_id=123,
             variable_values_id=None,
         )
-        mock_client.wait_for_queue_job.assert_called_once_with("557", max_wait=60.0)
+        mock_client.wait_for_queue_job.assert_called_once_with(
+            "557", max_wait=60.0, poll_strategy="exponential"
+        )
+
+
+class TestJobServiceQueuePollingParity:
+    """PR4: log-tail capture + auto-cancel on --timeout + poll-strategy plumbing."""
+
+    def _store(self, tmp_config_dir: Path) -> ConfigStore:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-abc-defghijklmnopqrst",
+                project_name="Prod",
+                project_id=1234,
+            ),
+        )
+        return store
+
+    def _service(self, store: ConfigStore, mock_client: MagicMock) -> JobService:
+        return JobService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+    def test_run_job_threads_poll_strategy_to_client(self, tmp_config_dir: Path) -> None:
+        """poll_strategy kwarg reaches wait_for_queue_job unchanged."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 700, "status": "waiting"}
+        mock_client.wait_for_queue_job.return_value = {
+            "id": 700,
+            "status": "success",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        service.run_job(
+            alias="prod",
+            component_id="keboola.ex-http",
+            config_id="42",
+            wait=True,
+            timeout=60.0,
+            poll_strategy="fixed",
+            no_variables=True,
+        )
+
+        mock_client.wait_for_queue_job.assert_called_once_with(
+            "700", max_wait=60.0, poll_strategy="fixed"
+        )
+
+    def test_run_job_rejects_unknown_strategy(self, tmp_config_dir: Path) -> None:
+        """Bad poll_strategy fails at service boundary, not at client."""
+        service = self._service(self._store(tmp_config_dir), MagicMock())
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                poll_strategy="linear",
+                no_variables=True,
+            )
+        assert exc_info.value.error_code == "INVALID_ARGUMENT"
+
+    def test_run_job_rejects_negative_log_tail(self, tmp_config_dir: Path) -> None:
+        service = self._service(self._store(tmp_config_dir), MagicMock())
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                log_tail_lines=-1,
+                no_variables=True,
+            )
+        assert exc_info.value.error_code == "INVALID_ARGUMENT"
+
+    def test_run_job_success_no_tail_attached(self, tmp_config_dir: Path) -> None:
+        """status=success does NOT fetch events (log tail only for non-success)."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 701, "status": "waiting"}
+        mock_client.wait_for_queue_job.return_value = {
+            "id": 701,
+            "status": "success",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        result = service.run_job(
+            alias="prod",
+            component_id="keboola.ex-http",
+            config_id="42",
+            wait=True,
+            no_variables=True,
+        )
+        assert "logTail" not in result
+        mock_client.fetch_job_events.assert_not_called()
+
+    def test_run_job_warning_attaches_log_tail(self, tmp_config_dir: Path) -> None:
+        """status=warning surfaces a logTail of the first N events (newest-first)."""
+        # Storage Events returns newest -> oldest; emulate that ordering so
+        # the slice asserts the client didn't accidentally reverse it.
+        events = [{"id": 249 - i, "message": f"event {249 - i}"} for i in range(250)]
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 702, "status": "waiting"}
+        mock_client.wait_for_queue_job.return_value = {
+            "id": 702,
+            "runId": "702-run",
+            "status": "warning",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+        mock_client.fetch_job_events.return_value = events
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        result = service.run_job(
+            alias="prod",
+            component_id="keboola.ex-http",
+            config_id="42",
+            wait=True,
+            log_tail_lines=100,
+            no_variables=True,
+        )
+        # Storage Events yields newest-first; we take [:100] so the head
+        # stays newest. IDs 249 -> 150.
+        assert len(result["logTail"]) == 100
+        assert result["logTail"][0]["id"] == 249
+        assert result["logTail"][-1]["id"] == 150
+        # runId (not raw id) must have been the query key.
+        mock_client.fetch_job_events.assert_called_once_with("702-run", limit=100)
+
+    def test_run_job_zero_tail_skips_fetch(self, tmp_config_dir: Path) -> None:
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 703, "status": "waiting"}
+        mock_client.wait_for_queue_job.return_value = {
+            "id": 703,
+            "status": "terminated",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        result = service.run_job(
+            alias="prod",
+            component_id="keboola.ex-http",
+            config_id="42",
+            wait=True,
+            log_tail_lines=0,
+            no_variables=True,
+        )
+        mock_client.fetch_job_events.assert_not_called()
+        assert "logTail" not in result
+
+    def test_run_job_queue_failure_attaches_tail_and_reraises(self, tmp_config_dir: Path) -> None:
+        """QUEUE_JOB_FAILED re-raises with logTail tucked into exc.details."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 704, "status": "waiting"}
+        mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="Queue job 704 failed: SQL error",
+            status_code=500,
+            error_code="QUEUE_JOB_FAILED",
+        )
+        # The service fetches job detail on failure to resolve runId.
+        mock_client.get_job_detail.return_value = {
+            "id": "704",
+            "runId": "704",
+            "status": "error",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+        mock_client.fetch_job_events.return_value = [
+            {"uuid": "u1", "type": "error", "message": "SQL error"},
+        ]
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                wait=True,
+                no_variables=True,
+            )
+        assert exc_info.value.error_code == "QUEUE_JOB_FAILED"
+        assert exc_info.value.details["logTail"][0]["message"] == "SQL error"
+        # kill_job must NOT be called when the job failed on its own.
+        mock_client.kill_job.assert_not_called()
+        # runId used as the query key, not the Queue job id.
+        mock_client.fetch_job_events.assert_called_once_with("704", limit=200)
+
+    def test_run_job_timeout_issues_kill_and_raises_terminated(self, tmp_config_dir: Path) -> None:
+        """QUEUE_JOB_TIMEOUT -> kill_job + JOB_TIMEOUT_TERMINATED with job payload."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 705, "status": "waiting"}
+        mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="Queue job 705 did not complete within 5s",
+            status_code=504,
+            error_code="QUEUE_JOB_TIMEOUT",
+        )
+        mock_client.kill_job.return_value = {
+            "id": 705,
+            "status": "terminating",
+            "desiredStatus": "terminating",
+        }
+        mock_client.get_job_detail.return_value = {
+            "id": 705,
+            "runId": "705-run",
+            "status": "terminated",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+        mock_client.fetch_job_events.return_value = [{"uuid": "u1", "message": "x"}]
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                wait=True,
+                timeout=5.0,
+                no_variables=True,
+            )
+        assert exc_info.value.error_code == "JOB_TIMEOUT_TERMINATED"
+        mock_client.kill_job.assert_called_once_with("705")
+        details = exc_info.value.details
+        assert details["job"]["status"] == "terminated"
+        assert details["logTail"] == [{"uuid": "u1", "message": "x"}]
+        # runId from the terminated job detail used as the lookup key.
+        mock_client.fetch_job_events.assert_called_once_with("705-run", limit=200)
+
+    def test_run_job_timeout_kill_fails_falls_back(self, tmp_config_dir: Path) -> None:
+        """If kill_job AND the follow-up GET fail, surface QUEUE_JOB_TIMEOUT (retryable)."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 706, "status": "waiting"}
+        mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="Queue job 706 did not complete within 5s",
+            status_code=504,
+            error_code="QUEUE_JOB_TIMEOUT",
+            retryable=True,
+        )
+        mock_client.kill_job.side_effect = KeboolaApiError(
+            message="network down",
+            status_code=0,
+            error_code="CONNECTION_ERROR",
+        )
+        mock_client.get_job_detail.side_effect = KeboolaApiError(
+            message="still down",
+            status_code=0,
+            error_code="CONNECTION_ERROR",
+        )
+        mock_client.get_config_detail.return_value = {}
+        mock_client.fetch_job_events.return_value = []
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                wait=True,
+                timeout=5.0,
+                no_variables=True,
+            )
+        assert exc_info.value.error_code == "QUEUE_JOB_TIMEOUT"
+        assert exc_info.value.retryable is True
+
+    def test_run_job_log_tail_fetch_failure_is_swallowed(self, tmp_config_dir: Path) -> None:
+        """A failing fetch_job_events must not mask the original job failure."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 707, "status": "waiting"}
+        mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="Queue job 707 failed: SQL error",
+            status_code=500,
+            error_code="QUEUE_JOB_FAILED",
+        )
+        mock_client.fetch_job_events.side_effect = KeboolaApiError(
+            message="events 500",
+            status_code=500,
+            error_code="UNKNOWN_ERROR",
+        )
+        mock_client.get_config_detail.return_value = {}
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                wait=True,
+                no_variables=True,
+            )
+        # Original error preserved; details has no logTail key when fetch fails.
+        assert exc_info.value.error_code == "QUEUE_JOB_FAILED"
+        assert "logTail" not in exc_info.value.details
 
 
 class TestJobServiceVariableValuesResolution:

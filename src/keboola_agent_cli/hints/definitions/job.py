@@ -128,11 +128,19 @@ HintRegistry.register(
                         "timeout": "{timeout}",
                         "variable_values_id": "{variable_values_id}",
                         "no_variables": "{no_variables}",
+                        "poll_strategy": "{poll_strategy}",
+                        "log_tail_lines": "{log_tail_lines}",
                     },
                 ),
             ),
             HintStep(
-                comment="Poll until job completes (when --wait is used)",
+                comment=(
+                    "Poll until job completes (when --wait is used). The "
+                    "piecewise interval matches JOB_POLL_CURVE: 2s x 30 -> "
+                    "5s x 48 -> 15s. This sample shows 5s as a single "
+                    "representative value; the real client cycles through "
+                    "the curve."
+                ),
                 client=ClientCall(
                     method="get_job_detail",
                     args={"job_id": 'str(job["id"])'},
@@ -142,11 +150,23 @@ HintRegistry.register(
                 poll_interval=5.0,
                 poll_condition='not job.get("isFinished")',
             ),
+            HintStep(
+                comment=(
+                    "On FAILED/WARNING/TERMINATED jobs, fetch the last N events "
+                    "to surface as logTail (skip when --log-tail-lines 0)."
+                ),
+                client=ClientCall(
+                    method="fetch_job_events",
+                    args={"job_id": 'str(job["id"])', "limit": "{log_tail_lines}"},
+                    result_var="events",
+                    result_hint="list[dict]",
+                ),
+            ),
         ],
         notes=[
             "Uses the Queue API (queue.keboola.com), not Storage API.",
             "Without --wait, returns immediately after job creation.",
-            "Service layer handles both resolve + create + optional poll in one call.",
+            "Service layer handles resolve + create + optional poll + log-tail in one call.",
             (
                 "Service auto-resolves variableValuesId from "
                 "configuration.variables_id; the client hint shows "
@@ -157,6 +177,16 @@ HintRegistry.register(
                 "NO_VARIABLE_ROWS (exit 1) means the linked variables config "
                 "has zero rows; fix via `kbagent config variables-set` or "
                 "pass --no-variables."
+            ),
+            (
+                "--poll-strategy exponential (default) matches FIIA and the "
+                "Go CLI. --poll-strategy fixed retains the legacy 1s interval."
+            ),
+            (
+                "If --timeout elapses, the service issues kill_job and raises "
+                "JOB_TIMEOUT_TERMINATED (exit 7) with the cancelled job + "
+                "logTail in details. If kill itself fails, QUEUE_JOB_TIMEOUT "
+                "(exit 4, retryable) is surfaced instead."
             ),
         ],
     )

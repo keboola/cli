@@ -68,6 +68,7 @@ class OutputFormatter:
         project: str = "",
         retryable: bool = False,
         error_type: str = "",
+        details: dict | None = None,
     ) -> None:
         """Output an error message.
 
@@ -77,6 +78,9 @@ class OutputFormatter:
             project: Project alias related to the error.
             retryable: Whether the operation can be retried.
             error_type: Broad error category. If empty, derived from error_code.
+            details: Optional structured context (e.g. {"logTail": [...]}).
+                When empty/None, the field is omitted from JSON output so
+                consumers can key off presence.
         """
         if self.json_mode:
             if not error_type:
@@ -89,8 +93,12 @@ class OutputFormatter:
                 message=message,
                 project=project,
                 retryable=retryable,
+                details=details if details else None,
             )
-            error_envelope = {"status": "error", "error": err.model_dump()}
+            error_envelope = {
+                "status": "error",
+                "error": err.model_dump(exclude_none=True),
+            }
             sys.stdout.write(json.dumps(error_envelope, indent=2) + "\n")
         else:
             self.err_console.print(f"[bold red]Error:[/bold red] {message}")

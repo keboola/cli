@@ -2512,6 +2512,206 @@ class TestJobRun:
         assert "NO_VARIABLE_ROWS" in result.output
 
 
+class TestJobRunQueuePollingFlags:
+    """PR4: --poll-strategy, --log-tail-lines, JOB_TIMEOUT_TERMINATED exit."""
+
+    def _setup(self, tmp_path: Path):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+        return store
+
+    def _invoke_job_run(self, store, args, run_job_return=None, run_job_side_effect=None):
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            job_service = MagicMock()
+            if run_job_side_effect is not None:
+                job_service.run_job.side_effect = run_job_side_effect
+            else:
+                job_service.run_job.return_value = run_job_return or {
+                    "id": 800,
+                    "status": "success",
+                    "isFinished": True,
+                }
+            MockJobService.return_value = job_service
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(app, args)
+        return result, job_service
+
+    def test_poll_strategy_forwarded(self, tmp_path: Path) -> None:
+        store = self._setup(tmp_path)
+        result, job_service = self._invoke_job_run(
+            store,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                "prod",
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                "42",
+                "--wait",
+                "--poll-strategy",
+                "fixed",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert job_service.run_job.call_args.kwargs["poll_strategy"] == "fixed"
+
+    def test_log_tail_lines_forwarded(self, tmp_path: Path) -> None:
+        store = self._setup(tmp_path)
+        result, job_service = self._invoke_job_run(
+            store,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                "prod",
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                "42",
+                "--wait",
+                "--log-tail-lines",
+                "42",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert job_service.run_job.call_args.kwargs["log_tail_lines"] == 42
+
+    def test_poll_strategy_invalid_rejected_by_click(self, tmp_path: Path) -> None:
+        store = self._setup(tmp_path)
+        result, job_service = self._invoke_job_run(
+            store,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                "prod",
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                "42",
+                "--poll-strategy",
+                "linear",
+            ],
+        )
+        # Click.Choice rejects before the command body runs.
+        assert result.exit_code == 2
+        job_service.run_job.assert_not_called()
+
+    def test_log_tail_lines_out_of_range_rejected(self, tmp_path: Path) -> None:
+        store = self._setup(tmp_path)
+        result, job_service = self._invoke_job_run(
+            store,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                "prod",
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                "42",
+                "--log-tail-lines",
+                "99999",
+            ],
+        )
+        assert result.exit_code == 2
+        assert "log-tail-lines" in result.output.lower() or "INVALID_ARGUMENT" in result.output
+        job_service.run_job.assert_not_called()
+
+    def test_timeout_terminated_exits_seven_with_details(self, tmp_path: Path) -> None:
+        """JOB_TIMEOUT_TERMINATED -> exit 7 + details.logTail + details.job in JSON."""
+        import json as _json
+
+        from keboola_agent_cli.errors import KeboolaApiError
+
+        store = self._setup(tmp_path)
+        result, _ = self._invoke_job_run(
+            store,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                "prod",
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                "42",
+                "--wait",
+                "--timeout",
+                "5",
+            ],
+            run_job_side_effect=KeboolaApiError(
+                message="timed out; issued kill",
+                status_code=504,
+                error_code="JOB_TIMEOUT_TERMINATED",
+                details={
+                    "job": {"id": 900, "status": "terminated", "isFinished": True},
+                    "logTail": [{"id": 1, "message": "x"}],
+                },
+            ),
+        )
+        assert result.exit_code == 7, result.output
+        envelope = _json.loads(result.output)
+        assert envelope["status"] == "error"
+        assert envelope["error"]["code"] == "JOB_TIMEOUT_TERMINATED"
+        assert envelope["error"]["details"]["job"]["status"] == "terminated"
+        assert envelope["error"]["details"]["logTail"] == [{"id": 1, "message": "x"}]
+
+    def test_queue_job_timeout_exits_four(self, tmp_path: Path) -> None:
+        """Soft gave-up (kill also failed) -> exit 4, retryable=True."""
+        import json as _json
+
+        from keboola_agent_cli.errors import KeboolaApiError
+
+        store = self._setup(tmp_path)
+        result, _ = self._invoke_job_run(
+            store,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                "prod",
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                "42",
+                "--wait",
+                "--timeout",
+                "5",
+            ],
+            run_job_side_effect=KeboolaApiError(
+                message="did not complete within 5s",
+                status_code=504,
+                error_code="QUEUE_JOB_TIMEOUT",
+                retryable=True,
+            ),
+        )
+        assert result.exit_code == 4
+        envelope = _json.loads(result.output)
+        assert envelope["error"]["code"] == "QUEUE_JOB_TIMEOUT"
+        assert envelope["error"]["retryable"] is True
+
+
 class TestJobTerminate:
     """Tests for `kbagent job terminate` command."""
 
