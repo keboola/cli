@@ -886,10 +886,8 @@ def config_metadata_list(
             formatter.console.print("[dim]No metadata entries.[/dim]")
         else:
             for e in entries:
-                from rich.markup import escape as _esc
-
                 formatter.console.print(
-                    f"  [dim]{e.get('id')}[/dim]  [green]{_esc(e.get('key', ''))}[/green] = {_esc(str(e.get('value', '')))}  [dim]{e.get('provider', 'user')}[/dim]"
+                    f"  [dim]{escape(str(e.get('id', '')))}[/dim]  [green]{escape(e.get('key', ''))}[/green] = {escape(str(e.get('value', '')))}  [dim]{escape(e.get('provider', 'user'))}[/dim]"
                 )
 
 

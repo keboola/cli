@@ -395,7 +395,7 @@ class WorkspaceService(BaseService):
             try:
                 self.delete_workspace(alias=ws["project_alias"], workspace_id=ws["id"])
                 deleted.append(ws)
-            except (KeboolaApiError, ConfigError) as exc:
+            except Exception as exc:
                 delete_errors.append(
                     {
                         "workspace_id": ws["id"],
