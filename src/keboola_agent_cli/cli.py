@@ -290,6 +290,8 @@ def main(
     ctx.obj["permission_engine"] = permission_engine
     ctx.obj["verbose"] = verbose
     ctx.obj["no_color"] = effective_no_color
+    ctx.obj["deny_writes"] = deny_writes
+    ctx.obj["deny_destructive"] = deny_destructive
     ctx.obj["config_store"] = config_store
     ctx.obj["project_service"] = project_service
     ctx.obj["component_service"] = component_service
@@ -361,5 +363,7 @@ def main(
             verbose=verbose,
             no_color=effective_no_color,
             config_dir=config_dir,
+            deny_writes=deny_writes,
+            deny_destructive=deny_destructive,
         )
         raise typer.Exit()

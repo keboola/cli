@@ -67,8 +67,21 @@ def _get_history_path() -> Path:
     return config_dir / "repl_history"
 
 
-def _run_repl(json_mode: bool, verbose: bool, no_color: bool, config_dir: str | None) -> None:
-    """Main REPL loop."""
+def _run_repl(
+    json_mode: bool,
+    verbose: bool,
+    no_color: bool,
+    config_dir: str | None,
+    deny_writes: bool = False,
+    deny_destructive: bool = False,
+) -> None:
+    """Main REPL loop.
+
+    Global flags from the outer invocation are re-applied on every command
+    executed inside the REPL. This includes the session-only firewall flags
+    ``--deny-writes`` / ``--deny-destructive`` -- dropping them here would
+    silently elevate the REPL above the policy the user started it with.
+    """
     from ..cli import app as typer_app
 
     # Build command tree for completion
@@ -94,7 +107,15 @@ def _run_repl(json_mode: bool, verbose: bool, no_color: bool, config_dir: str | 
     # Show banner
     sys.stderr.write(f"\nkbagent v{__version__} -- interactive mode\n")
     sys.stderr.write("Type 'help' for commands, 'exit' to quit.\n")
-    sys.stderr.write(f"Global flags: --json={json_mode}, --verbose={verbose}\n\n")
+    sys.stderr.write(f"Global flags: --json={json_mode}, --verbose={verbose}\n")
+    if deny_writes or deny_destructive:
+        active = []
+        if deny_writes:
+            active.append("--deny-writes")
+        if deny_destructive:
+            active.append("--deny-destructive")
+        sys.stderr.write(f"Session firewall: {' '.join(active)} (active for all commands)\n")
+    sys.stderr.write("\n")
 
     while True:
         try:
@@ -141,6 +162,13 @@ def _run_repl(json_mode: bool, verbose: bool, no_color: bool, config_dir: str | 
             full_argv.append("--no-color")
         if config_dir and "--config-dir" not in argv:
             full_argv.extend(["--config-dir", config_dir])
+        # Session firewall flags: re-applied on every REPL invocation so the
+        # user's opt-in policy survives across prompts. Forgetting to forward
+        # these would silently restore write/destructive access inside the REPL.
+        if deny_writes and "--deny-writes" not in argv:
+            full_argv.append("--deny-writes")
+        if deny_destructive and "--deny-destructive" not in argv:
+            full_argv.append("--deny-destructive")
         full_argv.extend(argv)
 
         # Prevent recursive REPL
@@ -176,4 +204,6 @@ def repl_command(ctx: typer.Context) -> None:
         verbose=ctx.obj.get("verbose", False),
         no_color=ctx.obj.get("no_color", False),
         config_dir=None,  # Already resolved in ctx
+        deny_writes=ctx.obj.get("deny_writes", False),
+        deny_destructive=ctx.obj.get("deny_destructive", False),
     )

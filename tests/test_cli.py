@@ -657,6 +657,29 @@ class TestProjectUse:
         data = json.loads(result.output)
         assert data["error"]["code"] == "PERMISSION_DENIED"
 
+    def test_hint_on_non_api_project_use(self, tmp_path: Path) -> None:
+        """project use is purely local -- --hint must exit cleanly, not crash."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod")
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["--hint", "client", "project", "use", "prod"])
+        # Should exit 0 with a clear message -- no hint available for local ops.
+        assert result.exit_code == 0
+
+    def test_hint_on_non_api_project_current(self, tmp_path: Path) -> None:
+        """project current is purely local -- --hint must exit cleanly, not crash."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod")
+
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, ["--hint", "service", "project", "current"])
+        assert result.exit_code == 0
+
     def test_project_current_allowed_under_deny_writes(self, tmp_path: Path) -> None:
         """project current is classified read, so cli:write deny must NOT block it."""
         from keboola_agent_cli.models import PermissionPolicy
@@ -821,6 +844,50 @@ class TestFirewallFlags:
 
         # The permission check must not fire.
         assert result.exit_code != 6 or "PERMISSION_DENIED" not in result.output
+
+    def test_deny_writes_composes_with_persisted_deny_mode(self, tmp_path: Path) -> None:
+        """End-to-end: default-deny policy + --deny-writes still blocks writes.
+
+        A persisted default-deny policy that allows cli:write (unusual but
+        syntactically valid) composed with --deny-writes must resolve to
+        "write denied" because deny takes precedence over allow in the engine
+        (permissions.py: default-deny rule is 'allowed and not denied').
+        """
+        from keboola_agent_cli.models import PermissionPolicy
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir)
+
+        # Persist a default-deny policy that explicitly allows cli:write.
+        store = ConfigStore(config_dir=config_dir)
+        cfg = store.load()
+        cfg.permissions = PermissionPolicy(mode="deny", allow=["cli:write", "cli:read"], deny=[])
+        store.save(cfg)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
+        ):
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(
+                app,
+                [
+                    "--deny-writes",
+                    "--json",
+                    "project",
+                    "add",
+                    "--project",
+                    "newproj",
+                ],
+            )
+
+        # Merged policy: mode=deny, allow=[cli:write,cli:read], deny=[cli:write,tool:write].
+        # Default-deny rule: allowed AND not denied. cli:write matches both
+        # allow and deny -- deny wins.
+        assert result.exit_code == 6, result.output
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "PERMISSION_DENIED"
 
     def test_deny_writes_and_destructive_merge_with_persisted(self, tmp_path: Path) -> None:
         """Flags merge with persisted policy; never persist to disk."""
@@ -4004,6 +4071,16 @@ class TestHelp:
         assert "remove" in result.output
         assert "edit" in result.output
         assert "status" in result.output
+        # PR5 additions -- guard against accidental removal.
+        assert "use" in result.output
+        assert "current" in result.output
+
+    def test_root_help_lists_firewall_flags(self) -> None:
+        """Root --help must advertise the session firewall flags."""
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "--deny-writes" in result.output
+        assert "--deny-destructive" in result.output
 
     def test_config_help(self) -> None:
         """config --help shows subcommands."""

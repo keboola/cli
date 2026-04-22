@@ -76,6 +76,27 @@ class TestPermissionsList:
         for op in data:
             assert op["category"] == "destructive"
 
+    def test_list_includes_project_use_and_current(self, tmp_path: Path) -> None:
+        """Registry entries for the PR5 commands are visible to the engine.
+
+        Guards against a future refactor that accidentally drops them from
+        OPERATION_REGISTRY -- unregistered commands would silently default
+        to 'write' for category matching, which is fail-closed but invisible.
+        """
+        store = _make_store(tmp_path)
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = store
+            result = runner.invoke(app, ["--json", "permissions", "list"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        by_name = {op["name"]: op for op in data}
+
+        assert "project.use" in by_name, "project.use missing from permissions list"
+        assert by_name["project.use"]["category"] == "write"
+
+        assert "project.current" in by_name, "project.current missing from permissions list"
+        assert by_name["project.current"]["category"] == "read"
+
 
 class TestPermissionsShow:
     """Tests for `kbagent permissions show`."""
