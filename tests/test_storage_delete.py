@@ -957,3 +957,324 @@ class TestDeleteColumnBranch:
         assert result.exit_code == 0
         call_kwargs = svc.delete_columns.call_args.kwargs
         assert call_kwargs["branch_id"] == 42
+
+
+def _make_store_with_active_branch(tmp_path: Path, branch_id: int) -> ConfigStore:
+    """Build a config store with one project that has an active dev branch."""
+    store = _make_store(tmp_path)
+    store.set_project_branch("test", branch_id)
+    return store
+
+
+class TestStorageReadIgnoresActiveBranch:
+    """Regression tests for GitHub issue #207.
+
+    Storage READ commands (tables, buckets, bucket-detail, table-detail,
+    files) must NOT follow the implicit active dev branch -- the Storage
+    API branch-scoped endpoint returns only locally-modified resources,
+    so a fresh dev branch lists nothing. Explicit --branch still wins.
+    Storage WRITE commands stay branch-aware (user intent to modify).
+    """
+
+    # Read commands ---------------------------------------------------------
+
+    def test_storage_tables_with_active_branch_uses_production(self, tmp_path: Path) -> None:
+        """storage tables sends branch_id=None when only an active branch is set."""
+        store = _make_store_with_active_branch(tmp_path, 15931)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.list_tables.return_value = {"tables": [], "project_alias": "test"}
+
+            result = runner.invoke(
+                app,
+                ["--json", "storage", "tables", "--project", "test"],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = svc.list_tables.call_args.kwargs
+        assert call_kwargs["branch_id"] is None
+
+    def test_storage_tables_explicit_branch_overrides_active(self, tmp_path: Path) -> None:
+        """Explicit --branch wins even when active_branch_id is set."""
+        store = _make_store_with_active_branch(tmp_path, 15931)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.list_tables.return_value = {"tables": [], "project_alias": "test"}
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "tables",
+                    "--project",
+                    "test",
+                    "--branch",
+                    "99",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = svc.list_tables.call_args.kwargs
+        assert call_kwargs["branch_id"] == 99
+
+    def test_storage_buckets_with_active_branch_uses_production(self, tmp_path: Path) -> None:
+        """storage buckets ignores active_branch_id (single-project case)."""
+        store = _make_store_with_active_branch(tmp_path, 15931)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.list_buckets.return_value = {"buckets": [], "errors": []}
+
+            result = runner.invoke(
+                app,
+                ["--json", "storage", "buckets", "--project", "test"],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = svc.list_buckets.call_args.kwargs
+        assert call_kwargs["branch_id"] is None
+
+    def test_storage_buckets_explicit_branch_overrides_active(self, tmp_path: Path) -> None:
+        """Explicit --branch wins for storage buckets too."""
+        store = _make_store_with_active_branch(tmp_path, 15931)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.list_buckets.return_value = {"buckets": [], "errors": []}
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "buckets",
+                    "--project",
+                    "test",
+                    "--branch",
+                    "77",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = svc.list_buckets.call_args.kwargs
+        assert call_kwargs["branch_id"] == 77
+
+    def test_storage_bucket_detail_with_active_branch_uses_production(self, tmp_path: Path) -> None:
+        """storage bucket-detail sends branch_id=None despite active dev branch."""
+        store = _make_store_with_active_branch(tmp_path, 15931)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.get_bucket_detail.return_value = {
+                "project_alias": "test",
+                "project_id": 1234,
+                "bucket_id": "in.c-data",
+                "display_name": "data",
+                "stage": "in",
+                "description": "",
+                "backend": "snowflake",
+                "is_linked": False,
+                "source_project_id": None,
+                "source_project_name": "",
+                "source_bucket_id": "",
+                "snowflake_database": "SAPI_1234",
+                "snowflake_schema": "in.c-data",
+                "tables": [],
+                "table_count": 0,
+            }
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "bucket-detail",
+                    "--project",
+                    "test",
+                    "--bucket-id",
+                    "in.c-data",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = svc.get_bucket_detail.call_args.kwargs
+        assert call_kwargs["branch_id"] is None
+
+    def test_storage_table_detail_with_active_branch_uses_production(self, tmp_path: Path) -> None:
+        """storage table-detail sends branch_id=None despite active dev branch."""
+        store = _make_store_with_active_branch(tmp_path, 15931)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.get_table_detail.return_value = {
+                "project_alias": "test",
+                "project_id": 1234,
+                "table_id": "in.c-data.users",
+                "name": "users",
+                "display_name": "users",
+                "bucket_id": "in.c-data",
+                "rows_count": 10,
+                "data_size_bytes": 1024,
+                "primary_key": [],
+                "column_details": [],
+                "last_import_date": None,
+            }
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "table-detail",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-data.users",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = svc.get_table_detail.call_args.kwargs
+        assert call_kwargs["branch_id"] is None
+
+    def test_storage_files_with_active_branch_uses_production(self, tmp_path: Path) -> None:
+        """storage files sends branch_id=None despite active dev branch."""
+        store = _make_store_with_active_branch(tmp_path, 15931)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.list_files.return_value = {"files": [], "count": 0}
+
+            result = runner.invoke(
+                app,
+                ["--json", "storage", "files", "--project", "test"],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = svc.list_files.call_args.kwargs
+        assert call_kwargs["branch_id"] is None
+
+    def test_storage_files_explicit_branch_overrides_active(self, tmp_path: Path) -> None:
+        """Explicit --branch wins for storage files."""
+        store = _make_store_with_active_branch(tmp_path, 15931)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.list_files.return_value = {"files": [], "count": 0}
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "files",
+                    "--project",
+                    "test",
+                    "--branch",
+                    "55",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = svc.list_files.call_args.kwargs
+        assert call_kwargs["branch_id"] == 55
+
+    # Write commands remain branch-aware -----------------------------------
+
+    def test_storage_create_bucket_still_follows_active_branch(self, tmp_path: Path) -> None:
+        """Write command create-bucket keeps branch-awareness (user intent)."""
+        store = _make_store_with_active_branch(tmp_path, 15931)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.create_bucket.return_value = {
+                "id": "in.c-foo",
+                "stage": "in",
+                "project_alias": "test",
+                "display_name": "foo",
+                "description": "",
+                "backend": "snowflake",
+            }
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "create-bucket",
+                    "--project",
+                    "test",
+                    "--stage",
+                    "in",
+                    "--name",
+                    "foo",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = svc.create_bucket.call_args.kwargs
+        assert call_kwargs["branch_id"] == 15931
+
+    def test_storage_delete_table_still_follows_active_branch(self, tmp_path: Path) -> None:
+        """Destructive delete-table keeps branch-awareness."""
+        store = _make_store_with_active_branch(tmp_path, 15931)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.delete_tables.return_value = {
+                "deleted": ["in.c-data.users"],
+                "failed": [],
+                "dry_run": False,
+                "project_alias": "test",
+            }
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "delete-table",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-data.users",
+                    "--yes",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = svc.delete_tables.call_args.kwargs
+        assert call_kwargs["branch_id"] == 15931
