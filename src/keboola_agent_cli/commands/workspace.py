@@ -8,7 +8,7 @@ from pathlib import Path
 
 import typer
 
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_query_results, format_workspaces_table
 from ._helpers import (
     check_cli_permission,
@@ -103,7 +103,7 @@ def workspace_create(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -126,7 +126,7 @@ def workspace_list(
     try:
         result = service.list_workspaces(aliases=project)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -182,7 +182,7 @@ def workspace_detail(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -222,7 +222,7 @@ def workspace_delete(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -265,7 +265,7 @@ def workspace_password(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -327,7 +327,7 @@ def workspace_load(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -383,13 +383,13 @@ def workspace_query(
     if sql and file:
         formatter.error(
             message="Specify either --sql or --file, not both.",
-            error_code="USAGE_ERROR",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
     if not sql and not file:
         formatter.error(
             message="Specify either --sql or --file.",
-            error_code="USAGE_ERROR",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
 
@@ -416,7 +416,7 @@ def workspace_query(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -500,5 +500,5 @@ def workspace_from_transformation(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None

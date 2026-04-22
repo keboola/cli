@@ -21,7 +21,7 @@ from .constants import (
     MAX_RETRY_AFTER_SECONDS,
     RETRYABLE_STATUS_CODES,
 )
-from .errors import KeboolaApiError, mask_token
+from .errors import ErrorCode, KeboolaApiError, mask_token
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,7 @@ class BaseHttpClient:
                 raise KeboolaApiError(
                     message=f"Request timed out connecting to {url_label} (token: {self._masked_token})",
                     status_code=0,
-                    error_code="TIMEOUT",
+                    error_code=ErrorCode.TIMEOUT,
                     retryable=True,
                 ) from exc
 
@@ -189,7 +189,7 @@ class BaseHttpClient:
                 raise KeboolaApiError(
                     message=f"Cannot connect to {url_label} (token: {self._masked_token})",
                     status_code=0,
-                    error_code="CONNECTION_ERROR",
+                    error_code=ErrorCode.CONNECTION_ERROR,
                     retryable=True,
                 ) from exc
 
@@ -199,7 +199,7 @@ class BaseHttpClient:
         raise KeboolaApiError(
             message=f"Request failed after {MAX_RETRIES} retries to {url_label} (token: {self._masked_token})",
             status_code=0,
-            error_code="RETRY_EXHAUSTED",
+            error_code=ErrorCode.RETRY_EXHAUSTED,
             retryable=True,
         )
 
@@ -234,7 +234,7 @@ class BaseHttpClient:
             raise KeboolaApiError(
                 message=f"Invalid or expired token (token: {self._masked_token}): {api_message}",
                 status_code=status,
-                error_code="INVALID_TOKEN",
+                error_code=ErrorCode.INVALID_TOKEN,
                 retryable=False,
             )
 
@@ -242,7 +242,7 @@ class BaseHttpClient:
             raise KeboolaApiError(
                 message=f"Access denied (token: {self._masked_token}): {api_message}",
                 status_code=status,
-                error_code="ACCESS_DENIED",
+                error_code=ErrorCode.ACCESS_DENIED,
                 retryable=False,
             )
 
@@ -250,7 +250,7 @@ class BaseHttpClient:
             raise KeboolaApiError(
                 message=f"Resource not found: {api_message}",
                 status_code=status,
-                error_code="NOT_FOUND",
+                error_code=ErrorCode.NOT_FOUND,
                 retryable=False,
             )
 
@@ -258,6 +258,6 @@ class BaseHttpClient:
         raise KeboolaApiError(
             message=f"API error {status} from {url_label} (token: {self._masked_token}): {api_message}",
             status_code=status,
-            error_code="API_ERROR",
+            error_code=ErrorCode.API_ERROR,
             retryable=retryable,
         )

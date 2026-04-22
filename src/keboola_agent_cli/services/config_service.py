@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ..errors import KeboolaApiError
+from ..errors import ErrorCode, KeboolaApiError
 from ..json_utils import compute_diff, deep_merge, set_nested_value
 from ..models import ProjectConfig
 from ..sync.manifest import Manifest, load_manifest, save_manifest
@@ -291,7 +291,7 @@ class ConfigService(BaseService):
         if not has_content and not has_metadata:
             raise KeboolaApiError(
                 status_code=400,
-                error_code="VALIDATION_ERROR",
+                error_code=ErrorCode.VALIDATION_ERROR,
                 message=(
                     "At least one of --name, --description, --configuration, "
                     "--configuration-file, or --set must be provided."

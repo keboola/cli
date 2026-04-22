@@ -8,7 +8,7 @@ resolution. Stays agnostic of CLI and HTTP transport details.
 from typing import Any
 
 from ..constants import DEFAULT_JOB_LIMIT, KILLABLE_JOB_STATUSES
-from ..errors import KeboolaApiError
+from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -278,7 +278,7 @@ class JobService(BaseService):
                     f"`--no-variables` to skip resolution."
                 ),
                 status_code=0,
-                error_code="NO_VARIABLE_ROWS",
+                error_code=ErrorCode.NO_VARIABLE_ROWS,
             )
 
         # Defense against a malformed Storage API response: a row without a
@@ -296,7 +296,7 @@ class JobService(BaseService):
                     f"with empty variable bindings."
                 ),
                 status_code=0,
-                error_code="MALFORMED_VARIABLES_ROW",
+                error_code=ErrorCode.MALFORMED_VARIABLES_ROW,
             )
         return str(first_row_id)
 

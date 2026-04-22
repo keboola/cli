@@ -1,6 +1,6 @@
 """Tests for error types and helpers."""
 
-from keboola_agent_cli.errors import ConfigError, KeboolaApiError, mask_token
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError, mask_token
 
 
 class TestMaskToken:
@@ -91,3 +91,69 @@ class TestConfigError:
         """ConfigError is a proper Exception subclass."""
         err = ConfigError(message="test")
         assert isinstance(err, Exception)
+
+
+class TestErrorCode:
+    """Tests for the ErrorCode enum."""
+
+    def test_str_equality(self) -> None:
+        """ErrorCode members compare equal to their plain string values."""
+        assert ErrorCode.QUEUE_JOB_FAILED == "QUEUE_JOB_FAILED"
+        assert ErrorCode.PERMISSION_DENIED == "PERMISSION_DENIED"
+        assert ErrorCode.CONFIG_ERROR == "CONFIG_ERROR"
+
+    def test_is_str(self) -> None:
+        """ErrorCode is a subtype of str -- usable wherever a str is expected."""
+        code = ErrorCode.NOT_FOUND
+        assert isinstance(code, str)
+
+    def test_json_serialisation(self) -> None:
+        """ErrorCode serialises to its plain string value in json.dumps."""
+        import json
+
+        assert json.dumps(ErrorCode.UPLOAD_FAILED) == '"UPLOAD_FAILED"'
+
+    def test_no_duplicate_values(self) -> None:
+        """Every ErrorCode member has a unique string value."""
+        values = [c.value for c in ErrorCode]
+        assert len(values) == len(set(values)), "Duplicate ErrorCode values detected"
+
+    def test_known_codes_present(self) -> None:
+        """Spot-check that key codes defined in the spec are present."""
+        required = {
+            "INVALID_TOKEN",
+            "PERMISSION_DENIED",
+            "TIMEOUT",
+            "CONNECTION_ERROR",
+            "RETRY_EXHAUSTED",
+            "API_ERROR",
+            "NOT_FOUND",
+            "CONFIG_ERROR",
+            "QUEUE_JOB_FAILED",
+            "QUEUE_JOB_TIMEOUT",
+            "STORAGE_JOB_FAILED",
+            "NO_VARIABLE_ROWS",
+            "MALFORMED_VARIABLES_ROW",
+            "UPLOAD_FAILED",
+            "UNKNOWN_ERROR",
+            "ENCRYPTION_FAILED",
+            "WORKSPACE_NOT_FOUND",
+        }
+        member_names = {c.name for c in ErrorCode}
+        missing = required - member_names
+        assert not missing, f"Required ErrorCode members missing: {missing}"
+
+    def test_keboolaapierror_default_uses_enum(self) -> None:
+        """KeboolaApiError default error_code is an ErrorCode member."""
+        err = KeboolaApiError(message="oops")
+        assert err.error_code == ErrorCode.UNKNOWN_ERROR
+        assert err.error_code == "UNKNOWN_ERROR"
+
+    def test_keboolaapierror_accepts_enum(self) -> None:
+        """KeboolaApiError can be constructed with an ErrorCode member."""
+        err = KeboolaApiError(
+            message="job died",
+            error_code=ErrorCode.QUEUE_JOB_FAILED,
+        )
+        assert err.error_code == "QUEUE_JOB_FAILED"
+        assert err.error_code == ErrorCode.QUEUE_JOB_FAILED

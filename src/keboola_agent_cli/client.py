@@ -33,7 +33,7 @@ from .constants import (
     STORAGE_JOB_MAX_WAIT,
     STORAGE_JOB_POLL_INTERVAL,
 )
-from .errors import KeboolaApiError
+from .errors import ErrorCode, KeboolaApiError
 from .http_base import BaseHttpClient
 from .models import TokenVerifyResponse
 
@@ -523,13 +523,13 @@ class KeboolaClient(BaseHttpClient):
                 raise KeboolaApiError(
                     message=error_msg,
                     status_code=500,
-                    error_code="STORAGE_JOB_FAILED",
+                    error_code=ErrorCode.STORAGE_JOB_FAILED,
                     retryable=False,
                 )
         raise KeboolaApiError(
             message=f"Storage job {job_id} did not complete within {max_wait}s",
             status_code=504,
-            error_code="STORAGE_JOB_TIMEOUT",
+            error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
             retryable=True,
         )
 
@@ -821,7 +821,7 @@ class KeboolaClient(BaseHttpClient):
                 message=f"Invalid sharing type: '{sharing_type}'. "
                 f"Valid types: {', '.join(endpoint_map.keys())}",
                 status_code=400,
-                error_code="INVALID_SHARING_TYPE",
+                error_code=ErrorCode.INVALID_SHARING_TYPE,
                 retryable=False,
             )
 
@@ -1126,7 +1126,7 @@ class KeboolaClient(BaseHttpClient):
             raise KeboolaApiError(
                 message=f"Cloud storage upload failed (HTTP {response.status_code})",
                 status_code=response.status_code,
-                error_code="UPLOAD_FAILED",
+                error_code=ErrorCode.UPLOAD_FAILED,
                 retryable=False,
             )
 
@@ -1540,7 +1540,7 @@ class KeboolaClient(BaseHttpClient):
             raise KeboolaApiError(
                 message="Sliced file manifest has no entries",
                 status_code=500,
-                error_code="EXPORT_EMPTY_MANIFEST",
+                error_code=ErrorCode.EXPORT_EMPTY_MANIFEST,
                 retryable=False,
             )
 
@@ -1819,7 +1819,7 @@ class KeboolaClient(BaseHttpClient):
                     raise KeboolaApiError(
                         message=f"Queue job {job_id} failed: {error_msg}",
                         status_code=500,
-                        error_code="QUEUE_JOB_FAILED",
+                        error_code=ErrorCode.QUEUE_JOB_FAILED,
                         retryable=False,
                     )
                 return job
@@ -1828,7 +1828,7 @@ class KeboolaClient(BaseHttpClient):
         raise KeboolaApiError(
             message=f"Queue job {job_id} did not complete within {max_wait}s",
             status_code=504,
-            error_code="QUEUE_JOB_TIMEOUT",
+            error_code=ErrorCode.QUEUE_JOB_TIMEOUT,
             retryable=True,
         )
 
@@ -2087,7 +2087,7 @@ class KeboolaClient(BaseHttpClient):
                 raise KeboolaApiError(
                     message=f"Query job failed: {error_msg}",
                     status_code=500,
-                    error_code="QUERY_JOB_FAILED",
+                    error_code=ErrorCode.QUERY_JOB_FAILED,
                     retryable=False,
                 )
             time.sleep(QUERY_JOB_POLL_INTERVAL)
@@ -2095,7 +2095,7 @@ class KeboolaClient(BaseHttpClient):
         raise KeboolaApiError(
             message=f"Query job {query_job_id} did not complete within {QUERY_JOB_MAX_WAIT}s",
             status_code=504,
-            error_code="QUERY_JOB_TIMEOUT",
+            error_code=ErrorCode.QUERY_JOB_TIMEOUT,
             retryable=True,
         )
 

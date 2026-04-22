@@ -11,7 +11,7 @@ from pathlib import Path
 import typer
 
 from ..config_store import ConfigStore
-from ..errors import ConfigError
+from ..errors import ConfigError, ErrorCode
 from ..output import OutputFormatter, format_tool_result, format_tools_table
 from ._helpers import (
     check_cli_permission,
@@ -48,7 +48,7 @@ def _read_input(value: str, formatter: OutputFormatter) -> str:
         if not file_path.is_file():
             formatter.error(
                 message=f"Input file not found: {file_path}",
-                error_code="INVALID_ARGUMENT",
+                error_code=ErrorCode.INVALID_ARGUMENT,
             )
             raise typer.Exit(code=2) from None
         return file_path.read_text(encoding="utf-8")
@@ -97,7 +97,7 @@ def tool_list(
     if branch_str and not project:
         formatter.error(
             message="--branch requires --project (branch ID is per-project)",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
 
@@ -106,7 +106,7 @@ def tool_list(
     try:
         result = service.list_tools(aliases=aliases, branch_id=branch_str)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -169,7 +169,7 @@ def tool_call(
     if branch_str and not project:
         formatter.error(
             message="--branch requires --project (branch ID is per-project)",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
 
@@ -182,14 +182,14 @@ def tool_call(
         except json.JSONDecodeError as exc:
             formatter.error(
                 message=f"Invalid JSON in --input: {exc}",
-                error_code="INVALID_ARGUMENT",
+                error_code=ErrorCode.INVALID_ARGUMENT,
             )
             raise typer.Exit(code=2) from None
 
         if not isinstance(parsed_input, dict):
             formatter.error(
                 message='--input must be a JSON object (e.g. \'{"key": "value"}\')',
-                error_code="INVALID_ARGUMENT",
+                error_code=ErrorCode.INVALID_ARGUMENT,
             )
             raise typer.Exit(code=2) from None
 
@@ -203,13 +203,13 @@ def tool_call(
         )
     except ConfigError as exc:
         # ConfigError covers: unknown tool, missing params, config issues
-        error_code = "CONFIG_ERROR"
+        error_code = ErrorCode.CONFIG_ERROR
         exit_code = 5
         if "Missing required parameter" in exc.message:
-            error_code = "MISSING_PARAMETER"
+            error_code = ErrorCode.MISSING_PARAMETER
             exit_code = 2
         elif "Unknown MCP tool" in exc.message:
-            error_code = "CONFIG_ERROR"
+            error_code = ErrorCode.CONFIG_ERROR
             exit_code = 5
         formatter.error(message=exc.message, error_code=error_code)
         raise typer.Exit(code=exit_code) from None

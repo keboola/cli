@@ -8,6 +8,18 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.22.0": [
+        "New: ErrorCode enum (StrEnum) in errors.py -- all 46 error codes are now typed constants; "
+        "every KeboolaApiError / formatter.error() raise site migrated from string literals to "
+        "ErrorCode.<MEMBER>. Wire format is unchanged (str subtype). CI guard "
+        "(scripts/check_error_codes.py, wired into 'make check') rejects new raw literals.",
+        "New: docs/error-codes.md -- versioned reference for all ErrorCode members with "
+        "add=minor / rename-remove=major semver policy.",
+        "New: sync init --adopt-existing -- idempotently adopt a .keboola/manifest.json written "
+        "by the kbc Go CLI (or an older kbagent version) without overwriting it. Validates "
+        "manifest project_id against the alias token; rejects mismatch with ConfigError (exit 5). "
+        "Falls through to normal init when no manifest exists. Safe to re-run.",
+    ],
     "0.21.1": [
         "Fix: sync pull on a newly created dev branch now writes config rows (#193) -- idempotent skip guard for rows was missing a file-existence check, causing rows to be silently skipped when the branch directory was new (hash matched main because the branch is a clone)",
     ],

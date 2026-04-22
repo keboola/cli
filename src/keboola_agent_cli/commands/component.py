@@ -10,7 +10,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ..constants import VALID_COMPONENT_TYPES
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
     emit_hint,
@@ -162,7 +162,7 @@ def component_list(
         formatter.error(
             message=f"Invalid component type '{component_type}'. "
             f"Valid types: {', '.join(VALID_COMPONENT_TYPES)}",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -173,7 +173,7 @@ def component_list(
             query=query,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -211,7 +211,7 @@ def component_detail(
         )
         formatter.output(result, _format_component_detail)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)

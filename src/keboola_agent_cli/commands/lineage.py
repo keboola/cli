@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 import typer
 
+from ..errors import ErrorCode
 from ._helpers import (
     check_cli_permission,
     emit_hint,
@@ -103,7 +104,7 @@ def lineage_build(
 
     root = directory.resolve()
     if not root.is_dir():
-        formatter.error(message=f"Directory not found: {root}", error_code="DIR_NOT_FOUND")
+        formatter.error(message=f"Directory not found: {root}", error_code=ErrorCode.DIR_NOT_FOUND)
         raise typer.Exit(code=1)
 
     # --refresh: sync pull all projects first
@@ -127,7 +128,7 @@ def lineage_build(
     except OSError as exc:
         formatter.error(
             message=f"Cannot write output file '{output}': {exc}",
-            error_code="WRITE_ERROR",
+            error_code=ErrorCode.WRITE_ERROR,
         )
         raise typer.Exit(code=1) from None
 
@@ -187,7 +188,9 @@ def lineage_info(
     service = get_service(ctx, "deep_lineage_service")
 
     if not load.exists():
-        formatter.error(message=f"Cache file not found: {load}", error_code="FILE_NOT_FOUND")
+        formatter.error(
+            message=f"Cache file not found: {load}", error_code=ErrorCode.FILE_NOT_FOUND
+        )
         raise typer.Exit(code=1)
 
     graph = service.load_from_cache(load)
@@ -333,12 +336,14 @@ def lineage_show(
     if format not in valid_formats:
         formatter.error(
             message=f"Invalid format '{format}'. Must be one of: {', '.join(valid_formats)}",
-            error_code="INVALID_FORMAT",
+            error_code=ErrorCode.INVALID_FORMAT,
         )
         raise typer.Exit(code=2)
 
     if not load.exists():
-        formatter.error(message=f"Cache file not found: {load}", error_code="FILE_NOT_FOUND")
+        formatter.error(
+            message=f"Cache file not found: {load}", error_code=ErrorCode.FILE_NOT_FOUND
+        )
         raise typer.Exit(code=1)
 
     graph = service.load_from_cache(load)
@@ -347,7 +352,7 @@ def lineage_show(
         formatter.error(
             message="Specify --upstream or --downstream to query.\n"
             "Use `kbagent lineage info -l FILE` to see what's in the graph.",
-            error_code="MISSING_QUERY",
+            error_code=ErrorCode.MISSING_QUERY,
         )
         raise typer.Exit(code=2)
 
@@ -360,7 +365,7 @@ def lineage_show(
             msg = query_result["error"]
             if suggestions:
                 msg += "\nDid you mean: " + ", ".join(suggestions[:5])
-            formatter.error(message=msg, error_code="NODE_NOT_FOUND")
+            formatter.error(message=msg, error_code=ErrorCode.NODE_NOT_FOUND)
             raise typer.Exit(code=1)
 
         if formatter.json_mode:
@@ -379,7 +384,7 @@ def lineage_show(
             msg = query_result["error"]
             if suggestions:
                 msg += "\nDid you mean: " + ", ".join(suggestions[:5])
-            formatter.error(message=msg, error_code="NODE_NOT_FOUND")
+            formatter.error(message=msg, error_code=ErrorCode.NODE_NOT_FOUND)
             raise typer.Exit(code=1)
 
         if formatter.json_mode:
@@ -431,7 +436,7 @@ def _output_mermaid_or_html(
         except OSError as exc:
             formatter.error(
                 message=f"Cannot write HTML file '{filename}': {exc}",
-                error_code="WRITE_ERROR",
+                error_code=ErrorCode.WRITE_ERROR,
             )
             raise typer.Exit(code=1) from None
 
@@ -1430,13 +1435,15 @@ def lineage_serve(
     formatter = get_formatter(ctx)
 
     if not load.exists():
-        formatter.error(message=f"Cache file not found: {load}", error_code="FILE_NOT_FOUND")
+        formatter.error(
+            message=f"Cache file not found: {load}", error_code=ErrorCode.FILE_NOT_FOUND
+        )
         raise typer.Exit(code=1)
 
     try:
         raw_data = json.loads(load.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
-        formatter.error(message=f"Cannot read lineage file: {exc}", error_code="READ_ERROR")
+        formatter.error(message=f"Cannot read lineage file: {exc}", error_code=ErrorCode.READ_ERROR)
         raise typer.Exit(code=1) from None
 
     # Load the graph via the service for API queries

@@ -112,7 +112,9 @@ class Manifest(BaseModel):
     version: int = MANIFEST_VERSION
     project: ManifestProject
     allow_target_env: bool = Field(default=True, alias="allowTargetEnv")
-    git_branching: ManifestGitBranching = Field(alias="gitBranching")
+    git_branching: ManifestGitBranching = Field(
+        default_factory=ManifestGitBranching, alias="gitBranching"
+    )
     sort_by: str = Field(default="id", alias="sortBy")
     naming: ManifestNaming
     allowed_branches: list[str] = Field(default_factory=list, alias="allowedBranches")

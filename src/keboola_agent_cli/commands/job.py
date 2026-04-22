@@ -14,7 +14,7 @@ from ..constants import (
     MAX_JOB_LIMIT,
     VALID_STATUSES,
 )
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_job_detail, format_jobs_table
 from ._helpers import (
     check_cli_permission,
@@ -84,7 +84,7 @@ def job_list(
     if status and status not in VALID_STATUSES:
         formatter.error(
             message=f"Invalid status '{status}'. Valid statuses: {', '.join(VALID_STATUSES)}",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -92,7 +92,7 @@ def job_list(
     if limit < 1 or limit > MAX_JOB_LIMIT:
         formatter.error(
             message=f"Invalid limit {limit}. Must be between 1 and {MAX_JOB_LIMIT}.",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -100,7 +100,7 @@ def job_list(
     if config_id and not component_id:
         formatter.error(
             message="--config-id requires --component-id to be specified.",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -113,7 +113,7 @@ def job_list(
             limit=limit,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -140,7 +140,7 @@ def job_detail(
         result = service.get_job_detail(alias=project, job_id=job_id)
         formatter.output(result, format_job_detail)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
@@ -250,7 +250,7 @@ def job_run(
                 "--variable-values-id cannot be empty or whitespace. "
                 "Pass a row id, or omit the flag to auto-resolve the default row."
             ),
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -261,7 +261,7 @@ def job_run(
                 "Pass --variable-values-id to bind a specific values row, or "
                 "--no-variables to skip resolution, but not both."
             ),
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -300,7 +300,7 @@ def job_run(
             no_variables=no_variables,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(
@@ -429,7 +429,7 @@ def job_terminate(
     if bool(job_id) == bool(status):
         formatter.error(
             message="Provide either --job-id (one or more) or --status, but not both.",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -439,21 +439,21 @@ def job_terminate(
                 f"Invalid --status '{status}'. Use one of: "
                 f"{', '.join(sorted(KILLABLE_JOB_STATUSES))} or 'any'."
             ),
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
     if config_id and not component_id:
         formatter.error(
             message="--config-id requires --component-id.",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
     if limit < 1 or limit > MAX_JOB_LIMIT:
         formatter.error(
             message=f"Invalid --limit {limit}. Must be between 1 and {MAX_JOB_LIMIT}.",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -480,7 +480,7 @@ def job_terminate(
             if status == "any":
                 matched = service.filter_killable(matched)
         except ConfigError as exc:
-            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
         except KeboolaApiError as exc:
             formatter.error(
@@ -525,7 +525,7 @@ def job_terminate(
                 dry_run=True,
             )
         except ConfigError as exc:
-            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
         if filter_context is not None:
@@ -552,7 +552,7 @@ def job_terminate(
             job_ids=resolved_ids,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(

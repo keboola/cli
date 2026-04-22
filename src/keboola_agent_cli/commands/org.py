@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ..constants import DEFAULT_TOKEN_DESCRIPTION, ENV_KBC_STORAGE_API_URL
-from ..errors import KeboolaApiError
+from ..errors import ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
     emit_hint,
@@ -216,7 +216,7 @@ def org_setup(
     if not org_id and not project_ids:
         formatter.error(
             message="Provide --org-id (org admin) or --project-ids (project member)",
-            error_code="usage_error",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
 

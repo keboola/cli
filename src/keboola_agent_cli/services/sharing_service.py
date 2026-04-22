@@ -14,7 +14,7 @@ import os
 from typing import Any
 
 from ..constants import ENV_KBC_MASTER_TOKEN
-from ..errors import KeboolaApiError
+from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -241,7 +241,7 @@ class SharingService(BaseService):
                     message=f"Bucket '{bucket_id}' is not a linked bucket. "
                     "Use this command only for linked (shared) buckets.",
                     status_code=400,
-                    error_code="NOT_LINKED_BUCKET",
+                    error_code=ErrorCode.NOT_LINKED_BUCKET,
                     retryable=False,
                 )
             client.delete_bucket(bucket_id=bucket_id, force=True)
