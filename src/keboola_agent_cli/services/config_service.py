@@ -663,6 +663,11 @@ class ConfigService(BaseService):
                 f"Could not list branches to resolve metadata branch: {exc.message}. "
                 "Pass --branch explicitly."
             ) from exc
+        except Exception as exc:
+            raise ConfigError(
+                f"Unexpected error listing branches for metadata route: {exc}. "
+                "Pass --branch explicitly."
+            ) from exc
         default = next((b for b in branches if b.get("isDefault")), None)
         if default:
             return int(default["id"])
@@ -692,15 +697,15 @@ class ConfigService(BaseService):
             entries = client.list_config_metadata(
                 component_id, config_id, branch_id=effective_branch_id
             )
+            return {
+                "project_alias": alias,
+                "component_id": component_id,
+                "config_id": config_id,
+                "branch_id": effective_branch_id,
+                "metadata": sorted(entries, key=lambda e: e.get("key", "")),
+            }
         finally:
             client.close()
-        return {
-            "project_alias": alias,
-            "component_id": component_id,
-            "config_id": config_id,
-            "branch_id": effective_branch_id,
-            "metadata": sorted(entries, key=lambda e: e.get("key", "")),
-        }
 
     def get_config_metadata_value(
         self,
@@ -751,20 +756,20 @@ class ConfigService(BaseService):
             result = client.set_config_metadata(
                 component_id, config_id, entries=[(key, value)], branch_id=effective_branch_id
             )
+            return {
+                "project_alias": alias,
+                "component_id": component_id,
+                "config_id": config_id,
+                "branch_id": effective_branch_id,
+                "key": key,
+                "value": value,
+                "result": result,
+                "message": (
+                    f"Metadata '{key}' set on config '{component_id}/{config_id}' in project '{alias}'."
+                ),
+            }
         finally:
             client.close()
-        return {
-            "project_alias": alias,
-            "component_id": component_id,
-            "config_id": config_id,
-            "branch_id": effective_branch_id,
-            "key": key,
-            "value": value,
-            "result": result,
-            "message": (
-                f"Metadata '{key}' set on config '{component_id}/{config_id}' in project '{alias}'."
-            ),
-        }
 
     def delete_config_metadata(
         self,
@@ -783,19 +788,19 @@ class ConfigService(BaseService):
             client.delete_config_metadata(
                 component_id, config_id, metadata_id, branch_id=effective_branch_id
             )
+            return {
+                "project_alias": alias,
+                "component_id": component_id,
+                "config_id": config_id,
+                "branch_id": effective_branch_id,
+                "metadata_id": metadata_id,
+                "message": (
+                    f"Metadata ID {metadata_id} deleted from config "
+                    f"'{component_id}/{config_id}' in project '{alias}'."
+                ),
+            }
         finally:
             client.close()
-        return {
-            "project_alias": alias,
-            "component_id": component_id,
-            "config_id": config_id,
-            "branch_id": effective_branch_id,
-            "metadata_id": metadata_id,
-            "message": (
-                f"Metadata ID {metadata_id} deleted from config "
-                f"'{component_id}/{config_id}' in project '{alias}'."
-            ),
-        }
 
     def set_config_folder(
         self,

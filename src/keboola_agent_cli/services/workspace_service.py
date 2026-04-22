@@ -468,6 +468,7 @@ class WorkspaceService(BaseService):
         try:
             # Get workspace details to find associated config
             config_id = None
+            component = None
             try:
                 ws_data = client.get_workspace(workspace_id, branch_id=branch_id)
                 component = ws_data.get("component")

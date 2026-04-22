@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
@@ -165,6 +165,28 @@ class TestConfigMetadataList:
         data = json.loads(result.output)
         assert data["status"] == "error"
 
+    def test_list_config_error_exits_5(self, tmp_path: Path) -> None:
+        store = _setup_store(tmp_path)
+        mock_svc = MagicMock()
+        mock_svc.list_config_metadata.side_effect = ConfigError("No active branch")
+        result = _invoke(
+            store,
+            mock_svc,
+            "--json",
+            "config",
+            "metadata-list",
+            "--project",
+            "prod",
+            "--component-id",
+            COMP_ID,
+            "--config-id",
+            CFG_ID,
+        )
+        assert result.exit_code == 5
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+        assert data["error"]["code"] == "CONFIG_ERROR"
+
 
 # ── get-metadata ───────────────────────────────────────────────────────
 
@@ -229,6 +251,29 @@ class TestConfigGetMetadata:
         assert result.exit_code == 1
         data = json.loads(result.output)
         assert data["error"]["code"] == "NOT_FOUND"
+
+    def test_get_config_error_exits_5(self, tmp_path: Path) -> None:
+        store = _setup_store(tmp_path)
+        mock_svc = MagicMock()
+        mock_svc.get_config_metadata_value.side_effect = ConfigError("Branch resolution failed")
+        result = _invoke(
+            store,
+            mock_svc,
+            "--json",
+            "config",
+            "get-metadata",
+            "--project",
+            "prod",
+            "--component-id",
+            COMP_ID,
+            "--config-id",
+            CFG_ID,
+            "--key",
+            "k",
+        )
+        assert result.exit_code == 5
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "CONFIG_ERROR"
 
 
 # ── set-metadata ───────────────────────────────────────────────────────
@@ -303,6 +348,31 @@ class TestConfigSetMetadata:
         )
         assert result.exit_code == 1
 
+    def test_set_config_error_exits_5(self, tmp_path: Path) -> None:
+        store = _setup_store(tmp_path)
+        mock_svc = MagicMock()
+        mock_svc.set_config_metadata.side_effect = ConfigError("Branch resolution failed")
+        result = _invoke(
+            store,
+            mock_svc,
+            "--json",
+            "config",
+            "set-metadata",
+            "--project",
+            "prod",
+            "--component-id",
+            COMP_ID,
+            "--config-id",
+            CFG_ID,
+            "--key",
+            "k",
+            "--value",
+            "v",
+        )
+        assert result.exit_code == 5
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "CONFIG_ERROR"
+
 
 # ── delete-metadata ────────────────────────────────────────────────────
 
@@ -345,6 +415,30 @@ class TestConfigDeleteMetadata:
             metadata_id=2,
             branch_id=None,
         )
+
+    def test_delete_config_error_exits_5(self, tmp_path: Path) -> None:
+        store = _setup_store(tmp_path)
+        mock_svc = MagicMock()
+        mock_svc.delete_config_metadata.side_effect = ConfigError("Branch resolution failed")
+        result = _invoke(
+            store,
+            mock_svc,
+            "--json",
+            "config",
+            "delete-metadata",
+            "--project",
+            "prod",
+            "--component-id",
+            COMP_ID,
+            "--config-id",
+            CFG_ID,
+            "--metadata-id",
+            "1",
+            "--yes",
+        )
+        assert result.exit_code == 5
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "CONFIG_ERROR"
 
     def test_delete_api_error(self, tmp_path: Path) -> None:
         store = _setup_store(tmp_path)
@@ -414,6 +508,29 @@ class TestConfigSetFolder:
             folder_name="My Folder",
             branch_id=None,
         )
+
+    def test_set_folder_config_error_exits_5(self, tmp_path: Path) -> None:
+        store = _setup_store(tmp_path)
+        mock_svc = MagicMock()
+        mock_svc.set_config_folder.side_effect = ConfigError("Branch resolution failed")
+        result = _invoke(
+            store,
+            mock_svc,
+            "--json",
+            "config",
+            "set-folder",
+            "--project",
+            "prod",
+            "--component-id",
+            COMP_ID,
+            "--config-id",
+            CFG_ID,
+            "--name",
+            "Bad Folder",
+        )
+        assert result.exit_code == 5
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "CONFIG_ERROR"
 
     def test_set_folder_empty_clears(self, tmp_path: Path) -> None:
         """Empty folder name is a valid call (clearing the folder)."""

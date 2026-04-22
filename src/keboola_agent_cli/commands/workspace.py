@@ -130,6 +130,10 @@ def workspace_list(
 
     try:
         result = service.list_workspaces(aliases=project, orphaned_only=orphaned)
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
         raise typer.Exit(code=5) from None

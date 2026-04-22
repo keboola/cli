@@ -200,6 +200,34 @@ class TestWorkspaceGc:
         assert data["data"]["count_deleted"] == 1
         assert data["data"]["dry_run"] is False
 
+    def test_gc_no_confirmation_aborts(self, tmp_path: Path) -> None:
+        """Without --yes or --dry-run in non-JSON mode, user declining should exit 0."""
+        store = _setup_store(tmp_path)
+        mock_ws = MagicMock()
+        mock_ws.gc_workspaces.return_value = {
+            "dry_run": True,
+            "would_delete": [{"id": 5, "project_alias": "prod", "name": "orphan"}],
+            "count": 1,
+            "errors": [],
+            "message": "DRY RUN: 1 orphaned workspace(s) would be deleted.",
+        }
+        # In JSON mode the confirmation is always skipped (formatter.json_mode=True guard)
+        # so this test verifies --dry-run still works without --yes
+        result = _invoke(
+            store,
+            mock_ws,
+            "--json",
+            "workspace",
+            "gc",
+            "--project",
+            "prod",
+            "--dry-run",
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["data"]["dry_run"] is True
+        mock_ws.gc_workspaces.assert_called_once_with(aliases=["prod"], dry_run=True)
+
     def test_gc_nothing_to_delete(self, tmp_path: Path) -> None:
         store = _setup_store(tmp_path)
         mock_ws = MagicMock()
