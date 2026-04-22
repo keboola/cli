@@ -3474,7 +3474,7 @@ class TestE2ESyncAdoptExisting:
         #    We first call sync init normally to learn the real project_id, then
         #    delete and rewrite as a "legacy" manifest.
         _step(1, "sync init (normal) to learn project_id")
-        data = self._run_ok(
+        resp = self._run_ok(
             "sync",
             "init",
             "--project",
@@ -3482,7 +3482,7 @@ class TestE2ESyncAdoptExisting:
             "--directory",
             str(self.project_dir),
         )
-        project_id = data["project_id"]
+        project_id = resp["data"]["project_id"]
         branch_id = None
         keboola_dir = self.project_dir / ".keboola"
         manifest_path = keboola_dir / "manifest.json"
@@ -3505,7 +3505,7 @@ class TestE2ESyncAdoptExisting:
 
         # 3. sync init --adopt-existing should succeed without error.
         _step(3, "sync init --adopt-existing")
-        data = self._run_ok(
+        resp = self._run_ok(
             "sync",
             "init",
             "--project",
@@ -3514,20 +3514,22 @@ class TestE2ESyncAdoptExisting:
             str(self.project_dir),
             "--adopt-existing",
         )
-        assert data["status"] == "adopted", f"Expected 'adopted', got {data['status']}"
-        assert data["project_id"] == project_id
-        assert data["files_created"] == []
+        inner = resp["data"]
+        assert inner["status"] == "adopted", f"Expected 'adopted', got {inner['status']}"
+        assert inner["project_id"] == project_id
+        assert inner["files_created"] == []
 
         # 4. sync status should work on the adopted directory.
         _step(4, "sync status on adopted directory")
-        data = self._run_ok(
+        resp = self._run_ok(
             "sync",
             "status",
             "--directory",
             str(self.project_dir),
         )
         # Status should be parseable (may show no changes on an empty dir)
-        assert "modified" in data or "unchanged" in data or "added" in data
+        inner = resp["data"]
+        assert "modified" in inner or "unchanged" in inner or "added" in inner
 
     def test_adopt_existing_rejects_wrong_project(self) -> None:
         """init --adopt-existing rejects a manifest with a different project_id."""
