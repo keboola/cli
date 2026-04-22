@@ -193,6 +193,22 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
     Delete one or more buckets. --force cascade-deletes tables. Linked/shared buckets protected. Branch-aware.
 
+### Storage Descriptions
+
+  kbagent storage describe-bucket --project NAME --bucket-id ID [--text STR | --file PATH | --stdin] [--branch ID]
+    Set the KBC.description metadata on a bucket (upsert). Visible in bucket-detail.
+
+  kbagent storage describe-table --project NAME --table-id ID [--text STR | --file PATH | --stdin] [--branch ID]
+    Set the KBC.description metadata on a table (upsert). Readable via table-detail --json .data.description.
+
+  kbagent storage describe-column --project NAME --table-id ID --column NAME=DESC [--column ...] [--branch ID]
+    Set per-column descriptions stored as KBC.column.{{name}}.description in table metadata (upsert).
+    Readable via table-detail --json .data.column_details[].description.
+
+  kbagent storage describe-batch --project NAME --from-file YAML [--branch ID]
+    Apply bucket/table/column descriptions from a YAML file. Sections: buckets, tables, columns (all optional).
+    Failures collected; one error does not abort remaining items.
+
 ### Storage Files
 
   kbagent storage files --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]

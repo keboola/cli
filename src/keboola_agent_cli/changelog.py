@@ -8,6 +8,14 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.22.0": [
+        "New: storage describe-bucket -- set KBC.description on a bucket via metadata POST (upsert-by-key, provider=user)",
+        "New: storage describe-table -- set KBC.description on a table via metadata POST; description surfaces in table-detail",
+        "New: storage describe-column -- set per-column descriptions using KBC.column.{name}.description convention in table metadata; readable via table-detail column_details[].description",
+        "New: storage describe-batch --from-file -- apply bucket/table/column descriptions from a YAML file in one shot; failures collected, remaining items continue",
+        "Fix: storage table-detail now returns 'description' and 'metadata' fields (extracted from table metadata array)",
+        "Fix: storage bucket-detail now returns 'description' and 'metadata' fields (KBC.description in metadata takes precedence over native creation-time description field)",
+    ],
     "0.21.1": [
         "Fix: sync pull on a newly created dev branch now writes config rows (#193) -- idempotent skip guard for rows was missing a file-existence check, causing rows to be silently skipped when the branch directory was new (hash matched main because the branch is a clone)",
     ],

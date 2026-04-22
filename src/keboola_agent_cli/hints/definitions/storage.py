@@ -681,3 +681,157 @@ HintRegistry.register(
         ],
     )
 )
+
+# ── storage describe-bucket ────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="storage.describe-bucket",
+        description="Set the description on a storage bucket",
+        steps=[
+            HintStep(
+                comment="Upsert KBC.description in bucket metadata (provider='user')",
+                client=ClientCall(
+                    method="set_bucket_metadata",
+                    args={
+                        "bucket_id": "{bucket_id}",
+                        "entries": '[("KBC.description", "{description}")]',
+                        "branch_id": "{branch}",
+                    },
+                    result_var="result",
+                    result_hint="list[dict]",
+                ),
+                service=ServiceCall(
+                    service_class="StorageService",
+                    service_module="storage_service",
+                    method="describe_bucket",
+                    args={
+                        "alias": "{project}",
+                        "bucket_id": "{bucket_id}",
+                        "description": "{description}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "POST /v2/storage/buckets/{id}/metadata with provider='user' is an upsert-by-key.",
+            "The description appears in 'metadata' array of bucket-detail, not the native 'description' field.",
+        ],
+    )
+)
+
+# ── storage describe-table ────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="storage.describe-table",
+        description="Set the description on a storage table",
+        steps=[
+            HintStep(
+                comment="Upsert KBC.description in table metadata (provider='user')",
+                client=ClientCall(
+                    method="set_table_metadata",
+                    args={
+                        "table_id": "{table_id}",
+                        "entries": '[("KBC.description", "{description}")]',
+                        "branch_id": "{branch}",
+                    },
+                    result_var="result",
+                    result_hint="list[dict]",
+                ),
+                service=ServiceCall(
+                    service_class="StorageService",
+                    service_module="storage_service",
+                    method="describe_table",
+                    args={
+                        "alias": "{project}",
+                        "table_id": "{table_id}",
+                        "description": "{description}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Description is readable via 'storage table-detail --json | .data.description'.",
+        ],
+    )
+)
+
+# ── storage describe-column ───────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="storage.describe-column",
+        description="Set per-column descriptions on a storage table",
+        steps=[
+            HintStep(
+                comment="Store column descriptions as KBC.column.{name}.description in table metadata",
+                client=ClientCall(
+                    method="set_table_metadata",
+                    args={
+                        "table_id": "{table_id}",
+                        "entries": '[("KBC.column.{col}.description", "{description}")]',
+                        "branch_id": "{branch}",
+                    },
+                    result_var="result",
+                    result_hint="list[dict]",
+                ),
+                service=ServiceCall(
+                    service_class="StorageService",
+                    service_module="storage_service",
+                    method="describe_columns",
+                    args={
+                        "alias": "{project}",
+                        "table_id": "{table_id}",
+                        "columns": '{"{col}": "{description}"}',
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Column descriptions use key KBC.column.{name}.description in table metadata.",
+            "They appear under column_details[].description in 'storage table-detail --json'.",
+            "Keboola does not provide a user-writable column-metadata endpoint; this is the supported convention.",
+        ],
+    )
+)
+
+# ── storage describe-batch ────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="storage.describe-batch",
+        description="Apply bucket/table/column descriptions from a YAML file",
+        steps=[
+            HintStep(
+                comment="Load YAML and apply descriptions to all listed assets",
+                client=ClientCall(
+                    method="set_bucket_metadata / set_table_metadata",
+                    args={
+                        "from_file": "{from_file}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="result",
+                    result_hint="dict",
+                ),
+                service=ServiceCall(
+                    service_class="StorageService",
+                    service_module="storage_service",
+                    method="describe_batch",
+                    args={
+                        "alias": "{project}",
+                        "from_file": "Path('{from_file}')",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "YAML sections: 'buckets', 'tables', 'columns' (all optional).",
+            "Failures are collected -- one error does not abort the rest.",
+        ],
+    )
+)

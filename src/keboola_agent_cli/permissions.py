@@ -106,6 +106,11 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.delete-column": "destructive",
     "storage.delete-bucket": "destructive",
     "storage.file-delete": "destructive",
+    # Storage descriptions
+    "storage.describe-bucket": "write",
+    "storage.describe-table": "write",
+    "storage.describe-column": "write",
+    "storage.describe-batch": "write",
     # Encryption
     "encrypt.values": "write",
     # Sync / git workflow
