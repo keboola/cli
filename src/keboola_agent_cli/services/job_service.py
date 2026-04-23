@@ -14,6 +14,7 @@ from ..constants import (
     DEFAULT_LOG_TAIL_LINES,
     DEFAULT_POLL_STRATEGY,
     JOB_TERMINATE_GRACE_SECONDS,
+    JOB_TERMINATE_POLL_INTERVAL,
     KILLABLE_JOB_STATUSES,
     VALID_POLL_STRATEGIES,
 )
@@ -147,13 +148,13 @@ def _terminate_and_wait(
         try:
             job = client.get_job_detail(job_id)
         except Exception:
-            time.sleep(min(1.0, remaining))
+            time.sleep(min(JOB_TERMINATE_POLL_INTERVAL, remaining))
             continue
         if job.get("isFinished"):
             return job
         # Cap the sleep so we never overshoot the grace deadline by a
         # full poll interval (caller may be latency-sensitive).
-        time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+        time.sleep(min(JOB_TERMINATE_POLL_INTERVAL, max(0.0, deadline - time.monotonic())))
 
     # Remote still wasn't terminal within the grace window; return whatever
     # the last GET saw so callers can surface the actual state.

@@ -83,6 +83,10 @@ MAX_LOG_TAIL_LINES: int = 5000
 # Seconds to wait after issuing kill_job() during timeout-cancellation for
 # the job to transition to a terminal state before we return.
 JOB_TERMINATE_GRACE_SECONDS: float = 10.0
+# Poll cadence while waiting inside the terminate grace window; capped so we
+# never overshoot the deadline by more than one interval on latency-sensitive
+# callers (see _terminate_and_wait in services/job_service.py).
+JOB_TERMINATE_POLL_INTERVAL: float = 1.0
 
 # --- Storage Write Validation ---
 VALID_COLUMN_TYPES: frozenset[str] = frozenset(
