@@ -43,11 +43,13 @@ observability -- all API requests will include the X-Conversation-ID header.
 
 ## Global Flags
 
-  --json / -j     JSON output (always use for programmatic parsing)
-  --verbose / -v  Verbose output
-  --no-color      Disable colors (auto-disabled in non-TTY)
-  --config-dir    Override config directory path
-  --hint MODE     Generate Python code instead of executing (MODE: client or service)
+  --json / -j       JSON output (always use for programmatic parsing)
+  --verbose / -v    Verbose output
+  --no-color        Disable colors (auto-disabled in non-TTY)
+  --config-dir      Override config directory path
+  --hint MODE       Generate Python code instead of executing (MODE: client or service)
+  --deny-writes     Session-only firewall: block the WIDE NET -- every write, destructive, AND admin op (project add/remove/edit, org setup, all storage mutations)
+  --deny-destructive  Session-only firewall: NARROW -- block only data-destructive ops in Keboola (delete-table/bucket/column, terminate-job, branch delete). Admin ops (project remove, org setup) stay allowed -- use --deny-writes for those
 
 ## All Commands
 
@@ -82,6 +84,15 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent project description-set --project NAME [--text STR | --file PATH | --stdin]
     Set the dashboard project description. Pass exactly one of --text,
     --file, or --stdin. Writes KBC.projectDescription to the default branch.
+
+  kbagent project use ALIAS
+    Pin ALIAS as the default project. Persists to config.json.
+    Env var KBAGENT_PROJECT=ALIAS overrides the pin for a single shell/session;
+    an explicit --project flag overrides both.
+
+  kbagent project current
+    Print the effective default project and its source (env / pin / none).
+    Resolution order for single-project operations: --project > KBAGENT_PROJECT > pin.
 
 ### Component Discovery
 
@@ -131,6 +142,24 @@ Use `kbagent <command> --help` for full flag details and examples.
     Unlink variables from a config. Does NOT delete the underlying keboola.variables config
     (it may be shared). Delete it explicitly via `kbagent config delete` if needed.
 
+### Config Metadata (folder organisation + arbitrary key/value)
+
+  kbagent config metadata-list --project NAME --component-id ID --config-id ID [--branch ID]
+    List all metadata entries on a configuration. Each entry: id, key, value, provider, timestamp.
+
+  kbagent config get-metadata --project NAME --component-id ID --config-id ID --key KEY [--branch ID]
+    Read a single metadata value by key. Exits 1 (NOT_FOUND) if absent.
+
+  kbagent config set-metadata --project NAME --component-id ID --config-id ID --key KEY --value VALUE [--branch ID]
+    Set (upsert) a metadata key/value on a configuration.
+
+  kbagent config delete-metadata --project NAME --component-id ID --config-id ID --metadata-id ID [--branch ID] [--yes]
+    Delete a configuration metadata entry by numeric ID (from metadata-list).
+
+  kbagent config set-folder --project NAME --component-id ID --config-id ID --name "FolderName" [--branch ID]
+    Sugar: writes KBC.configuration.folderName metadata. Groups the config in the Keboola UI.
+    Pass --name "" to remove the folder assignment.
+
 ### Job History
 
   kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N]
@@ -139,13 +168,26 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent job detail --project NAME --job-id ID
     Full job detail including result message and timing.
 
-  kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--variable-values-id ID] [--no-variables]
+  kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N]
     Run a Queue API job. --row-id selects specific config rows (repeatable; omit to run entire config).
     --wait polls until job finishes. --timeout sets max wait in seconds (default 300). Branch-aware.
     When the config has linked variables (configuration.variables_id), kbagent auto-resolves
     a variableValuesId so the job binds to the deployed values row. --variable-values-id
     overrides; --no-variables skips resolution. Error code NO_VARIABLE_ROWS when the linked
     variables config has zero rows (run `kbagent config variables-set` to create one).
+    Polling under --wait uses an exponential curve by default (2s x 30 -> 5s x 48 -> 15s);
+    --poll-strategy fixed keeps a constant 1s interval. On FAILED/WARNING/TERMINATED, the last
+    --log-tail-lines events (default 200, 0 disables -- recommended for automation pipelines) are
+    surfaced as `logTail` in --json output.
+    --json response shapes by exit code:
+      - exit 0 (success): {{status:"ok", data:{{..., logTail?:[...]}}}}
+      - exit 1 (QUEUE_JOB_FAILED, remote job status=error):
+        {{status:"error", error:{{code:"QUEUE_JOB_FAILED", details:{{logTail:[...]}}}}}}
+      - exit 4 (QUEUE_JOB_TIMEOUT, local timeout + remote kill also failed):
+        {{status:"error", error:{{code:"QUEUE_JOB_TIMEOUT", retryable:true, details:{{logTail:[...]}}}}}}
+      - exit 7 (JOB_TIMEOUT_TERMINATED, local timeout + remote kill succeeded):
+        {{status:"error", error:{{code:"JOB_TIMEOUT_TERMINATED", details:{{job:{{...}}, logTail:[...]}}}}}}
+    jq pattern: `.error.details.logTail? // .data.logTail? // []` picks up the tail regardless of exit.
 
   kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
     Kill running jobs via Queue API (POST /jobs/{id}/kill). Use to stop runaway loops or pile-ups.
@@ -211,6 +253,22 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
     Delete one or more buckets. --force cascade-deletes tables. Linked/shared buckets protected. Branch-aware.
+
+### Storage Descriptions
+
+  kbagent storage describe-bucket --project NAME --bucket-id ID [--text STR | --file PATH | --stdin] [--branch ID]
+    Set the KBC.description metadata on a bucket (upsert). Visible in bucket-detail.
+
+  kbagent storage describe-table --project NAME --table-id ID [--text STR | --file PATH | --stdin] [--branch ID]
+    Set the KBC.description metadata on a table (upsert). Readable via table-detail --json .data.description.
+
+  kbagent storage describe-column --project NAME --table-id ID --column NAME=DESC [--column ...] [--branch ID]
+    Set per-column descriptions stored as KBC.column.{{name}}.description in table metadata (upsert).
+    Readable via table-detail --json .data.column_details[].description.
+
+  kbagent storage describe-batch --project NAME --from-file YAML [--branch ID]
+    Apply bucket/table/column descriptions from a YAML file. Sections: buckets, tables, columns (all optional).
+    Failures collected; one error does not abort remaining items.
 
 ### Storage Files
 
@@ -304,6 +362,38 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Use --org-id OR --project-ids (at least one required).
     Token via KBC_MANAGE_API_TOKEN env var or interactive prompt.
 
+### Flows (Orchestrator + Conditional)
+
+  kbagent flow list [--project NAME] [--branch ID]
+    List all flows (keboola.orchestrator + keboola.flow) across projects.
+
+  kbagent flow detail --project NAME --flow-id ID [--component-id keboola.orchestrator|keboola.flow] [--branch ID]
+    Show phases, tasks, and full configuration. --component-id defaults to keboola.orchestrator.
+
+  kbagent flow schema
+    Print the YAML format accepted by 'flow new' and 'flow update'.
+
+  kbagent flow new --project NAME --name "Name" [--component-id keboola.orchestrator|keboola.flow] [--description D] [--file YAML|@file|-] [--branch ID]
+    Create a new flow. --component-id defaults to keboola.flow (newer format).
+    --file accepts YAML with 'phases' and 'tasks' keys. DAG is validated (acyclic, refs exist).
+
+  kbagent flow update --project NAME --flow-id ID [--component-id ID] [--name N] [--description D] [--file YAML] [--branch ID]
+    Update a flow's name, description, or phases/tasks. --file replaces both phases and tasks.
+    Omitting --file leaves the flow body unchanged. DAG re-validated on write.
+
+  kbagent flow delete --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]
+    Delete a flow. Does NOT remove associated keboola.scheduler configs.
+    Run 'flow schedule-remove' first if you want to clean up schedules.
+
+  kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--component-id ID] [--timezone TZ] [--enabled/--disabled] [--name NAME] [--branch ID]
+    Upsert a cron schedule: updates the existing keboola.scheduler config if one exists, creates one
+    otherwise. Calling twice with a new cron replaces the old schedule — no duplicates created.
+    Schedules are stored as Storage API configs, not a separate scheduler service.
+
+  kbagent flow schedule-remove --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]
+    Remove all schedules bound to this flow (deletes all matching keboola.scheduler configs).
+    Idempotent: safe to run when no schedules exist.
+
 ### Development Branches
 
   kbagent branch list [--project NAME]
@@ -342,8 +432,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
     Create workspace. Backend auto-detected from project (or override with --backend). Default: headless (~1s). --ui: visible in KBC UI (~15s).
 
-  kbagent workspace list [--project NAME]
-    List workspaces. --project repeatable.
+  kbagent workspace list [--project NAME] [--orphaned]
+    List workspaces. --orphaned shows only orphaned workspaces (sandboxes config missing).
 
   kbagent workspace detail --project ALIAS --workspace-id ID
     Workspace connection details (no password).
@@ -363,9 +453,12 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]
     Create workspace from transformation config. Loads input tables automatically.
 
+  kbagent workspace gc [--project NAME] [--dry-run] [--yes]
+    Garbage-collect orphaned workspaces (keboola.sandboxes config missing). Use --dry-run to preview.
+
 ### Project Sync
 
-  kbagent sync init --project ALIAS [--directory DIR] [--git-branching]
+  kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
     Initialize sync working directory. --git-branching enables git-to-Keboola branch mapping.
 
   kbagent sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N]
@@ -500,6 +593,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
      KBC_MASTER_TOKEN         Master token for sharing ops (global fallback)
      KBC_MASTER_TOKEN_*       Per-project master token (e.g. KBC_MASTER_TOKEN_PROD)
      KBAGENT_CONFIG_DIR       Override config directory
+     KBAGENT_PROJECT          Override the pinned default project for this shell/session (beats pin, loses to --project)
      KBAGENT_MAX_PARALLEL_WORKERS  Max concurrent threads for multi-project ops (default 10, max 100)
      KBAGENT_AUTO_UPDATE      Set to "false" to disable automatic update on startup
      KBAGENT_UPDATED_FROM     Set to an older version to trigger "What's new" display on next run

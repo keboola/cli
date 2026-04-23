@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..errors import KeboolaApiError
+from ..errors import ErrorCode, KeboolaApiError
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +191,7 @@ def encrypt_secrets_in_config(
                     f"Use --allow-plaintext-on-encrypt-failure to override."
                 ),
                 status_code=0,
-                error_code="ENCRYPTION_FAILED",
+                error_code=ErrorCode.ENCRYPTION_FAILED,
             ) from exc
 
     return configuration

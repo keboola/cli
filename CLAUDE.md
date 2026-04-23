@@ -233,7 +233,7 @@ Note: `SKILL.md` instructs Claude to run `kbagent context` as its first step, wh
 ## All CLI Commands
 
 ```
-# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service
+# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service, --deny-writes, --deny-destructive
 
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list
@@ -244,6 +244,8 @@ kbagent project refresh --project ALIAS [--dry-run] [--force] [--yes] [--token-d
 kbagent project refresh --all [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
 kbagent project description-get --project NAME
 kbagent project description-set --project NAME [--text STR | --file PATH | --stdin]
+kbagent project use ALIAS
+kbagent project current
 
 kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID]
 kbagent config detail --project NAME --component-id ID --config-id ID [--branch ID]
@@ -253,10 +255,15 @@ kbagent config rename --project NAME --component-id ID --config-id ID --name "Ne
 kbagent config variables-set --project NAME --component-id ID --config-id ID --var KEY=VALUE [--var ...] [--replace] [--variables-id ID] [--values-id ID] [--branch ID] [--dry-run]
 kbagent config variables-get --project NAME --component-id ID --config-id ID [--branch ID]
 kbagent config variables-clear --project NAME --component-id ID --config-id ID [--branch ID] [--yes]
+kbagent config metadata-list --project NAME --component-id ID --config-id ID [--branch ID]
+kbagent config get-metadata --project NAME --component-id ID --config-id ID --key KEY [--branch ID]
+kbagent config set-metadata --project NAME --component-id ID --config-id ID --key KEY --value VALUE [--branch ID]
+kbagent config delete-metadata --project NAME --component-id ID --config-id ID --metadata-id ID [--branch ID] [--yes]
+kbagent config set-folder --project NAME --component-id ID --config-id ID --name FOLDER [--branch ID]
 
 kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
 kbagent job detail --project NAME --job-id ID
-kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--variable-values-id ID] [--no-variables]
+kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N]
 kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
 
 kbagent storage buckets [--project NAME] [--branch ID]
@@ -270,6 +277,10 @@ kbagent storage download-table --project NAME --table-id ID [--output FILE] [--c
 kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-column --project NAME --table-id ID --column COL [--column ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
+kbagent storage describe-bucket --project NAME --bucket-id ID [--text STR | --file PATH | --stdin] [--branch ID]
+kbagent storage describe-table --project NAME --table-id ID [--text STR | --file PATH | --stdin] [--branch ID]
+kbagent storage describe-column --project NAME --table-id ID --column NAME=DESC [--column ...] [--branch ID]
+kbagent storage describe-batch --project NAME --from-file YAML [--branch ID]
 kbagent storage files --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]
 kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID]
 kbagent storage file-download --project NAME [--file-id ID | --tag TAG ...] [--output FILE]
@@ -309,13 +320,14 @@ kbagent branch metadata-set --project NAME --key KEY [--text STR | --file PATH |
 kbagent branch metadata-delete --project NAME --metadata-id ID [--branch ID|default]
 
 kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
-kbagent workspace list [--project NAME]
+kbagent workspace list [--project NAME ...] [--orphaned]
 kbagent workspace detail --project ALIAS --workspace-id ID
 kbagent workspace delete --project ALIAS --workspace-id ID
 kbagent workspace password --project ALIAS --workspace-id ID
 kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [--tables ...] [--preserve]
 kbagent workspace query --project ALIAS --workspace-id ID --sql "SELECT ..." [--transactional]
 kbagent workspace query --project ALIAS --workspace-id ID --file query.sql
+kbagent workspace gc [--project NAME ...] [--dry-run] [--yes]
 kbagent workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
@@ -328,6 +340,15 @@ kbagent kai ping [--project NAME]
 kbagent kai ask --message "question" [--project NAME]
 kbagent kai chat --message "msg" [--chat-id ID] [--project NAME]
 kbagent kai history [--project NAME] [--limit N]
+
+kbagent flow list [--project NAME] [--branch ID]
+kbagent flow detail --project NAME --flow-id ID [--component-id keboola.orchestrator|keboola.flow] [--branch ID]
+kbagent flow schema
+kbagent flow new --project NAME --name NAME [--component-id keboola.orchestrator|keboola.flow] [--description D] [--file @path.yaml|-|JSON] [--branch ID]
+kbagent flow update --project NAME --flow-id ID [--component-id ID] [--name N] [--description D] [--file @path.yaml|-|JSON] [--branch ID]
+kbagent flow delete --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]
+kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--component-id ID] [--timezone TZ] [--disabled] [--branch ID]
+kbagent flow schedule-remove --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]
 
 kbagent context
 kbagent init [--from-global]

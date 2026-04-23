@@ -120,3 +120,132 @@ class TestReplCli:
 
         assert result.exit_code == 0
         assert "Commands" in result.output or "kbagent" in result.output
+
+
+class TestReplFirewallPropagation:
+    """REPL must forward --deny-writes / --deny-destructive to every inner command.
+
+    Dropping the flags when re-invoking inside the REPL would silently
+    restore write access for a user who started the session with a firewall.
+    """
+
+    def test_deny_writes_appended_to_inner_argv(self, monkeypatch) -> None:
+        """When deny_writes=True, the REPL rebuilds argv with --deny-writes."""
+        from keboola_agent_cli.commands import repl as repl_module
+
+        captured: list[list[str]] = []
+
+        class _FakeClickApp:
+            def __call__(self, argv, standalone_mode=False):
+                captured.append(list(argv))
+                raise SystemExit(0)
+
+        monkeypatch.setattr(repl_module.typer.main, "get_command", lambda _app: _FakeClickApp())
+
+        class _FakeSession:
+            def __init__(self, **_kwargs):
+                self._replies = iter(["project list", ""])
+
+            def prompt(self, _text):
+                try:
+                    return next(self._replies)
+                except StopIteration as exc:
+                    raise EOFError from exc
+
+        monkeypatch.setattr(repl_module, "PromptSession", _FakeSession)
+
+        repl_module._run_repl(
+            json_mode=True,
+            verbose=False,
+            no_color=True,
+            config_dir=None,
+            deny_writes=True,
+            deny_destructive=False,
+        )
+
+        # Every captured invocation must carry --deny-writes in the rebuilt argv.
+        assert captured, "REPL did not dispatch any commands"
+        for argv in captured:
+            assert "--deny-writes" in argv, (
+                f"REPL dropped --deny-writes when rebuilding argv: {argv}"
+            )
+
+    def test_deny_destructive_appended_to_inner_argv(self, monkeypatch) -> None:
+        """When deny_destructive=True, the REPL rebuilds argv with --deny-destructive."""
+        from keboola_agent_cli.commands import repl as repl_module
+
+        captured: list[list[str]] = []
+
+        class _FakeClickApp:
+            def __call__(self, argv, standalone_mode=False):
+                captured.append(list(argv))
+                raise SystemExit(0)
+
+        monkeypatch.setattr(repl_module.typer.main, "get_command", lambda _app: _FakeClickApp())
+
+        class _FakeSession:
+            def __init__(self, **_kwargs):
+                self._replies = iter(["storage delete-table --project p --table-id t"])
+
+            def prompt(self, _text):
+                try:
+                    return next(self._replies)
+                except StopIteration as exc:
+                    raise EOFError from exc
+
+        monkeypatch.setattr(repl_module, "PromptSession", _FakeSession)
+
+        repl_module._run_repl(
+            json_mode=False,
+            verbose=False,
+            no_color=True,
+            config_dir=None,
+            deny_writes=False,
+            deny_destructive=True,
+        )
+
+        assert captured
+        for argv in captured:
+            assert "--deny-destructive" in argv, (
+                f"REPL dropped --deny-destructive when rebuilding argv: {argv}"
+            )
+
+    def test_no_duplicate_when_user_retypes_flag(self, monkeypatch) -> None:
+        """If user types the flag inside the REPL, we must not double it."""
+        from keboola_agent_cli.commands import repl as repl_module
+
+        captured: list[list[str]] = []
+
+        class _FakeClickApp:
+            def __call__(self, argv, standalone_mode=False):
+                captured.append(list(argv))
+                raise SystemExit(0)
+
+        monkeypatch.setattr(repl_module.typer.main, "get_command", lambda _app: _FakeClickApp())
+
+        class _FakeSession:
+            def __init__(self, **_kwargs):
+                self._replies = iter(["--deny-writes project list"])
+
+            def prompt(self, _text):
+                try:
+                    return next(self._replies)
+                except StopIteration as exc:
+                    raise EOFError from exc
+
+        monkeypatch.setattr(repl_module, "PromptSession", _FakeSession)
+
+        repl_module._run_repl(
+            json_mode=False,
+            verbose=False,
+            no_color=True,
+            config_dir=None,
+            deny_writes=True,
+            deny_destructive=False,
+        )
+
+        assert captured
+        argv = captured[0]
+        assert argv.count("--deny-writes") == 1, (
+            f"REPL duplicated --deny-writes when user also typed it: {argv}"
+        )

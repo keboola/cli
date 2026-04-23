@@ -18,6 +18,13 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `project status [--project NAME]` -- test connectivity and response time
 - `project description-get --project NAME` -- read the dashboard project description (KBC.projectDescription on the default branch). Returns `{"description": ""}` if not set, not an error
 - `project description-set --project NAME [--text STR | --file PATH | --stdin]` -- set the dashboard project description (markdown). Pass exactly one of `--text`, `--file`, or `--stdin`. Writes to `KBC.projectDescription` on the default branch -- always the main branch, regardless of any active dev branch
+- `project use ALIAS` -- pin `ALIAS` as the persistent default project. Stored as `default_project` in config.json. Overridden at runtime by `KBAGENT_PROJECT=ALIAS` (env, beats pin) and by `--project ALIAS` (CLI flag, beats both)
+- `project current` -- print the effective default project and its source (`env` / `pin` / `none`). Reports both the env override AND the persisted pin so misconfigurations are visible. Returns `{"alias": null, "source": "none"}` when neither is set
+
+## Permission flags (top-level, session-only)
+- `--deny-writes` -- block all write/destructive/admin operations for this single invocation. Merges with any persisted permission policy; never written to config.json. Exit code 6 (PERMISSION_DENIED) on blocked operations
+- `--deny-destructive` -- block only destructive operations (delete-table, delete-bucket, terminate-job, etc.) for this invocation. Pure-write ops like create-table stay allowed. Use this when you want to keep build-up capabilities but lock out tear-downs
+- Both flags compose: `kbagent --deny-writes --deny-destructive ...` is the safest read-only run
 
 ## Organization
 - `org setup --org-id ID --url URL [--dry-run] [--yes]` -- bulk-onboard all projects from an org (org admin, needs `KBC_MANAGE_API_TOKEN`)
@@ -38,11 +45,16 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `config variables-set --project NAME --component-id ID --config-id ID --var KEY=VALUE [--var ...] [--replace] [--variables-id ID] [--values-id ID] [--branch ID] [--dry-run] [--allow-plaintext-on-encrypt-failure] [--yes]` -- attach variable values to a config. Auto-creates a sibling `keboola.variables` config + default row on first use and links it via the parent's `runtime.variables_id` / `variables_values_id`. Defaults to merge; `--replace` drops keys not in `--var`. `#`-prefixed values encrypt via the Encryption API (fail-closed; exit non-zero on `ENCRYPTION_FAILED`). See `variables-workflow.md`
 - `config variables-get --project NAME --component-id ID --config-id ID [--branch ID]` -- resolve `variables_id` + `values_id` from the parent config and fetch the current KEY=VALUE map. Returns `{linked: bool, variables_id, values_id, values}`; `linked=false` means the parent has no variables attached
 - `config variables-clear --project NAME --component-id ID --config-id ID [--branch ID] [--yes]` -- unlink variables from the parent config (strips `variables_id` + `variables_values_id`). **Does NOT delete** the backing `keboola.variables` config -- use `config delete` explicitly if you've verified nothing else references it
+- `config metadata-list --project NAME --component-id ID --config-id ID [--branch ID]` -- list all metadata entries on a configuration (id, key, value, provider, timestamp). Branch-aware
+- `config get-metadata --project NAME --component-id ID --config-id ID --key KEY [--branch ID]` -- read a single metadata value by key. Exits with `NOT_FOUND` (exit 1) if absent
+- `config set-metadata --project NAME --component-id ID --config-id ID --key KEY --value VALUE [--branch ID]` -- set (upsert) a metadata key/value on a configuration. Common keys: `KBC.configuration.folderName`, plus any custom `KBC.*` agent-facing tags
+- `config delete-metadata --project NAME --component-id ID --config-id ID --metadata-id ID [--branch ID] [--yes]` -- delete a configuration metadata entry by its numeric ID (from `metadata-list`)
+- `config set-folder --project NAME --component-id ID --config-id ID --name FOLDER [--branch ID]` -- set (or clear, with empty `--name`) the `KBC.configuration.folderName` metadata, which groups configs into named folders in the Keboola UI. See `config-metadata-workflow.md`
 
 ## Job History
 - `job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N]` -- list jobs (default 50, max 500)
 - `job detail --project NAME --job-id ID` -- full job detail with timing and result message
-- `job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--variable-values-id ID] [--no-variables]` -- run a job, optionally wait for completion (branch-aware). For configs with linked `keboola.variables` (root-level `configuration.variables_id`), kbagent auto-resolves a `variableValuesId` so transformations bind to the deployed values row. `--variable-values-id` overrides; `--no-variables` skips resolution. `NO_VARIABLE_ROWS` when the linked variables config has zero rows -- fix via `kbagent config variables-set`.
+- `job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N]` -- run a job, optionally wait for completion (branch-aware). For configs with linked `keboola.variables` (root-level `configuration.variables_id`), kbagent auto-resolves a `variableValuesId` so transformations bind to the deployed values row. `--variable-values-id` overrides; `--no-variables` skips resolution. `NO_VARIABLE_ROWS` when the linked variables config has zero rows -- fix via `kbagent config variables-set`. Under `--wait`, polls with an exponential curve (2s x 30 -> 5s x 48 -> 15s); `--poll-strategy fixed` keeps a constant 1s interval. On FAILED/WARNING/TERMINATED, the last `--log-tail-lines` events (default 200, **0 disables -- recommended for automation pipelines**) are attached as `logTail` in the JSON result (or `details.logTail` on errors). If `--timeout` expires, kbagent issues `kill_job` on the remote and exits **7** (`JOB_TIMEOUT_TERMINATED`) with the cancelled `details.job` + `details.logTail`; if the kill itself fails, exits **4** (`QUEUE_JOB_TIMEOUT`, `retryable=true`). Use jq pattern `.error.details.logTail? // .data.logTail? // []` to pick up the tail regardless of exit code.
 - `job terminate --project NAME (--job-id ID [--job-id ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]` -- kill running Queue API jobs. Use to stop runaway loops or clean up pile-ups from repeated `job run` calls. Two modes: by ID (single/batch) or by filter (`--status any` catches every killable state). Response partitions IDs into `killed / already_finished / not_found / failed`; safe to re-run idempotently. Kill is async -- poll `job detail` for `isFinished=true`.
 
 ## Storage
@@ -57,6 +69,10 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `storage delete-table --project NAME --table-id ID [--table-id ...] [--force] [--dry-run] [--yes] [--branch ID]` -- delete tables, --force cascade-deletes aliased tables (branch-aware)
 - `storage delete-column --project NAME --table-id ID --column COL [--column ...] [--force] [--dry-run] [--yes] [--branch ID]` -- delete columns from a table (branch-aware)
 - `storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]` -- delete buckets (branch-aware)
+- `storage describe-bucket --project NAME --bucket-id ID [--text STR | --file PATH | --stdin] [--branch ID]` -- set a bucket description (stored as `KBC.description` in bucket metadata, upsert). Provide exactly one of `--text`, `--file`, `--stdin`. Read back via `storage bucket-detail`
+- `storage describe-table --project NAME --table-id ID [--text STR | --file PATH | --stdin] [--branch ID]` -- set a table description (stored as `KBC.description` in table metadata, upsert). Provide exactly one of `--text`, `--file`, `--stdin`. Read back via `storage table-detail`
+- `storage describe-column --project NAME --table-id ID --column NAME=DESCRIPTION [--column ...] [--branch ID]` -- set one or more column descriptions. Stored as `KBC.column.{name}.description` keys in the table's metadata (Keboola has no user-writable column-metadata endpoint). Read back in `storage table-detail` under `column_details[].description`
+- `storage describe-batch --project NAME --from-file PATH [--branch ID]` -- apply bucket/table/column descriptions from a YAML file (top-level `buckets`, `tables`, `columns` sections, all optional). Partial-failure tolerant: per-item errors are collected and reported, the batch does not abort. Non-zero exit only when at least one item failed
 
 ## Storage Files
 - `storage files --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]` -- list Storage Files, optionally filtered by tag/query
@@ -90,12 +106,13 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 
 ## Workspaces (SQL Debugging)
 - `workspace create --project ALIAS [--name NAME] [--ui] [--read-only]` -- create workspace (headless ~1s, `--ui` ~15s)
-- `workspace list [--project NAME]` -- list workspaces
+- `workspace list [--project NAME ...] [--orphaned]` -- list workspaces. `--project` repeatable for multi-project; `--orphaned` filters to workspaces whose backing `keboola.sandboxes` config is missing
 - `workspace detail --project ALIAS --workspace-id ID` -- show connection details
 - `workspace delete --project ALIAS --workspace-id ID` -- delete workspace
 - `workspace password --project ALIAS --workspace-id ID` -- reset and return new password
 - `workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [...] [--preserve]` -- load storage tables
 - `workspace query --project ALIAS --workspace-id ID --sql "..." [--file F] [--transactional]` -- run SQL via Query Service
+- `workspace gc [--project NAME ...] [--dry-run] [--yes]` -- garbage-collect orphaned workspaces (and any lingering `keboola.sandboxes` configs). `--dry-run` previews without deleting; `--project` repeatable, omit to GC across all connected projects
 - `workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]` -- workspace from existing transform
 
 ## MCP Tools
@@ -108,8 +125,18 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `kai chat --message "msg" [--chat-id ID] [--project NAME]` -- send message in a chat session, returns chat_id for continuation
 - `kai history [--project NAME] [--limit N]` -- list recent Kai chat sessions (default limit: 10)
 
+## Flows (Orchestrator)
+- `flow list [--project NAME] [--branch ID]` -- list all flows (keboola.orchestrator + keboola.flow) across one or all projects
+- `flow detail --project NAME --flow-id ID [--component-id keboola.orchestrator|keboola.flow] [--branch ID]` -- full phase/task breakdown; groups tasks by phase, lists orphan tasks
+- `flow schema` -- print YAML template for flow configuration (phases + tasks); use with `--file @-` or save to a file
+- `flow new --project NAME --name NAME [--component-id keboola.orchestrator|keboola.flow] [--description D] [--file @path.yaml|-|JSON] [--branch ID]` -- create a flow; DAG validated before API call; default component: keboola.flow
+- `flow update --project NAME --flow-id ID [--component-id ID] [--name N] [--description D] [--file @path.yaml|-|JSON] [--branch ID]` -- update name, description, or phases/tasks; requires at least one of --name/--description/--file
+- `flow delete --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]` -- delete a flow config (confirmation guard)
+- `flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--component-id ID] [--timezone TZ] [--disabled] [--branch ID]` -- attach a cron schedule (stored as keboola.scheduler config); replaces any existing schedule
+- `flow schedule-remove --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]` -- remove all cron schedules attached to a flow; idempotent
+
 ## Sync (GitOps)
-- `sync init --project ALIAS [--directory DIR] [--git-branching]` -- initialize sync working directory
+- `sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]` -- initialize sync working directory; `--adopt-existing` (since v0.22.0) adopts a `.keboola/manifest.json` already written by the kbc Go CLI without overwriting (idempotent; validates `project_id` against the alias token)
 - `sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N]` -- download configs to local files. For large projects (>100 configs), automatically fetches jobs per-config when the grouped API limit is insufficient
 - `sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure]` -- push local changes (auto-encrypts secrets, fails if encryption fails)
 - `sync diff --project ALIAS [--all-projects]` -- 3-way diff (local vs base vs remote), detects conflicts

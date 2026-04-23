@@ -33,7 +33,7 @@ from ..constants import (
     STORAGE_DIR_NAME,
     STORAGE_SAMPLES_DIR_NAME,
 )
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..sync.code_extraction import extract_code_files, merge_code_files
 from ..sync.config_format import (
     api_config_to_local,
@@ -78,6 +78,7 @@ class SyncService(BaseService):
         alias: str,
         project_root: Path,
         git_branching: bool = False,
+        adopt_existing: bool = False,
     ) -> dict[str, Any]:
         """Initialize a sync working directory for a project.
 
@@ -88,13 +89,19 @@ class SyncService(BaseService):
             alias: Project alias from config store.
             project_root: Root directory for the sync working tree.
             git_branching: Enable git-branching mode.
+            adopt_existing: If True and a manifest already exists, validate it
+                against the alias's project_id and normalise it (idempotent
+                upgrade of a ``kbc``-written manifest) instead of refusing.
 
         Returns:
             Dict with initialization stats and created file paths.
 
         Raises:
-            ConfigError: If the project alias is not found.
-            FileExistsError: If manifest already exists (use pull instead).
+            ConfigError: If the project alias is not found, or if
+                ``adopt_existing`` is True but the manifest's project_id does
+                not match the alias's project.
+            FileExistsError: If manifest already exists and adopt_existing is
+                False (use ``sync pull`` to update).
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -102,9 +109,12 @@ class SyncService(BaseService):
         keboola_dir = project_root / KEBOOLA_DIR_NAME
         manifest_path = keboola_dir / "manifest.json"
         if manifest_path.exists():
+            if adopt_existing:
+                return self._adopt_existing_manifest(alias, project_root, project)
             raise FileExistsError(
                 f"Manifest already exists at {manifest_path}. "
-                "Use 'sync pull' to update, or delete .keboola/ to reinitialize."
+                "Use 'sync pull' to update, 'sync init --adopt-existing' to adopt a "
+                "kbc-written manifest, or delete .keboola/ to reinitialize."
             )
 
         # Fetch project info from API
@@ -182,6 +192,48 @@ class SyncService(BaseService):
             "git_branching": git_branching,
             "default_branch": default_branch_name,
             "files_created": created_files,
+        }
+
+    def _adopt_existing_manifest(
+        self,
+        alias: str,
+        project_root: Path,
+        project: Any,
+    ) -> dict[str, Any]:
+        """Validate and normalise an existing manifest written by kbc or kbagent.
+
+        Idempotent: loads the manifest, confirms project_id matches the alias,
+        then saves it back through kbagent's serialiser (fills missing optional
+        fields with defaults, normalises camelCase keys, preserves all
+        existing content).
+
+        Raises:
+            ConfigError: If the manifest's project_id doesn't match the alias.
+        """
+        existing = load_manifest(project_root)
+
+        client = self._client_factory(project.stack_url, project.token)
+        with client:
+            token_info = client.verify_token()
+
+        if existing.project.id != token_info.project_id:
+            raise ConfigError(
+                f"Manifest project_id={existing.project.id} does not match alias "
+                f"'{alias}' project_id={token_info.project_id}; refusing to overwrite. "
+                "Check that --project points to the correct alias."
+            )
+
+        api_host = project.stack_url.replace("https://", "").rstrip("/")
+        save_manifest(project_root, existing)
+
+        return {
+            "status": "adopted",
+            "project_id": token_info.project_id,
+            "project_alias": alias,
+            "api_host": api_host,
+            "git_branching": existing.git_branching.enabled,
+            "default_branch": existing.git_branching.default_branch,
+            "files_created": [],
         }
 
     # ------------------------------------------------------------------
@@ -1278,7 +1330,7 @@ class SyncService(BaseService):
                     f"{parent_config_id} is not tracked in the manifest."
                 ),
                 status_code=0,
-                error_code="PARENT_CONFIG_NOT_TRACKED",
+                error_code=ErrorCode.PARENT_CONFIG_NOT_TRACKED,
             )
 
         project_id = manifest.project.id if manifest.project else None

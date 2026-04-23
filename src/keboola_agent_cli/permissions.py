@@ -22,6 +22,8 @@ OPERATION_REGISTRY: dict[str, str] = {
     "project.refresh": "admin",
     "project.description-get": "read",
     "project.description-set": "write",
+    "project.use": "write",
+    "project.current": "read",
     # Config browsing & management
     "config.list": "read",
     "config.detail": "read",
@@ -33,6 +35,11 @@ OPERATION_REGISTRY: dict[str, str] = {
     "config.variables-set": "write",
     "config.variables-get": "read",
     "config.variables-clear": "destructive",
+    "config.metadata-list": "read",
+    "config.get-metadata": "read",
+    "config.set-metadata": "write",
+    "config.delete-metadata": "destructive",
+    "config.set-folder": "write",
     # Job history
     "job.list": "read",
     "job.detail": "read",
@@ -72,6 +79,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "workspace.load": "write",
     "workspace.query": "write",
     "workspace.from-transformation": "write",
+    "workspace.gc": "destructive",
     # MCP tools
     "tool.list": "read",
     "tool.call": "write",
@@ -106,6 +114,11 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.delete-column": "destructive",
     "storage.delete-bucket": "destructive",
     "storage.file-delete": "destructive",
+    # Storage descriptions
+    "storage.describe-bucket": "write",
+    "storage.describe-table": "write",
+    "storage.describe-column": "write",
+    "storage.describe-batch": "write",
     # Encryption
     "encrypt.values": "write",
     # Sync / git workflow
@@ -117,6 +130,15 @@ OPERATION_REGISTRY: dict[str, str] = {
     "sync.branch-link": "write",
     "sync.branch-unlink": "write",
     "sync.branch-status": "read",
+    # Flow operations
+    "flow.list": "read",
+    "flow.detail": "read",
+    "flow.schema": "read",
+    "flow.new": "write",
+    "flow.update": "write",
+    "flow.delete": "destructive",
+    "flow.schedule": "write",
+    "flow.schedule-remove": "destructive",
     # Top-level commands
     "init": "admin",
     "doctor": "read",

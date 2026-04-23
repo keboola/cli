@@ -102,6 +102,77 @@ kbagent --json permissions list
 | `sync.*` | All sync subcommands (glob) |
 | `tool:create_*` | MCP tools matching glob pattern |
 
+## Session firewall flags
+
+Two top-level flags let an operator harden a single invocation WITHOUT editing
+the persisted policy in `config.json`. They are session-only, additive, and
+evaluated alongside any persisted policy.
+
+```bash
+# Wide net: blocks writes + destructive + admin
+kbagent --deny-writes <command>
+
+# Narrow net: blocks only data-destructive ops (pure writes still allowed)
+kbagent --deny-destructive <command>
+
+# Both (equivalent to --deny-writes here, since wide subsumes narrow)
+kbagent --deny-writes --deny-destructive <command>
+```
+
+### `--deny-writes` (WIDE)
+
+Appends `cli:write` and `tool:write` to the deny list. The `cli:write` pattern
+intentionally spans the **write + destructive + admin** categories, so this one
+flag blocks everything that mutates state -- config create/update/delete, branch
+delete, project add/remove/edit, org setup, storage writes, sync push, and every
+MCP write tool (`create_*`, `update_*`, `delete_*`, `add_*`, `set_*`, `remove_*`).
+
+Use this when you want a strict read-only session without touching the persisted
+policy. Blocked operations exit with code 6 (`PERMISSION_DENIED`).
+
+### `--deny-destructive` (NARROW)
+
+Appends `cli:destructive` and `tool:destructive` to the deny list. This pattern
+matches **only** operations categorized as destructive (data destruction) --
+`branch.delete`, `workspace.delete`, `config.delete`, `storage.delete-table`,
+`storage.delete-bucket`, `storage.delete-column`, `job.terminate`, and MCP
+`delete_*` / `remove_*` tools.
+
+Pure-write operations (e.g. `storage create-bucket`, `config update`) and admin
+operations (e.g. `project remove`, `org setup`) are **still allowed**. Use this
+when an agent needs to create/modify resources but must not be able to destroy
+existing data.
+
+### REPL forwarding
+
+When invoked as `kbagent --deny-writes repl` (or `--deny-destructive`), the
+flags propagate into every subcommand run inside the REPL session, so each
+inner invocation picks them up automatically. A duplicate-append guard prevents
+the flag from being injected twice if a user also types it explicitly on a REPL
+line.
+
+### Relationship to persisted policy
+
+The session flags merge **additively** with the persisted policy for the
+duration of the invocation:
+
+- The persisted `mode`, `allow` list, and existing `deny` entries are preserved
+  unchanged. Only the flag-implied deny patterns are appended (deduped).
+- Session flags **can only add more deny entries** -- they NEVER relax the
+  persisted policy. Running `kbagent --deny-writes` against a policy that
+  already denies everything does not re-open anything.
+- The merged policy lives in memory for this process only. It is never written
+  to `config.json`, so subsequent invocations without the flag revert to the
+  persisted policy alone.
+- `kbagent permissions list` and `kbagent permissions show` render the
+  **effective** policy (persisted merged with session flags) so you can verify
+  what is actually active right now. The `session_flags` field in the JSON
+  output of `permissions show` surfaces which flags are in play.
+
+For the complementary project-pin UX (`kbagent project use <alias>`, which
+persists a default project so you can drop `--project` from subsequent
+commands), see the project management section of the skill.
+
 ## Defense in depth (`--read-only`)
 
 `kbagent init --read-only` applies three layers of protection:

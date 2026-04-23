@@ -7,8 +7,9 @@ No business logic belongs here.
 from pathlib import Path
 
 import typer
+from rich.markup import escape
 
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_query_results, format_workspaces_table
 from ._helpers import (
     check_cli_permission,
@@ -103,7 +104,7 @@ def workspace_create(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -115,6 +116,11 @@ def workspace_list(
         "--project",
         help="Project alias to query (can be repeated for multiple projects)",
     ),
+    orphaned: bool = typer.Option(
+        False,
+        "--orphaned",
+        help="Show only orphaned workspaces (keboola.sandboxes config missing)",
+    ),
 ) -> None:
     """List workspaces from connected projects."""
     if should_hint(ctx):
@@ -124,9 +130,13 @@ def workspace_list(
     service = get_service(ctx, "workspace_service")
 
     try:
-        result = service.list_workspaces(aliases=project)
+        result = service.list_workspaces(aliases=project, orphaned_only=orphaned)
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -182,7 +192,7 @@ def workspace_detail(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -222,7 +232,7 @@ def workspace_delete(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -265,7 +275,7 @@ def workspace_password(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -327,7 +337,7 @@ def workspace_load(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -383,13 +393,13 @@ def workspace_query(
     if sql and file:
         formatter.error(
             message="Specify either --sql or --file, not both.",
-            error_code="USAGE_ERROR",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
     if not sql and not file:
         formatter.error(
             message="Specify either --sql or --file.",
-            error_code="USAGE_ERROR",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
 
@@ -416,8 +426,81 @@ def workspace_query(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
+
+
+@workspace_app.command("gc")
+def workspace_gc(
+    ctx: typer.Context,
+    project: list[str] | None = typer.Option(
+        None,
+        "--project",
+        help="Project alias to query (can be repeated). None = all projects.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="List orphaned workspaces without deleting them",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompt",
+    ),
+) -> None:
+    """Garbage-collect orphaned workspaces.
+
+    An orphaned workspace is one backed by keboola.sandboxes whose
+    sandbox config no longer exists. Running gc deletes those workspaces
+    (and any lingering sandbox configs). Use --dry-run to preview first.
+    """
+    if should_hint(ctx):
+        emit_hint(ctx, "workspace.gc", project=project, dry_run=dry_run)
+        return
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "workspace_service")
+
+    if (
+        not dry_run
+        and not yes
+        and not formatter.json_mode
+        and not typer.confirm("Delete all orphaned workspaces in the selected project(s)?")
+    ):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+
+    try:
+        result = service.gc_workspaces(aliases=project, dry_run=dry_run)
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=exit_code) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        formatter.console.print(result.get("message", ""))
+        if dry_run:
+            would_delete = result.get("would_delete", [])
+            for ws in would_delete:
+                formatter.console.print(
+                    f"  [dim]would delete[/dim] workspace {ws['id']} "
+                    f"([cyan]{escape(ws.get('name', ''))}[/cyan]) in '{escape(ws['project_alias'])}'"
+                )
+        else:
+            for ws in result.get("deleted", []):
+                formatter.console.print(
+                    f"  [green]deleted[/green] workspace {ws['id']} in '{escape(ws['project_alias'])}'"
+                )
+            for err in result.get("errors", []):
+                formatter.console.print(
+                    f"  [red]error[/red] workspace {err.get('workspace_id', '?')}: {escape(err.get('error', ''))}"
+                )
 
 
 @workspace_app.command("from-transformation")
@@ -500,5 +583,5 @@ def workspace_from_transformation(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None

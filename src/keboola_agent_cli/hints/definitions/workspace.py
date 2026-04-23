@@ -252,3 +252,34 @@ HintRegistry.register(
         ],
     )
 )
+
+# ── workspace gc ───────────────────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="workspace.gc",
+        description="Garbage-collect orphaned workspaces (keboola.sandboxes config missing)",
+        steps=[
+            HintStep(
+                comment="List orphaned workspaces then delete each one",
+                client=ClientCall(
+                    method="list_workspaces",
+                    args={"branch_id": "{branch}"},
+                    result_var="workspaces",
+                    result_hint="list[dict]",
+                ),
+                service=ServiceCall(
+                    service_class="WorkspaceService",
+                    service_module="workspace_service",
+                    method="gc_workspaces",
+                    args={"aliases": "{project}", "dry_run": "{dry_run}"},
+                ),
+            ),
+        ],
+        notes=[
+            "Orphan = workspace whose keboola.sandboxes config no longer exists.",
+            "Use --dry-run first to preview without deleting.",
+            "Reuses delete_workspace internally (also cleans up any lingering sandbox config).",
+        ],
+    )
+)

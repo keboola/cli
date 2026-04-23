@@ -519,6 +519,181 @@ SAMPLE_COMPONENTS_2 = [
 ]
 
 
+class TestUseAndCurrentProject:
+    """Tests for ProjectService.use_project() / current_project() / resolve_pinned_alias()."""
+
+    def _seed_two(self, tmp_config_dir: Path) -> ConfigStore:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        for alias, pid in (("prod", 1), ("stage", 2)):
+            store.add_project(
+                alias,
+                ProjectConfig(
+                    stack_url="https://connection.keboola.com",
+                    token=f"901-x-{alias}",
+                    project_name=alias.title(),
+                    project_id=pid,
+                ),
+            )
+        return store
+
+    def test_use_project_pins_and_persists(self, tmp_config_dir: Path) -> None:
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        result = service.use_project(alias="stage")
+
+        assert result["alias"] == "stage"
+        assert result["previous"] == "prod"
+        assert result["source"] == "pin"
+        # Persistence check
+        assert ConfigStore(config_dir=tmp_config_dir).load().default_project == "stage"
+
+    def test_use_project_unknown_raises(self, tmp_config_dir: Path) -> None:
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+        with pytest.raises(ConfigError, match="not found"):
+            service.use_project(alias="does-not-exist")
+
+    def test_current_project_pin_only(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        result = service.current_project()
+        assert result["alias"] == "prod"
+        assert result["source"] == "pin"
+        assert result["env_override"] is None
+
+    def test_current_project_env_override(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_PROJECT", "stage")
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        result = service.current_project()
+        assert result["alias"] == "stage"
+        assert result["source"] == "env"
+        assert result["pinned"] == "prod"
+        assert result["env_points_to_configured_project"] is True
+
+    def test_current_project_env_unknown(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_PROJECT", "mystery")
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        result = service.current_project()
+        assert result["alias"] == "mystery"
+        assert result["env_points_to_configured_project"] is False
+
+    def test_current_project_no_pin_no_env(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        # Empty store -- no pin possible
+        store = ConfigStore(config_dir=tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        result = service.current_project()
+        assert result["alias"] is None
+        assert result["source"] == "none"
+
+    # ── resolve_pinned_alias precedence ────────────────────────────────
+
+    def test_resolve_explicit_wins(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_PROJECT", "stage")
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        alias, source = service.resolve_pinned_alias(explicit="prod")
+        assert alias == "prod"
+        assert source == "explicit"
+
+    def test_resolve_env_beats_pin(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_PROJECT", "stage")
+        store = self._seed_two(tmp_config_dir)
+        # default is prod (first added)
+        service = ProjectService(config_store=store)
+
+        alias, source = service.resolve_pinned_alias()
+        assert alias == "stage"
+        assert source == "env"
+
+    def test_resolve_pin_used(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        alias, source = service.resolve_pinned_alias()
+        assert alias == "prod"
+        assert source == "pin"
+
+    def test_resolve_sole_project_fallback(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "only",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="t",
+                project_name="Only",
+                project_id=7,
+            ),
+        )
+        # Clear the pin to exercise the sole-project fallback.
+        cfg = store.load()
+        cfg.default_project = ""
+        store.save(cfg)
+
+        service = ProjectService(config_store=store)
+        alias, source = service.resolve_pinned_alias()
+        assert alias == "only"
+        assert source == "sole"
+
+    def test_resolve_fail_hard_multi_no_pin(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = self._seed_two(tmp_config_dir)
+        cfg = store.load()
+        cfg.default_project = ""
+        store.save(cfg)
+
+        service = ProjectService(config_store=store)
+        with pytest.raises(ConfigError, match="Multiple projects"):
+            service.resolve_pinned_alias()
+
+    def test_resolve_explicit_unknown_raises(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+        with pytest.raises(ConfigError, match="not found"):
+            service.resolve_pinned_alias(explicit="ghost")
+
+    def test_resolve_env_unknown_raises(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_PROJECT", "mystery")
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+        with pytest.raises(ConfigError, match="not registered"):
+            service.resolve_pinned_alias()
+
+    def test_resolve_no_projects_raises(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = ConfigStore(config_dir=tmp_config_dir)
+        service = ProjectService(config_store=store)
+        with pytest.raises(ConfigError, match="No projects configured"):
+            service.resolve_pinned_alias()
+
+    def test_resolve_pinned_alias_points_to_unregistered(
+        self, tmp_config_dir: Path, monkeypatch
+    ) -> None:
+        """Stale pin (pointing at deleted project) raises a repair-friendly ConfigError."""
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = self._seed_two(tmp_config_dir)
+        # Hand-edit default_project to a value that isn't in projects.
+        cfg = store.load()
+        cfg.default_project = "ghost"
+        store.save(cfg)
+
+        service = ProjectService(config_store=store)
+        with pytest.raises(ConfigError, match="not registered"):
+            service.resolve_pinned_alias()
+
+
 class TestConfigServiceListConfigs:
     """Tests for ConfigService.list_configs()."""
 
@@ -1862,7 +2037,411 @@ class TestJobServiceRunJob:
             branch_id=123,
             variable_values_id=None,
         )
-        mock_client.wait_for_queue_job.assert_called_once_with("557", max_wait=60.0)
+        mock_client.wait_for_queue_job.assert_called_once_with(
+            "557", max_wait=60.0, poll_strategy="exponential"
+        )
+
+
+class TestJobServiceQueuePollingParity:
+    """PR4: log-tail capture + auto-cancel on --timeout + poll-strategy plumbing."""
+
+    def _store(self, tmp_config_dir: Path) -> ConfigStore:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-abc-defghijklmnopqrst",
+                project_name="Prod",
+                project_id=1234,
+            ),
+        )
+        return store
+
+    def _service(self, store: ConfigStore, mock_client: MagicMock) -> JobService:
+        return JobService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+    def test_run_job_threads_poll_strategy_to_client(self, tmp_config_dir: Path) -> None:
+        """poll_strategy kwarg reaches wait_for_queue_job unchanged."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 700, "status": "waiting"}
+        mock_client.wait_for_queue_job.return_value = {
+            "id": 700,
+            "status": "success",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        service.run_job(
+            alias="prod",
+            component_id="keboola.ex-http",
+            config_id="42",
+            wait=True,
+            timeout=60.0,
+            poll_strategy="fixed",
+            no_variables=True,
+        )
+
+        mock_client.wait_for_queue_job.assert_called_once_with(
+            "700", max_wait=60.0, poll_strategy="fixed"
+        )
+
+    def test_run_job_rejects_unknown_strategy(self, tmp_config_dir: Path) -> None:
+        """Bad poll_strategy fails at service boundary, not at client."""
+        service = self._service(self._store(tmp_config_dir), MagicMock())
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                poll_strategy="linear",
+                no_variables=True,
+            )
+        assert exc_info.value.error_code == "INVALID_ARGUMENT"
+
+    def test_run_job_rejects_negative_log_tail(self, tmp_config_dir: Path) -> None:
+        service = self._service(self._store(tmp_config_dir), MagicMock())
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                log_tail_lines=-1,
+                no_variables=True,
+            )
+        assert exc_info.value.error_code == "INVALID_ARGUMENT"
+
+    def test_run_job_success_no_tail_attached(self, tmp_config_dir: Path) -> None:
+        """status=success does NOT fetch events (log tail only for non-success)."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 701, "status": "waiting"}
+        mock_client.wait_for_queue_job.return_value = {
+            "id": 701,
+            "status": "success",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        result = service.run_job(
+            alias="prod",
+            component_id="keboola.ex-http",
+            config_id="42",
+            wait=True,
+            no_variables=True,
+        )
+        assert "logTail" not in result
+        mock_client.fetch_job_events.assert_not_called()
+
+    def test_run_job_warning_attaches_log_tail(self, tmp_config_dir: Path) -> None:
+        """status=warning surfaces a logTail of the first N events (newest-first)."""
+        # Storage Events returns newest -> oldest; emulate that ordering so
+        # the slice asserts the client didn't accidentally reverse it.
+        events = [{"id": 249 - i, "message": f"event {249 - i}"} for i in range(250)]
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 702, "status": "waiting"}
+        mock_client.wait_for_queue_job.return_value = {
+            "id": 702,
+            "runId": "702-run",
+            "status": "warning",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+        mock_client.fetch_job_events.return_value = events
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        result = service.run_job(
+            alias="prod",
+            component_id="keboola.ex-http",
+            config_id="42",
+            wait=True,
+            log_tail_lines=100,
+            no_variables=True,
+        )
+        # Storage Events yields newest-first; we take [:100] so the head
+        # stays newest. IDs 249 -> 150.
+        assert len(result["logTail"]) == 100
+        assert result["logTail"][0]["id"] == 249
+        assert result["logTail"][-1]["id"] == 150
+        # runId (not raw id) must have been the query key.
+        mock_client.fetch_job_events.assert_called_once_with("702-run", limit=100)
+
+    def test_run_job_zero_tail_skips_fetch(self, tmp_config_dir: Path) -> None:
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 703, "status": "waiting"}
+        mock_client.wait_for_queue_job.return_value = {
+            "id": 703,
+            "status": "terminated",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        result = service.run_job(
+            alias="prod",
+            component_id="keboola.ex-http",
+            config_id="42",
+            wait=True,
+            log_tail_lines=0,
+            no_variables=True,
+        )
+        mock_client.fetch_job_events.assert_not_called()
+        assert "logTail" not in result
+
+    def test_run_job_queue_failure_attaches_tail_and_reraises(self, tmp_config_dir: Path) -> None:
+        """QUEUE_JOB_FAILED re-raises with logTail tucked into exc.details."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 704, "status": "waiting"}
+        mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="Queue job 704 failed: SQL error",
+            status_code=500,
+            error_code="QUEUE_JOB_FAILED",
+        )
+        # The service fetches job detail on failure to resolve runId.
+        mock_client.get_job_detail.return_value = {
+            "id": "704",
+            "runId": "704",
+            "status": "error",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+        mock_client.fetch_job_events.return_value = [
+            {"uuid": "u1", "type": "error", "message": "SQL error"},
+        ]
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                wait=True,
+                no_variables=True,
+            )
+        assert exc_info.value.error_code == "QUEUE_JOB_FAILED"
+        assert exc_info.value.details["logTail"][0]["message"] == "SQL error"
+        # kill_job must NOT be called when the job failed on its own.
+        mock_client.kill_job.assert_not_called()
+        # runId used as the query key, not the Queue job id.
+        mock_client.fetch_job_events.assert_called_once_with("704", limit=200)
+
+    def test_run_job_timeout_issues_kill_and_raises_terminated(self, tmp_config_dir: Path) -> None:
+        """QUEUE_JOB_TIMEOUT -> kill_job + JOB_TIMEOUT_TERMINATED with job payload."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 705, "status": "waiting"}
+        mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="Queue job 705 did not complete within 5s",
+            status_code=504,
+            error_code="QUEUE_JOB_TIMEOUT",
+        )
+        mock_client.kill_job.return_value = {
+            "id": 705,
+            "status": "terminating",
+            "desiredStatus": "terminating",
+        }
+        mock_client.get_job_detail.return_value = {
+            "id": 705,
+            "runId": "705-run",
+            "status": "terminated",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+        mock_client.fetch_job_events.return_value = [{"uuid": "u1", "message": "x"}]
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                wait=True,
+                timeout=5.0,
+                no_variables=True,
+            )
+        assert exc_info.value.error_code == "JOB_TIMEOUT_TERMINATED"
+        mock_client.kill_job.assert_called_once_with("705")
+        details = exc_info.value.details
+        assert details["job"]["status"] == "terminated"
+        assert details["logTail"] == [{"uuid": "u1", "message": "x"}]
+        # runId from the terminated job detail used as the lookup key.
+        mock_client.fetch_job_events.assert_called_once_with("705-run", limit=200)
+
+    def test_run_job_timeout_kill_fails_falls_back(self, tmp_config_dir: Path) -> None:
+        """If kill_job AND the follow-up GET fail, surface QUEUE_JOB_TIMEOUT (retryable)."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 706, "status": "waiting"}
+        mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="Queue job 706 did not complete within 5s",
+            status_code=504,
+            error_code="QUEUE_JOB_TIMEOUT",
+            retryable=True,
+        )
+        mock_client.kill_job.side_effect = KeboolaApiError(
+            message="network down",
+            status_code=0,
+            error_code="CONNECTION_ERROR",
+        )
+        mock_client.get_job_detail.side_effect = KeboolaApiError(
+            message="still down",
+            status_code=0,
+            error_code="CONNECTION_ERROR",
+        )
+        mock_client.get_config_detail.return_value = {}
+        mock_client.fetch_job_events.return_value = []
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                wait=True,
+                timeout=5.0,
+                no_variables=True,
+            )
+        assert exc_info.value.error_code == "QUEUE_JOB_TIMEOUT"
+        assert exc_info.value.retryable is True
+
+    def test_run_job_log_tail_fetch_failure_is_swallowed(self, tmp_config_dir: Path) -> None:
+        """A failing fetch_job_events must not mask the original job failure."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 707, "status": "waiting"}
+        mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="Queue job 707 failed: SQL error",
+            status_code=500,
+            error_code="QUEUE_JOB_FAILED",
+        )
+        mock_client.fetch_job_events.side_effect = KeboolaApiError(
+            message="events 500",
+            status_code=500,
+            error_code="UNKNOWN_ERROR",
+        )
+        mock_client.get_config_detail.return_value = {}
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                wait=True,
+                no_variables=True,
+            )
+        # Original error preserved; details has no logTail key when fetch fails.
+        assert exc_info.value.error_code == "QUEUE_JOB_FAILED"
+        assert "logTail" not in exc_info.value.details
+
+    def test_run_job_unhandled_wait_code_bubbles_up_unchanged(self, tmp_config_dir: Path) -> None:
+        """A wait error that is neither QUEUE_JOB_FAILED nor QUEUE_JOB_TIMEOUT
+        must re-raise the original instance with no mutation and no kill attempt.
+        Locks the observability fall-through path added in the review loop."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 708, "status": "waiting"}
+        mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="token rotated mid-run",
+            status_code=401,
+            error_code="INVALID_TOKEN",
+        )
+        mock_client.get_config_detail.return_value = {}
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                wait=True,
+                no_variables=True,
+            )
+        assert exc_info.value.error_code == "INVALID_TOKEN"
+        # No tail fetch, no kill -- this path is for errors we don't specialise.
+        mock_client.fetch_job_events.assert_not_called()
+        mock_client.kill_job.assert_not_called()
+        # exc passes through without a logTail (mutation would be a bug).
+        assert "logTail" not in exc_info.value.details
+
+    def test_run_job_failure_exception_chaining_does_not_mutate_original(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """QUEUE_JOB_FAILED produces a NEW exception chained from the original.
+
+        Guarantees we do not mutate a caught exception's .details dict
+        (which would contaminate any shared instance / retry harness).
+        """
+        original_details: dict = {}
+        original = KeboolaApiError(
+            message="Queue job 709 failed: SQL error",
+            status_code=500,
+            error_code="QUEUE_JOB_FAILED",
+            details=original_details,
+        )
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 709, "status": "waiting"}
+        mock_client.wait_for_queue_job.side_effect = original
+        mock_client.get_job_detail.return_value = {
+            "id": "709",
+            "runId": "709",
+            "status": "error",
+            "isFinished": True,
+        }
+        mock_client.get_config_detail.return_value = {}
+        mock_client.fetch_job_events.return_value = [{"uuid": "u1", "message": "err"}]
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                wait=True,
+                no_variables=True,
+            )
+        raised = exc_info.value
+        # Raised instance is NEW, not the one side_effect handed us.
+        assert raised is not original
+        # Chain is explicit (raise ... from original).
+        assert raised.__cause__ is original
+        # Original details dict was NOT mutated.
+        assert original_details == {}
+        assert "logTail" not in original.details
+        # But the new exception carries the tail.
+        assert raised.details["logTail"][0]["uuid"] == "u1"
+
+
+class TestSafeFetchLogTailDefensiveSort:
+    """Ensure _safe_fetch_log_tail enforces newest-first ordering regardless of
+    what the API returned (PR4 review round 1 finding)."""
+
+    def test_sorts_events_by_created_desc(self) -> None:
+        """API returns events in arbitrary order -> we still emit newest first."""
+        from keboola_agent_cli.services.job_service import _safe_fetch_log_tail
+
+        mock_client = MagicMock()
+        # Deliberately shuffled order from the "API"
+        mock_client.fetch_job_events.return_value = [
+            {"uuid": "a", "created": "2026-04-22T09:54:27+0200", "message": "middle"},
+            {"uuid": "b", "created": "2026-04-22T09:54:30+0200", "message": "newest"},
+            {"uuid": "c", "created": "2026-04-22T09:54:10+0200", "message": "oldest"},
+        ]
+        tail = _safe_fetch_log_tail(mock_client, {"id": "x", "runId": "x"}, limit=10)
+        assert [e["uuid"] for e in tail] == ["b", "a", "c"]
+
+    def test_missing_created_sorts_last(self) -> None:
+        """Events without `created` should not jump to the top of the tail."""
+        from keboola_agent_cli.services.job_service import _safe_fetch_log_tail
+
+        mock_client = MagicMock()
+        mock_client.fetch_job_events.return_value = [
+            {"uuid": "no_created", "message": "missing"},
+            {"uuid": "timestamped", "created": "2026-04-22T09:54:30+0200", "message": "ok"},
+        ]
+        tail = _safe_fetch_log_tail(mock_client, {"id": "x", "runId": "x"}, limit=10)
+        assert tail[0]["uuid"] == "timestamped"
+        assert tail[1]["uuid"] == "no_created"
 
 
 class TestJobServiceVariableValuesResolution:
@@ -2093,7 +2672,9 @@ class TestJobServiceVariableValuesResolution:
 
         assert result["status"] == "success"
         assert result["resolvedVariableValuesId"] == "row-waited"
-        mock_client.wait_for_queue_job.assert_called_once_with("750", max_wait=30.0)
+        mock_client.wait_for_queue_job.assert_called_once_with(
+            "750", max_wait=30.0, poll_strategy="exponential"
+        )
 
     def test_run_job_closes_client_when_resolver_raises(self, tmp_config_dir: Path) -> None:
         """NO_VARIABLE_ROWS raised by the resolver inside run_job still closes the client.

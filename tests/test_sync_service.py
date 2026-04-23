@@ -2197,3 +2197,181 @@ class TestEnsureBranchRegistered:
         assert result == "branch-44444"
         assert len(manifest.branches) == 2
         assert manifest.branches[1].path == "branch-44444"
+
+
+# ===========================================================================
+# adopt-existing tests
+# ===========================================================================
+
+
+class TestAdoptExistingManifest:
+    """Tests for SyncService.init_sync(adopt_existing=True)."""
+
+    def _kbc_style_manifest(self, project_id: int = 258) -> dict:
+        """Return a manifest as written by the kbc Go CLI (camelCase, gitBranching present)."""
+        return {
+            "version": 2,
+            "project": {"id": project_id, "apiHost": "connection.keboola.com"},
+            "allowTargetEnv": True,
+            "sortBy": "id",
+            "gitBranching": {"enabled": False, "defaultBranch": "main"},
+            "naming": {"branch": "{branch_name}"},
+            "branches": [{"id": 12345, "path": "main"}],
+            "configurations": [
+                {
+                    "branchId": 12345,
+                    "componentId": "keboola.ex-http",
+                    "id": "cfg-001",
+                    "path": "extractor/keboola.ex-http/my-extractor",
+                    "rows": [],
+                }
+            ],
+        }
+
+    def test_adopt_existing_normalises_kbc_manifest(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """adopt_existing=True loads, validates, and saves a kbc manifest without data loss."""
+        mock_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,  # project_id=258
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        keboola_dir = project_root / ".keboola"
+        keboola_dir.mkdir()
+        manifest_path = keboola_dir / "manifest.json"
+        import json as _json
+
+        manifest_path.write_text(
+            _json.dumps(self._kbc_style_manifest(project_id=258)), encoding="utf-8"
+        )
+
+        result = svc.init_sync(
+            alias="prod",
+            project_root=project_root,
+            adopt_existing=True,
+        )
+
+        assert result["status"] == "adopted"
+        assert result["project_id"] == 258
+        assert result["project_alias"] == "prod"
+        assert result["files_created"] == []
+
+        # Original configuration entry preserved in manifest
+        saved = load_manifest(project_root)
+        assert len(saved.configurations) == 1
+        assert saved.configurations[0].component_id == "keboola.ex-http"
+
+    def test_adopt_existing_rejects_project_id_mismatch(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """adopt_existing raises ConfigError when manifest project_id != alias project_id."""
+        mock_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,  # project_id=258
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        keboola_dir = project_root / ".keboola"
+        keboola_dir.mkdir()
+        import json as _json
+
+        # Manifest claims a different project (id=999, not 258)
+        (keboola_dir / "manifest.json").write_text(
+            _json.dumps(self._kbc_style_manifest(project_id=999)), encoding="utf-8"
+        )
+
+        with pytest.raises(ConfigError, match="project_id=999"):
+            svc.init_sync(alias="prod", project_root=project_root, adopt_existing=True)
+
+    def test_adopt_existing_falls_through_to_normal_init_when_no_manifest(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """adopt_existing=True with no manifest runs normal init (creates manifest)."""
+        mock_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        result = svc.init_sync(
+            alias="prod",
+            project_root=project_root,
+            adopt_existing=True,
+        )
+
+        # Should behave like a normal init when no manifest exists
+        assert result["status"] == "initialized"
+        assert (project_root / ".keboola" / "manifest.json").exists()
+
+    def test_adopt_existing_false_still_raises_on_existing_manifest(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """Default (adopt_existing=False) still raises FileExistsError when manifest exists."""
+        mock_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        svc.init_sync(alias="prod", project_root=project_root)
+
+        # Second call without adopt_existing should still fail
+        with pytest.raises(FileExistsError, match="--adopt-existing"):
+            svc.init_sync(alias="prod", project_root=project_root)
+
+    def test_adopt_existing_idempotent(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """adopt_existing is idempotent: calling it twice leaves the manifest unchanged."""
+        mock_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        keboola_dir = project_root / ".keboola"
+        keboola_dir.mkdir()
+        import json as _json
+
+        (keboola_dir / "manifest.json").write_text(
+            _json.dumps(self._kbc_style_manifest(project_id=258)), encoding="utf-8"
+        )
+
+        result1 = svc.init_sync(alias="prod", project_root=project_root, adopt_existing=True)
+        result2 = svc.init_sync(alias="prod", project_root=project_root, adopt_existing=True)
+
+        assert result1["status"] == "adopted"
+        assert result2["status"] == "adopted"
+        # Both calls return the same project data
+        assert result1["project_id"] == result2["project_id"]

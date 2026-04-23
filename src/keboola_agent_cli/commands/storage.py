@@ -5,11 +5,12 @@ that is not available via MCP tools.
 """
 
 from pathlib import Path
+from typing import Any
 
 import typer
 
 from ..config_store import ConfigStore
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
     emit_hint,
@@ -71,7 +72,7 @@ def storage_buckets(
     if branch is not None and (not project or len(project) != 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -89,7 +90,7 @@ def storage_buckets(
     try:
         result = service.list_buckets(aliases=project, branch_id=effective_branch)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -175,7 +176,7 @@ def storage_bucket_detail(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -268,7 +269,7 @@ def storage_tables(
     if branch is not None and (not project or len(project) != 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -290,7 +291,7 @@ def storage_tables(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -376,7 +377,7 @@ def storage_table_detail(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -477,10 +478,10 @@ def storage_create_bucket(
             branch_id=effective_branch,
         )
     except ValueError as exc:
-        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -561,10 +562,10 @@ def storage_create_table(
             branch_id=effective_branch,
         )
     except ValueError as exc:
-        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -648,7 +649,7 @@ def storage_upload_table(
 
     p = Path(file)
     if not p.is_file():
-        formatter.error(message=f"File not found: {file}", error_code="FILE_NOT_FOUND")
+        formatter.error(message=f"File not found: {file}", error_code=ErrorCode.FILE_NOT_FOUND)
         raise typer.Exit(code=2) from None
 
     if not formatter.json_mode:
@@ -669,10 +670,10 @@ def storage_upload_table(
             branch_id=effective_branch,
         )
     except ValueError as exc:
-        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -794,10 +795,10 @@ def storage_download_table(
             keep_slices=keep_slices,
         )
     except ValueError as exc:
-        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -887,7 +888,7 @@ def storage_delete_table(
                 branch_id=effective_branch,
             )
         except ConfigError as exc:
-            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
         if formatter.json_mode:
@@ -915,7 +916,7 @@ def storage_delete_table(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -1004,7 +1005,7 @@ def storage_delete_column(
                 branch_id=effective_branch,
             )
         except ConfigError as exc:
-            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
         if formatter.json_mode:
@@ -1035,7 +1036,7 @@ def storage_delete_column(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -1118,7 +1119,7 @@ def storage_delete_bucket(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -1138,6 +1139,401 @@ def storage_delete_bucket(
 
     if result["failed"]:
         raise typer.Exit(code=1)
+
+
+# ------------------------------------------------------------------
+# Describe (metadata write) commands
+# ------------------------------------------------------------------
+
+_DESCRIBE = "Descriptions"
+
+
+@storage_app.command("describe-bucket", rich_help_panel=_DESCRIBE)
+def storage_describe_bucket(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    bucket_id: str = typer.Option(
+        ...,
+        "--bucket-id",
+        help="Bucket ID (e.g. 'in.c-my-bucket')",
+    ),
+    text: str | None = typer.Option(
+        None,
+        "--text",
+        help="Description text (inline)",
+    ),
+    file: Path | None = typer.Option(
+        None,
+        "--file",
+        help="Path to a file containing the description",
+    ),
+    stdin: bool = typer.Option(
+        False,
+        "--stdin",
+        help="Read description from standard input",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
+) -> None:
+    """Set the description on a storage bucket.
+
+    Stores the description as KBC.description in bucket metadata (upsert).
+    Provide the text via --text, --file, or --stdin (exactly one required).
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx, "storage.describe-bucket", project=project, bucket_id=bucket_id, branch=branch
+        )
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    from ._metadata_input import resolve_text_input
+
+    try:
+        description = resolve_text_input(text=text, file=file, stdin=stdin)
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
+
+    try:
+        result = service.describe_bucket(
+            alias=project,
+            bucket_id=bucket_id,
+            description=description,
+            branch_id=effective_branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        formatter.console.print(f"[bold green]Description set:[/bold green] {bucket_id}")
+        formatter.console.print(f"  {description[:120]}")
+
+
+@storage_app.command("describe-table", rich_help_panel=_DESCRIBE)
+def storage_describe_table(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    table_id: str = typer.Option(
+        ...,
+        "--table-id",
+        help="Table ID (e.g. 'in.c-my-bucket.my-table')",
+    ),
+    text: str | None = typer.Option(
+        None,
+        "--text",
+        help="Description text (inline)",
+    ),
+    file: Path | None = typer.Option(
+        None,
+        "--file",
+        help="Path to a file containing the description",
+    ),
+    stdin: bool = typer.Option(
+        False,
+        "--stdin",
+        help="Read description from standard input",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
+) -> None:
+    """Set the description on a storage table.
+
+    Stores the description as KBC.description in table metadata (upsert).
+    Provide the text via --text, --file, or --stdin (exactly one required).
+    """
+    if should_hint(ctx):
+        emit_hint(ctx, "storage.describe-table", project=project, table_id=table_id, branch=branch)
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    from ._metadata_input import resolve_text_input
+
+    try:
+        description = resolve_text_input(text=text, file=file, stdin=stdin)
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
+
+    try:
+        result = service.describe_table(
+            alias=project,
+            table_id=table_id,
+            description=description,
+            branch_id=effective_branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        formatter.console.print(f"[bold green]Description set:[/bold green] {table_id}")
+        formatter.console.print(f"  {description[:120]}")
+
+
+@storage_app.command("describe-column", rich_help_panel=_DESCRIBE)
+def storage_describe_column(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    table_id: str = typer.Option(
+        ...,
+        "--table-id",
+        help="Table ID (e.g. 'in.c-my-bucket.my-table')",
+    ),
+    column: list[str] = typer.Option(
+        ...,
+        "--column",
+        help="Column description as 'NAME=DESCRIPTION' (can be repeated)",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
+) -> None:
+    """Set descriptions on one or more columns of a storage table.
+
+    Descriptions are stored as KBC.column.{name}.description keys in table
+    metadata (upsert).  Keboola Storage does not expose a user-writable
+    column-level metadata endpoint; this convention lets you annotate columns
+    and read them back via 'storage table-detail'.
+
+    Example:
+
+        kbagent storage describe-column \\
+            --project myproj \\
+            --table-id in.c-bucket.orders \\
+            --column order_id="Unique order identifier" \\
+            --column total="Order total in USD"
+    """
+    if should_hint(ctx):
+        emit_hint(ctx, "storage.describe-column", project=project, table_id=table_id, branch=branch)
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    parsed: dict[str, str] = {}
+    for entry in column:
+        if "=" not in entry:
+            formatter.error(
+                message=f"--column must be NAME=DESCRIPTION, got: {entry!r}",
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+            raise typer.Exit(code=2) from None
+        name, _, desc = entry.partition("=")
+        name = name.strip()
+        if not name:
+            formatter.error(
+                message=f"Column name cannot be empty in: {entry!r}",
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+            raise typer.Exit(code=2) from None
+        parsed[name] = desc
+
+    try:
+        result = service.describe_columns(
+            alias=project,
+            table_id=table_id,
+            columns=parsed,
+            branch_id=effective_branch,
+        )
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        formatter.console.print(
+            f"[bold green]Column descriptions set:[/bold green] {table_id} "
+            f"({len(parsed)} column(s))"
+        )
+        for name, desc in parsed.items():
+            formatter.console.print(f"  {name}: {desc[:80]}")
+
+
+@storage_app.command("describe-batch", rich_help_panel=_DESCRIBE)
+def storage_describe_batch(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    from_file: Path = typer.Option(
+        ...,
+        "--from-file",
+        help="Path to a YAML file with bucket/table/column descriptions",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
+) -> None:
+    """Apply descriptions to buckets, tables, and columns from a YAML file.
+
+    YAML schema:
+
+        buckets:
+          in.c-my-bucket: "Bucket description"
+
+        tables:
+          in.c-my-bucket.my-table: "Table description"
+
+        columns:
+          in.c-my-bucket.my-table:
+            col1: "Column 1 description"
+            col2: "Column 2 description"
+
+    All sections are optional.  A failure in one item does not abort the
+    rest -- all results are collected and reported.
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx, "storage.describe-batch", project=project, from_file=from_file, branch=branch
+        )
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    # In human mode, show a live progress indicator so that large batches
+    # (100+ items) do not look frozen. JSON mode must remain silent on stderr
+    # so structured output is the only thing on stdout.
+    progress_cm: Any = None
+    progress_task: Any = None
+    progress_callback = None
+    if not formatter.json_mode:
+        from rich.progress import (
+            BarColumn,
+            MofNCompleteColumn,
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            TimeElapsedColumn,
+        )
+
+        progress_cm = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+            console=formatter.console,
+            transient=True,
+        )
+
+        def _on_item(obj_type: str, obj_id: str, current: int, total: int) -> None:
+            # Guard against progress_task/progress_cm not being ready yet.
+            if progress_task is None or progress_cm is None:
+                return
+            # total is known up-front (passed the first time), but re-setting
+            # is a no-op after the first call.
+            progress_cm.update(
+                progress_task,
+                total=total,
+                completed=max(current - 1, 0),
+                description=f"Describing {obj_type} {obj_id}",
+            )
+
+        progress_callback = _on_item
+
+    try:
+        if progress_cm is not None:
+            progress_cm.start()
+            progress_task = progress_cm.add_task("Applying descriptions...", total=None)
+        result = service.describe_batch(
+            alias=project,
+            from_file=from_file,
+            branch_id=effective_branch,
+            progress_callback=progress_callback,
+        )
+        if progress_cm is not None and progress_task is not None:
+            # Mark the task complete so the final render shows N / N.
+            progress_cm.update(
+                progress_task,
+                completed=result["applied_count"] + result["error_count"],
+            )
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    finally:
+        if progress_cm is not None:
+            # .stop() is idempotent; safe for both happy and error paths.
+            progress_cm.stop()
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        applied = result["applied_count"]
+        errors = result["error_count"]
+        formatter.console.print(
+            f"[bold green]Batch complete:[/bold green] {applied} applied, {errors} error(s)"
+        )
+        for item in result["applied"]:
+            obj_type = item["type"]
+            obj_id = item["id"]
+            if obj_type == "columns":
+                n = len(item.get("columns", {}))
+                formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id} ({n} cols)")
+            else:
+                formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id}")
+        for item in result["errors"]:
+            formatter.console.print(f"  [red]✗[/red] {item['type']} {item['id']}: {item['error']}")
+        if errors:
+            raise typer.Exit(code=1) from None
 
 
 # ------------------------------------------------------------------
@@ -1228,7 +1624,7 @@ def storage_file_list(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1292,7 +1688,7 @@ def storage_file_info(
     try:
         result = service.get_file_info(alias=project, file_id=file_id)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1376,7 +1772,7 @@ def storage_file_upload(
 
     p = Path(file)
     if not p.is_file():
-        formatter.error(message=f"File not found: {file}", error_code="FILE_NOT_FOUND")
+        formatter.error(message=f"File not found: {file}", error_code=ErrorCode.FILE_NOT_FOUND)
         raise typer.Exit(code=2) from None
 
     if not formatter.json_mode:
@@ -1393,7 +1789,7 @@ def storage_file_upload(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1460,7 +1856,7 @@ def storage_file_download(
     if not file_id and not tag:
         formatter.error(
             message="Either --file-id or --tag must be provided",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
 
@@ -1478,10 +1874,10 @@ def storage_file_download(
             output_path=output,
         )
     except ValueError as exc:
-        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1534,7 +1930,7 @@ def storage_file_tag(
     if not add and not remove:
         formatter.error(
             message="At least one of --add or --remove must be provided",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
 
@@ -1546,7 +1942,7 @@ def storage_file_tag(
             remove_tags=remove,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1607,7 +2003,7 @@ def storage_file_delete(
             dry_run=dry_run,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1709,7 +2105,7 @@ def storage_load_file(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1806,7 +2202,7 @@ def storage_unload_table(
         formatter = get_formatter(ctx)
         formatter.error(
             message=f"--file-type must be 'csv' or 'parquet', got {file_type!r}",
-            error_code="VALIDATION_ERROR",
+            error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2) from None
     if should_hint(ctx):
@@ -1851,7 +2247,7 @@ def storage_unload_table(
             keep_slices=keep_slices,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)

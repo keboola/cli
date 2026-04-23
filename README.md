@@ -69,18 +69,19 @@ kbagent workspace query --project prod --workspace-id WS_ID \
 | Area | What you get |
 |------|-------------|
 | **Multi-project** | All read commands query every connected project in parallel. One command, all projects. |
-| **Configurations** | List, search, inspect, scaffold, update, delete configs. Full-text search across all config bodies. |
-| **Jobs** | List, inspect, run with `--wait` polling and `--timeout`. Row-level execution for multi-row configs. |
-| **Storage** | Buckets, tables, files -- full CRUD. Upload CSV (auto-creates bucket+table). Download by file ID or by tag. |
-| **Dev branches** | Create a branch, activate it, and every command auto-targets it. Storage, MCP, sync -- everything follows. |
-| **Sync & GitOps** | Pull configs as YAML, edit in IDE, push back. SQL/Python extracted as real files. Diff and status tracking. |
+| **Configurations** | List, search, inspect, scaffold, update, delete configs. Full-text search across all config bodies (incl. rows). Metadata CRUD + folder grouping. |
+| **Jobs** | List, inspect, run with `--wait` polling (exponential curve), `--timeout` auto-kill, log tail on failure. Row-level execution for multi-row configs. |
+| **Flows** | Create, update, delete orchestrator/flow configs with phase/task DAG validation. Attach cron schedules (timezone + enabled/disabled state). |
+| **Storage** | Buckets, tables, files -- full CRUD. Upload CSV (auto-creates bucket+table). Download by file ID or by tag. Descriptions on buckets/tables/columns (batch-applicable from YAML). |
+| **Dev branches** | Create a branch, activate it, and every command auto-targets it. Storage writes, MCP, sync -- everything follows. Storage reads default to production (safer). |
+| **Sync & GitOps** | Pull configs as YAML, edit in IDE, push back. SQL/Python extracted as real files. Diff and status tracking. Adopt existing kbc Go CLI checkouts (`sync init --adopt-existing`). |
 | **MCP tools** | Call `keboola-mcp-server` tools with auto-expand, multi-project fan-out, branch propagation, schema validation. |
-| **Workspaces** | Create Snowflake/BQ workspace, load tables, run SQL. Create from transformation config for instant debugging. |
+| **Workspaces** | Create Snowflake/BQ workspace, load tables, run SQL. Create from transformation config for instant debugging. Orphan detection + garbage collection. |
 | **Sharing** | Cross-project bucket sharing with org/project/user access control. Share, link, unlink. |
 | **Lineage** | Column-level dependency analysis across projects. SQL/Python parsing, AI-enhanced detection, interactive web browser, Mermaid/HTML/ER export. |
 | **Kai (AI Assistant)** | Ask Keboola's built-in AI questions about your project. One-shot or chat sessions with full MCP context. |
 | **Encryption** | Encrypt secrets (`#password`, `#api_token`) via Keboola Encryption API. Works with sync push and MCP. |
-| **Permissions** | Firewall for AI agents: read-only, deny-writes, deny-destructive. Code-level enforcement, not prompt tricks. |
+| **Permissions** | Firewall for AI agents: read-only, deny-writes, deny-destructive (session-only flags or persisted policy). Project pin + `KBAGENT_PROJECT` env override. Code-level enforcement, stable `ErrorCode` enum, not prompt tricks. |
 | **Auto-update** | Self-updates on startup. "What's new" after each update. Full changelog via `kbagent changelog`. |
 
 ## Setup options
@@ -109,25 +110,33 @@ Run `kbagent doctor` to verify your setup.
 Full command reference with flags: [SKILL.md](plugins/kbagent/skills/kbagent/SKILL.md)
 
 ```
-kbagent project     add | list | remove | edit | status | refresh
+kbagent project     add | list | remove | edit | status | refresh | use | current
 kbagent org         setup
 kbagent component   list | detail
 kbagent config      list | detail | search | update | rename | delete | new
-kbagent job         list | detail | run
+                    metadata-list | get-metadata | set-metadata | delete-metadata | set-folder
+                    variables-set | variables-get | variables-clear
+kbagent job         list | detail | run | terminate
+kbagent flow        list | detail | schema | new | update | delete | schedule | schedule-remove
 kbagent storage     buckets | bucket-detail | create-bucket | delete-bucket
                     tables | table-detail | create-table | upload-table | download-table | delete-table | delete-column
+                    describe-bucket | describe-table | describe-column | describe-batch
                     files | file-detail | file-upload | file-download | file-tag | file-delete
                     load-file | unload-table
-kbagent sharing     list | share | unshare | link | unlink
+kbagent sharing     list | share | unshare | link | unlink | edges
 kbagent lineage     build | show | info | server
 kbagent branch      list | create | use | reset | delete | merge
-kbagent workspace   create | list | detail | delete | password | load | query | from-transformation
+                    metadata-list | metadata-get | metadata-set | metadata-delete
+kbagent workspace   create | list | detail | delete | password | load | query | from-transformation | gc
 kbagent tool        list | call
 kbagent sync        init | pull | status | diff | push | branch-link | branch-unlink | branch-status
 kbagent kai         ping | ask | chat | history
 kbagent encrypt     values
 kbagent permissions list | show | set | reset | check
 kbagent             init | context | doctor | version | update | changelog
+
+# Global flags: --json, --verbose, --no-color, --config-dir, --hint client|service
+#               --deny-writes, --deny-destructive (session-only firewall)
 ```
 
 ## Documentation

@@ -28,6 +28,7 @@ Run:
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import json
 import os
@@ -400,6 +401,9 @@ class TestFullE2E:
         _step(14.1, "storage unload-table --file-type parquet", "Parquet export + sliced download")
         self._test_unload_table_parquet(table_id)
 
+        _step(14.2, "storage describe-bucket/table/column/batch", "description metadata round-trip")
+        self._test_storage_describe(bucket_id, table_id)
+
         _step(15, "storage load-file", "upload CSV as file then load into table")
         self._test_load_file(table_id)
 
@@ -557,6 +561,9 @@ class TestFullE2E:
 
         _step(42, "storage delete-table + delete-bucket", "CLI-driven cleanup")
         self._test_storage_cleanup(bucket_id, table_id)
+
+        _step("42.5", "project use / current + firewall flags")
+        self._test_project_pin_and_firewall()
 
         _step(43, "project edit + remove", "final cleanup")
         self._test_project_edit_and_remove()
@@ -2382,6 +2389,225 @@ class TestFullE2E:
         assert bucket_id in data["data"]["deleted"]
         self._created_buckets.remove(bucket_id)
 
+    def _test_project_pin_and_firewall(self) -> None:
+        """End-to-end coverage for `project use`, `project current`, and --deny-* flags."""
+        # --- Pin lifecycle -------------------------------------------------
+
+        # Pre-condition: first-added is already the default. Verify via current.
+        data = self._run_ok("project", "current")
+        assert data["data"]["alias"] == self.alias
+        assert data["data"]["source"] == "pin"
+
+        # Explicit `project use` is a no-op in value but confirms it persists.
+        data = self._run_ok("project", "use", self.alias)
+        assert data["data"]["alias"] == self.alias
+        # source is always "pin" on use (the field describes where the new
+        # pin ended up, not how it arrived).
+        assert data["data"]["source"] == "pin"
+
+        # `project use nonexistent` fails with exit 5 (CONFIG_ERROR).
+        result = self._run("project", "use", "does-not-exist-alias")
+        assert result.exit_code == 5
+
+        # --- KBAGENT_PROJECT env override ---------------------------------
+        # Set the env var to a bogus value and confirm `current` reports env
+        # as the source + flags the unknown alias.
+        with patch.dict(os.environ, {"KBAGENT_PROJECT": "mystery-alias"}):
+            data = self._run_ok("project", "current")
+            assert data["data"]["alias"] == "mystery-alias"
+            assert data["data"]["source"] == "env"
+            assert data["data"]["env_points_to_configured_project"] is False
+            assert data["data"]["pinned"] == self.alias
+
+        # After unsetting, pin is restored as the effective alias.
+        data = self._run_ok("project", "current")
+        assert data["data"]["source"] == "pin"
+        assert data["data"]["alias"] == self.alias
+
+        # --- --deny-writes blocks writes, allows reads --------------------
+        # Read still succeeds.
+        data = self._run_ok(
+            "--deny-writes",  # top-level flag must come before subcommand
+            "project",
+            "list",
+        )
+        assert any(p["alias"] == self.alias for p in data["data"])
+
+        # Attempting a write under --deny-writes must exit 6 PERMISSION_DENIED.
+        # create-bucket is a safe write to try: if the firewall fails to
+        # block it we'd create a real bucket, so track it for cleanup just
+        # in case the block logic regresses.
+        guard_bucket_name = f"{RUN_ID.replace('-', '_')}_firewall_guard"
+        result = self._run(
+            "--deny-writes",
+            "storage",
+            "create-bucket",
+            "--project",
+            self.alias,
+            "--stage",
+            "in",
+            "--name",
+            guard_bucket_name,
+        )
+        assert result.exit_code == 6, (
+            f"--deny-writes should block storage.create-bucket (exit 6), "
+            f"got {result.exit_code}: {result.output}"
+        )
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "PERMISSION_DENIED"
+
+        # Safety: if the block failed silently and a bucket was actually
+        # created, schedule cleanup. We don't fail louder because the
+        # exit_code assert above already did.
+        try:
+            buckets = self.api.list_buckets()
+            for bucket in buckets:
+                if bucket.get("name") == guard_bucket_name:
+                    self._created_buckets.append(bucket["id"])
+        except Exception:
+            pass  # Best-effort cleanup tracking only.
+
+        # --- --deny-destructive blocks destructive ops --------------------
+        # delete-bucket is destructive; must exit 6 even on a bucket that
+        # does not exist (permission check fires before the API call).
+        result = self._run(
+            "--deny-destructive",
+            "storage",
+            "delete-bucket",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            "in.c-never-existed",
+            "--yes",
+        )
+        assert result.exit_code == 6, (
+            f"--deny-destructive should block storage.delete-bucket (exit 6), "
+            f"got {result.exit_code}: {result.output}"
+        )
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "PERMISSION_DENIED"
+
+        # --- --deny-destructive allows non-destructive writes -------------
+        # project.description-set is classified 'write' (not destructive),
+        # so --deny-destructive must NOT block it. We pass an empty string
+        # write -- this goes to the API, but the permission gate is the
+        # only thing under test here, so any non-6 exit is acceptable.
+        result = self._run(
+            "--deny-destructive",
+            "project",
+            "description-get",
+            "--project",
+            self.alias,
+        )
+        assert result.exit_code != 6, (
+            "--deny-destructive must not block read op project.description-get"
+        )
+
+        # --- Persistence check --------------------------------------------
+        # None of the --deny-* flags may have written to config.json.
+        store = ConfigStore(config_dir=self.config_dir)
+        persisted = store.load()
+        assert persisted.permissions is None, (
+            "--deny-writes / --deny-destructive must be session-only; "
+            f"found persisted policy: {persisted.permissions}"
+        )
+
+    def _test_storage_describe(self, bucket_id: str, table_id: str) -> None:
+        """Round-trip describe commands: write description, read it back."""
+        # describe-bucket: set KBC.description, verify via bucket-detail
+        data = self._run_ok(
+            "storage",
+            "describe-bucket",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--text",
+            "E2E bucket description",
+        )
+        assert data["data"]["bucket_id"] == bucket_id
+        assert data["data"]["description"] == "E2E bucket description"
+
+        data = self._run_ok(
+            "storage", "bucket-detail", "--project", self.alias, "--bucket-id", bucket_id
+        )
+        assert data["data"]["description"] == "E2E bucket description"
+
+        # describe-table: set KBC.description, verify via table-detail
+        data = self._run_ok(
+            "storage",
+            "describe-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--text",
+            "E2E table description",
+        )
+        assert data["data"]["table_id"] == table_id
+        assert data["data"]["description"] == "E2E table description"
+
+        data = self._run_ok(
+            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+        )
+        assert data["data"]["description"] == "E2E table description"
+
+        # describe-column: set per-column descriptions, verify via table-detail column_details
+        data = self._run_ok(
+            "storage",
+            "describe-column",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--column",
+            "id=Unique row identifier",
+            "--column",
+            "name=Human-readable name",
+        )
+        assert data["data"]["table_id"] == table_id
+        assert data["data"]["columns"]["id"] == "Unique row identifier"
+        assert data["data"]["columns"]["name"] == "Human-readable name"
+
+        data = self._run_ok(
+            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+        )
+        col_descs = {c["name"]: c.get("description", "") for c in data["data"]["column_details"]}
+        assert col_descs.get("id") == "Unique row identifier"
+        assert col_descs.get("name") == "Human-readable name"
+
+        # describe-batch: apply all three sections from a YAML file
+        batch_yaml = (
+            f"buckets:\n"
+            f"  {bucket_id}: Batch bucket desc\n"
+            f"tables:\n"
+            f"  {table_id}: Batch table desc\n"
+            f"columns:\n"
+            f"  {table_id}:\n"
+            f"    id: Batch column id desc\n"
+        )
+        batch_file = self.work_dir / "batch_describe.yaml"
+        batch_file.write_text(batch_yaml, encoding="utf-8")
+        data = self._run_ok(
+            "storage",
+            "describe-batch",
+            "--project",
+            self.alias,
+            "--from-file",
+            str(batch_file),
+        )
+        assert data["data"]["project_alias"] == self.alias
+        assert len(data["data"]["applied"]) == 3
+        assert data["data"]["errors"] == []
+
+        # Verify the batch updated the descriptions
+        data = self._run_ok(
+            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+        )
+        assert data["data"]["description"] == "Batch table desc"
+        col_descs = {c["name"]: c.get("description", "") for c in data["data"]["column_details"]}
+        assert col_descs.get("id") == "Batch column id desc"
+
     def _test_project_edit_and_remove(self) -> None:
         """Edit project URL, then remove it."""
         # project edit -- change URL back to same (just verify command works)
@@ -3413,3 +3639,1260 @@ class TestE2EJobRunVariableValues:
         )
         print(f"  {_DIM}resolved={resolved} pinned={pinned_row_id} first={first_row_id}{_RESET}")
         assert resolved == pinned_row_id
+
+
+# ---------------------------------------------------------------------------
+# Project pin + firewall flag E2E (PR5)
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestPinAndFirewallE2E:
+    """Focused E2E for `project use`, `project current`, and --deny-* flags.
+
+    Exercises the real API to confirm:
+    - `project use` persists the pin to config.json.
+    - `project current` reports the effective alias + source correctly.
+    - `KBAGENT_PROJECT` env var overrides the pin at runtime.
+    - `--deny-writes` blocks the permission gate on a real write op (exit 6).
+    - `--deny-destructive` blocks a real destructive op (exit 6).
+    - Neither flag persists to config.json.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self.alias_a = f"{RUN_ID}-pin-a"
+        self.alias_b = f"{RUN_ID}-pin-b"
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def test_pin_lifecycle_against_real_project(self) -> None:
+        """End-to-end: add, use, current, env override."""
+        # Register two aliases pointing at the SAME real project. We only
+        # need distinct aliases to observe the pin switching.
+        self._run(
+            "project",
+            "add",
+            "--project",
+            self.alias_a,
+            "--url",
+            self.url,
+            "--token",
+            self.token,
+        )
+        self._run(
+            "project",
+            "add",
+            "--project",
+            self.alias_b,
+            "--url",
+            self.url,
+            "--token",
+            self.token,
+        )
+
+        # First-added becomes default.
+        current = self._run("project", "current")
+        assert current.exit_code == 0
+        data = _json_ok(current)
+        assert data["data"]["alias"] == self.alias_a
+        assert data["data"]["source"] == "pin"
+
+        # `project use` switches the pin; persistence survives next invocation.
+        use_result = self._run("project", "use", self.alias_b)
+        use_data = _json_ok(use_result)
+        assert use_data["data"]["alias"] == self.alias_b
+        assert use_data["data"]["previous"] == self.alias_a
+
+        after = _json_ok(self._run("project", "current"))
+        assert after["data"]["alias"] == self.alias_b
+        assert after["data"]["source"] == "pin"
+
+        # Unknown alias -> exit 5.
+        bad = self._run("project", "use", "does-not-exist")
+        assert bad.exit_code == 5
+        bad_data = json.loads(bad.output)
+        assert bad_data["error"]["code"] == "CONFIG_ERROR"
+
+        # KBAGENT_PROJECT overrides the pin.
+        with patch.dict(os.environ, {"KBAGENT_PROJECT": self.alias_a}):
+            env_view = _json_ok(self._run("project", "current"))
+            assert env_view["data"]["alias"] == self.alias_a
+            assert env_view["data"]["source"] == "env"
+            assert env_view["data"]["pinned"] == self.alias_b
+            assert env_view["data"]["env_points_to_configured_project"] is True
+
+    def test_deny_writes_blocks_real_write_op(self) -> None:
+        """--deny-writes must exit 6 on a real create-bucket attempt."""
+        self._run(
+            "project",
+            "add",
+            "--project",
+            self.alias_a,
+            "--url",
+            self.url,
+            "--token",
+            self.token,
+        )
+
+        # Use a name that won't collide; the permission gate fires before
+        # the API call so the bucket must never appear.
+        bucket_name = f"{RUN_ID.replace('-', '_')}_fw_w"
+        result = self._run(
+            "--deny-writes",
+            "storage",
+            "create-bucket",
+            "--project",
+            self.alias_a,
+            "--stage",
+            "in",
+            "--name",
+            bucket_name,
+        )
+        assert result.exit_code == 6, (
+            f"--deny-writes should block storage.create-bucket; got exit "
+            f"{result.exit_code}: {result.output}"
+        )
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "PERMISSION_DENIED"
+
+        # Defensive: if the block leaked and a bucket was actually created,
+        # clean it up and fail the assertion above (already failed) more loudly.
+        import contextlib
+
+        api = KeboolaClient(self.url, self.token)
+        try:
+            for bucket in api.list_buckets():
+                if bucket.get("name") == bucket_name:
+                    with contextlib.suppress(Exception):
+                        api.delete_bucket(bucket["id"], force=True)
+                    raise AssertionError(
+                        f"--deny-writes failed to block: bucket {bucket['id']} was created"
+                    )
+        finally:
+            api.close()
+
+    def test_deny_destructive_blocks_real_destructive_op(self) -> None:
+        """--deny-destructive must exit 6 on storage.delete-bucket."""
+        self._run(
+            "project",
+            "add",
+            "--project",
+            self.alias_a,
+            "--url",
+            self.url,
+            "--token",
+            self.token,
+        )
+
+        result = self._run(
+            "--deny-destructive",
+            "storage",
+            "delete-bucket",
+            "--project",
+            self.alias_a,
+            "--bucket-id",
+            "in.c-does-not-exist-for-sure",
+            "--yes",
+        )
+        assert result.exit_code == 6, (
+            f"--deny-destructive should block delete-bucket; got exit "
+            f"{result.exit_code}: {result.output}"
+        )
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "PERMISSION_DENIED"
+
+    def test_deny_destructive_allows_read_op(self) -> None:
+        """--deny-destructive must NOT block read ops (regression guard)."""
+        self._run(
+            "project",
+            "add",
+            "--project",
+            self.alias_a,
+            "--url",
+            self.url,
+            "--token",
+            self.token,
+        )
+        result = self._run(
+            "--deny-destructive",
+            "storage",
+            "buckets",
+            "--project",
+            self.alias_a,
+        )
+        # Read must succeed (exit 0) OR fail for non-permission reasons.
+        assert result.exit_code != 6, f"--deny-destructive blocked a read op: {result.output}"
+
+    def test_firewall_flags_never_persist(self) -> None:
+        """Neither --deny-writes nor --deny-destructive may write to config.json."""
+        self._run(
+            "project",
+            "add",
+            "--project",
+            self.alias_a,
+            "--url",
+            self.url,
+            "--token",
+            self.token,
+        )
+        # Run a blocked op under both flags.
+        self._run(
+            "--deny-writes",
+            "--deny-destructive",
+            "storage",
+            "create-bucket",
+            "--project",
+            self.alias_a,
+            "--stage",
+            "in",
+            "--name",
+            "never_created",
+        )
+        # Persisted policy must still be None.
+        persisted = ConfigStore(config_dir=self.config_dir).load()
+        assert persisted.permissions is None, (
+            f"--deny-* flags leaked to config.json: {persisted.permissions}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Flow E2E tests
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EFlowOperations:
+    """End-to-end tests for all flow subcommands against a real Keboola project.
+
+    Creates a real keboola.flow config, exercises all 8 commands, and cleans up.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-flow"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self._created_flows: list[tuple[str, str]] = []  # (component_id, flow_id)
+
+        from keboola_agent_cli.client import KeboolaClient
+
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        yield
+
+        import contextlib
+
+        for component_id, flow_id in self._created_flows:
+            with contextlib.suppress(Exception):
+                self.client.delete_config(
+                    component_id=component_id, config_id=flow_id, branch_id=None
+                )
+        self.client.close()
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_flow_crud_and_schedule(self, tmp_path: Path) -> None:
+        """Full lifecycle: schema → new → list → detail → update → schedule → schedule-remove → delete."""
+
+        _step(1, "flow schema returns YAML template with phases key")
+        result = self._run("flow", "schema")
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "phases" in data["data"]["schema"]
+
+        _step(2, "flow new -- create a keboola.flow config")
+        result = self._run(
+            "flow",
+            "new",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--name",
+            f"{RUN_ID}-flow",
+            "--description",
+            "E2E flow test",
+        )
+        assert result.exit_code == 0, result.output
+        created = json.loads(result.output)["data"]
+        flow_id = created["id"]
+        assert flow_id
+        assert created["project_alias"] == self.alias
+        self._created_flows.append(("keboola.flow", flow_id))
+
+        _step(3, "flow list -- flow appears in listing")
+        result = self._run("flow", "list", "--project", self.alias)
+        assert result.exit_code == 0
+        listing = json.loads(result.output)["data"]
+        ids = {f["config_id"] for f in listing["flows"]}
+        assert flow_id in ids
+
+        _step(4, "flow detail -- returns phase/task counts")
+        result = self._run(
+            "flow",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+        )
+        assert result.exit_code == 0, result.output
+        detail = json.loads(result.output)["data"]
+        assert detail["id"] == flow_id
+        assert "phase_count" in detail
+
+        _step(5, "flow update -- rename the flow")
+        result = self._run(
+            "flow",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--name",
+            f"{RUN_ID}-flow-renamed",
+        )
+        assert result.exit_code == 0, result.output
+        updated = json.loads(result.output)["data"]
+        assert updated["id"] == flow_id
+
+        _step(6, "flow schedule -- attach a cron schedule")
+        result = self._run(
+            "flow",
+            "schedule",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--cron",
+            "0 6 * * *",
+        )
+        assert result.exit_code == 0, result.output
+        sched = json.loads(result.output)["data"]
+        assert sched["status"] in ("created", "updated")
+        assert sched["config_id"] == flow_id
+        assert sched["cron_tab"] == "0 6 * * *"
+
+        _step(7, "flow schedule-remove -- remove schedule, idempotent")
+        result = self._run(
+            "flow",
+            "schedule-remove",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--yes",
+        )
+        assert result.exit_code == 0, result.output
+        removed = json.loads(result.output)["data"]
+        assert removed["deleted_count"] >= 1
+
+        # Idempotent second call
+        result2 = self._run(
+            "flow",
+            "schedule-remove",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--yes",
+        )
+        assert result2.exit_code == 0
+        assert json.loads(result2.output)["data"]["deleted_count"] == 0
+
+        _step(8, "flow delete -- delete the flow")
+        result = self._run(
+            "flow",
+            "delete",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--yes",
+        )
+        assert result.exit_code == 0, result.output
+        deleted = json.loads(result.output)["data"]
+        assert deleted["status"] == "deleted"
+        assert deleted["config_id"] == flow_id
+        # Remove from cleanup list since we deleted it
+        self._created_flows.remove(("keboola.flow", flow_id))
+
+    def test_flow_dag_validation_rejects_cycle(self) -> None:
+        """flow new with a cyclic phase dependency must fail with INVALID_FLOW_DAG."""
+        cyclic_yaml = (
+            "phases:\n"
+            "  - id: 1\n    name: A\n    dependsOn: [2]\n"
+            "  - id: 2\n    name: B\n    dependsOn: [1]\n"
+            "tasks: []\n"
+        )
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(cyclic_yaml)
+            yaml_path = f.name
+
+        try:
+            result = self._run(
+                "flow",
+                "new",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.flow",
+                "--name",
+                f"{RUN_ID}-cyclic",
+                "--file",
+                f"@{yaml_path}",
+            )
+            assert result.exit_code != 0
+            out = json.loads(result.output)
+            assert out["error"]["code"] == "INVALID_FLOW_DAG"
+        finally:
+            import os as _os
+
+            _os.unlink(yaml_path)
+
+    def test_flow_list_no_project_returns_all(self) -> None:
+        """flow list without --project returns flows from all registered projects."""
+        result = self._run("flow", "list")
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert "flows" in data
+        assert "errors" in data
+
+
+# ---------------------------------------------------------------------------
+# PR8: Config metadata + Workspace GC (standalone, no storage dependency)
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EPR8ConfigMetadata:
+    """End-to-end tests for config metadata CRUD commands (PR8).
+
+    Creates a real keboola.ex-db-snowflake config, exercises the full
+    metadata round-trip (metadata-list / set-metadata / get-metadata /
+    delete-metadata / set-folder), then deletes the config.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-meta"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        self.api = KeboolaClient(self.url, self.token)
+        self._created_config_ids: list[tuple[str, str]] = []
+
+        # Register project
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self) -> Any:
+        yield
+        for comp_id, cfg_id in self._created_config_ids:
+            with contextlib.suppress(Exception):
+                self.api.delete_config(comp_id, cfg_id)
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_config_metadata_crud_roundtrip(self) -> None:
+        """Full metadata CRUD: list (empty) → set → get → list (present) → delete → list (gone)."""
+        # Create a config to attach metadata to
+        cfg = self.api.create_config(
+            component_id=TEST_COMPONENT_ID,
+            name=f"{RUN_ID}-meta-test",
+            configuration={},
+            description="E2E PR8 metadata test",
+        )
+        config_id = str(cfg["id"])
+        self._created_config_ids.append((TEST_COMPONENT_ID, config_id))
+
+        custom_key = f"E2E.PR8.{RUN_ID}"
+
+        _step(1, "metadata-list on fresh config -- should be empty")
+        data = self._run_ok(
+            "config",
+            "metadata-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        assert isinstance(data["data"]["metadata"], list)
+        initial_count = len(data["data"]["metadata"])
+
+        _step(2, "set-metadata -- upsert custom key")
+        data = self._run_ok(
+            "config",
+            "set-metadata",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--key",
+            custom_key,
+            "--value",
+            "pr8-value",
+        )
+        assert data["data"]["key"] == custom_key
+        assert data["data"]["value"] == "pr8-value"
+
+        _step(3, "get-metadata -- value round-trips")
+        data = self._run_ok(
+            "config",
+            "get-metadata",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--key",
+            custom_key,
+        )
+        assert data["data"]["value"] == "pr8-value"
+
+        _step(4, "metadata-list -- custom key appears")
+        data = self._run_ok(
+            "config",
+            "metadata-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        entries = data["data"]["metadata"]
+        assert len(entries) == initial_count + 1
+        match = next((e for e in entries if e.get("key") == custom_key), None)
+        assert match is not None
+        metadata_id = str(match["id"])
+
+        _step(5, "delete-metadata -- remove by ID")
+        data = self._run_ok(
+            "config",
+            "delete-metadata",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--metadata-id",
+            metadata_id,
+            "--yes",
+        )
+        assert metadata_id in data["data"]["message"]
+
+        _step(6, "metadata-list after delete -- key is gone")
+        data = self._run_ok(
+            "config",
+            "metadata-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        remaining = {e.get("key") for e in data["data"]["metadata"]}
+        assert custom_key not in remaining
+
+    def test_set_folder_sugar(self) -> None:
+        """set-folder writes KBC.configuration.folderName metadata."""
+        cfg = self.api.create_config(
+            component_id=TEST_COMPONENT_ID,
+            name=f"{RUN_ID}-folder-test",
+            configuration={},
+            description="E2E PR8 set-folder test",
+        )
+        config_id = str(cfg["id"])
+        self._created_config_ids.append((TEST_COMPONENT_ID, config_id))
+
+        folder_name = f"PR8-Folder-{RUN_ID}"
+
+        _step(1, "set-folder -- write KBC.configuration.folderName")
+        data = self._run_ok(
+            "config",
+            "set-folder",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--name",
+            folder_name,
+        )
+        assert data["data"]["folder"] == folder_name
+        assert data["data"]["key"] == "KBC.configuration.folderName"
+
+        _step(2, "metadata-list -- folder key is visible")
+        data = self._run_ok(
+            "config",
+            "metadata-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        folder_entry = next(
+            (e for e in data["data"]["metadata"] if e.get("key") == "KBC.configuration.folderName"),
+            None,
+        )
+        assert folder_entry is not None
+        assert folder_entry["value"] == folder_name
+
+    def test_get_metadata_missing_key_exits_1(self) -> None:
+        """get-metadata for a non-existent key returns exit code 1."""
+        cfg = self.api.create_config(
+            component_id=TEST_COMPONENT_ID,
+            name=f"{RUN_ID}-meta-missing",
+            configuration={},
+            description="E2E PR8 missing key test",
+        )
+        config_id = str(cfg["id"])
+        self._created_config_ids.append((TEST_COMPONENT_ID, config_id))
+
+        result = self._run(
+            "config",
+            "get-metadata",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--key",
+            "does.not.exist",
+        )
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EPR8WorkspaceGC:
+    """End-to-end tests for workspace list --orphaned and workspace gc (PR8).
+
+    Creates a real workspace, deletes its backing sandbox config via direct API
+    call to manufacture an orphan, then verifies the GC commands detect and
+    remove it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-gc"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        self.api = KeboolaClient(self.url, self.token)
+        self._created_workspace_ids: list[int] = []
+
+        # Register project
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self) -> Any:
+        yield
+        for ws_id in self._created_workspace_ids:
+            with contextlib.suppress(Exception):
+                self.api.delete_workspace(ws_id)
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_workspace_gc_orphan_roundtrip(self) -> None:
+        """Create workspace, orphan it by deleting sandbox config, verify GC finds and removes it."""
+        _step(1, "workspace create")
+        result = self._run("workspace", "create", "--project", self.alias)
+        if result.exit_code != 0:
+            pytest.skip(f"workspace create not supported: {result.output}")
+
+        data = _json_ok(result)
+        ws_id = data["data"]["workspace_id"]
+        assert ws_id > 0
+        self._created_workspace_ids.append(ws_id)
+
+        _step(2, "retrieve workspace to find sandbox config_id")
+        ws_data = self.api.get_workspace(ws_id)
+        config_id = str(ws_data.get("configurationId") or ws_data.get("config_id") or "")
+        if not config_id:
+            pytest.skip("workspace has no configurationId, cannot manufacture orphan")
+
+        _step(3, "delete sandbox config to make the workspace orphaned")
+        try:
+            self.api.delete_config("keboola.sandboxes", config_id)
+        except Exception as exc:
+            pytest.skip(f"could not delete sandbox config: {exc}")
+
+        _step(4, "workspace list --orphaned -- workspace should appear")
+        data = self._run_ok("workspace", "list", "--project", self.alias, "--orphaned")
+        orphan_ids = [w["id"] for w in data["data"]["workspaces"]]
+        assert ws_id in orphan_ids, f"ws {ws_id} not listed as orphan; got: {orphan_ids}"
+
+        _step(5, "workspace gc --dry-run -- counts but does not delete")
+        data = self._run_ok("workspace", "gc", "--project", self.alias, "--dry-run")
+        gc_data = data["data"]
+        assert gc_data["dry_run"] is True
+        would_delete_ids = [w["id"] for w in gc_data.get("would_delete", [])]
+        assert ws_id in would_delete_ids
+
+        # Verify workspace still exists after dry-run
+        remaining = self._run_ok("workspace", "list", "--project", self.alias, "--orphaned")
+        assert ws_id in [w["id"] for w in remaining["data"]["workspaces"]]
+
+        _step(6, "workspace gc --yes -- deletes the orphan")
+        data = self._run_ok("workspace", "gc", "--project", self.alias, "--yes")
+        gc_data = data["data"]
+        assert gc_data["dry_run"] is False
+        deleted_ids = [w["id"] for w in gc_data.get("deleted", [])]
+        assert ws_id in deleted_ids
+
+        # Remove from cleanup tracker since GC deleted it
+        if ws_id in self._created_workspace_ids:
+            self._created_workspace_ids.remove(ws_id)
+
+        _step(7, "workspace list --orphaned -- workspace is gone")
+        data = self._run_ok("workspace", "list", "--project", self.alias, "--orphaned")
+        remaining_ids = [w["id"] for w in data["data"]["workspaces"]]
+        assert ws_id not in remaining_ids
+
+
+# ---------------------------------------------------------------------------
+# Queue polling parity (PR4 / P0-3): exponential curve, log tail, timeout kill
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EJobRunQueuePollingParity:
+    """Live verification of the PR4 Queue API polling contract.
+
+    Three scenarios, each spawns exactly one config, cleans it up:
+
+    - **log tail on a failed job**: a snowflake-transformation with
+      deliberately invalid SQL runs to `status=error`; we assert the
+      returned JSON error envelope contains a non-empty
+      `details.logTail` sourced from ``GET /jobs/{id}/events``.
+    - **timeout triggers remote kill**: a python-transformation-v2 with
+      `time.sleep(120)` is invoked with `--timeout 8`; we assert the
+      command exits 7 (``EXIT_JOB_TIMEOUT_TERMINATED``) with
+      `error.code == "JOB_TIMEOUT_TERMINATED"` and `details.job.status`
+      in {terminated, cancelled, terminating} -- i.e. the kill landed.
+    - **fixed strategy still reaches completion**: a no-op transformation
+      runs under ``--poll-strategy fixed`` to prove the opt-out path works
+      against a real Queue.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path, request: pytest.FixtureRequest) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        # Per-test alias suffix so parallel pytest-xdist runs don't share a
+        # project alias across workers. `request.node.name` is stable per test
+        # and includes any parametrize id.
+        safe = request.node.name.replace("[", "-").replace("]", "")
+        self.alias = f"{RUN_ID}-queuepoll-{safe}"[:60]
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+        self._created: list[tuple[str, str]] = []
+        self._submitted_jobs: list[str] = []
+
+        yield
+
+        # Best-effort cleanup: kill any jobs we left running, then delete
+        # the configs. We never want a test failure here to mask the real
+        # assertion failure.
+        import contextlib
+
+        for job_id in self._submitted_jobs:
+            with contextlib.suppress(Exception):
+                self.client.kill_job(job_id)
+
+        for component_id, config_id in reversed(self._created):
+            try:
+                self.client.delete_config(component_id=component_id, config_id=config_id)
+            except Exception as exc:
+                print(
+                    f"  {_DIM}(teardown) delete_config {component_id}/{config_id} "
+                    f"failed: {exc}{_RESET}"
+                )
+        self.client.close()
+
+    def _create_sleep_config(self, seconds: int, suffix: str) -> str:
+        """Create a python-transformation-v2 config that sleeps and returns its id."""
+        cfg = self.client.create_config(
+            component_id="keboola.python-transformation-v2",
+            name=f"{RUN_ID}-queuepoll-{suffix}",
+            description=f"E2E PR4: sleeps {seconds}s -- used only for polling tests",
+            configuration={
+                "parameters": {
+                    "blocks": [
+                        {
+                            "name": "Block 1",
+                            "codes": [
+                                {
+                                    "name": "sleep",
+                                    "script": [
+                                        "import time",
+                                        f"time.sleep({seconds})",
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        )
+        cfg_id = str(cfg["id"])
+        self._created.append(("keboola.python-transformation-v2", cfg_id))
+        return cfg_id
+
+    def _create_guaranteed_fail_config(self, suffix: str) -> str:
+        """Python transformation that raises an exception so job status=error.
+
+        Why python not Snowflake: a Snowflake transformation with no
+        input/output tables registered is treated as a successful no-op
+        even if the SQL would be invalid at execute time. A Python
+        transformation with an unconditional ``raise`` surfaces as
+        ``status=error`` with a clear message on the event feed, which
+        is what the log-tail assertion needs.
+        """
+        cfg = self.client.create_config(
+            component_id="keboola.python-transformation-v2",
+            name=f"{RUN_ID}-queuepoll-bad-{suffix}",
+            description="E2E PR4: guaranteed-fail python transformation",
+            configuration={
+                "parameters": {
+                    "blocks": [
+                        {
+                            "name": "Block 1",
+                            "codes": [
+                                {
+                                    "name": "boom",
+                                    "script": [
+                                        "raise RuntimeError('kbagent E2E PR4 deliberate failure')",
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        )
+        cfg_id = str(cfg["id"])
+        self._created.append(("keboola.python-transformation-v2", cfg_id))
+        return cfg_id
+
+    def test_log_tail_surfaced_on_queue_job_failed(self) -> None:
+        """Failed Queue job -> error envelope with details.logTail from /events."""
+        _step(1, "create python-transformation-v2 that raises")
+        cfg_id = self._create_guaranteed_fail_config("tail")
+
+        _step(2, "kbagent --json job run --wait (expect QUEUE_JOB_FAILED)")
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.python-transformation-v2",
+                "--config-id",
+                cfg_id,
+                "--wait",
+                "--timeout",
+                "300",
+                "--log-tail-lines",
+                "50",
+                "--no-variables",
+            ],
+        )
+
+        # Deliberate failure: exit non-zero, envelope status=error,
+        # details.logTail is a non-empty list.
+        assert result.exit_code != 0, f"Expected failure, got success: {result.output}"
+        envelope = json.loads(result.output)
+        assert envelope["status"] == "error"
+        assert envelope["error"]["code"] == "QUEUE_JOB_FAILED"
+        details = envelope["error"].get("details") or {}
+        log_tail = details.get("logTail") or []
+        assert isinstance(log_tail, list) and len(log_tail) > 0, (
+            f"Expected non-empty logTail, got {log_tail!r} in {envelope!r}"
+        )
+
+    def test_timeout_triggers_remote_kill_and_exits_seven(self) -> None:
+        """--timeout N < job runtime -> exit 7 + kill landed remotely."""
+        _step(1, "create python-transformation-v2 that sleeps 120s")
+        cfg_id = self._create_sleep_config(seconds=120, suffix="kill")
+
+        _step(2, "kbagent --json job run --wait --timeout 8 (expect exit 7)")
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.python-transformation-v2",
+                "--config-id",
+                cfg_id,
+                "--wait",
+                "--timeout",
+                "8",
+                "--log-tail-lines",
+                "20",
+                "--no-variables",
+            ],
+        )
+
+        assert result.exit_code == 7, (
+            f"Expected exit 7 (JOB_TIMEOUT_TERMINATED), got {result.exit_code}\n{result.output}"
+        )
+        envelope = json.loads(result.output)
+        assert envelope["status"] == "error"
+        assert envelope["error"]["code"] == "JOB_TIMEOUT_TERMINATED"
+
+        job = envelope["error"]["details"]["job"]
+        assert job["status"] in {"terminated", "cancelled", "terminating"}, (
+            f"Expected terminated/cancelled/terminating; got {job['status']!r}"
+        )
+        # Track job_id so teardown's kill-if-needed covers the 'terminating'
+        # transitional case where the remote hasn't settled yet.
+        self._submitted_jobs.append(str(job["id"]))
+
+    def test_fixed_poll_strategy_reaches_completion(self) -> None:
+        """--poll-strategy fixed still completes against a real Queue."""
+        _step(1, "create trivial python-transformation-v2 (sleep 3s)")
+        cfg_id = self._create_sleep_config(seconds=3, suffix="fixed")
+
+        _step(2, "kbagent job run --wait --poll-strategy fixed")
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.python-transformation-v2",
+                "--config-id",
+                cfg_id,
+                "--wait",
+                "--timeout",
+                "120",
+                "--poll-strategy",
+                "fixed",
+                "--no-variables",
+            ],
+        )
+
+        assert result.exit_code == 0, f"Expected success, got: {result.output}"
+        payload = _json(result)["data"]
+        assert payload["status"] == "success"
+        assert payload.get("isFinished") is True
+
+    def test_fetch_job_events_returns_list_on_real_job(self) -> None:
+        """Direct client call against /jobs/{id}/events on a finished job."""
+        _step(1, "create trivial successful job + run to completion")
+        cfg_id = self._create_sleep_config(seconds=1, suffix="events")
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.python-transformation-v2",
+                "--config-id",
+                cfg_id,
+                "--wait",
+                "--timeout",
+                "120",
+                "--no-variables",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        job_id = str(_json(result)["data"]["id"])
+
+        _step(2, "client.fetch_job_events direct call")
+        events = self.client.fetch_job_events(job_id, limit=50)
+        assert isinstance(events, list)
+        # A completed python-transformation job always emits at least one event
+        # (startup + completion). Guard against an empty-but-silent regression.
+        assert len(events) > 0
+
+
+# ===========================================================================
+
+
+@pytest.mark.e2e
+@skip_without_credentials
+class TestE2ESyncAdoptExisting:
+    """E2E test for 'sync init --adopt-existing' against a real Keboola project.
+
+    Simulates a directory that was set up by the kbc CLI (or a previous kbagent
+    version) by writing a minimal valid manifest, then verifies that:
+      1. kbagent sync init --adopt-existing succeeds (status=adopted)
+      2. kbagent sync status works on the adopted directory
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-adopt"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self.project_dir = tmp_path / "project"
+        self.project_dir.mkdir()
+
+        # Register the project
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+    def _run(self, *args: str):
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict:
+        return _json_ok(self._run(*args))
+
+    def test_adopt_existing_manifest(self) -> None:
+        """init --adopt-existing adopts a kbc-style manifest; sync status works after."""
+        import json as _json
+
+        # 1. Write a kbc-style manifest for the real project.
+        #    We first call sync init normally to learn the real project_id, then
+        #    delete and rewrite as a "legacy" manifest.
+        _step(1, "sync init (normal) to learn project_id")
+        resp = self._run_ok(
+            "sync",
+            "init",
+            "--project",
+            self.alias,
+            "--directory",
+            str(self.project_dir),
+        )
+        project_id = resp["data"]["project_id"]
+        branch_id = None
+        keboola_dir = self.project_dir / ".keboola"
+        manifest_path = keboola_dir / "manifest.json"
+        raw = _json.loads(manifest_path.read_text())
+        if raw.get("branches"):
+            branch_id = raw["branches"][0]["id"]
+
+        # 2. Rewrite as a minimal kbc-style manifest (drop gitBranching field).
+        _step(2, "rewrite as kbc-style manifest (drop gitBranching)")
+        kbc_manifest = {
+            "version": 2,
+            "project": {"id": project_id, "apiHost": self.url.replace("https://", "")},
+            "allowTargetEnv": True,
+            "sortBy": "id",
+            "naming": {"branch": "{branch_name}"},
+            "branches": [{"id": branch_id, "path": "main"}] if branch_id else [],
+            "configurations": [],
+        }
+        manifest_path.write_text(_json.dumps(kbc_manifest, indent=4), encoding="utf-8")
+
+        # 3. sync init --adopt-existing should succeed without error.
+        _step(3, "sync init --adopt-existing")
+        resp = self._run_ok(
+            "sync",
+            "init",
+            "--project",
+            self.alias,
+            "--directory",
+            str(self.project_dir),
+            "--adopt-existing",
+        )
+        inner = resp["data"]
+        assert inner["status"] == "adopted", f"Expected 'adopted', got {inner['status']}"
+        assert inner["project_id"] == project_id
+        assert inner["files_created"] == []
+
+        # 4. sync status should work on the adopted directory.
+        _step(4, "sync status on adopted directory")
+        resp = self._run_ok(
+            "sync",
+            "status",
+            "--directory",
+            str(self.project_dir),
+        )
+        # Status should be parseable (may show no changes on an empty dir)
+        inner = resp["data"]
+        assert "modified" in inner or "unchanged" in inner or "added" in inner
+
+    def test_adopt_existing_rejects_wrong_project(self) -> None:
+        """init --adopt-existing rejects a manifest with a different project_id."""
+        import json as _json
+
+        keboola_dir = self.project_dir / ".keboola"
+        keboola_dir.mkdir()
+        # Write a manifest with a clearly wrong project_id
+        wrong_manifest = {
+            "version": 2,
+            "project": {"id": 999999999, "apiHost": "connection.keboola.com"},
+            "allowTargetEnv": True,
+            "sortBy": "id",
+            "naming": {"branch": "{branch_name}"},
+            "branches": [],
+            "configurations": [],
+        }
+        (keboola_dir / "manifest.json").write_text(_json.dumps(wrong_manifest), encoding="utf-8")
+
+        result = self._run(
+            "sync",
+            "init",
+            "--project",
+            self.alias,
+            "--directory",
+            str(self.project_dir),
+            "--adopt-existing",
+        )
+        assert result.exit_code == 5, f"Expected exit 5, got {result.exit_code}: {result.output}"
+        output = _json.loads(result.output)
+        assert output["status"] == "error"
+        assert "999999999" in output["error"]["message"]

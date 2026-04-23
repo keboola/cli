@@ -6,10 +6,12 @@ metadata that MCP tools strip from responses.
 
 import csv
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from ..constants import VALID_COLUMN_TYPES
+from ..errors import ErrorCode
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -172,15 +174,27 @@ class StorageService(BaseService):
         project_id = token_info.project_id
         source = bucket.get("sourceBucket")
 
+        # KBC.description in the metadata array takes precedence over the
+        # native description field (which can only be set at creation time
+        # via the Storage API; user updates go through the metadata endpoint).
+        raw_metadata: list[dict[str, Any]] = bucket.get("metadata", [])
+        metadata_description = ""
+        for m in raw_metadata:
+            if m.get("key") == "KBC.description" and m.get("provider") == "user":
+                metadata_description = m.get("value", "") or ""
+                break
+        description = metadata_description or bucket.get("description", "")
+
         result: dict[str, Any] = {
             "project_alias": alias,
             "project_id": project_id,
             "bucket_id": bucket.get("id", ""),
             "display_name": bucket.get("displayName", ""),
             "stage": bucket.get("stage", ""),
-            "description": bucket.get("description", ""),
+            "description": description,
             "backend": bucket.get("backend", ""),
             "is_linked": source is not None,
+            "metadata": raw_metadata,
         }
 
         # Resolve Snowflake paths using backendPath from API (preserves correct case).
@@ -260,6 +274,18 @@ class StorageService(BaseService):
 
         columns = table.get("columns", [])
         column_metadata = table.get("columnMetadata", {})
+        raw_metadata: list[dict[str, Any]] = table.get("metadata", [])
+
+        # Extract description and per-column descriptions from metadata list
+        description = ""
+        col_descriptions: dict[str, str] = {}
+        for m in raw_metadata:
+            key = m.get("key", "")
+            if key == "KBC.description" and m.get("provider") == "user":
+                description = m.get("value", "") or ""
+            elif key.startswith("KBC.column.") and key.endswith(".description"):
+                col_name = key[len("KBC.column.") : -len(".description")]
+                col_descriptions[col_name] = m.get("value", "") or ""
 
         column_details = []
         for col in columns:
@@ -270,6 +296,8 @@ class StorageService(BaseService):
                     col_info["type"] = m.get("value", "")
                 elif m.get("key") == "KBC.datatype.nullable":
                     col_info["nullable"] = m.get("value", "") == "1"
+            if col in col_descriptions:
+                col_info["description"] = col_descriptions[col]
             column_details.append(col_info)
 
         return {
@@ -278,6 +306,7 @@ class StorageService(BaseService):
             "name": table.get("name", ""),
             "display_name": table.get("displayName", ""),
             "bucket_id": table.get("bucket", {}).get("id", ""),
+            "description": description,
             "columns": columns,
             "column_details": column_details,
             "primary_key": table.get("primaryKey", []),
@@ -287,6 +316,7 @@ class StorageService(BaseService):
             "last_import_date": table.get("lastImportDate", ""),
             "last_change_date": table.get("lastChangeDate", ""),
             "created": table.get("created", ""),
+            "metadata": raw_metadata,
         }
 
     def list_tables(
@@ -643,7 +673,7 @@ class StorageService(BaseService):
                 raise KeboolaApiError(
                     message="Export job completed but no file ID in results",
                     status_code=500,
-                    error_code="EXPORT_NO_FILE",
+                    error_code=ErrorCode.EXPORT_NO_FILE,
                     retryable=False,
                 )
 
@@ -654,7 +684,7 @@ class StorageService(BaseService):
                 raise KeboolaApiError(
                     message=f"No download URL for file {file_id}",
                     status_code=500,
-                    error_code="EXPORT_NO_URL",
+                    error_code=ErrorCode.EXPORT_NO_URL,
                     retryable=False,
                 )
 
@@ -670,7 +700,7 @@ class StorageService(BaseService):
                             "produced a single file. Re-run without --keep-slices."
                         ),
                         status_code=400,
-                        error_code="NOT_SLICED",
+                        error_code=ErrorCode.NOT_SLICED,
                         retryable=False,
                     )
                 slice_info = client.download_sliced_file_to_dir(file_detail, output_path)
@@ -1092,7 +1122,7 @@ class StorageService(BaseService):
                     raise KeboolaApiError(
                         message=f"No files found matching tags: {tag_str}",
                         status_code=404,
-                        error_code="FILE_NOT_FOUND",
+                        error_code=ErrorCode.FILE_NOT_FOUND,
                         retryable=False,
                     )
                 file_id = files[0]["id"]
@@ -1131,7 +1161,7 @@ class StorageService(BaseService):
                     raise KeboolaApiError(
                         message=f"No download URL for file {file_id}",
                         status_code=500,
-                        error_code="FILE_NO_URL",
+                        error_code=ErrorCode.FILE_NO_URL,
                         retryable=False,
                     )
                 bytes_written = client.download_file(download_url, effective_output)
@@ -1346,7 +1376,7 @@ class StorageService(BaseService):
             raise KeboolaApiError(
                 message=f"file_type must be 'csv' or 'parquet', got {file_type!r}",
                 status_code=400,
-                error_code="VALIDATION_ERROR",
+                error_code=ErrorCode.VALIDATION_ERROR,
                 retryable=False,
             )
 
@@ -1371,7 +1401,7 @@ class StorageService(BaseService):
                 raise KeboolaApiError(
                     message="Export job completed but no file ID in results",
                     status_code=500,
-                    error_code="EXPORT_NO_FILE",
+                    error_code=ErrorCode.EXPORT_NO_FILE,
                     retryable=False,
                 )
 
@@ -1429,7 +1459,7 @@ class StorageService(BaseService):
                                 "file is a single non-sliced CSV. Drop the flag."
                             ),
                             status_code=400,
-                            error_code="NOT_SLICED",
+                            error_code=ErrorCode.NOT_SLICED,
                             retryable=False,
                         )
                     effective_output = output_path or f"{table_short}.csv"
@@ -1442,7 +1472,7 @@ class StorageService(BaseService):
                             raise KeboolaApiError(
                                 message=f"No download URL for file {file_id}",
                                 status_code=500,
-                                error_code="FILE_NO_URL",
+                                error_code=ErrorCode.FILE_NO_URL,
                                 retryable=False,
                             )
                         bytes_written = client.download_file(download_url, effective_output)
@@ -1456,6 +1486,253 @@ class StorageService(BaseService):
             client.close()
 
         return result
+
+    # ------------------------------------------------------------------
+    # Describe (metadata write) methods
+    # ------------------------------------------------------------------
+
+    def describe_bucket(
+        self,
+        alias: str,
+        bucket_id: str,
+        description: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Set the KBC.description metadata on a storage bucket.
+
+        Idempotent upsert: re-running with a different value overwrites the
+        existing entry (Keboola metadata POST is upsert-by-key).
+
+        Args:
+            alias: Project alias.
+            bucket_id: Bucket ID (e.g. 'in.c-my-bucket').
+            description: Human-readable description text.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Dict with project_alias, bucket_id, description, result, message.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            result = client.set_bucket_metadata(
+                bucket_id=bucket_id,
+                entries=[("KBC.description", description)],
+                branch_id=branch_id,
+            )
+        finally:
+            client.close()
+        return {
+            "project_alias": alias,
+            "bucket_id": bucket_id,
+            "description": description,
+            "result": result,
+            "message": f"Description set on bucket '{bucket_id}' in project '{alias}'.",
+        }
+
+    def describe_table(
+        self,
+        alias: str,
+        table_id: str,
+        description: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Set the KBC.description metadata on a storage table.
+
+        Idempotent upsert: re-running with a different value overwrites.
+
+        Args:
+            alias: Project alias.
+            table_id: Full table ID (e.g. 'in.c-bucket.table').
+            description: Human-readable description text.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Dict with project_alias, table_id, description, result, message.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            result = client.set_table_metadata(
+                table_id=table_id,
+                entries=[("KBC.description", description)],
+                branch_id=branch_id,
+            )
+        finally:
+            client.close()
+        return {
+            "project_alias": alias,
+            "table_id": table_id,
+            "description": description,
+            "result": result,
+            "message": f"Description set on table '{table_id}' in project '{alias}'.",
+        }
+
+    def describe_columns(
+        self,
+        alias: str,
+        table_id: str,
+        columns: dict[str, str],
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Set per-column descriptions on a storage table.
+
+        Column descriptions are stored as namespaced table metadata using the
+        key convention ``KBC.column.{colname}.description``.  Keboola's
+        Storage API does not provide a user-writable column-level metadata
+        endpoint (``columnMetadata`` is populated exclusively by processing
+        components); this convention is the supported alternative for
+        annotating columns from the CLI.
+
+        Args:
+            alias: Project alias.
+            table_id: Full table ID.
+            columns: Mapping of column name -> description text.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Dict with project_alias, table_id, columns dict, result, message.
+        """
+        if not columns:
+            raise ValueError("At least one column description must be provided.")
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        entries = [(f"KBC.column.{name}.description", desc) for name, desc in columns.items()]
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            result = client.set_table_metadata(
+                table_id=table_id,
+                entries=entries,
+                branch_id=branch_id,
+            )
+        finally:
+            client.close()
+        return {
+            "project_alias": alias,
+            "table_id": table_id,
+            "columns": columns,
+            "result": result,
+            "message": (
+                f"Descriptions set for {len(columns)} column(s) on table '{table_id}' "
+                f"in project '{alias}'."
+            ),
+        }
+
+    def describe_batch(
+        self,
+        alias: str,
+        from_file: Path,
+        branch_id: int | None = None,
+        progress_callback: Callable[[str, str, int, int], None] | None = None,
+    ) -> dict[str, Any]:
+        """Apply bucket, table, and column descriptions from a YAML file.
+
+        YAML schema::
+
+            buckets:
+              in.c-my-bucket: "Bucket description"
+            tables:
+              in.c-my-bucket.my-table: "Table description"
+            columns:
+              in.c-my-bucket.my-table:
+                col1: "Column 1 description"
+                col2: "Column 2 description"
+
+        All sections are optional; empty or absent sections are silently
+        skipped.  Within each section the operations are applied in order.
+        A failure in one item does not skip remaining items — all results
+        (success and error) are collected and returned.
+
+        Args:
+            alias: Project alias.
+            from_file: Path to a YAML file with the schema above.
+            branch_id: If set, target a specific dev branch.
+            progress_callback: Optional ``(obj_type, obj_id, current, total)``
+                callable invoked **before** each item is processed. ``obj_type``
+                is ``"bucket"``, ``"table"``, or ``"columns"``; ``current`` is
+                1-based; ``total`` is the total number of items across all
+                sections. Used by the CLI to render a Rich progress indicator
+                in human mode; JSON mode leaves it unset.
+
+        Returns:
+            Dict with project_alias, applied, errors, applied_count, error_count.
+        """
+        import yaml
+
+        from ..errors import KeboolaApiError
+
+        if not from_file.is_file():
+            raise ValueError(f"Batch file not found: {from_file}")
+        raw = yaml.safe_load(from_file.read_text(encoding="utf-8")) or {}
+        if not isinstance(raw, dict):
+            raise ValueError("Batch file must be a YAML mapping.")
+
+        applied: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+
+        buckets: dict[str, str] = raw.get("buckets") or {}
+        tables: dict[str, str] = raw.get("tables") or {}
+        columns: dict[str, dict[str, str]] = raw.get("columns") or {}
+
+        total = len(buckets) + len(tables) + len(columns)
+        current = 0
+
+        for bucket_id, desc in buckets.items():
+            current += 1
+            if progress_callback is not None:
+                progress_callback("bucket", bucket_id, current, total)
+            try:
+                self.describe_bucket(alias, bucket_id, str(desc), branch_id=branch_id)
+                applied.append({"type": "bucket", "id": bucket_id, "description": desc})
+                logger.debug("describe_batch bucket %s: ok", bucket_id)
+            except Exception as exc:
+                msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
+                errors.append({"type": "bucket", "id": bucket_id, "error": msg})
+
+        for table_id, desc in tables.items():
+            current += 1
+            if progress_callback is not None:
+                progress_callback("table", table_id, current, total)
+            try:
+                self.describe_table(alias, table_id, str(desc), branch_id=branch_id)
+                applied.append({"type": "table", "id": table_id, "description": desc})
+            except Exception as exc:
+                msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
+                errors.append({"type": "table", "id": table_id, "error": msg})
+
+        for table_id, col_map in columns.items():
+            current += 1
+            if progress_callback is not None:
+                progress_callback("columns", table_id, current, total)
+            if not isinstance(col_map, dict):
+                errors.append(
+                    {"type": "columns", "id": table_id, "error": "columns entry must be a mapping"}
+                )
+                continue
+            try:
+                self.describe_columns(
+                    alias, table_id, {k: str(v) for k, v in col_map.items()}, branch_id=branch_id
+                )
+                applied.append(
+                    {
+                        "type": "columns",
+                        "id": table_id,
+                        "columns": {k: str(v) for k, v in col_map.items()},
+                    }
+                )
+            except Exception as exc:
+                msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
+                errors.append({"type": "columns", "id": table_id, "error": msg})
+
+        return {
+            "project_alias": alias,
+            "applied": applied,
+            "errors": errors,
+            "applied_count": len(applied),
+            "error_count": len(errors),
+        }
 
     # ------------------------------------------------------------------
     # Parallel workers

@@ -123,8 +123,34 @@ One project failing does not block others. Check the `errors` array:
 | 1 | General error |
 | 2 | Usage error (invalid arguments) |
 | 3 | Authentication error (invalid or expired token) |
-| 4 | Network error (timeout, unreachable) |
+| 4 | Network error (timeout, unreachable) -- includes `QUEUE_JOB_TIMEOUT` (local gave up AND the remote-kill attempt failed; the remote job may still be running) |
 | 5 | Configuration error (corrupt config, missing alias) |
+| 6 | Permission denied (blocked by firewall / `--deny-writes` / `--deny-destructive`) |
+| 7 | `JOB_TIMEOUT_TERMINATED` -- `job run --timeout` elapsed AND the remote job was successfully cancelled (since 0.22.0). Scripts can distinguish "we killed it" from "it failed on its own" (exit 1) from "it's still running" (exit 4). |
+
+## `job run --wait` polling + log tail (since 0.22.0)
+
+- Polling follows an exponential curve by default: **2s x 30 -> 5s x 48 -> 15s forever**. For a short test job or a test that needs fast turnaround, pass `--poll-strategy fixed` to force the legacy 1s fixed interval.
+- On terminal non-success (`error` / `warning` / `terminated`), kbagent fetches the last N Storage Events and attaches them as `logTail` on the response. Controlled by `--log-tail-lines N` (default 200, max 5000, `0` disables).
+  - **Errors:** `error.details.logTail` carries the tail when the job surfaces as an exception (exit 1 / `QUEUE_JOB_FAILED`, exit 4 / `QUEUE_JOB_TIMEOUT`).
+  - **Non-error terminals** (`warning` / `terminated`): `logTail` is attached to the top-level result dict (exit 0).
+- `--timeout N` is a **local** deadline. When it elapses, kbagent issues `POST /jobs/{id}/kill` against the Queue API. Two outcomes:
+  - Kill succeeded -> exit **7** with `details.job` + `details.logTail`. The remote is definitely cancelled.
+  - Kill failed -> exit **4** with `details.logTail`, `retryable=True`. The remote **may still be running**; investigate before retrying.
+- Inspecting events outside of `job run`: `kbagent job detail --project X --job-id N` does not fetch the log tail. To get the raw event stream, call the Storage Events API directly (`GET /v2/storage/events?runId=<runId>`) with the project token.
+
+## `--deny-writes` / `--deny-destructive` firewall (since 0.22.0)
+
+- Session-only. Flags synthesize a `PermissionPolicy` for the current invocation and merge it with any persisted policy in `config.json`. **Never** written to disk.
+- Classes: `--deny-writes` blocks `cli:write` + `tool:write` (covers write+destructive+admin). `--deny-destructive` is narrower -- blocks only `cli:destructive` + `tool:destructive`; pure write ops like `storage create-bucket` stay allowed.
+- Blocked operation exits **6** with `error.code = PERMISSION_DENIED`. Read commands stay unaffected.
+- Safe to run under either flag without mutating the saved policy -- useful when your agent needs a one-shot read-only run on a machine with a write-enabled config.
+
+## `sync init --adopt-existing` (since 0.22.0)
+
+- Adopts a `.keboola/manifest.json` written by the kbc Go CLI **in place** instead of overwriting. Idempotent; re-running is a no-op.
+- Validates `project_id` from the manifest against the token via `verify_token`. Mismatch exits 5 (`CONFIG_ERROR`) with guidance -- never silently adopts someone else's checkout.
+- If no manifest exists, `--adopt-existing` falls through to the normal init path (no error).
 
 ## Token handling
 
@@ -168,6 +194,32 @@ kbagent looks for configuration in this order:
 4. `~/.config/keboola-agent-cli/` (global)
 
 Use `kbagent init` to create a local `.kbagent/` workspace for per-directory isolation.
+
+## `KBAGENT_PROJECT` environment variable
+
+Lets callers override the default project for one shell/session without editing
+`config.json`. A few non-obvious rules:
+
+- **Empty string counts as unset.** `KBAGENT_PROJECT=""` (or a value consisting
+  only of whitespace) is treated exactly like the variable not being set at
+  all. This follows the standard Unix shell convention and prevents a stray
+  `export KBAGENT_PROJECT=` from silently breaking every subsequent command.
+- **Points to an unregistered alias -> hard fail.** If the env var names an
+  alias that is NOT in your configured projects, write-ops (the ones that
+  consult the pin) fail with `CONFIG_ERROR` and exit code 5. Repair either by
+  running `kbagent project use <valid-alias>` and unsetting the env var, or by
+  `unset KBAGENT_PROJECT`. The CLI will not fall back silently to the persisted
+  pin -- that would mask a misconfiguration.
+- **Precedence for resolving the target project** (highest wins):
+  1. `--project <alias>` CLI flag (explicit per-command)
+  2. `KBAGENT_PROJECT` env var
+  3. Persisted pin (`default_project` in `config.json`, set via
+     `kbagent project use <alias>`)
+  4. Sole-project fallback (if exactly one project is configured)
+  5. Hard fail with `CONFIG_ERROR` (no ambiguous defaulting)
+- `kbagent project current` reports which of (2) or (3) is active and flags
+  when the env var points to an unregistered alias, so you can diagnose
+  precedence issues without reading the source.
 
 ## config update vs MCP update_config
 
@@ -475,6 +527,35 @@ They live at different endpoints in the Storage API
 (`/v2/storage/branch/{id}/metadata` vs. `/v2/storage/dev-branches/{id}`),
 so setting a branch's description will **not** update the dashboard.
 
+## Storage descriptions: key convention + precedence + partial failures
+
+`kbagent storage describe-bucket / describe-table / describe-column / describe-batch`
+write descriptive metadata onto storage objects. Three behaviors are easy to miss:
+
+- **Column descriptions use a metadata-key convention, not a column endpoint.**
+  The Keboola Storage API has no user-writable column-level metadata endpoint,
+  so `describe-column` stores each description as a `KBC.column.{name}.description`
+  entry on the **table's** metadata (upsert). `storage table-detail` reads them
+  back via the same key and surfaces them under `column_details[].description`.
+  Renaming or deleting a column does NOT automatically clean these entries up
+  (they remain on the table's metadata under the old name). Same convention for
+  table and bucket descriptions: stored as `KBC.description` (provider=user) on
+  the object's metadata.
+- **`describe-batch` is partial-failure-tolerant.** Item-level errors are
+  collected into `result.errors[]` but the batch keeps processing the remaining
+  items. The CLI exits non-zero only if `error_count > 0`, so in scripts always
+  inspect `errors[]` (or at least `error_count`) rather than relying solely on
+  the exit code — and when consuming `--json` output, never trust a zero-exit
+  as "everything applied."
+- **Description-field precedence: metadata wins.** When both the native Storage
+  API `description` field and a user-provided `KBC.description` (provider=user)
+  metadata entry are present, `storage bucket-detail` / `storage table-detail`
+  surface the **metadata value**. The native field is only settable at object
+  creation time via the Storage API; all user updates flow through the metadata
+  endpoint, so the metadata entry is the authoritative source. `KBC.description`
+  entries whose provider is not `user` (e.g. `system`) are ignored during
+  read-back and the native field is used as fallback.
+
 ## `job terminate` quirks
 
 Queue API's kill endpoint (`POST /jobs/{id}/kill`) has a few non-obvious behaviors the
@@ -531,3 +612,30 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   addressing. When exporting multiple tables, each ends up in a predictable
   subdirectory and there is no risk of name collisions. Override with
   `--output DIR` if you need a custom location.
+
+## Flow: default `--component-id` differs between commands
+
+- `kbagent flow new` defaults to **`keboola.flow`** (the newer format).
+- `kbagent flow detail / update / delete / schedule / schedule-remove` all
+  default to **`keboola.orchestrator`** (the legacy format, since most
+  existing flows still use it).
+- Consequence: if you create a flow with `flow new` and then call
+  `flow detail` without `--component-id`, you will get a `NOT_FOUND` error
+  because kbagent looks up the ID under `keboola.orchestrator`. Always pass
+  `--component-id keboola.flow` when round-tripping a flow you just created
+  via `flow new` (or, equivalently, pass `--component-id keboola.orchestrator`
+  on `flow new` to keep things consistent).
+- `flow list` returns both component IDs and surfaces `component_id` on each
+  row — use it to confirm which variant a flow lives under before issuing
+  detail/update/delete/schedule commands.
+
+## Flow: `schedule` is an upsert (no `schedule-update`)
+
+- `kbagent flow schedule` creates a `keboola.scheduler` config on first run
+  and **updates the existing one in-place** on subsequent runs. Running it
+  twice with different `--cron` values replaces the schedule — it does not
+  create a second one. That's why there is no separate `flow schedule-update`
+  command.
+- To inspect or remove schedules: `kbagent flow schedule-remove` deletes all
+  scheduler configs that target the flow. Pair it with `--dry-run` to see the
+  affected configs (cron + timezone) without calling `delete_config`.

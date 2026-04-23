@@ -372,3 +372,149 @@ class TestResolveBranch:
         assert project == "prod"
         assert branch_id is None
         formatter.err_console.print.assert_called_once()
+
+
+class TestResolveProjectAlias:
+    """Tests for resolve_project_alias() (write-op precedence)."""
+
+    def _build(self, tmp_config_dir) -> tuple:
+        from unittest.mock import MagicMock
+
+        from keboola_agent_cli.config_store import ConfigStore
+        from keboola_agent_cli.models import ProjectConfig
+        from keboola_agent_cli.services.project_service import ProjectService
+
+        store = ConfigStore(config_dir=tmp_config_dir)
+        for alias, pid in (("prod", 1), ("stage", 2)):
+            store.add_project(
+                alias,
+                ProjectConfig(
+                    stack_url="https://connection.keboola.com",
+                    token=f"t-{alias}",
+                    project_name=alias,
+                    project_id=pid,
+                ),
+            )
+        service = ProjectService(config_store=store)
+        ctx = MagicMock()
+        ctx.obj = {"project_service": service}
+        formatter = MagicMock(json_mode=False)
+        return ctx, formatter, store
+
+    def test_explicit_wins_over_env_and_pin(self, tmp_config_dir, monkeypatch) -> None:
+        from keboola_agent_cli.commands._helpers import resolve_project_alias
+
+        monkeypatch.setenv("KBAGENT_PROJECT", "stage")
+        ctx, formatter, _ = self._build(tmp_config_dir)
+        assert resolve_project_alias(ctx, formatter, explicit="prod") == "prod"
+
+    def test_env_beats_pin(self, tmp_config_dir, monkeypatch) -> None:
+        from keboola_agent_cli.commands._helpers import resolve_project_alias
+
+        monkeypatch.setenv("KBAGENT_PROJECT", "stage")
+        ctx, formatter, _ = self._build(tmp_config_dir)
+        # pin is prod (first-added); env overrides to stage
+        assert resolve_project_alias(ctx, formatter, explicit=None) == "stage"
+
+    def test_pin_used_when_no_env(self, tmp_config_dir, monkeypatch) -> None:
+        from keboola_agent_cli.commands._helpers import resolve_project_alias
+
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        ctx, formatter, _ = self._build(tmp_config_dir)
+        assert resolve_project_alias(ctx, formatter, explicit=None) == "prod"
+
+    def test_fail_hard_multi_no_pin(self, tmp_config_dir, monkeypatch) -> None:
+        import typer
+
+        from keboola_agent_cli.commands._helpers import resolve_project_alias
+
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        ctx, formatter, store = self._build(tmp_config_dir)
+        cfg = store.load()
+        cfg.default_project = ""
+        store.save(cfg)
+
+        with pytest.raises(typer.Exit) as exc_info:
+            resolve_project_alias(ctx, formatter, explicit=None)
+        assert exc_info.value.exit_code == 5
+        formatter.error.assert_called_once()
+
+
+class TestApplyFirewallFlags:
+    """Tests for cli.apply_firewall_flags (session-only policy merge)."""
+
+    def test_no_flags_returns_persisted_as_is(self) -> None:
+        from keboola_agent_cli.cli import apply_firewall_flags
+        from keboola_agent_cli.models import PermissionPolicy
+
+        persisted = PermissionPolicy(mode="allow", allow=[], deny=["branch.delete"])
+        result = apply_firewall_flags(persisted, deny_writes=False, deny_destructive=False)
+        assert result is persisted
+
+    def test_no_flags_no_persisted_returns_none(self) -> None:
+        from keboola_agent_cli.cli import apply_firewall_flags
+
+        result = apply_firewall_flags(None, deny_writes=False, deny_destructive=False)
+        assert result is None
+
+    def test_deny_writes_synthesizes_fresh_policy(self) -> None:
+        from keboola_agent_cli.cli import apply_firewall_flags
+
+        result = apply_firewall_flags(None, deny_writes=True, deny_destructive=False)
+        assert result is not None
+        assert result.mode == "allow"
+        assert "cli:write" in result.deny
+        assert "tool:write" in result.deny
+
+    def test_deny_destructive_synthesizes_fresh_policy(self) -> None:
+        from keboola_agent_cli.cli import apply_firewall_flags
+
+        result = apply_firewall_flags(None, deny_writes=False, deny_destructive=True)
+        assert result is not None
+        assert "cli:destructive" in result.deny
+        assert "tool:destructive" in result.deny
+        assert "cli:write" not in result.deny
+
+    def test_flags_merge_with_persisted_deny_no_duplicates(self) -> None:
+        from keboola_agent_cli.cli import apply_firewall_flags
+        from keboola_agent_cli.models import PermissionPolicy
+
+        persisted = PermissionPolicy(mode="allow", allow=[], deny=["branch.delete", "cli:write"])
+        result = apply_firewall_flags(persisted, deny_writes=True, deny_destructive=False)
+        assert result is not None
+        # Existing cli:write preserved (no dup); tool:write appended; custom entry kept.
+        assert result.deny.count("cli:write") == 1
+        assert "tool:write" in result.deny
+        assert "branch.delete" in result.deny
+        # Mode preserved.
+        assert result.mode == persisted.mode
+
+    def test_flags_preserve_persisted_mode_deny_mode(self) -> None:
+        from keboola_agent_cli.cli import apply_firewall_flags
+        from keboola_agent_cli.models import PermissionPolicy
+
+        persisted = PermissionPolicy(mode="deny", allow=["cli:read"], deny=[])
+        result = apply_firewall_flags(persisted, deny_writes=True, deny_destructive=False)
+        assert result is not None
+        assert result.mode == "deny"
+        assert result.allow == ["cli:read"]
+        assert "cli:write" in result.deny
+
+    def test_both_flags_combine(self) -> None:
+        from keboola_agent_cli.cli import apply_firewall_flags
+
+        result = apply_firewall_flags(None, deny_writes=True, deny_destructive=True)
+        assert result is not None
+        # Both prefixes present.
+        assert {"cli:write", "tool:write", "cli:destructive", "tool:destructive"} <= set(
+            result.deny
+        )
+
+    def test_flags_do_not_mutate_persisted(self) -> None:
+        from keboola_agent_cli.cli import apply_firewall_flags
+        from keboola_agent_cli.models import PermissionPolicy
+
+        persisted = PermissionPolicy(mode="allow", allow=[], deny=["branch.delete"])
+        before = list(persisted.deny)
+        apply_firewall_flags(persisted, deny_writes=True, deny_destructive=True)
+        assert persisted.deny == before, "persisted.deny was mutated in place"

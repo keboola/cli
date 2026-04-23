@@ -60,6 +60,34 @@ STORAGE_JOB_POLL_INTERVAL: float = 1.0  # seconds between polls
 STORAGE_JOB_MAX_WAIT: float = 60.0  # max seconds to wait for a storage job
 IMPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table import jobs (large files)
 
+# --- Queue Job Polling ---
+# Piecewise curve matching FIIA's existing Queue API polling contract
+# (same cadence as the official keboola-as-code Go CLI): fast initial polls
+# to catch short jobs, then relax so multi-hour orchestrations don't spam
+# the API. Each tuple is (interval_seconds, max_polls_at_this_interval);
+# count=0 means "continue at this interval indefinitely" (only valid on the
+# last segment). Total first-phase time: 2s * 30 + 5s * 48 = 300s = 5 min,
+# after which we settle at 15s forever.
+JOB_POLL_CURVE: tuple[tuple[float, int], ...] = (
+    (2.0, 30),
+    (5.0, 48),
+    (15.0, 0),
+)
+VALID_POLL_STRATEGIES: frozenset[str] = frozenset({"exponential", "fixed"})
+DEFAULT_POLL_STRATEGY: str = "exponential"
+# Default log-tail length surfaced on FAILED/WARNING/TERMINATED jobs.
+DEFAULT_LOG_TAIL_LINES: int = 200
+# Upper bound to prevent accidentally pulling tens of thousands of events
+# from a long-running job.
+MAX_LOG_TAIL_LINES: int = 5000
+# Seconds to wait after issuing kill_job() during timeout-cancellation for
+# the job to transition to a terminal state before we return.
+JOB_TERMINATE_GRACE_SECONDS: float = 10.0
+# Poll cadence while waiting inside the terminate grace window; capped so we
+# never overshoot the deadline by more than one interval on latency-sensitive
+# callers (see _terminate_and_wait in services/job_service.py).
+JOB_TERMINATE_POLL_INTERVAL: float = 1.0
+
 # --- Storage Write Validation ---
 VALID_COLUMN_TYPES: frozenset[str] = frozenset(
     {"STRING", "INTEGER", "NUMERIC", "FLOAT", "BOOLEAN", "DATE", "TIMESTAMP"}
@@ -90,6 +118,10 @@ MAX_PARALLEL_WORKERS_LIMIT: int = 100
 # --- Config Resolution ---
 ENV_CONFIG_DIR: str = "KBAGENT_CONFIG_DIR"
 LOCAL_CONFIG_DIR_NAME: str = ".kbagent"
+
+# --- Project Pin ---
+# Overrides the persisted `default_project` pin for a single invocation/session.
+ENV_KBAGENT_PROJECT: str = "KBAGENT_PROJECT"
 
 # --- Environment Variable Names ---
 ENV_MAX_PARALLEL_WORKERS: str = "KBAGENT_MAX_PARALLEL_WORKERS"
@@ -132,6 +164,12 @@ KILLABLE_JOB_STATUSES: frozenset[str] = frozenset({"created", "waiting", "proces
 
 # --- Permission Exit Code ---
 EXIT_PERMISSION_DENIED: int = 6
+# --- Job-timeout Exit Code ---
+# Distinct from the general "1" exit code so scripts can tell
+# "local --timeout elapsed and we cancelled the remote job" apart
+# from "job failed on its own". The retryable-with-longer-timeout
+# QUEUE_JOB_TIMEOUT case (kill itself failed) stays at exit 4.
+EXIT_JOB_TIMEOUT_TERMINATED: int = 7
 
 # --- Domain Validation Constants ---
 VALID_COMPONENT_TYPES: list[str] = ["extractor", "writer", "transformation", "application"]

@@ -5,6 +5,7 @@ from . import (
     component,  # noqa: F401
     config,  # noqa: F401
     encrypt,  # noqa: F401
+    flow,  # noqa: F401
     job,  # noqa: F401
     kai,  # noqa: F401
     lineage,  # noqa: F401

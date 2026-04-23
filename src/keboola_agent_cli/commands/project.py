@@ -18,7 +18,7 @@ from ..constants import (
     ENV_KBC_STORAGE_API_URL,
     ENV_KBC_TOKEN,
 )
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
     emit_hint,
@@ -178,7 +178,7 @@ def project_add(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -192,7 +192,7 @@ def project_list(ctx: typer.Context) -> None:
         projects = service.list_projects()
         formatter.output(projects, _format_project_table)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -211,7 +211,7 @@ def project_remove(
             result, lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}")
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -249,7 +249,7 @@ def project_edit(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -353,7 +353,7 @@ def project_status(
         statuses = service.get_status(aliases=aliases)
         formatter.output(statuses, _format_status_table)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
@@ -410,13 +410,13 @@ def project_refresh(
     if project and all_projects:
         formatter.error(
             message="Provide --project or --all, not both",
-            error_code="usage_error",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
     if not project and not all_projects:
         formatter.error(
             message="Provide --project or --all",
-            error_code="usage_error",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
 
@@ -473,6 +473,89 @@ def project_refresh(
     formatter.output(result, _format_refresh_result)
 
 
+# ── Project pin (default project) ─────────────────────────────────────
+
+
+@project_app.command("use")
+def project_use(
+    ctx: typer.Context,
+    alias: str = typer.Argument(..., help="Project alias to pin as default"),
+) -> None:
+    """Pin <alias> as the default project for subsequent commands.
+
+    The pin persists in config.json. ``KBAGENT_PROJECT`` overrides it for a
+    single invocation; an explicit ``--project`` flag overrides both.
+    """
+    # No --hint: local-only ConfigStore mutation; no client or service call to render.
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "project_service")
+
+    try:
+        result = service.use_project(alias=alias)
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+
+    def _human(c: Console, d: dict[str, Any]) -> None:
+        previous = d.get("previous")
+        if previous and previous != d["alias"]:
+            c.print(
+                f"[bold green]Pinned:[/bold green] default project is now "
+                f"[bold]{d['alias']}[/bold] (was [dim]{previous}[/dim])"
+            )
+        else:
+            c.print(
+                f"[bold green]Pinned:[/bold green] default project is [bold]{d['alias']}[/bold]"
+            )
+        env_override = d.get("env_override")
+        if env_override and env_override != d["alias"]:
+            c.print(
+                f"[yellow]Note:[/yellow] KBAGENT_PROJECT='{env_override}' is set "
+                "and overrides this pin for the current shell."
+            )
+
+    formatter.output(result, _human)
+
+
+@project_app.command("current")
+def project_current(ctx: typer.Context) -> None:
+    """Show the effective default project.
+
+    Reports whether the value comes from the ``KBAGENT_PROJECT`` env var
+    (``env``) or the persisted pin (``pin``). Prints nothing but a hint if
+    neither is set.
+    """
+    # No --hint: local-only ConfigStore read; no client or service call to render.
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "project_service")
+
+    result = service.current_project()
+
+    def _human(c: Console, d: dict[str, Any]) -> None:
+        alias = d.get("alias")
+        source = d.get("source")
+        if alias is None:
+            c.print(
+                "[dim](no default project set)[/dim] -- pass --project, set "
+                "KBAGENT_PROJECT, or run 'kbagent project use <alias>'"
+            )
+            return
+        if source == "env":
+            c.print(f"[bold cyan]{alias}[/bold cyan]  [dim](source: KBAGENT_PROJECT env var)[/dim]")
+            if d.get("env_points_to_configured_project") is False:
+                c.print(
+                    f"[yellow]Warning:[/yellow] '{alias}' is NOT in your "
+                    "configured projects. Commands that use this pin will fail."
+                )
+            pinned = d.get("pinned")
+            if pinned:
+                c.print(f"[dim]  (pinned in config: {pinned}, overridden)[/dim]")
+        else:
+            c.print(f"[bold cyan]{alias}[/bold cyan]  [dim](source: pinned default)[/dim]")
+
+    formatter.output(result, _human)
+
+
 # ── Project description (dashboard KBC.projectDescription) ────────────
 
 
@@ -504,7 +587,7 @@ def project_description_get(
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     formatter.output(
@@ -543,7 +626,7 @@ def project_description_set(
     try:
         description = resolve_text_input(text=text, file=file, stdin=stdin)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="INVALID_ARGUMENT")
+        formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
 
     if should_hint(ctx):
@@ -567,5 +650,5 @@ def project_description_set(
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None

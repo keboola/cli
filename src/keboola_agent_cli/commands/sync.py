@@ -9,7 +9,7 @@ from typing import Any
 
 import typer
 
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import check_cli_permission, get_formatter, get_service, map_error_to_exit_code
 
 sync_app = typer.Typer(help="Sync project configurations with local filesystem")
@@ -81,12 +81,22 @@ def sync_init(
         "--git-branching",
         help="Enable git-branching mode (maps git branches to Keboola branches)",
     ),
+    adopt_existing: bool = typer.Option(
+        False,
+        "--adopt-existing",
+        help="Adopt an existing .keboola/manifest.json (e.g. written by kbc) "
+        "instead of failing. Validates the manifest's project_id against the alias "
+        "and normalises the file. Idempotent.",
+    ),
 ) -> None:
     """Initialize a sync working directory for a Keboola project.
 
     Creates the .keboola/ directory with manifest.json containing
     project metadata and naming conventions. Optionally enables
     git-branching mode for branch-to-branch mapping.
+
+    Use --adopt-existing to register a directory that was already initialised
+    by the official kbc CLI without overwriting the manifest.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "sync_service")
@@ -97,12 +107,13 @@ def sync_init(
             alias=project,
             project_root=project_root,
             git_branching=git_branching,
+            adopt_existing=adopt_existing,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except FileExistsError as exc:
-        formatter.error(message=str(exc), error_code="ALREADY_EXISTS")
+        formatter.error(message=str(exc), error_code=ErrorCode.ALREADY_EXISTS)
         raise typer.Exit(code=1) from None
     except KeboolaApiError as exc:
         formatter.error(
@@ -115,9 +126,17 @@ def sync_init(
     if formatter.json_mode:
         formatter.output(result)
     else:
-        formatter.success(
-            f"Initialized sync for project '{result['project_alias']}' (ID: {result['project_id']})"
-        )
+        status = result.get("status", "initialized")
+        if status == "adopted":
+            formatter.success(
+                f"Adopted manifest for project '{result['project_alias']}' "
+                f"(ID: {result['project_id']})"
+            )
+        else:
+            formatter.success(
+                f"Initialized sync for project '{result['project_alias']}' "
+                f"(ID: {result['project_id']})"
+            )
         formatter.console.print(f"  API host: {result['api_host']}")
         if result["git_branching"]:
             formatter.console.print(
@@ -439,13 +458,13 @@ def sync_pull(
     if all_projects and project:
         formatter.error(
             message="Cannot use --project with --all-projects",
-            error_code="USAGE_ERROR",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
     if not all_projects and not project:
         formatter.error(
             message="Specify --project ALIAS or --all-projects",
-            error_code="USAGE_ERROR",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
 
@@ -464,7 +483,7 @@ def sync_pull(
                 max_samples=max_samples,
             )
         except ConfigError as exc:
-            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
         if formatter.json_mode:
@@ -481,7 +500,7 @@ def sync_pull(
         try:
             service.init_sync(project, project_root)
         except Exception as exc:
-            formatter.error(message=str(exc), error_code="INIT_ERROR")
+            formatter.error(message=str(exc), error_code=ErrorCode.INIT_ERROR)
             raise typer.Exit(code=1) from None
 
     try:
@@ -498,10 +517,10 @@ def sync_pull(
             max_samples=max_samples,
         )
     except FileNotFoundError as exc:
-        formatter.error(message=str(exc), error_code="NOT_INITIALIZED")
+        formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
         raise typer.Exit(code=1) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(
@@ -539,7 +558,7 @@ def sync_status(
     try:
         result = service.status(project_root=project_root)
     except FileNotFoundError as exc:
-        formatter.error(message=str(exc), error_code="NOT_INITIALIZED")
+        formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
         raise typer.Exit(code=1) from None
 
     if formatter.json_mode:
@@ -608,13 +627,13 @@ def sync_diff(
     if all_projects and project:
         formatter.error(
             message="Cannot use --project with --all-projects",
-            error_code="USAGE_ERROR",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
     if not all_projects and not project:
         formatter.error(
             message="Specify --project ALIAS or --all-projects",
-            error_code="USAGE_ERROR",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
 
@@ -623,7 +642,7 @@ def sync_diff(
         try:
             data = service.diff_all(base_dir)
         except ConfigError as exc:
-            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
         if formatter.json_mode:
@@ -637,10 +656,10 @@ def sync_diff(
     try:
         result = service.diff(alias=project, project_root=project_root)
     except FileNotFoundError as exc:
-        formatter.error(message=str(exc), error_code="NOT_INITIALIZED")
+        formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
         raise typer.Exit(code=1) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -784,13 +803,13 @@ def sync_push(
     if all_projects and project:
         formatter.error(
             message="Cannot use --project with --all-projects",
-            error_code="USAGE_ERROR",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
     if not all_projects and not project:
         formatter.error(
             message="Specify --project ALIAS or --all-projects",
-            error_code="USAGE_ERROR",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
 
@@ -804,7 +823,7 @@ def sync_push(
                 allow_plaintext_fallback=allow_plaintext,
             )
         except ConfigError as exc:
-            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
         if formatter.json_mode:
@@ -824,10 +843,10 @@ def sync_push(
             allow_plaintext_fallback=allow_plaintext,
         )
     except FileNotFoundError as exc:
-        formatter.error(message=str(exc), error_code="NOT_INITIALIZED")
+        formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
         raise typer.Exit(code=1) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -902,10 +921,10 @@ def sync_branch_link(
             branch_name=branch_name,
         )
     except FileNotFoundError as exc:
-        formatter.error(message=str(exc), error_code="NOT_INITIALIZED")
+        formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
         raise typer.Exit(code=1) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -943,10 +962,10 @@ def sync_branch_unlink(
     try:
         result = service.branch_unlink(project_root=project_root)
     except FileNotFoundError as exc:
-        formatter.error(message=str(exc), error_code="NOT_INITIALIZED")
+        formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
         raise typer.Exit(code=1) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -973,7 +992,7 @@ def sync_branch_status(
     try:
         result = service.branch_status(project_root=project_root)
     except FileNotFoundError as exc:
-        formatter.error(message=str(exc), error_code="NOT_INITIALIZED")
+        formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
         raise typer.Exit(code=1) from None
 
     if formatter.json_mode:

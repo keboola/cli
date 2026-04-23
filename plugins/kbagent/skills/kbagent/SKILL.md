@@ -81,6 +81,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Edit an existing Keboola project connection | `kbagent project edit --project ALIAS` |
 | Test connectivity to connected Keboola projects | `kbagent project status` |
 | Refresh expired or invalid Storage API tokens | `kbagent project refresh` |
+| Pin <alias> as the default project for subsequent commands | `kbagent project use <ALIAS>` |
+| Show the effective default project | `kbagent project current` |
 | Get the Keboola dashboard project description | `kbagent project description-get --project PROJECT` |
 | Set the Keboola dashboard project description (markdown) | `kbagent project description-set --project PROJECT` |
 | Set up projects and register them in the kbagent config | `kbagent org setup --url URL` |
@@ -93,6 +95,11 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Rename a configuration (update name via API + rename local sync directory) | `kbagent config rename --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Delete a configuration from a project | `kbagent config delete --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Generate boilerplate configuration files for a Keboola component | `kbagent config new --component-id COMPONENT-ID` |
+| List all metadata entries on a configuration | `kbagent config metadata-list --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Read a single metadata value by key | `kbagent config get-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --key KEY` |
+| Set a metadata key/value on a configuration (upsert) | `kbagent config set-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --key KEY --value VALUE` |
+| Delete a configuration metadata entry by its numeric ID | `kbagent config delete-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --metadata-id METADATA-ID` |
+| Set the folder (KBC.configuration.folderName) on a configuration | `kbagent config set-folder --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Assign variables to a config (auto-creates backing keboola.variables on first call) | `kbagent config variables-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Read the current variable values attached to a config | `kbagent config variables-get --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Unlink variables from a config (does NOT delete the underlying keboola.variables) | `kbagent config variables-clear --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -111,6 +118,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Delete one or more storage tables | `kbagent storage delete-table --project PROJECT --table-id TABLE-ID` |
 | Delete one or more columns from a storage table | `kbagent storage delete-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
 | Delete one or more storage buckets | `kbagent storage delete-bucket --project PROJECT --bucket-id BUCKET-ID` |
+| Set the description on a storage bucket | `kbagent storage describe-bucket --project PROJECT --bucket-id BUCKET-ID` |
+| Set the description on a storage table | `kbagent storage describe-table --project PROJECT --table-id TABLE-ID` |
+| Set descriptions on one or more columns of a storage table | `kbagent storage describe-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
+| Apply descriptions to buckets, tables, and columns from a YAML file | `kbagent storage describe-batch --project PROJECT --from-file FROM-FILE` |
 | List Storage Files with optional tag filtering | `kbagent storage files --project PROJECT` |
 | Show Storage File metadata (without downloading) | `kbagent storage file-detail --project PROJECT --file-id FILE-ID` |
 | Upload a local file to Storage Files | `kbagent storage file-upload --project PROJECT --file FILE` |
@@ -133,6 +144,14 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Ask Kai a one-shot question and get the full response | `kbagent kai ask --message MESSAGE` |
 | Send a message to Kai in a chat session | `kbagent kai chat --message MESSAGE` |
 | List recent Kai chat sessions | `kbagent kai history` |
+| List all flows (keboola.orchestrator + keboola.flow) across projects | `kbagent flow list` |
+| Show detailed flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |
+| Print the YAML format expected by 'flow new' and 'flow update' | `kbagent flow schema` |
+| Create a new flow configuration | `kbagent flow new --project PROJECT --name NAME` |
+| Update a flow's name, description, or phases/tasks | `kbagent flow update --project PROJECT --flow-id FLOW-ID` |
+| Delete a flow configuration | `kbagent flow delete --project PROJECT --flow-id FLOW-ID` |
+| Bind a cron schedule to a flow (upsert: creates or updates) | `kbagent flow schedule --project PROJECT --flow-id FLOW-ID --cron CRON` |
+| Remove all schedules bound to a flow (deletes keboola.scheduler configs) | `kbagent flow schedule-remove --project PROJECT --flow-id FLOW-ID` |
 | List development branches from connected projects | `kbagent branch list` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
@@ -150,6 +169,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Reset workspace password and show the new one | `kbagent workspace password --project PROJECT --workspace-id WORKSPACE-ID` |
 | Load tables into a workspace | `kbagent workspace load --project PROJECT --workspace-id WORKSPACE-ID --tables TABLES` |
 | Execute SQL query in a workspace via Query Service | `kbagent workspace query --project PROJECT --workspace-id WORKSPACE-ID` |
+| Garbage-collect orphaned workspaces | `kbagent workspace gc` |
 | Create a workspace from a transformation config | `kbagent workspace from-transformation --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | List available MCP tools from the keboola-mcp-server | `kbagent tool list` |
 | Call an MCP tool on keboola-mcp-server | `kbagent tool call <TOOL-NAME>` |

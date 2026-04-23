@@ -15,8 +15,12 @@ from typing import Any
 import typer
 
 from ..config_store import ConfigStore
-from ..constants import ENV_KBC_MANAGE_API_TOKEN, EXIT_PERMISSION_DENIED
-from ..errors import KeboolaApiError, PermissionDeniedError
+from ..constants import (
+    ENV_KBC_MANAGE_API_TOKEN,
+    EXIT_JOB_TIMEOUT_TERMINATED,
+    EXIT_PERMISSION_DENIED,
+)
+from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError
 from ..output import OutputFormatter
 
 
@@ -63,15 +67,26 @@ def get_service(ctx: typer.Context, key: str) -> Any:
 def map_error_to_exit_code(exc: KeboolaApiError) -> int:
     """Map a KeboolaApiError to a CLI exit code.
 
-    Unified 3-case logic:
     - INVALID_TOKEN -> 3 (authentication error)
-    - TIMEOUT / CONNECTION_ERROR / RETRY_EXHAUSTED -> 4 (network error)
+    - TIMEOUT / CONNECTION_ERROR / RETRY_EXHAUSTED / QUEUE_JOB_TIMEOUT -> 4
+      (network/retryable; QUEUE_JOB_TIMEOUT means local gave up AND the
+      remote-kill attempt also failed, so the job may still be running)
+    - JOB_TIMEOUT_TERMINATED -> EXIT_JOB_TIMEOUT_TERMINATED (7)
+      (local --timeout elapsed and we successfully cancelled the remote
+      job; scripts can distinguish "we killed it" from "it failed on its own")
     - Everything else -> 1 (general error)
     """
     if exc.error_code == "INVALID_TOKEN":
         return 3
-    if exc.error_code in ("TIMEOUT", "CONNECTION_ERROR", "RETRY_EXHAUSTED"):
+    if exc.error_code in (
+        "TIMEOUT",
+        "CONNECTION_ERROR",
+        "RETRY_EXHAUSTED",
+        "QUEUE_JOB_TIMEOUT",
+    ):
         return 4
+    if exc.error_code == "JOB_TIMEOUT_TERMINATED":
+        return EXIT_JOB_TIMEOUT_TERMINATED
     return 1
 
 
@@ -149,8 +164,45 @@ def check_cli_permission(ctx: typer.Context, group_name: str) -> None:
         engine.check_or_raise(operation)
     except PermissionDeniedError as exc:
         formatter = get_formatter(ctx)
-        formatter.error(message=exc.message, error_code="PERMISSION_DENIED")
+        formatter.error(message=exc.message, error_code=ErrorCode.PERMISSION_DENIED)
         raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
+
+
+def resolve_project_alias(
+    ctx: typer.Context,
+    formatter: OutputFormatter,
+    explicit: str | None,
+) -> str:
+    """Resolve the effective project alias for a single-project operation.
+
+    Precedence (first match wins):
+    1. ``explicit`` (typically the CLI ``--project`` flag)
+    2. ``KBAGENT_PROJECT`` env var
+    3. Persisted pin (``config.default_project`` set by ``kbagent project use``)
+    4. Sole registered project when exactly one exists (convenience)
+    5. Exit code 5 with a CONFIG_ERROR if none of the above resolves
+
+    Use this from write/destructive command paths where implicit fan-out
+    (``resolve_projects(None)`` returning every project) would be surprising
+    or unsafe. Read paths should keep their existing fan-out behavior.
+
+    Args:
+        ctx: Typer context (must contain ``project_service``).
+        formatter: Output formatter for structured error emission.
+        explicit: The value of the CLI --project flag, or None.
+
+    Returns:
+        The resolved project alias (guaranteed to be registered).
+    """
+    from ..errors import ConfigError as _ConfigError
+
+    service = get_service(ctx, "project_service")
+    try:
+        alias, _source = service.resolve_pinned_alias(explicit=explicit)
+    except _ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    return alias
 
 
 def validate_branch_requires_project(
@@ -166,7 +218,7 @@ def validate_branch_requires_project(
     if branch is not None and not project:
         formatter.error(
             message="--branch requires --project (branch ID is per-project)",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
 

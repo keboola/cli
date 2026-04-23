@@ -16,7 +16,7 @@ from rich.syntax import Syntax
 
 from ..config_store import ConfigStore
 from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME, VALID_COMPONENT_TYPES
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_config_detail, format_configs_table, format_search_results
 from ._helpers import (
     check_cli_permission,
@@ -116,7 +116,7 @@ def config_list(
     if branch is not None and (not project or len(project) != 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -131,7 +131,7 @@ def config_list(
         formatter.error(
             message=f"Invalid component type '{component_type}'. "
             f"Valid types: {', '.join(VALID_COMPONENT_TYPES)}",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -143,7 +143,7 @@ def config_list(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     # In JSON mode, include both configs and errors in the response
@@ -197,7 +197,7 @@ def config_detail(
         )
         formatter.output(result, format_config_detail)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
@@ -276,7 +276,7 @@ def config_search(
     if branch is not None and (not project or len(project) != 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -290,7 +290,7 @@ def config_search(
         formatter.error(
             message=f"Invalid component type '{component_type}'. "
             f"Valid types: {', '.join(VALID_COMPONENT_TYPES)}",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -301,7 +301,7 @@ def config_search(
         except re.error as exc:
             formatter.error(
                 message=f"Invalid regex pattern: {exc}",
-                error_code="INVALID_ARGUMENT",
+                error_code=ErrorCode.INVALID_ARGUMENT,
             )
             raise typer.Exit(code=2) from None
 
@@ -316,7 +316,7 @@ def config_search(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -447,7 +447,7 @@ def config_update(
     if configuration and configuration_file:
         formatter.error(
             message="Cannot use both --configuration and --configuration-file.",
-            error_code="VALIDATION_ERROR",
+            error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2) from None
 
@@ -457,7 +457,7 @@ def config_update(
         except (json.JSONDecodeError, FileNotFoundError) as exc:
             formatter.error(
                 message=f"Invalid --configuration input: {exc}",
-                error_code="VALIDATION_ERROR",
+                error_code=ErrorCode.VALIDATION_ERROR,
             )
             raise typer.Exit(code=2) from None
 
@@ -467,7 +467,7 @@ def config_update(
         except json.JSONDecodeError as exc:
             formatter.error(
                 message=f"Invalid JSON in {configuration_file}: {exc}",
-                error_code="VALIDATION_ERROR",
+                error_code=ErrorCode.VALIDATION_ERROR,
             )
             raise typer.Exit(code=2) from None
 
@@ -479,7 +479,7 @@ def config_update(
             if "=" not in item:
                 formatter.error(
                     message=f"Invalid --set format: '{item}'. Expected PATH=VALUE.",
-                    error_code="VALIDATION_ERROR",
+                    error_code=ErrorCode.VALIDATION_ERROR,
                 )
                 raise typer.Exit(code=2) from None
             path, _, raw_value = item.partition("=")
@@ -502,7 +502,7 @@ def config_update(
             branch_id=branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(
@@ -624,7 +624,7 @@ def config_rename(
             directory=effective_directory,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(
@@ -693,7 +693,7 @@ def config_delete(
             branch_id=branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(
@@ -772,7 +772,7 @@ def config_new(
             name=name or None,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
@@ -834,6 +834,263 @@ def config_new(
                 )
                 formatter.console.print(syntax)
                 formatter.console.print()
+
+
+# ── Config metadata commands ───────────────────────────────────────────
+
+
+@config_app.command("metadata-list")
+def config_metadata_list(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    component_id: str = typer.Option(..., "--component-id", help="Component ID"),
+    config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
+    branch: int | None = typer.Option(
+        None, "--branch", help="Dev branch ID (defaults to active branch)"
+    ),
+) -> None:
+    """List all metadata entries on a configuration."""
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.metadata-list",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            branch=branch,
+        )
+        return
+    formatter = get_formatter(ctx)
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    service = get_service(ctx, "config_service")
+    try:
+        result = service.list_config_metadata(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            branch_id=effective_branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        entries = result.get("metadata", [])
+        if not entries:
+            formatter.console.print("[dim]No metadata entries.[/dim]")
+        else:
+            for e in entries:
+                formatter.console.print(
+                    f"  [dim]{escape(str(e.get('id', '')))}[/dim]  [green]{escape(e.get('key', ''))}[/green] = {escape(str(e.get('value', '')))}  [dim]{escape(e.get('provider', 'user'))}[/dim]"
+                )
+
+
+@config_app.command("get-metadata")
+def config_get_metadata(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    component_id: str = typer.Option(..., "--component-id", help="Component ID"),
+    config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
+    key: str = typer.Option(..., "--key", help="Metadata key to read"),
+    branch: int | None = typer.Option(
+        None, "--branch", help="Dev branch ID (defaults to active branch)"
+    ),
+) -> None:
+    """Read a single metadata value by key.
+
+    Exits with code 1 (NOT_FOUND) if the key is not present.
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.get-metadata",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            key=key,
+            branch=branch,
+        )
+        return
+    formatter = get_formatter(ctx)
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    service = get_service(ctx, "config_service")
+    try:
+        result = service.get_config_metadata_value(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            key=key,
+            branch_id=effective_branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    formatter.output(result, lambda c, d: c.print(d["value"]))
+
+
+@config_app.command("set-metadata")
+def config_set_metadata(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    component_id: str = typer.Option(..., "--component-id", help="Component ID"),
+    config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
+    key: str = typer.Option(..., "--key", help="Metadata key to set"),
+    value: str = typer.Option(..., "--value", help="Metadata value (string)"),
+    branch: int | None = typer.Option(
+        None, "--branch", help="Dev branch ID (defaults to active branch)"
+    ),
+) -> None:
+    """Set a metadata key/value on a configuration (upsert)."""
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.set-metadata",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            key=key,
+            value=value,
+            branch=branch,
+        )
+        return
+    formatter = get_formatter(ctx)
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    service = get_service(ctx, "config_service")
+    try:
+        result = service.set_config_metadata(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            key=key,
+            value=value,
+            branch_id=effective_branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    formatter.output(
+        result, lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}")
+    )
+
+
+@config_app.command("delete-metadata")
+def config_delete_metadata(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    component_id: str = typer.Option(..., "--component-id", help="Component ID"),
+    config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
+    metadata_id: int = typer.Option(..., "--metadata-id", help="Numeric ID from metadata-list"),
+    branch: int | None = typer.Option(
+        None, "--branch", help="Dev branch ID (defaults to active branch)"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+) -> None:
+    """Delete a configuration metadata entry by its numeric ID."""
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.delete-metadata",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            metadata_id=metadata_id,
+            branch=branch,
+        )
+        return
+    formatter = get_formatter(ctx)
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    if (
+        not yes
+        and not formatter.json_mode
+        and not typer.confirm(f"Delete metadata ID {metadata_id} from {component_id}/{config_id}?")
+    ):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+
+    service = get_service(ctx, "config_service")
+    try:
+        result = service.delete_config_metadata(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            metadata_id=metadata_id,
+            branch_id=effective_branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    formatter.output(
+        result, lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}")
+    )
+
+
+@config_app.command("set-folder")
+def config_set_folder(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    component_id: str = typer.Option(..., "--component-id", help="Component ID"),
+    config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
+    name: str = typer.Option(..., "--name", help="Folder name (empty string to clear)"),
+    branch: int | None = typer.Option(
+        None, "--branch", help="Dev branch ID (defaults to active branch)"
+    ),
+) -> None:
+    """Set the folder (KBC.configuration.folderName) on a configuration.
+
+    Organises configs into named groups in the Keboola UI.
+    Pass an empty string to remove the folder assignment.
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.set-folder",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            name=name,
+            branch=branch,
+        )
+        return
+    formatter = get_formatter(ctx)
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    service = get_service(ctx, "config_service")
+    try:
+        result = service.set_config_folder(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            folder_name=name,
+            branch_id=effective_branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    formatter.output(
+        result, lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}")
+    )
 
 
 def _parse_kv_var(raw: str) -> tuple[str, str]:
@@ -918,7 +1175,7 @@ def config_variables_set(
     if not raw_vars:
         formatter.error(
             message="At least one --var KEY=VALUE is required.",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -927,7 +1184,7 @@ def config_variables_set(
         try:
             key, value = _parse_kv_var(raw)
         except typer.BadParameter as exc:
-            formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+            formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
             raise typer.Exit(code=2) from None
         variables_dict[key] = value
 
@@ -951,7 +1208,7 @@ def config_variables_set(
             )
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
         except ConfigError as exc:
-            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
         preview_values = (
@@ -994,7 +1251,7 @@ def config_variables_set(
         )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -1047,7 +1304,7 @@ def config_variables_get(
         )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -1115,7 +1372,7 @@ def config_variables_clear(
         )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:

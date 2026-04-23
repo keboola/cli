@@ -9,6 +9,7 @@ import typer
 
 from ..config_store import ConfigStore
 from ..constants import LOCAL_CONFIG_DIR_NAME
+from ..errors import ErrorCode
 from ..models import AppConfig, PermissionPolicy
 from ._helpers import get_formatter, get_service
 
@@ -91,7 +92,7 @@ def init_command(
                 "3) 'kbagent permissions set --mode allow --deny cli:write --deny tool:write' to lock. "
                 "Alternatively, use --from-global to seed projects from the global config."
             ),
-            error_code="CONFIG_ERROR",
+            error_code=ErrorCode.CONFIG_ERROR,
         )
         raise typer.Exit(code=5)
 

@@ -13,6 +13,7 @@ from .commands.config import config_app
 from .commands.context import context_command
 from .commands.doctor import doctor_command
 from .commands.encrypt import encrypt_app
+from .commands.flow import flow_app
 from .commands.init import init_command
 from .commands.job import job_app
 from .commands.kai import kai_app
@@ -29,7 +30,8 @@ from .commands.version import update_command, version_command
 from .commands.workspace import workspace_app
 from .config_store import ConfigStore, resolve_config_dir
 from .constants import EXIT_PERMISSION_DENIED
-from .errors import PermissionDeniedError
+from .errors import ErrorCode, PermissionDeniedError
+from .models import PermissionPolicy
 from .output import OutputFormatter
 from .permissions import PermissionEngine
 from .services.branch_service import BranchService
@@ -38,6 +40,7 @@ from .services.config_service import ConfigService
 from .services.deep_lineage_service import DeepLineageService
 from .services.doctor_service import DoctorService
 from .services.encrypt_service import EncryptService
+from .services.flow_service import FlowService
 from .services.job_service import JobService
 from .services.kai_service import KaiService
 from .services.lineage_service import LineageService
@@ -83,6 +86,10 @@ app.add_typer(sharing_app, name="sharing", rich_help_panel=_BROWSE)
 app.add_typer(lineage_app, name="lineage", rich_help_panel=_BROWSE)
 app.add_typer(kai_app, name="kai", rich_help_panel=_BROWSE)
 
+# -- Flows --
+_FLOWS = "Flows"
+app.add_typer(flow_app, name="flow", rich_help_panel=_FLOWS)
+
 # -- Development --
 _DEV = "Development"
 app.add_typer(branch_app, name="branch", rich_help_panel=_DEV)
@@ -90,6 +97,58 @@ app.add_typer(workspace_app, name="workspace", rich_help_panel=_DEV)
 app.add_typer(tool_app, name="tool", rich_help_panel=_DEV)
 app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
 app.add_typer(encrypt_app, name="encrypt", rich_help_panel=_DEV)
+
+
+def apply_firewall_flags(
+    persisted: PermissionPolicy | None,
+    *,
+    deny_writes: bool,
+    deny_destructive: bool,
+) -> PermissionPolicy | None:
+    """Merge --deny-writes / --deny-destructive into the active policy for this invocation.
+
+    Session-only: does NOT touch config.json. If neither flag is set, the
+    persisted policy is returned unchanged (possibly None).
+
+    Merge semantics:
+    - A fresh session policy synthesized from the flags uses mode='allow'
+      so everything is allowed unless matched by the deny list.
+    - When a persisted policy already exists, the flag-implied deny patterns
+      are appended to its deny list (dedup); the mode is preserved. This is
+      strictly additive -- adding a flag never relaxes the persisted policy.
+    """
+    if not deny_writes and not deny_destructive:
+        return persisted
+
+    extra_deny: list[str] = []
+    if deny_writes:
+        # cli:write pattern intentionally spans write+destructive+admin
+        # (permissions._matches_pattern lines 175-178). tool:write spans
+        # tool write+destructive. Wide net: --deny-writes blocks anything
+        # that mutates state.
+        extra_deny.extend(["cli:write", "tool:write"])
+    if deny_destructive:
+        # cli:destructive narrowly matches only ops categorized 'destructive'
+        # (data destruction). Admin and pure-write are left allowed by design:
+        # the two flags exist precisely so callers can opt into the narrower
+        # block without forfeiting writes (e.g. allow create-bucket, block
+        # delete-bucket).
+        extra_deny.extend(["cli:destructive", "tool:destructive"])
+
+    if persisted is None:
+        return PermissionPolicy(mode="allow", allow=[], deny=extra_deny)
+
+    # Preserve persisted mode, allow list; extend deny list without duplicates.
+    merged_deny = list(persisted.deny)
+    for pattern in extra_deny:
+        if pattern not in merged_deny:
+            merged_deny.append(pattern)
+
+    return PermissionPolicy(
+        mode=persisted.mode,
+        allow=list(persisted.allow),
+        deny=merged_deny,
+    )
 
 
 @app.callback()
@@ -122,6 +181,21 @@ def main(
         "--hint",
         help="Show equivalent Python code instead of executing. "
         "Values: 'client' (direct API usage, default) or 'service' (uses CLI config).",
+    ),
+    deny_writes: bool = typer.Option(
+        False,
+        "--deny-writes",
+        help="Session-only firewall: block write, destructive, AND admin "
+        "operations (the wide net -- project add/remove/edit, org setup, "
+        "storage writes and deletes, etc.). Merges with any persisted policy.",
+    ),
+    deny_destructive: bool = typer.Option(
+        False,
+        "--deny-destructive",
+        help="Session-only firewall: block ONLY data-destructive operations "
+        "(storage delete-table/delete-bucket/delete-column, job terminate, "
+        "branch delete, etc.). Admin ops like 'project remove' and 'org setup' "
+        "are NOT blocked -- use --deny-writes for the wide net.",
     ),
 ) -> None:
     """Global options applied to all commands."""
@@ -192,6 +266,7 @@ def main(
     sync_service = SyncService(config_store=config_store)
     variables_service = VariablesService(config_store=config_store)
     encrypt_service = EncryptService(config_store=config_store)
+    flow_service = FlowService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
     kai_service = KaiService(config_store=config_store)
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
@@ -199,10 +274,17 @@ def main(
 
     try:
         config = config_store.load()
-        permission_engine = PermissionEngine(config.permissions)
+        persisted_policy = config.permissions
     except Exception:
-        # Config may be invalid (e.g. corrupted JSON) -- skip permission check
-        permission_engine = PermissionEngine(None)
+        # Config may be invalid (e.g. corrupted JSON) -- skip persisted policy
+        persisted_policy = None
+
+    session_policy = apply_firewall_flags(
+        persisted_policy,
+        deny_writes=deny_writes,
+        deny_destructive=deny_destructive,
+    )
+    permission_engine = PermissionEngine(session_policy)
 
     # Resolve hint mode
     hint_mode = None
@@ -218,6 +300,8 @@ def main(
     ctx.obj["permission_engine"] = permission_engine
     ctx.obj["verbose"] = verbose
     ctx.obj["no_color"] = effective_no_color
+    ctx.obj["deny_writes"] = deny_writes
+    ctx.obj["deny_destructive"] = deny_destructive
     ctx.obj["config_store"] = config_store
     ctx.obj["project_service"] = project_service
     ctx.obj["component_service"] = component_service
@@ -233,6 +317,7 @@ def main(
     ctx.obj["sync_service"] = sync_service
     ctx.obj["variables_service"] = variables_service
     ctx.obj["encrypt_service"] = encrypt_service
+    ctx.obj["flow_service"] = flow_service
     ctx.obj["workspace_service"] = workspace_service
     ctx.obj["kai_service"] = kai_service
     ctx.obj["doctor_service"] = doctor_service
@@ -277,7 +362,7 @@ def main(
         try:
             permission_engine.check_or_raise(ctx.invoked_subcommand)
         except PermissionDeniedError as exc:
-            formatter.error(message=exc.message, error_code="PERMISSION_DENIED")
+            formatter.error(message=exc.message, error_code=ErrorCode.PERMISSION_DENIED)
             raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
 
     # Launch REPL if no subcommand was given (set above)
@@ -289,5 +374,7 @@ def main(
             verbose=verbose,
             no_color=effective_no_color,
             config_dir=config_dir,
+            deny_writes=deny_writes,
+            deny_destructive=deny_destructive,
         )
         raise typer.Exit()

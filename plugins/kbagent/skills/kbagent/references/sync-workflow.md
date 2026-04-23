@@ -67,6 +67,34 @@ kbagent sync push --all-projects             # apply
 
 Each project gets its own subdirectory (named by alias). Projects are processed in parallel.
 
+## Adopting an existing kbc Go CLI checkout (since v0.22.0)
+
+If you already have a `.keboola/manifest.json` produced by the official
+`kbc` Go CLI (keboola-as-code), `kbagent` can adopt it in place instead of
+overwriting:
+
+```bash
+cd /path/to/existing-kbc-checkout
+
+# Adopt the manifest as-is; validates project_id against the alias token
+kbagent sync init --project prod --adopt-existing
+```
+
+Behavior:
+
+- **Idempotent.** The existing `manifest.json` is re-used, not rewritten.
+  Re-running `--adopt-existing` is a no-op.
+- **Validated.** `project_id` from the manifest is checked against the
+  token's project via `verify_token`. A mismatch exits 5 (`CONFIG_ERROR`)
+  with a clear message -- no silent adoption of someone else's checkout.
+- **Fall-through.** If no manifest exists, `--adopt-existing` falls
+  through to the normal init path.
+- **Without the flag**, `sync init` still refuses to overwrite an
+  existing manifest (prior behavior unchanged).
+
+Use this when migrating a team from the Go CLI to kbagent without
+re-pulling all configs.
+
 ## Single-project workflow
 
 ```bash

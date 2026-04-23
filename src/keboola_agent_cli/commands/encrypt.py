@@ -10,7 +10,7 @@ from pathlib import Path
 
 import typer
 
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
     emit_hint,
@@ -79,20 +79,20 @@ def encrypt_values(
     try:
         parsed = _parse_input(input_data)
     except (json.JSONDecodeError, FileNotFoundError, ValueError) as exc:
-        formatter.error(message=str(exc), error_code="INPUT_ERROR")
+        formatter.error(message=str(exc), error_code=ErrorCode.INPUT_ERROR)
         raise typer.Exit(code=2) from None
 
     if not isinstance(parsed, dict):
         formatter.error(
             message="Input must be a JSON object (dict), not " + type(parsed).__name__,
-            error_code="INPUT_ERROR",
+            error_code=ErrorCode.INPUT_ERROR,
         )
         raise typer.Exit(code=2) from None
 
     try:
         result = service.encrypt(alias=project, component_id=component_id, input_data=parsed)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
