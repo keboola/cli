@@ -504,6 +504,35 @@ class TestFlowDelete:
         data = json.loads(result.output)
         assert data["data"]["status"] == "deleted"
 
+    def test_delete_dry_run_does_not_call_service(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.FlowService") as MockFlowService,
+        ):
+            MockStore.return_value = store
+            MockFlowService.return_value = mock_flow
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "flow",
+                    "delete",
+                    "--project",
+                    "prod",
+                    "--flow-id",
+                    "1",
+                    "--dry-run",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["data"]["would_delete"]["config_id"] == "1"
+        assert data["data"]["would_delete"]["component_id"] == "keboola.orchestrator"
+        mock_flow.delete_flow.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # flow schedule

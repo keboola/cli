@@ -518,6 +518,11 @@ def flow_delete(
         help="Flow component ID (default: keboola.orchestrator)",
     ),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be deleted without executing",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Delete a flow configuration.
@@ -537,6 +542,25 @@ def flow_delete(
 
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
+
+    if dry_run:
+        result = {
+            "would_delete": {
+                "project_alias": project,
+                "component_id": component_id,
+                "config_id": flow_id,
+                "branch_id": branch,
+            },
+        }
+        if formatter.json_mode:
+            formatter.output(result)
+        else:
+            formatter.console.print(
+                f"[bold blue]Would delete:[/bold blue] flow "
+                f"{escape(component_id)}/{escape(flow_id)}"
+                + (f" (branch {branch})" if branch else "")
+            )
+        return
 
     if not yes and not formatter.json_mode:
         confirmed = typer.confirm(f"Delete flow {component_id}/{flow_id}?")
