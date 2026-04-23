@@ -69,6 +69,10 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `storage delete-table --project NAME --table-id ID [--table-id ...] [--force] [--dry-run] [--yes] [--branch ID]` -- delete tables, --force cascade-deletes aliased tables (branch-aware)
 - `storage delete-column --project NAME --table-id ID --column COL [--column ...] [--force] [--dry-run] [--yes] [--branch ID]` -- delete columns from a table (branch-aware)
 - `storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]` -- delete buckets (branch-aware)
+- `storage describe-bucket --project NAME --bucket-id ID [--text STR | --file PATH | --stdin] [--branch ID]` -- set a bucket description (stored as `KBC.description` in bucket metadata, upsert). Provide exactly one of `--text`, `--file`, `--stdin`. Read back via `storage bucket-detail`
+- `storage describe-table --project NAME --table-id ID [--text STR | --file PATH | --stdin] [--branch ID]` -- set a table description (stored as `KBC.description` in table metadata, upsert). Provide exactly one of `--text`, `--file`, `--stdin`. Read back via `storage table-detail`
+- `storage describe-column --project NAME --table-id ID --column NAME=DESCRIPTION [--column ...] [--branch ID]` -- set one or more column descriptions. Stored as `KBC.column.{name}.description` keys in the table's metadata (Keboola has no user-writable column-metadata endpoint). Read back in `storage table-detail` under `column_details[].description`
+- `storage describe-batch --project NAME --from-file PATH [--branch ID]` -- apply bucket/table/column descriptions from a YAML file (top-level `buckets`, `tables`, `columns` sections, all optional). Partial-failure tolerant: per-item errors are collected and reported, the batch does not abort. Non-zero exit only when at least one item failed
 
 ## Storage Files
 - `storage files --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]` -- list Storage Files, optionally filtered by tag/query

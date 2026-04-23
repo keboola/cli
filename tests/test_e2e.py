@@ -401,6 +401,9 @@ class TestFullE2E:
         _step(14.1, "storage unload-table --file-type parquet", "Parquet export + sliced download")
         self._test_unload_table_parquet(table_id)
 
+        _step(14.2, "storage describe-bucket/table/column/batch", "description metadata round-trip")
+        self._test_storage_describe(bucket_id, table_id)
+
         _step(15, "storage load-file", "upload CSV as file then load into table")
         self._test_load_file(table_id)
 
@@ -2508,6 +2511,102 @@ class TestFullE2E:
             "--deny-writes / --deny-destructive must be session-only; "
             f"found persisted policy: {persisted.permissions}"
         )
+
+    def _test_storage_describe(self, bucket_id: str, table_id: str) -> None:
+        """Round-trip describe commands: write description, read it back."""
+        # describe-bucket: set KBC.description, verify via bucket-detail
+        data = self._run_ok(
+            "storage",
+            "describe-bucket",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--text",
+            "E2E bucket description",
+        )
+        assert data["data"]["bucket_id"] == bucket_id
+        assert data["data"]["description"] == "E2E bucket description"
+
+        data = self._run_ok(
+            "storage", "bucket-detail", "--project", self.alias, "--bucket-id", bucket_id
+        )
+        assert data["data"]["description"] == "E2E bucket description"
+
+        # describe-table: set KBC.description, verify via table-detail
+        data = self._run_ok(
+            "storage",
+            "describe-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--text",
+            "E2E table description",
+        )
+        assert data["data"]["table_id"] == table_id
+        assert data["data"]["description"] == "E2E table description"
+
+        data = self._run_ok(
+            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+        )
+        assert data["data"]["description"] == "E2E table description"
+
+        # describe-column: set per-column descriptions, verify via table-detail column_details
+        data = self._run_ok(
+            "storage",
+            "describe-column",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--column",
+            "id=Unique row identifier",
+            "--column",
+            "name=Human-readable name",
+        )
+        assert data["data"]["table_id"] == table_id
+        assert data["data"]["columns"]["id"] == "Unique row identifier"
+        assert data["data"]["columns"]["name"] == "Human-readable name"
+
+        data = self._run_ok(
+            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+        )
+        col_descs = {c["name"]: c.get("description", "") for c in data["data"]["column_details"]}
+        assert col_descs.get("id") == "Unique row identifier"
+        assert col_descs.get("name") == "Human-readable name"
+
+        # describe-batch: apply all three sections from a YAML file
+        batch_yaml = (
+            f"buckets:\n"
+            f"  {bucket_id}: Batch bucket desc\n"
+            f"tables:\n"
+            f"  {table_id}: Batch table desc\n"
+            f"columns:\n"
+            f"  {table_id}:\n"
+            f"    id: Batch column id desc\n"
+        )
+        batch_file = self.work_dir / "batch_describe.yaml"
+        batch_file.write_text(batch_yaml, encoding="utf-8")
+        data = self._run_ok(
+            "storage",
+            "describe-batch",
+            "--project",
+            self.alias,
+            "--from-file",
+            str(batch_file),
+        )
+        assert data["data"]["project_alias"] == self.alias
+        assert len(data["data"]["applied"]) == 3
+        assert data["data"]["errors"] == []
+
+        # Verify the batch updated the descriptions
+        data = self._run_ok(
+            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+        )
+        assert data["data"]["description"] == "Batch table desc"
+        col_descs = {c["name"]: c.get("description", "") for c in data["data"]["column_details"]}
+        assert col_descs.get("id") == "Batch column id desc"
 
     def _test_project_edit_and_remove(self) -> None:
         """Edit project URL, then remove it."""

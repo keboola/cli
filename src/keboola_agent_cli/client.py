@@ -763,6 +763,69 @@ class KeboolaClient(BaseHttpClient):
         """
         return self.list_buckets(include="metadata")
 
+    def set_bucket_metadata(
+        self,
+        bucket_id: str,
+        entries: list[tuple[str, str]],
+        branch_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Upsert metadata key/value pairs on a storage bucket.
+
+        POST /v2/storage/buckets/{id}/metadata
+
+        Uses the same PHP-style array form encoding as ``set_branch_metadata``.
+        Provider is always ``"user"`` for CLI-originated descriptions.
+
+        Args:
+            bucket_id: Bucket ID (e.g. 'in.c-db').
+            entries: Ordered list of ``(key, value)`` metadata tuples.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Full metadata list for the bucket after the upsert.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_id = quote(bucket_id, safe="")
+        form: dict[str, str] = {"provider": "user"}
+        for i, (key, value) in enumerate(entries):
+            form[f"metadata[{i}][key]"] = key
+            form[f"metadata[{i}][value]"] = value
+        response = self._request("POST", f"{prefix}/buckets/{safe_id}/metadata", data=form)
+        return response.json()
+
+    def set_table_metadata(
+        self,
+        table_id: str,
+        entries: list[tuple[str, str]],
+        branch_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Upsert metadata key/value pairs on a storage table.
+
+        POST /v2/storage/tables/{id}/metadata
+
+        Provider is always ``"user"`` for CLI-originated descriptions.
+        Column-level descriptions use the namespaced key convention
+        ``KBC.column.{colname}.description`` stored at table-metadata level
+        (Keboola Storage API does not expose a user-writable column-metadata
+        endpoint; ``columnMetadata`` is populated exclusively by components).
+
+        Args:
+            table_id: Full table ID (e.g. "in.c-bucket.table").
+            entries: Ordered list of ``(key, value)`` metadata tuples.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Full metadata list for the table after the upsert.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_id = quote(table_id, safe="")
+        form: dict[str, str] = {"provider": "user"}
+        for i, (key, value) in enumerate(entries):
+            form[f"metadata[{i}][key]"] = key
+            form[f"metadata[{i}][value]"] = value
+        response = self._request("POST", f"{prefix}/tables/{safe_id}/metadata", data=form)
+        return response.json()
+
     def get_bucket_detail(
         self,
         bucket_id: str,

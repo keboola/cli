@@ -2653,3 +2653,154 @@ class TestBranchMetadata:
         with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
             value = client.get_branch_metadata_value(key="KBC.projectDescription")
         assert value is METADATA_NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# Storage object metadata (bucket + table)
+# ---------------------------------------------------------------------------
+
+_STORAGE_META_RESPONSE = [
+    {
+        "id": "9001",
+        "key": "KBC.description",
+        "value": "A test description",
+        "provider": "user",
+        "timestamp": "2026-04-22T10:00:00+0200",
+    },
+]
+
+
+class TestSetBucketMetadata:
+    """Tests for set_bucket_metadata() - POST /v2/storage/buckets/{id}/metadata."""
+
+    def test_set_bucket_metadata_php_form_body(self, httpx_mock) -> None:
+        """Encodes provider + PHP-array indices in the form body."""
+        from urllib.parse import quote as url_quote
+
+        safe_id = url_quote("in.c-my-bucket", safe="")
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/buckets/{safe_id}/metadata",
+            method="POST",
+            json=_STORAGE_META_RESPONSE,
+            status_code=201,
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            result = client.set_bucket_metadata(
+                bucket_id="in.c-my-bucket",
+                entries=[("KBC.description", "A test description")],
+            )
+
+        assert result == _STORAGE_META_RESPONSE
+        req = httpx_mock.get_request()
+        body = req.content.decode().replace("%5B", "[").replace("%5D", "]")
+        assert "provider=user" in body
+        assert "metadata[0][key]=KBC.description" in body
+        assert (
+            "metadata[0][value]=A+test+description" in body
+            or "A%20test%20description" in body
+            or "A test description" in body
+        )
+        assert req.headers["content-type"].startswith("application/x-www-form-urlencoded")
+
+    def test_set_bucket_metadata_with_branch(self, httpx_mock) -> None:
+        """Uses branch prefix when branch_id is provided."""
+        from urllib.parse import quote as url_quote
+
+        safe_id = url_quote("in.c-my-bucket", safe="")
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/branch/42/buckets/{safe_id}/metadata",
+            method="POST",
+            json=_STORAGE_META_RESPONSE,
+            status_code=201,
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            result = client.set_bucket_metadata(
+                bucket_id="in.c-my-bucket",
+                entries=[("KBC.description", "Branch desc")],
+                branch_id=42,
+            )
+        assert result == _STORAGE_META_RESPONSE
+
+    def test_set_bucket_metadata_multiple_entries(self, httpx_mock) -> None:
+        """Multiple entries get sequential PHP indices."""
+        from urllib.parse import quote as url_quote
+
+        safe_id = url_quote("in.c-bucket", safe="")
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/buckets/{safe_id}/metadata",
+            method="POST",
+            json=_STORAGE_META_RESPONSE,
+            status_code=201,
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client.set_bucket_metadata(
+                bucket_id="in.c-bucket",
+                entries=[("k1", "v1"), ("k2", "v2")],
+            )
+        body = httpx_mock.get_request().content.decode().replace("%5B", "[").replace("%5D", "]")
+        assert "metadata[0][key]=k1" in body
+        assert "metadata[1][key]=k2" in body
+
+
+class TestSetTableMetadata:
+    """Tests for set_table_metadata() - POST /v2/storage/tables/{id}/metadata."""
+
+    def test_set_table_metadata_php_form_body(self, httpx_mock) -> None:
+        """Encodes provider + PHP-array indices for a table metadata POST."""
+        from urllib.parse import quote as url_quote
+
+        safe_id = url_quote("in.c-b.tbl", safe="")
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/tables/{safe_id}/metadata",
+            method="POST",
+            json=_STORAGE_META_RESPONSE,
+            status_code=201,
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            result = client.set_table_metadata(
+                table_id="in.c-b.tbl",
+                entries=[("KBC.description", "A test description")],
+            )
+        assert result == _STORAGE_META_RESPONSE
+        req = httpx_mock.get_request()
+        body = req.content.decode().replace("%5B", "[").replace("%5D", "]")
+        assert "provider=user" in body
+        assert "metadata[0][key]=KBC.description" in body
+
+    def test_set_table_metadata_with_branch(self, httpx_mock) -> None:
+        """Uses branch prefix when branch_id is provided."""
+        from urllib.parse import quote as url_quote
+
+        safe_id = url_quote("in.c-b.tbl", safe="")
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/branch/7/tables/{safe_id}/metadata",
+            method="POST",
+            json=_STORAGE_META_RESPONSE,
+            status_code=201,
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            result = client.set_table_metadata(
+                table_id="in.c-b.tbl",
+                entries=[("KBC.description", "Branch desc")],
+                branch_id=7,
+            )
+        assert result == _STORAGE_META_RESPONSE
+
+    def test_set_table_metadata_column_convention(self, httpx_mock) -> None:
+        """Column descriptions use KBC.column.{name}.description key convention."""
+        from urllib.parse import quote as url_quote
+
+        safe_id = url_quote("in.c-b.tbl", safe="")
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/tables/{safe_id}/metadata",
+            method="POST",
+            json=_STORAGE_META_RESPONSE,
+            status_code=201,
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client.set_table_metadata(
+                table_id="in.c-b.tbl",
+                entries=[("KBC.column.city.description", "City name")],
+            )
+        body = httpx_mock.get_request().content.decode().replace("%5B", "[").replace("%5D", "]")
+        assert "KBC.column.city.description" in body
