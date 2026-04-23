@@ -93,7 +93,7 @@ app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
 app.add_typer(encrypt_app, name="encrypt", rich_help_panel=_DEV)
 
 
-def _apply_firewall_flags(
+def apply_firewall_flags(
     persisted: PermissionPolicy | None,
     *,
     deny_writes: bool,
@@ -272,7 +272,7 @@ def main(
         # Config may be invalid (e.g. corrupted JSON) -- skip persisted policy
         persisted_policy = None
 
-    session_policy = _apply_firewall_flags(
+    session_policy = apply_firewall_flags(
         persisted_policy,
         deny_writes=deny_writes,
         deny_destructive=deny_destructive,

@@ -105,7 +105,7 @@ def permissions_list(
     session flags like ``--deny-writes`` / ``--deny-destructive``. This
     matches what a command will actually do right now.
     """
-    from ..cli import _apply_firewall_flags
+    from ..cli import apply_firewall_flags
 
     formatter = get_formatter(ctx)
     config_store: ConfigStore = get_service(ctx, "config_store")
@@ -113,7 +113,7 @@ def permissions_list(
 
     deny_writes = bool(ctx.obj.get("deny_writes")) if ctx.obj else False
     deny_destructive = bool(ctx.obj.get("deny_destructive")) if ctx.obj else False
-    effective_policy = _apply_firewall_flags(
+    effective_policy = apply_firewall_flags(
         config.permissions,
         deny_writes=deny_writes,
         deny_destructive=deny_destructive,

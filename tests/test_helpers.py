@@ -441,46 +441,46 @@ class TestResolveProjectAlias:
 
 
 class TestApplyFirewallFlags:
-    """Tests for cli._apply_firewall_flags (session-only policy merge)."""
+    """Tests for cli.apply_firewall_flags (session-only policy merge)."""
 
     def test_no_flags_returns_persisted_as_is(self) -> None:
-        from keboola_agent_cli.cli import _apply_firewall_flags
+        from keboola_agent_cli.cli import apply_firewall_flags
         from keboola_agent_cli.models import PermissionPolicy
 
         persisted = PermissionPolicy(mode="allow", allow=[], deny=["branch.delete"])
-        result = _apply_firewall_flags(persisted, deny_writes=False, deny_destructive=False)
+        result = apply_firewall_flags(persisted, deny_writes=False, deny_destructive=False)
         assert result is persisted
 
     def test_no_flags_no_persisted_returns_none(self) -> None:
-        from keboola_agent_cli.cli import _apply_firewall_flags
+        from keboola_agent_cli.cli import apply_firewall_flags
 
-        result = _apply_firewall_flags(None, deny_writes=False, deny_destructive=False)
+        result = apply_firewall_flags(None, deny_writes=False, deny_destructive=False)
         assert result is None
 
     def test_deny_writes_synthesizes_fresh_policy(self) -> None:
-        from keboola_agent_cli.cli import _apply_firewall_flags
+        from keboola_agent_cli.cli import apply_firewall_flags
 
-        result = _apply_firewall_flags(None, deny_writes=True, deny_destructive=False)
+        result = apply_firewall_flags(None, deny_writes=True, deny_destructive=False)
         assert result is not None
         assert result.mode == "allow"
         assert "cli:write" in result.deny
         assert "tool:write" in result.deny
 
     def test_deny_destructive_synthesizes_fresh_policy(self) -> None:
-        from keboola_agent_cli.cli import _apply_firewall_flags
+        from keboola_agent_cli.cli import apply_firewall_flags
 
-        result = _apply_firewall_flags(None, deny_writes=False, deny_destructive=True)
+        result = apply_firewall_flags(None, deny_writes=False, deny_destructive=True)
         assert result is not None
         assert "cli:destructive" in result.deny
         assert "tool:destructive" in result.deny
         assert "cli:write" not in result.deny
 
     def test_flags_merge_with_persisted_deny_no_duplicates(self) -> None:
-        from keboola_agent_cli.cli import _apply_firewall_flags
+        from keboola_agent_cli.cli import apply_firewall_flags
         from keboola_agent_cli.models import PermissionPolicy
 
         persisted = PermissionPolicy(mode="allow", allow=[], deny=["branch.delete", "cli:write"])
-        result = _apply_firewall_flags(persisted, deny_writes=True, deny_destructive=False)
+        result = apply_firewall_flags(persisted, deny_writes=True, deny_destructive=False)
         assert result is not None
         # Existing cli:write preserved (no dup); tool:write appended; custom entry kept.
         assert result.deny.count("cli:write") == 1
@@ -490,20 +490,20 @@ class TestApplyFirewallFlags:
         assert result.mode == persisted.mode
 
     def test_flags_preserve_persisted_mode_deny_mode(self) -> None:
-        from keboola_agent_cli.cli import _apply_firewall_flags
+        from keboola_agent_cli.cli import apply_firewall_flags
         from keboola_agent_cli.models import PermissionPolicy
 
         persisted = PermissionPolicy(mode="deny", allow=["cli:read"], deny=[])
-        result = _apply_firewall_flags(persisted, deny_writes=True, deny_destructive=False)
+        result = apply_firewall_flags(persisted, deny_writes=True, deny_destructive=False)
         assert result is not None
         assert result.mode == "deny"
         assert result.allow == ["cli:read"]
         assert "cli:write" in result.deny
 
     def test_both_flags_combine(self) -> None:
-        from keboola_agent_cli.cli import _apply_firewall_flags
+        from keboola_agent_cli.cli import apply_firewall_flags
 
-        result = _apply_firewall_flags(None, deny_writes=True, deny_destructive=True)
+        result = apply_firewall_flags(None, deny_writes=True, deny_destructive=True)
         assert result is not None
         # Both prefixes present.
         assert {"cli:write", "tool:write", "cli:destructive", "tool:destructive"} <= set(
@@ -511,10 +511,10 @@ class TestApplyFirewallFlags:
         )
 
     def test_flags_do_not_mutate_persisted(self) -> None:
-        from keboola_agent_cli.cli import _apply_firewall_flags
+        from keboola_agent_cli.cli import apply_firewall_flags
         from keboola_agent_cli.models import PermissionPolicy
 
         persisted = PermissionPolicy(mode="allow", allow=[], deny=["branch.delete"])
         before = list(persisted.deny)
-        _apply_firewall_flags(persisted, deny_writes=True, deny_destructive=True)
+        apply_firewall_flags(persisted, deny_writes=True, deny_destructive=True)
         assert persisted.deny == before, "persisted.deny was mutated in place"
