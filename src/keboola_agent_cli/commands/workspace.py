@@ -7,6 +7,7 @@ No business logic belongs here.
 from pathlib import Path
 
 import typer
+from rich.markup import escape
 
 from ..errors import ConfigError, KeboolaApiError
 from ..output import format_query_results, format_workspaces_table
@@ -489,16 +490,16 @@ def workspace_gc(
             for ws in would_delete:
                 formatter.console.print(
                     f"  [dim]would delete[/dim] workspace {ws['id']} "
-                    f"([cyan]{ws.get('name', '')}[/cyan]) in '{ws['project_alias']}'"
+                    f"([cyan]{escape(ws.get('name', ''))}[/cyan]) in '{escape(ws['project_alias'])}'"
                 )
         else:
             for ws in result.get("deleted", []):
                 formatter.console.print(
-                    f"  [green]deleted[/green] workspace {ws['id']} in '{ws['project_alias']}'"
+                    f"  [green]deleted[/green] workspace {ws['id']} in '{escape(ws['project_alias'])}'"
                 )
             for err in result.get("errors", []):
                 formatter.console.print(
-                    f"  [red]error[/red] workspace {err.get('workspace_id', '?')}: {err.get('error', '')}"
+                    f"  [red]error[/red] workspace {err.get('workspace_id', '?')}: {escape(err.get('error', ''))}"
                 )
 
 
