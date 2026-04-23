@@ -54,7 +54,16 @@ kbagent --json flow list --project prod
 
 # Full phase/task breakdown
 kbagent --json flow detail --project prod --flow-id 111
+
+# Flow-centric schedule view -- each row gets inline schedules: [...]
+# One extra keboola.scheduler list call per project, NOT per flow.
+kbagent --json flow list --project prod --with-schedules
 ```
+
+For schedule-centric fleet-wide discovery ("which configs across N projects are on cron?"), see [schedule-workflow.md](schedule-workflow.md) and the `kbagent schedule list/detail/find` commands. The two views complement each other:
+
+- `flow list --with-schedules` answers "for each flow, which schedules target it?"
+- `schedule list` answers "what cron schedules exist in the fleet, and what do they target?"
 
 ## Update a flow
 
@@ -84,6 +93,8 @@ kbagent --json flow schedule \
 # Remove all schedules (idempotent)
 kbagent --json flow schedule-remove --project prod --flow-id 111 --yes
 ```
+
+For bulk audit (e.g. "which of our 14 projects have schedules that fire between 02:00-04:00?") use the dedicated [schedule-workflow.md](schedule-workflow.md) commands instead of iterating `flow list` manually.
 
 ## Delete a flow
 

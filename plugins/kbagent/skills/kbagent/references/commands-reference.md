@@ -126,7 +126,7 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `kai history [--project NAME] [--limit N]` -- list recent Kai chat sessions (default limit: 10)
 
 ## Flows (Orchestrator)
-- `flow list [--project NAME] [--branch ID]` -- list all flows (keboola.orchestrator + keboola.flow) across one or all projects
+- `flow list [--project NAME] [--branch ID] [--with-schedules]` -- list all flows (keboola.orchestrator + keboola.flow) across one or all projects. `--with-schedules` enriches each row with `schedules: [{schedule_id, cron, timezone, enabled}, ...]` via one extra keboola.scheduler list call per project (not per flow)
 - `flow detail --project NAME --flow-id ID [--component-id keboola.orchestrator|keboola.flow] [--branch ID]` -- full phase/task breakdown; groups tasks by phase, lists orphan tasks
 - `flow schema` -- print YAML template for flow configuration (phases + tasks); use with `--file @-` or save to a file
 - `flow new --project NAME --name NAME [--component-id keboola.orchestrator|keboola.flow] [--description D] [--file @path.yaml|-|JSON] [--branch ID]` -- create a flow; DAG validated before API call; default component: keboola.flow
@@ -134,6 +134,12 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `flow delete --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]` -- delete a flow config (confirmation guard)
 - `flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--component-id ID] [--timezone TZ] [--disabled] [--branch ID]` -- attach a cron schedule (stored as keboola.scheduler config); replaces any existing schedule
 - `flow schedule-remove --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]` -- remove all cron schedules attached to a flow; idempotent
+
+## Schedule Discovery & Audit (Fleet-Wide)
+- `schedule list [--project NAME ...] [--enabled-only] [--branch ID]` -- fleet-wide list of every `keboola.scheduler` config across one, many, or all projects (parallel fan-out, no --project = all). Each row has `project_alias`, `schedule_id`, `schedule_name`, `parent_component_id`, `parent_config_id`, `parent_name`, `cron`, `timezone`, `enabled`. Answers "which configs are running on cron triggers across N projects?" without enumerating flows
+- `schedule detail --project NAME --schedule-id ID [--branch ID]` -- single-schedule detail: cron, timezone, enabled, raw `configuration`, plus the parent config's `parent_name` (orphaned schedules return `parent_name=""` rather than failing)
+- `schedule find [--cron-window START-END] [--not-run-since DAYS] [--project NAME ...] [--branch ID]` -- audit filter (AND semantics). `--cron-window "02:00-04:00"` keeps rows whose cron's hour field is entirely inside the window (hour-level approximation -- see [gotchas.md](gotchas.md)). `--not-run-since N` keeps rows whose parent config's latest job is older than N days (or never ran). Without filters: equivalent to `schedule list` plus `last_run_at` + `matches_cron_window` columns
+- See [schedule-workflow.md](schedule-workflow.md) for the audit walk-through
 
 ## Sync (GitOps)
 - `sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]` -- initialize sync working directory; `--adopt-existing` (since v0.22.0) adopts a `.keboola/manifest.json` already written by the kbc Go CLI without overwriting (idempotent; validates `project_id` against the alias token)

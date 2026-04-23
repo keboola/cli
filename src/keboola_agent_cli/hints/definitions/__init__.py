@@ -11,6 +11,7 @@ from . import (
     lineage,  # noqa: F401
     org,  # noqa: F401
     project,  # noqa: F401
+    schedule,  # noqa: F401
     sharing,  # noqa: F401
     storage,  # noqa: F401
     tool,  # noqa: F401

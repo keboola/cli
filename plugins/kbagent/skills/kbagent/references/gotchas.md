@@ -684,6 +684,35 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   row — use it to confirm which variant a flow lives under before issuing
   detail/update/delete/schedule commands.
 
+## `schedule find --cron-window` is an hour-field approximation
+
+`kbagent schedule find --cron-window "02:00-04:00"` is an **audit helper, not a real cron evaluator**. It parses the *hour* field of the cron expression and asks whether every hour at which the cron fires falls inside the passed window. It deliberately does **not** account for minute precision, day-of-month restrictions, or day-of-week restrictions.
+
+- **Minutes in `--cron-window` are syntactic sugar, but still validated.** The spec `02:00-04:00` is accepted in the `HH:MM-HH:MM` format because it matches how people describe time windows; the matcher itself only uses the hour part. A cron expression `*/10 2-4 * * *` (every 10 minutes within hours 2-4) matches `--cron-window "02:30-04:30"` exactly the same as `--cron-window "02:00-04:00"`. Minute values outside `00-59` (e.g. `02:70-04:88`) are still rejected at parse time so obviously malformed inputs fail loudly.
+- **Hour field `*` (fires every hour) never matches a bounded window.** This is intentional: from an audit standpoint, "fires every hour" is the opposite of "confined to a 2-hour window". If you wanted to catch those, pass `--cron-window "00:00-23:00"` (or skip the window filter entirely).
+- **Wrap-around windows are not supported.** `--cron-window "22:00-02:00"` returns an error. The error message itself points you at the workaround: split into two passes (`22:00-23:00` and `00:00-02:00`) and union the results in your script.
+- **`,` lists, `-` ranges, and `*/N` steps on the hour field are all expanded.** Unparseable inputs fail safe to "no match" rather than "match everything" -- cleanup audits should never accidentally widen.
+- **Day-of-week / day-of-month restrictions are ignored.** A cron that only runs on Mondays is matched as if it fired every day. For most audit use-cases this is the right default: "which schedules *can* fire in this window?" is more operationally useful than "which schedules *will* fire today?".
+
+If you need full cron semantics (e.g. "what's the next time this cron fires?") pipe the schedule list into `croniter` or a similar library from your own script -- the CLI deliberately stays out of that space.
+
+## `schedule find` without filters -- `last_run_at` and `matches_cron_window` are `null`
+
+`kbagent schedule find` always emits `last_run_at` and `matches_cron_window` on every row, but **populates them only when the corresponding filter is active**. Without filters both columns are `null`; with `--cron-window` only `matches_cron_window` is populated; with `--not-run-since` only `last_run_at` is populated.
+
+Why not always populate? Because `last_run_at` costs one `list_jobs(limit=1)` Queue API call per unique parent config per project -- paying that unconditionally, to populate a column nobody asked for, is a pointless audit-wide latency hit. `matches_cron_window` is only meaningful relative to a user-supplied window.
+
+- **LLM/agent callers:** do not treat `matches_cron_window: true` as an affirmative signal unless `filters.cron_window` in the response envelope is populated. Before 0.23.0 this defaulted to `true` everywhere, which was misleading.
+- **Force `last_run_at` population without filtering:** pass `--not-run-since 0`. That fires the Queue API lookup for every row (N extra calls per project) and returns every row (no staleness filter applied because any past timestamp counts as stale at threshold 0 and `null` also counts as stale).
+- **`--not-run-since` + `--branch <DEV_ID>`:** the Queue API has no branch parameter. The timestamp comparison still hits production jobs, so schedules in a dev branch that were freshly deployed will register as stale even if their parent ran on main moments ago.
+- **`_fetch_latest_job_ts` silently returns `None` on Queue API errors** -- permission problems on Queue API are invisible in `errors[]`. If one project shows a suspiciously uniform "never ran" cluster, run `kbagent job list --project <alias>` to sanity-check the token.
+
+## `schedule list` + `schedule find` payload size scales with project size, not schedule count
+
+Both commands issue one `list_components_with_configs(branch_id=...)` call per project. That endpoint returns **every** component's configurations + rows + full configuration bodies -- not just `keboola.scheduler`. For a 50-component x 5-config project that is 250 configurations on the wire per project just to extract a handful of scheduler configs + parent names.
+
+The trade-off is deliberate: one big call avoids the O(unique-parents) round-trip a smaller `list_component_configs("keboola.scheduler")` + per-parent `get_config_detail` path would cost, and the parent-name join happens in memory for free. For typical 14-project audits this finishes in seconds. If you encounter memory pressure on unusually large projects, split the audit per-project (`--project X`) instead of fanning out wide. `flow list --with-schedules` uses the lighter per-component path because it does not need the parent-name join that schedule-side audits do.
+
 ## Flow: `schedule` is an upsert (no `schedule-update`)
 
 - `kbagent flow schedule` creates a `keboola.scheduler` config on first run

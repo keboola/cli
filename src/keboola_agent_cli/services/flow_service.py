@@ -96,6 +96,54 @@ def _validate_dag(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) -> 
     return errors
 
 
+def _collect_schedules_by_parent(
+    client: Any, branch_id: int | None
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Fetch every keboola.scheduler config for a project and group by target.
+
+    Returns a dict keyed by ``(parent_component_id, parent_config_id)`` so
+    ``list_flows`` can look up schedules per flow with a single in-memory
+    lookup. Used by the ``--with-schedules`` enrichment path.
+
+    A missing scheduler component (404 NOT_FOUND) yields an empty map.
+    """
+    try:
+        all_sched = client.list_component_configs(SCHEDULER_COMPONENT_ID, branch_id=branch_id)
+    except KeboolaApiError as exc:
+        if exc.error_code == "NOT_FOUND":
+            return {}
+        raise
+
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for sched in all_sched:
+        body = _parse_configuration(sched.get("configuration"))
+        target = body.get("target") or {}
+        sched_info = body.get("schedule") or {}
+
+        parent_key = (
+            str(target.get("componentId", "")),
+            str(target.get("configurationId", "")),
+        )
+        if not parent_key[0] or not parent_key[1]:
+            continue
+
+        state_raw = sched_info.get("state")
+        if isinstance(state_raw, dict):
+            enabled = bool(state_raw.get("enabled", False))
+        else:
+            enabled = str(state_raw).lower() == "enabled"
+
+        grouped.setdefault(parent_key, []).append(
+            {
+                "schedule_id": str(sched.get("id", "")),
+                "cron": str(sched_info.get("cronTab", "")),
+                "timezone": str(sched_info.get("timezone", "UTC")),
+                "enabled": enabled,
+            }
+        )
+    return grouped
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -114,13 +162,26 @@ class FlowService(BaseService):
         self,
         aliases: list[str] | None = None,
         branch_id: int | None = None,
+        with_schedules: bool = False,
     ) -> dict[str, Any]:
         """List all flows across projects (both component IDs).
+
+        When ``with_schedules`` is True, each flow row is enriched with a
+        ``schedules`` list pulled from the same project's
+        ``keboola.scheduler`` configs. The enrichment costs **one** extra
+        ``list_component_configs`` call per project (NOT per flow) -- the
+        join happens in memory by (component_id, config_id) key.
+
+        Args:
+            aliases: Project aliases to query; None means every project.
+            branch_id: Dev-branch override for single-project fan-out.
+            with_schedules: When True, populate ``schedules`` on each row.
 
         Returns:
             Dict with keys:
                 - "flows": list of flow dicts (project_alias, component_id,
-                  config_id, name, description, is_disabled)
+                  config_id, name, description, is_disabled, and
+                  ``schedules`` when ``with_schedules`` is True)
                 - "errors": list of error dicts
         """
         projects = self.resolve_projects(aliases)
@@ -139,16 +200,25 @@ class FlowService(BaseService):
                             continue
                         raise
                     for cfg in configs:
-                        flows.append(
-                            {
-                                "project_alias": alias,
-                                "component_id": comp_id,
-                                "config_id": str(cfg.get("id", "")),
-                                "name": cfg.get("name", ""),
-                                "description": cfg.get("description", ""),
-                                "is_disabled": cfg.get("isDisabled", False),
-                            }
-                        )
+                        flow_row: dict[str, Any] = {
+                            "project_alias": alias,
+                            "component_id": comp_id,
+                            "config_id": str(cfg.get("id", "")),
+                            "name": cfg.get("name", ""),
+                            "description": cfg.get("description", ""),
+                            "is_disabled": cfg.get("isDisabled", False),
+                        }
+                        if with_schedules:
+                            flow_row["schedules"] = []
+                        flows.append(flow_row)
+
+                # One extra list call per project, then a map-join in memory.
+                if with_schedules and flows:
+                    schedules_by_parent = _collect_schedules_by_parent(client, effective_branch)
+                    for flow_row in flows:
+                        key = (flow_row["component_id"], flow_row["config_id"])
+                        flow_row["schedules"] = schedules_by_parent.get(key, [])
+
                 return (alias, flows, True)
             except KeboolaApiError as exc:
                 return (

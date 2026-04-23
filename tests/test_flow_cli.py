@@ -85,7 +85,9 @@ class TestFlowList:
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert data["data"]["flows"][0]["config_id"] == "111"
-        mock_flow.list_flows.assert_called_once_with(aliases=["prod"], branch_id=None)
+        mock_flow.list_flows.assert_called_once_with(
+            aliases=["prod"], branch_id=None, with_schedules=False
+        )
 
     def test_list_empty(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
@@ -151,7 +153,9 @@ class TestFlowList:
         data = json.loads(result.output)
         assert len(data["data"]["flows"]) == 2
         # aliases=None means all projects
-        mock_flow.list_flows.assert_called_once_with(aliases=None, branch_id=None)
+        mock_flow.list_flows.assert_called_once_with(
+            aliases=None, branch_id=None, with_schedules=False
+        )
 
     def test_branch_without_project_fails(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})

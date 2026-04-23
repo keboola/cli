@@ -152,6 +152,9 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Delete a flow configuration | `kbagent flow delete --project PROJECT --flow-id FLOW-ID` |
 | Bind a cron schedule to a flow (upsert: creates or updates) | `kbagent flow schedule --project PROJECT --flow-id FLOW-ID --cron CRON` |
 | Remove all schedules bound to a flow (deletes keboola.scheduler configs) | `kbagent flow schedule-remove --project PROJECT --flow-id FLOW-ID` |
+| List cron schedules (keboola.scheduler configs) across projects | `kbagent schedule list` |
+| Show full detail for a single cron schedule | `kbagent schedule detail --project PROJECT --schedule-id SCHEDULE-ID` |
+| Audit schedules by cron window or job-freshness | `kbagent schedule find` |
 | List development branches from connected projects | `kbagent branch list` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |

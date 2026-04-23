@@ -108,10 +108,28 @@ def flow_list(
     branch: int | None = typer.Option(
         None, "--branch", help="Dev branch ID (per-project; requires single --project)"
     ),
+    with_schedules: bool = typer.Option(
+        False,
+        "--with-schedules",
+        help="Enrich each flow row with the cron schedules that target it "
+        "(one extra API call per project, NOT per flow).",
+    ),
 ) -> None:
-    """List all flows (keboola.orchestrator + keboola.flow) across projects."""
+    """List all flows (keboola.orchestrator + keboola.flow) across projects.
+
+    With ``--with-schedules`` each row includes a ``schedules`` list of
+    ``{schedule_id, cron, timezone, enabled}`` entries. Flows without
+    any schedule get ``schedules=[]``.
+    """
     if should_hint(ctx):
-        emit_hint(ctx, "flow.list", project=project, branch=branch)
+        command_key = "flow.list-with-schedules" if with_schedules else "flow.list"
+        emit_hint(
+            ctx,
+            command_key,
+            project=project,
+            branch=branch,
+            with_schedules=with_schedules,
+        )
 
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
@@ -129,7 +147,11 @@ def flow_list(
         _, effective_branch = resolve_branch(config_store, formatter, project[0], None)
 
     try:
-        result = service.list_flows(aliases=project, branch_id=effective_branch)
+        result = service.list_flows(
+            aliases=project,
+            branch_id=effective_branch,
+            with_schedules=with_schedules,
+        )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
@@ -137,34 +159,48 @@ def flow_list(
     if formatter.json_mode:
         formatter.output(result)
     else:
-        _format_flows_table(formatter, result)
+        _format_flows_table(formatter, result, with_schedules=with_schedules)
 
 
-def _format_flows_table(formatter: Any, result: dict[str, Any]) -> None:
+def _format_flows_table(
+    formatter: Any, result: dict[str, Any], *, with_schedules: bool = False
+) -> None:
     flows = result.get("flows", [])
     errors = result.get("errors", [])
 
     if not flows:
         formatter.console.print("[dim]No flows found.[/dim]")
     else:
+        columns = ["Project", "Component", "Config ID", "Name", "Disabled"]
+        if with_schedules:
+            columns.append("Schedules")
         tbl = Table(
-            "Project",
-            "Component",
-            "Config ID",
-            "Name",
-            "Disabled",
+            *columns,
             show_header=True,
             header_style="bold cyan",
         )
         for f in flows:
             disabled = "[red]yes[/red]" if f.get("is_disabled") else "[dim]no[/dim]"
-            tbl.add_row(
+            row = [
                 escape(f.get("project_alias", "")),
                 escape(f.get("component_id", "")),
                 escape(f.get("config_id", "")),
                 escape(f.get("name", "")),
                 disabled,
-            )
+            ]
+            if with_schedules:
+                schedules = f.get("schedules") or []
+                if not schedules:
+                    row.append("[dim]-[/dim]")
+                else:
+                    lines = []
+                    for s in schedules:
+                        tag = "[green]on[/green]" if s.get("enabled") else "[yellow]off[/yellow]"
+                        lines.append(
+                            f"{escape(s.get('cron', ''))} ({escape(s.get('timezone', ''))}) {tag}"
+                        )
+                    row.append("\n".join(lines))
+            tbl.add_row(*row)
         formatter.console.print(tbl)
 
     for err in errors:
