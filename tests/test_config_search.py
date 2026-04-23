@@ -12,9 +12,13 @@ from keboola_agent_cli.services.config_service import ConfigService, _find_match
 
 
 def _make_list_components_client(components: list[dict]) -> MagicMock:
-    """Create a mock KeboolaClient with list_components returning given data."""
+    """Create a mock KeboolaClient with list_components_with_configs returning given data.
+
+    ConfigService.search_configs uses ``list_components_with_configs`` (which
+    issues ``include=configuration,rows``) so we mock that method.
+    """
     mock_client = MagicMock()
-    mock_client.list_components.return_value = components
+    mock_client.list_components_with_configs.return_value = components
     return mock_client
 
 
@@ -342,7 +346,135 @@ class TestSearchConfigs:
         for m in matches:
             assert m["component_type"] == "extractor"
 
-        # The client was called with the component_type filter
-        mock_client.list_components.assert_called_once_with(
-            component_type="extractor", branch_id=None
+        # The client was called with the component_type filter and rows included
+        mock_client.list_components_with_configs.assert_called_once_with(
+            branch_id=None, component_type="extractor"
+        )
+
+
+# ===========================================================================
+# Regression tests for issue #196 -- search must look inside rows[]
+# ===========================================================================
+
+
+# Sample data that mirrors how real row-based components (Snowflake writer,
+# DB extractors, Google Sheets, etc.) store per-item configuration under
+# ``rows[].configuration``. Top-level ``configuration`` is intentionally
+# minimal -- the interesting properties live inside rows.
+SAMPLE_COMPONENTS_WITH_ROWS = [
+    {
+        "id": "keboola.wr-db-snowflake",
+        "name": "Snowflake Writer",
+        "type": "writer",
+        "configurations": [
+            {
+                "id": "900",
+                "name": "Write to DWH",
+                "description": "Writer with per-table rows",
+                "configuration": {
+                    "parameters": {
+                        "db": {"host": "dwh.snowflakecomputing.com"},
+                    }
+                },
+                "rows": [
+                    {
+                        "id": "900-row-1",
+                        "name": "customers table",
+                        "configuration": {
+                            "parameters": {
+                                "dbName": "CUSTOMERS",
+                                "incremental": False,
+                                "primaryKey": ["id"],
+                            }
+                        },
+                    },
+                    {
+                        "id": "900-row-2",
+                        "name": "orders table",
+                        "configuration": {
+                            "parameters": {
+                                "dbName": "ORDERS",
+                                "incremental": True,
+                                "primaryKey": ["order_id"],
+                            }
+                        },
+                    },
+                ],
+            },
+        ],
+    },
+]
+
+
+class TestSearchConfigsRowsCoverage:
+    """Regression tests ensuring ``config search`` also inspects ``rows[]``.
+
+    Before #196, the service only fetched ``include=configuration`` so row-level
+    properties were invisible to the search even though the command's help text
+    promised coverage of "row definitions".
+    """
+
+    def test_search_matches_row_configuration(self, tmp_config_dir: Path) -> None:
+        """A property that only exists in ``rows[].configuration`` is found."""
+        store = setup_single_project(tmp_config_dir)
+        mock_client = _make_list_components_client(SAMPLE_COMPONENTS_WITH_ROWS)
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        # "CUSTOMERS" appears only inside rows[0].configuration.parameters.dbName
+        result = service.search_configs(query="CUSTOMERS")
+
+        assert result["errors"] == []
+        matches = result["matches"]
+        assert len(matches) == 1
+        assert matches[0]["component_id"] == "keboola.wr-db-snowflake"
+        assert matches[0]["config_id"] == "900"
+
+        # The match path must point inside rows[0]
+        assert any(
+            loc.startswith("rows[0].configuration") and "dbName" in loc
+            for loc in matches[0]["match_locations"]
+        )
+
+    def test_search_matches_boolean_inside_row(self, tmp_config_dir: Path) -> None:
+        """Scalar values (booleans) inside rows are matched as strings.
+
+        This mirrors the exact query from issue #196 where users searched for
+        ``"incremental": false`` to audit writer configurations.
+        """
+        store = setup_single_project(tmp_config_dir)
+        mock_client = _make_list_components_client(SAMPLE_COMPONENTS_WITH_ROWS)
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        # The recursive walker stringifies booleans; case-insensitive matches "False"
+        result = service.search_configs(query="false", ignore_case=True)
+
+        matches = result["matches"]
+        assert len(matches) == 1
+        incremental_paths = [
+            loc for loc in matches[0]["match_locations"] if loc.endswith("incremental")
+        ]
+        # Only row-1 has incremental=False; row-2 has incremental=True
+        assert incremental_paths == ["rows[0].configuration.parameters.incremental"]
+
+    def test_search_client_receives_rows_include(self, tmp_config_dir: Path) -> None:
+        """Service must call ``list_components_with_configs`` (include=rows)."""
+        store = setup_single_project(tmp_config_dir)
+        mock_client = _make_list_components_client(SAMPLE_COMPONENTS_WITH_ROWS)
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        service.search_configs(query="anything")
+
+        # The old ``list_components`` (include=configuration only) must NOT be used.
+        mock_client.list_components.assert_not_called()
+        mock_client.list_components_with_configs.assert_called_once_with(
+            branch_id=None, component_type=None
         )

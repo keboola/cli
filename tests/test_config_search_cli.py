@@ -93,9 +93,14 @@ def _setup_config_store(config_dir: Path, projects: dict[str, dict] | None = Non
 
 
 def _make_list_components_client(components: list[dict]) -> MagicMock:
-    """Create a mock KeboolaClient with list_components returning given data."""
+    """Create a mock KeboolaClient with list_components_with_configs returning given data.
+
+    ``ConfigService.search_configs`` now uses ``list_components_with_configs``
+    (``include=configuration,rows``) so that row-level configuration is part
+    of the search tree -- see issue #196.
+    """
     mock_client = MagicMock()
-    mock_client.list_components.return_value = components
+    mock_client.list_components_with_configs.return_value = components
     return mock_client
 
 
@@ -315,3 +320,75 @@ class TestConfigSearch:
         output = json.loads(result.output)
         assert output["status"] == "error"
         assert output["error"]["code"] == "CONFIG_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# Row-level search regression (issue #196)
+# ---------------------------------------------------------------------------
+
+
+SAMPLE_COMPONENTS_WITH_ROWS = [
+    {
+        "id": "keboola.wr-db-snowflake",
+        "name": "Snowflake Writer",
+        "type": "writer",
+        "configurations": [
+            {
+                "id": "555",
+                "name": "Warehouse Writer",
+                "description": "Per-table row configs",
+                "configuration": {"parameters": {"db": {"host": "dwh.example.com"}}},
+                "rows": [
+                    {
+                        "id": "555-row-1",
+                        "name": "customers",
+                        "configuration": {
+                            "parameters": {
+                                "dbName": "CUSTOMERS",
+                                "incremental": False,
+                            }
+                        },
+                    },
+                ],
+            },
+        ],
+    },
+]
+
+
+class TestConfigSearchRows:
+    """End-to-end CLI coverage of the row-level search fix (issue #196)."""
+
+    def test_search_finds_property_inside_row(self, tmp_path: Path) -> None:
+        """`kbagent config search --query CUSTOMERS` returns the row match."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        mock_client = _make_list_components_client(SAMPLE_COMPONENTS_WITH_ROWS)
+        store = _setup_config_store(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(
+                config_store=store,
+                client_factory=lambda url, token: mock_client,
+            )
+
+            result = runner.invoke(
+                app,
+                ["--json", "config", "search", "--query", "CUSTOMERS"],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        data = output["data"]
+        assert data["stats"]["matches_found"] == 1
+        match = data["matches"][0]
+        assert match["config_id"] == "555"
+        assert any(loc.startswith("rows[0].configuration") for loc in match["match_locations"])
