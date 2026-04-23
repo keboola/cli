@@ -130,3 +130,38 @@ fully-qualified Snowflake paths (e.g. `"sapi_1507"."in.c-shared-data"."my-table"
 - **Quoting**: Snowflake converts unquoted identifiers to UPPERCASE. Always double-quote database, schema, and table names -- Keboola names are typically lowercase (e.g. `"sapi_901"."in.c-main"."users"`)
 - **Query Service**: uses Storage API token for auth -- no Snowflake credentials needed in the query command
 - **Transactional mode**: add `--transactional` to wrap SQL in a transaction
+
+## Orphan detection + garbage collection (since v0.22.0)
+
+Workspaces are backed by `keboola.sandboxes` configs. When a config is deleted
+out-of-band (UI cleanup, another CLI, force-delete script), the workspace
+record itself can linger. These are **orphaned** workspaces -- they have a
+workspace row but no sandbox config.
+
+```bash
+# Show only orphaned workspaces
+kbagent workspace list --project prod --orphaned
+
+# Preview what would be deleted (no side effects)
+kbagent workspace gc --project prod --dry-run
+
+# Delete all orphaned workspaces with confirmation
+kbagent workspace gc --project prod
+
+# Skip interactive confirmation (useful in CI or agent workflows)
+kbagent workspace gc --project prod --yes
+```
+
+Behavior:
+
+- **`workspace list --orphaned`** filters the normal list to workspaces whose
+  sandbox config cannot be resolved. Output shape matches `workspace list`.
+- **`workspace gc`** deletes each orphaned workspace one by one. Per-workspace
+  failures accumulate into `errors[]` without stopping the batch -- one
+  locked sandbox does not prevent the rest from being cleaned up.
+- **`--dry-run`** surfaces the would-be-deleted list via `data.would_delete[]`
+  in JSON mode and a Rich table in human mode.
+- Multi-project: `workspace list --orphaned` / `workspace gc` accept
+  repeatable `--project` or run against all connected projects when omitted.
+- Registered as `destructive` in the permission engine -- blocked by
+  `--deny-destructive` / `--deny-writes`.

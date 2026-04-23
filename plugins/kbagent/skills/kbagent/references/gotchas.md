@@ -123,8 +123,34 @@ One project failing does not block others. Check the `errors` array:
 | 1 | General error |
 | 2 | Usage error (invalid arguments) |
 | 3 | Authentication error (invalid or expired token) |
-| 4 | Network error (timeout, unreachable) |
+| 4 | Network error (timeout, unreachable) -- includes `QUEUE_JOB_TIMEOUT` (local gave up AND the remote-kill attempt failed; the remote job may still be running) |
 | 5 | Configuration error (corrupt config, missing alias) |
+| 6 | Permission denied (blocked by firewall / `--deny-writes` / `--deny-destructive`) |
+| 7 | `JOB_TIMEOUT_TERMINATED` -- `job run --timeout` elapsed AND the remote job was successfully cancelled (since 0.22.0). Scripts can distinguish "we killed it" from "it failed on its own" (exit 1) from "it's still running" (exit 4). |
+
+## `job run --wait` polling + log tail (since 0.22.0)
+
+- Polling follows an exponential curve by default: **2s x 30 -> 5s x 48 -> 15s forever**. For a short test job or a test that needs fast turnaround, pass `--poll-strategy fixed` to force the legacy 1s fixed interval.
+- On terminal non-success (`error` / `warning` / `terminated`), kbagent fetches the last N Storage Events and attaches them as `logTail` on the response. Controlled by `--log-tail-lines N` (default 200, max 5000, `0` disables).
+  - **Errors:** `error.details.logTail` carries the tail when the job surfaces as an exception (exit 1 / `QUEUE_JOB_FAILED`, exit 4 / `QUEUE_JOB_TIMEOUT`).
+  - **Non-error terminals** (`warning` / `terminated`): `logTail` is attached to the top-level result dict (exit 0).
+- `--timeout N` is a **local** deadline. When it elapses, kbagent issues `POST /jobs/{id}/kill` against the Queue API. Two outcomes:
+  - Kill succeeded -> exit **7** with `details.job` + `details.logTail`. The remote is definitely cancelled.
+  - Kill failed -> exit **4** with `details.logTail`, `retryable=True`. The remote **may still be running**; investigate before retrying.
+- Inspecting events outside of `job run`: `kbagent job detail --project X --job-id N` does not fetch the log tail. To get the raw event stream, call the Storage Events API directly (`GET /v2/storage/events?runId=<runId>`) with the project token.
+
+## `--deny-writes` / `--deny-destructive` firewall (since 0.22.0)
+
+- Session-only. Flags synthesize a `PermissionPolicy` for the current invocation and merge it with any persisted policy in `config.json`. **Never** written to disk.
+- Classes: `--deny-writes` blocks `cli:write` + `tool:write` (covers write+destructive+admin). `--deny-destructive` is narrower -- blocks only `cli:destructive` + `tool:destructive`; pure write ops like `storage create-bucket` stay allowed.
+- Blocked operation exits **6** with `error.code = PERMISSION_DENIED`. Read commands stay unaffected.
+- Safe to run under either flag without mutating the saved policy -- useful when your agent needs a one-shot read-only run on a machine with a write-enabled config.
+
+## `sync init --adopt-existing` (since 0.22.0)
+
+- Adopts a `.keboola/manifest.json` written by the kbc Go CLI **in place** instead of overwriting. Idempotent; re-running is a no-op.
+- Validates `project_id` from the manifest against the token via `verify_token`. Mismatch exits 5 (`CONFIG_ERROR`) with guidance -- never silently adopts someone else's checkout.
+- If no manifest exists, `--adopt-existing` falls through to the normal init path (no error).
 
 ## Token handling
 

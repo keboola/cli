@@ -136,7 +136,7 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `flow schedule-remove --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]` -- remove all cron schedules attached to a flow; idempotent
 
 ## Sync (GitOps)
-- `sync init --project ALIAS [--directory DIR] [--git-branching]` -- initialize sync working directory
+- `sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]` -- initialize sync working directory; `--adopt-existing` (since v0.22.0) adopts a `.keboola/manifest.json` already written by the kbc Go CLI without overwriting (idempotent; validates `project_id` against the alias token)
 - `sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N]` -- download configs to local files. For large projects (>100 configs), automatically fetches jobs per-config when the grouped API limit is insufficient
 - `sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure]` -- push local changes (auto-encrypts secrets, fails if encryption fails)
 - `sync diff --project ALIAS [--all-projects]` -- 3-way diff (local vs base vs remote), detects conflicts
