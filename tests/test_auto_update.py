@@ -407,3 +407,41 @@ class TestGetCachePath:
         path = _get_cache_path()
         assert path.name == "version_cache.json"
         assert "keboola-agent-cli" in str(path)
+
+
+# ---------------------------------------------------------------------------
+# `kbagent changelog` does not duplicate "What's new" output
+# ---------------------------------------------------------------------------
+class TestChangelogCommandConsumesWhatsNewTrigger:
+    """Regression test for the duplicate-output bug:
+    when the user runs ``kbagent changelog`` right after auto-update,
+    the root callback previously printed "What's new" AND the command
+    printed the full changelog, so the same bullets appeared twice.
+    The fix drops the trigger env var on ``changelog`` invocations.
+    """
+
+    def test_changelog_command_clears_updated_from_env(self, monkeypatch):
+        from typer.testing import CliRunner
+
+        from keboola_agent_cli.changelog import ENV_UPDATED_FROM
+        from keboola_agent_cli.cli import app
+
+        runner = CliRunner()
+        # Simulate a just-completed auto-update
+        monkeypatch.setenv(ENV_UPDATED_FROM, "0.23.0")
+        # Avoid network roundtrip
+        monkeypatch.setenv(ENV_SKIP_UPDATE, "1")
+
+        result = runner.invoke(app, ["changelog", "--limit", "1"])
+
+        # Assertions:
+        # 1. Command succeeded.
+        assert result.exit_code == 0, result.output
+        # 2. The trigger env var has been consumed so it does NOT fire again
+        #    on the next command in the same shell.
+        assert os.environ.get(ENV_UPDATED_FROM, "") == ""
+        # 3. The 2-space-indented "What's new in vX:" header (injected by
+        #    show_post_update_changelog via format_whats_new) does NOT appear.
+        #    Matching the exact header format avoids false positives from
+        #    prose mentions of the phrase inside changelog entries themselves.
+        assert "  What's new in v" not in result.output
