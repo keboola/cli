@@ -27,7 +27,14 @@ def mask_token(token: str) -> str:
 
 
 class KeboolaApiError(Exception):
-    """Raised when a Keboola API call fails."""
+    """Raised when a Keboola API call fails.
+
+    Optional ``details`` payload lets the service layer attach structured
+    context (e.g. a fetched log tail, the remote-cancelled job dict) that
+    the command layer surfaces in ``--json`` mode without changing the
+    stable top-level error envelope. Keep keys small and side-effect-free;
+    PR9 will lock this schema down with a versioned enum.
+    """
 
     def __init__(
         self,
@@ -35,12 +42,14 @@ class KeboolaApiError(Exception):
         status_code: int = 0,
         error_code: str = "UNKNOWN_ERROR",
         retryable: bool = False,
+        details: dict | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.error_code = error_code
         self.retryable = retryable
+        self.details: dict = details if details is not None else {}
 
 
 class ConfigError(Exception):

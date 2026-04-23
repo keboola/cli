@@ -4456,3 +4456,296 @@ class TestE2EPR8WorkspaceGC:
         data = self._run_ok("workspace", "list", "--project", self.alias, "--orphaned")
         remaining_ids = [w["id"] for w in data["data"]["workspaces"]]
         assert ws_id not in remaining_ids
+
+
+# ---------------------------------------------------------------------------
+# Queue polling parity (PR4 / P0-3): exponential curve, log tail, timeout kill
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EJobRunQueuePollingParity:
+    """Live verification of the PR4 Queue API polling contract.
+
+    Three scenarios, each spawns exactly one config, cleans it up:
+
+    - **log tail on a failed job**: a snowflake-transformation with
+      deliberately invalid SQL runs to `status=error`; we assert the
+      returned JSON error envelope contains a non-empty
+      `details.logTail` sourced from ``GET /jobs/{id}/events``.
+    - **timeout triggers remote kill**: a python-transformation-v2 with
+      `time.sleep(120)` is invoked with `--timeout 8`; we assert the
+      command exits 7 (``EXIT_JOB_TIMEOUT_TERMINATED``) with
+      `error.code == "JOB_TIMEOUT_TERMINATED"` and `details.job.status`
+      in {terminated, cancelled, terminating} -- i.e. the kill landed.
+    - **fixed strategy still reaches completion**: a no-op transformation
+      runs under ``--poll-strategy fixed`` to prove the opt-out path works
+      against a real Queue.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path, request: pytest.FixtureRequest) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        # Per-test alias suffix so parallel pytest-xdist runs don't share a
+        # project alias across workers. `request.node.name` is stable per test
+        # and includes any parametrize id.
+        safe = request.node.name.replace("[", "-").replace("]", "")
+        self.alias = f"{RUN_ID}-queuepoll-{safe}"[:60]
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+        self._created: list[tuple[str, str]] = []
+        self._submitted_jobs: list[str] = []
+
+        yield
+
+        # Best-effort cleanup: kill any jobs we left running, then delete
+        # the configs. We never want a test failure here to mask the real
+        # assertion failure.
+        import contextlib
+
+        for job_id in self._submitted_jobs:
+            with contextlib.suppress(Exception):
+                self.client.kill_job(job_id)
+
+        for component_id, config_id in reversed(self._created):
+            try:
+                self.client.delete_config(component_id=component_id, config_id=config_id)
+            except Exception as exc:
+                print(
+                    f"  {_DIM}(teardown) delete_config {component_id}/{config_id} "
+                    f"failed: {exc}{_RESET}"
+                )
+        self.client.close()
+
+    def _create_sleep_config(self, seconds: int, suffix: str) -> str:
+        """Create a python-transformation-v2 config that sleeps and returns its id."""
+        cfg = self.client.create_config(
+            component_id="keboola.python-transformation-v2",
+            name=f"{RUN_ID}-queuepoll-{suffix}",
+            description=f"E2E PR4: sleeps {seconds}s -- used only for polling tests",
+            configuration={
+                "parameters": {
+                    "blocks": [
+                        {
+                            "name": "Block 1",
+                            "codes": [
+                                {
+                                    "name": "sleep",
+                                    "script": [
+                                        "import time",
+                                        f"time.sleep({seconds})",
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        )
+        cfg_id = str(cfg["id"])
+        self._created.append(("keboola.python-transformation-v2", cfg_id))
+        return cfg_id
+
+    def _create_guaranteed_fail_config(self, suffix: str) -> str:
+        """Python transformation that raises an exception so job status=error.
+
+        Why python not Snowflake: a Snowflake transformation with no
+        input/output tables registered is treated as a successful no-op
+        even if the SQL would be invalid at execute time. A Python
+        transformation with an unconditional ``raise`` surfaces as
+        ``status=error`` with a clear message on the event feed, which
+        is what the log-tail assertion needs.
+        """
+        cfg = self.client.create_config(
+            component_id="keboola.python-transformation-v2",
+            name=f"{RUN_ID}-queuepoll-bad-{suffix}",
+            description="E2E PR4: guaranteed-fail python transformation",
+            configuration={
+                "parameters": {
+                    "blocks": [
+                        {
+                            "name": "Block 1",
+                            "codes": [
+                                {
+                                    "name": "boom",
+                                    "script": [
+                                        "raise RuntimeError('kbagent E2E PR4 deliberate failure')",
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        )
+        cfg_id = str(cfg["id"])
+        self._created.append(("keboola.python-transformation-v2", cfg_id))
+        return cfg_id
+
+    def test_log_tail_surfaced_on_queue_job_failed(self) -> None:
+        """Failed Queue job -> error envelope with details.logTail from /events."""
+        _step(1, "create python-transformation-v2 that raises")
+        cfg_id = self._create_guaranteed_fail_config("tail")
+
+        _step(2, "kbagent --json job run --wait (expect QUEUE_JOB_FAILED)")
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.python-transformation-v2",
+                "--config-id",
+                cfg_id,
+                "--wait",
+                "--timeout",
+                "300",
+                "--log-tail-lines",
+                "50",
+                "--no-variables",
+            ],
+        )
+
+        # Deliberate failure: exit non-zero, envelope status=error,
+        # details.logTail is a non-empty list.
+        assert result.exit_code != 0, f"Expected failure, got success: {result.output}"
+        envelope = json.loads(result.output)
+        assert envelope["status"] == "error"
+        assert envelope["error"]["code"] == "QUEUE_JOB_FAILED"
+        details = envelope["error"].get("details") or {}
+        log_tail = details.get("logTail") or []
+        assert isinstance(log_tail, list) and len(log_tail) > 0, (
+            f"Expected non-empty logTail, got {log_tail!r} in {envelope!r}"
+        )
+
+    def test_timeout_triggers_remote_kill_and_exits_seven(self) -> None:
+        """--timeout N < job runtime -> exit 7 + kill landed remotely."""
+        _step(1, "create python-transformation-v2 that sleeps 120s")
+        cfg_id = self._create_sleep_config(seconds=120, suffix="kill")
+
+        _step(2, "kbagent --json job run --wait --timeout 8 (expect exit 7)")
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.python-transformation-v2",
+                "--config-id",
+                cfg_id,
+                "--wait",
+                "--timeout",
+                "8",
+                "--log-tail-lines",
+                "20",
+                "--no-variables",
+            ],
+        )
+
+        assert result.exit_code == 7, (
+            f"Expected exit 7 (JOB_TIMEOUT_TERMINATED), got {result.exit_code}\n{result.output}"
+        )
+        envelope = json.loads(result.output)
+        assert envelope["status"] == "error"
+        assert envelope["error"]["code"] == "JOB_TIMEOUT_TERMINATED"
+
+        job = envelope["error"]["details"]["job"]
+        assert job["status"] in {"terminated", "cancelled", "terminating"}, (
+            f"Expected terminated/cancelled/terminating; got {job['status']!r}"
+        )
+        # Track job_id so teardown's kill-if-needed covers the 'terminating'
+        # transitional case where the remote hasn't settled yet.
+        self._submitted_jobs.append(str(job["id"]))
+
+    def test_fixed_poll_strategy_reaches_completion(self) -> None:
+        """--poll-strategy fixed still completes against a real Queue."""
+        _step(1, "create trivial python-transformation-v2 (sleep 3s)")
+        cfg_id = self._create_sleep_config(seconds=3, suffix="fixed")
+
+        _step(2, "kbagent job run --wait --poll-strategy fixed")
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.python-transformation-v2",
+                "--config-id",
+                cfg_id,
+                "--wait",
+                "--timeout",
+                "120",
+                "--poll-strategy",
+                "fixed",
+                "--no-variables",
+            ],
+        )
+
+        assert result.exit_code == 0, f"Expected success, got: {result.output}"
+        payload = _json(result)["data"]
+        assert payload["status"] == "success"
+        assert payload.get("isFinished") is True
+
+    def test_fetch_job_events_returns_list_on_real_job(self) -> None:
+        """Direct client call against /jobs/{id}/events on a finished job."""
+        _step(1, "create trivial successful job + run to completion")
+        cfg_id = self._create_sleep_config(seconds=1, suffix="events")
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.python-transformation-v2",
+                "--config-id",
+                cfg_id,
+                "--wait",
+                "--timeout",
+                "120",
+                "--no-variables",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        job_id = str(_json(result)["data"]["id"])
+
+        _step(2, "client.fetch_job_events direct call")
+        events = self.client.fetch_job_events(job_id, limit=50)
+        assert isinstance(events, list)
+        # A completed python-transformation job always emits at least one event
+        # (startup + completion). Guard against an empty-but-silent regression.
+        assert len(events) > 0

@@ -15,7 +15,11 @@ from typing import Any
 import typer
 
 from ..config_store import ConfigStore
-from ..constants import ENV_KBC_MANAGE_API_TOKEN, EXIT_PERMISSION_DENIED
+from ..constants import (
+    ENV_KBC_MANAGE_API_TOKEN,
+    EXIT_JOB_TIMEOUT_TERMINATED,
+    EXIT_PERMISSION_DENIED,
+)
 from ..errors import KeboolaApiError, PermissionDeniedError
 from ..output import OutputFormatter
 
@@ -63,15 +67,26 @@ def get_service(ctx: typer.Context, key: str) -> Any:
 def map_error_to_exit_code(exc: KeboolaApiError) -> int:
     """Map a KeboolaApiError to a CLI exit code.
 
-    Unified 3-case logic:
     - INVALID_TOKEN -> 3 (authentication error)
-    - TIMEOUT / CONNECTION_ERROR / RETRY_EXHAUSTED -> 4 (network error)
+    - TIMEOUT / CONNECTION_ERROR / RETRY_EXHAUSTED / QUEUE_JOB_TIMEOUT -> 4
+      (network/retryable; QUEUE_JOB_TIMEOUT means local gave up AND the
+      remote-kill attempt also failed, so the job may still be running)
+    - JOB_TIMEOUT_TERMINATED -> EXIT_JOB_TIMEOUT_TERMINATED (7)
+      (local --timeout elapsed and we successfully cancelled the remote
+      job; scripts can distinguish "we killed it" from "it failed on its own")
     - Everything else -> 1 (general error)
     """
     if exc.error_code == "INVALID_TOKEN":
         return 3
-    if exc.error_code in ("TIMEOUT", "CONNECTION_ERROR", "RETRY_EXHAUSTED"):
+    if exc.error_code in (
+        "TIMEOUT",
+        "CONNECTION_ERROR",
+        "RETRY_EXHAUSTED",
+        "QUEUE_JOB_TIMEOUT",
+    ):
         return 4
+    if exc.error_code == "JOB_TIMEOUT_TERMINATED":
+        return EXIT_JOB_TIMEOUT_TERMINATED
     return 1
 
 

@@ -4,6 +4,7 @@ Thin CLI layer: parses arguments, calls JobService, formats output.
 No business logic belongs here.
 """
 
+import click
 import typer
 from rich.markup import escape
 
@@ -11,8 +12,12 @@ from ..config_store import ConfigStore
 from ..constants import (
     DEFAULT_JOB_LIMIT,
     DEFAULT_JOB_RUN_TIMEOUT,
+    DEFAULT_LOG_TAIL_LINES,
+    DEFAULT_POLL_STRATEGY,
     KILLABLE_JOB_STATUSES,
     MAX_JOB_LIMIT,
+    MAX_LOG_TAIL_LINES,
+    VALID_POLL_STRATEGIES,
     VALID_STATUSES,
 )
 from ..errors import ConfigError, KeboolaApiError
@@ -212,6 +217,28 @@ def job_run(
             "--variable-values-id."
         ),
     ),
+    poll_strategy: str = typer.Option(
+        DEFAULT_POLL_STRATEGY,
+        "--poll-strategy",
+        click_type=click.Choice(sorted(VALID_POLL_STRATEGIES)),
+        help=(
+            "Polling cadence used with --wait. 'exponential' (default) "
+            "starts at 2s and relaxes toward 15s as a job runs long "
+            "(2s x 30 -> 5s x 48 -> 15s). 'fixed' keeps a constant 1s "
+            "interval (useful for tests or very short jobs)."
+        ),
+    ),
+    log_tail_lines: int = typer.Option(
+        DEFAULT_LOG_TAIL_LINES,
+        "--log-tail-lines",
+        help=(
+            "On FAILED/WARNING/TERMINATED jobs, fetch the last N job events "
+            f"(from Storage Events API) and surface them as 'logTail' in "
+            f"JSON output or a panel in human mode. Only used with --wait. "
+            f"0 disables (recommended for automation pipelines); max "
+            f"{MAX_LOG_TAIL_LINES}."
+        ),
+    ),
 ) -> None:
     """Run a job for a component configuration.
 
@@ -225,6 +252,13 @@ def job_run(
     kbagent auto-resolves a variableValuesId so the job binds to the
     deployed values row. Override with --variable-values-id or skip
     with --no-variables.
+
+    Queue polling uses an exponential curve by default (2s x 30 -> 5s x 48
+    -> 15s, total 5min before the 15s tail). If --timeout expires, kbagent
+    issues kill_job on the remote and exits 7 (JOB_TIMEOUT_TERMINATED) with
+    the cancelled job + log tail attached. If the kill itself fails, exits
+    4 (QUEUE_JOB_TIMEOUT, retryable) so scripts can tell "we killed it"
+    from "local gave up, remote may still be running".
     """
     if should_hint(ctx):
         emit_hint(
@@ -239,6 +273,8 @@ def job_run(
             branch=branch,
             variable_values_id=variable_values_id,
             no_variables=no_variables,
+            poll_strategy=poll_strategy,
+            log_tail_lines=log_tail_lines,
         )
         return
     formatter = get_formatter(ctx)
@@ -263,6 +299,16 @@ def job_run(
                 "--variable-values-id and --no-variables are mutually exclusive. "
                 "Pass --variable-values-id to bind a specific values row, or "
                 "--no-variables to skip resolution, but not both."
+            ),
+            error_code="INVALID_ARGUMENT",
+        )
+        raise typer.Exit(code=2)
+
+    if log_tail_lines < 0 or log_tail_lines > MAX_LOG_TAIL_LINES:
+        formatter.error(
+            message=(
+                f"--log-tail-lines must be between 0 and {MAX_LOG_TAIL_LINES}. "
+                f"Got {log_tail_lines}."
             ),
             error_code="INVALID_ARGUMENT",
         )
@@ -295,6 +341,8 @@ def job_run(
             branch_id=effective_branch,
             variable_values_id=variable_values_id,
             no_variables=no_variables,
+            poll_strategy=poll_strategy,
+            log_tail_lines=log_tail_lines,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code="CONFIG_ERROR")
@@ -305,7 +353,10 @@ def job_run(
             error_code=exc.error_code,
             project=project,
             retryable=exc.retryable,
+            details=exc.details or None,
         )
+        if not formatter.json_mode:
+            _render_log_tail(formatter, exc.details)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if formatter.json_mode:
@@ -318,15 +369,12 @@ def job_run(
         status = result.get("status", "unknown")
         if status in ("success", "terminated"):
             formatter.console.print(f"[bold green]Job {job_id}:[/bold green] {status}")
-        elif status == "error":
-            error_msg = ""
-            job_result = result.get("result", {})
-            if isinstance(job_result, dict):
-                error_msg = job_result.get("message", "")
-            formatter.console.print(f"[bold red]Job {job_id}:[/bold red] {status}")
-            if error_msg:
-                formatter.console.print(f"  Error: {error_msg}")
-            raise typer.Exit(code=1)
+        elif status == "warning":
+            # "error" is intentionally absent here: the service layer raises
+            # QUEUE_JOB_FAILED for failed jobs, so this human-mode branch is
+            # only reached for non-error terminal and transient states.
+            formatter.console.print(f"[bold yellow]Job {job_id}:[/bold yellow] {status}")
+            _render_log_tail(formatter, {"logTail": result.get("logTail") or []})
         else:
             formatter.console.print(f"[bold blue]Job {job_id}:[/bold blue] {status}")
             if not wait:
@@ -334,6 +382,24 @@ def job_run(
                     "  Use --wait to poll until completion, "
                     f"or: kbagent job detail --project {project} --job-id {job_id}"
                 )
+
+
+def _render_log_tail(formatter, details: dict | None) -> None:
+    """Render a logTail attached to an error or result payload in human mode."""
+    if not details:
+        return
+    tail = details.get("logTail") or []
+    if not tail:
+        return
+    formatter.console.print("[bold]Log tail (last events):[/bold]")
+    for event in tail:
+        ts = event.get("created") or event.get("createdTime") or ""
+        event_type = event.get("type") or event.get("event") or ""
+        msg = event.get("message") or ""
+        # Trim overly long event messages so the panel stays readable.
+        if len(msg) > 400:
+            msg = msg[:400] + "..."
+        formatter.console.print(f"  [dim]{ts}[/dim] [{event_type}] {msg}")
 
 
 @job_app.command("terminate")

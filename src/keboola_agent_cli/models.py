@@ -153,6 +153,14 @@ class ErrorResponse(BaseModel):
     message: str = Field(description="Human-readable error description")
     project: str = Field(default="", description="Project alias related to the error, if any")
     retryable: bool = Field(default=False, description="Whether the operation can be retried")
+    details: dict | None = Field(
+        default=None,
+        description=(
+            "Optional structured context keyed by the producer (e.g. logTail "
+            "for failed Queue jobs). Absent when empty so JSON consumers can "
+            "assume 'details in err' implies non-empty payload."
+        ),
+    )
 
 
 class SuccessResponse(BaseModel):

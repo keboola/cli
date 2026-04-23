@@ -168,13 +168,26 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent job detail --project NAME --job-id ID
     Full job detail including result message and timing.
 
-  kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--variable-values-id ID] [--no-variables]
+  kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N]
     Run a Queue API job. --row-id selects specific config rows (repeatable; omit to run entire config).
     --wait polls until job finishes. --timeout sets max wait in seconds (default 300). Branch-aware.
     When the config has linked variables (configuration.variables_id), kbagent auto-resolves
     a variableValuesId so the job binds to the deployed values row. --variable-values-id
     overrides; --no-variables skips resolution. Error code NO_VARIABLE_ROWS when the linked
     variables config has zero rows (run `kbagent config variables-set` to create one).
+    Polling under --wait uses an exponential curve by default (2s x 30 -> 5s x 48 -> 15s);
+    --poll-strategy fixed keeps a constant 1s interval. On FAILED/WARNING/TERMINATED, the last
+    --log-tail-lines events (default 200, 0 disables -- recommended for automation pipelines) are
+    surfaced as `logTail` in --json output.
+    --json response shapes by exit code:
+      - exit 0 (success): {{status:"ok", data:{{..., logTail?:[...]}}}}
+      - exit 1 (QUEUE_JOB_FAILED, remote job status=error):
+        {{status:"error", error:{{code:"QUEUE_JOB_FAILED", details:{{logTail:[...]}}}}}}
+      - exit 4 (QUEUE_JOB_TIMEOUT, local timeout + remote kill also failed):
+        {{status:"error", error:{{code:"QUEUE_JOB_TIMEOUT", retryable:true, details:{{logTail:[...]}}}}}}
+      - exit 7 (JOB_TIMEOUT_TERMINATED, local timeout + remote kill succeeded):
+        {{status:"error", error:{{code:"JOB_TIMEOUT_TERMINATED", details:{{job:{{...}}, logTail:[...]}}}}}}
+    jq pattern: `.error.details.logTail? // .data.logTail? // []` picks up the tail regardless of exit.
 
   kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
     Kill running jobs via Queue API (POST /jobs/{id}/kill). Use to stop runaway loops or pile-ups.

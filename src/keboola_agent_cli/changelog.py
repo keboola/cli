@@ -44,6 +44,11 @@ CHANGELOG: dict[str, list[str]] = {
         "New: storage describe-batch --from-file -- apply bucket/table/column descriptions from a YAML file in one shot; failures collected, remaining items continue",
         "Fix: storage table-detail now returns 'description' and 'metadata' fields (extracted from table metadata array)",
         "Fix: storage bucket-detail now returns 'description' and 'metadata' fields (KBC.description in metadata takes precedence over native creation-time description field)",
+        "New: Queue API polling parity with FIIA and the keboola-as-code Go CLI -- `kbagent job run --wait` now polls on an exponential curve (2s x 30 -> 5s x 48 -> 15s) instead of a fixed 1s interval. Preserves the legacy cadence behind `--poll-strategy fixed` for tests and very short jobs (FIIA P0-3).",
+        "New: --log-tail-lines N on `job run` -- on FAILED / WARNING / TERMINATED jobs, kbagent fetches the last N Storage Events (via /v2/storage/events?runId=...) and surfaces them as `logTail` in --json output or `details.logTail` on errors. Default 200, max 5000, 0 disables.",
+        "New: --timeout now auto-cancels the remote job -- when the local deadline expires under --wait, kbagent issues `kill_job` against the Queue and exits 7 (EXIT_JOB_TIMEOUT_TERMINATED) with the cancelled job + logTail in the error details. Distinct from exit 4 (QUEUE_JOB_TIMEOUT, retryable) which signals the local kill attempt ALSO failed and the remote may still be running.",
+        "Client: new `fetch_job_events(run_id, limit)` wraps the Storage Events API -- runId is resolved from the job dict (Queue v2 jobs typically have runId == id). The Queue API has NO /jobs/{id}/events route despite the name; events live on Storage.",
+        "Error envelope: KeboolaApiError gained an optional `details: dict` payload; JSON --mode output now includes `error.details` (only when non-empty) so callers can consume structured context without parsing the human message.",
     ],
     "0.21.1": [
         "Fix: sync pull on a newly created dev branch now writes config rows (#193) -- idempotent skip guard for rows was missing a file-existence check, causing rows to be silently skipped when the branch directory was new (hash matched main because the branch is a clone)",

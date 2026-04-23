@@ -5,12 +5,171 @@ fetch, creation with optional wait, termination, and variable-values
 resolution. Stays agnostic of CLI and HTTP transport details.
 """
 
+import logging
+import time
 from typing import Any
 
-from ..constants import DEFAULT_JOB_LIMIT, KILLABLE_JOB_STATUSES
+from ..constants import (
+    DEFAULT_JOB_LIMIT,
+    DEFAULT_LOG_TAIL_LINES,
+    DEFAULT_POLL_STRATEGY,
+    JOB_TERMINATE_GRACE_SECONDS,
+    JOB_TERMINATE_POLL_INTERVAL,
+    KILLABLE_JOB_STATUSES,
+    VALID_POLL_STRATEGIES,
+)
 from ..errors import KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
+
+logger = logging.getLogger(__name__)
+
+# Terminal statuses for which we surface a log-tail.
+_LOG_TAIL_STATUSES: frozenset[str] = frozenset({"error", "warning", "terminated"})
+
+
+def _safe_fetch_log_tail(client: Any, job: dict[str, Any], limit: int) -> list[dict[str, Any]]:
+    """Fetch the last ``limit`` events for a job; never raises.
+
+    Resolves ``runId`` from the job dict (falls back to ``id`` on legacy
+    records where Queue v2 makes them equal). Storage Events API returns
+    newest -> oldest, which we keep as-is: a "tail" display wants the
+    most recent events first, and callers can reverse for chronology if
+    they prefer.
+
+    Log-tail capture is a convenience surface; failing the whole command
+    because the events endpoint blipped would obscure the real underlying
+    error. We log the secondary failure at debug level and return an empty
+    list so callers can safely attach it to their result payload.
+    """
+    if limit <= 0:
+        return []
+    run_id = str(job.get("runId") or job.get("id") or "")
+    if not run_id:
+        # Defensive: malformed job dict with neither runId nor id. Log so
+        # a real API regression doesn't get masked by the silent return.
+        logger.debug(
+            "log tail fetch skipped: job has no runId or id (keys=%s)",
+            sorted(job.keys()),
+        )
+        return []
+    try:
+        events = client.fetch_job_events(run_id, limit=limit)
+    except KeboolaApiError as exc:
+        logger.debug(
+            "fetch_job_events(%s) failed (%s): %s; surfacing empty logTail",
+            run_id,
+            exc.error_code,
+            exc.message,
+        )
+        return []
+    except Exception as exc:  # defensive: do not let tail fetch tank the run
+        logger.debug("fetch_job_events(%s) raised %r; surfacing empty logTail", run_id, exc)
+        return []
+    # Storage Events API returns newest -> oldest today, but we do not
+    # rely on that: sort defensively by `created` DESC so a future API
+    # ordering change cannot silently invert the tail. Events without a
+    # `created` key sort last (they lose the race to timestamped peers).
+    events_list = list(events)
+    events_list.sort(key=lambda e: e.get("created") or "", reverse=True)
+    # Cap at limit in case the server ignored ?limit.
+    return events_list[:limit]
+
+
+def _enrich_with_tail(
+    base_details: dict[str, Any] | None,
+    tail: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Return a fresh details dict with ``logTail`` merged in, or None if empty.
+
+    We never mutate a caught exception's ``.details`` in place; we construct
+    a new dict and let the caller wrap it in a new KeboolaApiError. That
+    keeps exception identity clean and makes the chain explicit via
+    ``raise ... from exc``.
+    """
+    if not tail and not base_details:
+        return None
+    merged: dict[str, Any] = dict(base_details or {})
+    if tail:
+        merged["logTail"] = tail
+    return merged or None
+
+
+def _terminate_and_wait(
+    client: Any,
+    job_id: str,
+    grace_seconds: float,
+) -> dict[str, Any] | None:
+    """Issue kill_job and poll briefly for terminal status.
+
+    Returns the final job dict if termination was observed within
+    ``grace_seconds``; returns ``None`` if the kill call itself failed
+    (network, auth, race against remote terminal state). Never raises --
+    the caller decides how to surface the failure.
+
+    Idempotent under concurrent kill attempts: if the user runs
+    ``kbagent job terminate --job-id X`` while ``job run --wait`` is
+    auto-cancelling X on timeout, both paths land on Queue API's
+    ``POST /jobs/{id}/kill``. The second caller sees HTTP 400
+    "not in killable states" (or HTTP 500 with body 404 for already-final
+    jobs); the KeboolaApiError branch below still succeeds as long as a
+    follow-up GET confirms isFinished=True. No data loss, no double-kill
+    error surfaced.
+    """
+    try:
+        client.kill_job(job_id)
+    except KeboolaApiError as exc:
+        # If the job is already terminal, kill returns 400/500 -- honour
+        # that as "cancelled successfully" when a follow-up GET confirms.
+        logger.debug("kill_job(%s) raised %s: %s", job_id, exc.error_code, exc.message)
+        try:
+            job = client.get_job_detail(job_id)
+        except Exception:
+            logger.debug("terminate: kill failed AND GET failed for %s; giving up", job_id)
+            return None
+        if job.get("isFinished"):
+            return job
+        logger.debug(
+            "terminate: kill failed, GET succeeded but job %s still not terminal "
+            "(status=%r); returning None (remote may still be running)",
+            job_id,
+            job.get("status"),
+        )
+        return None
+    except Exception as exc:
+        logger.debug("kill_job(%s) raised %r; giving up", job_id, exc)
+        return None
+
+    deadline = time.monotonic() + grace_seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            job = client.get_job_detail(job_id)
+        except Exception:
+            time.sleep(min(JOB_TERMINATE_POLL_INTERVAL, remaining))
+            continue
+        if job.get("isFinished"):
+            return job
+        # Cap the sleep so we never overshoot the grace deadline by a
+        # full poll interval (caller may be latency-sensitive).
+        time.sleep(min(JOB_TERMINATE_POLL_INTERVAL, max(0.0, deadline - time.monotonic())))
+
+    # Remote still wasn't terminal within the grace window; return whatever
+    # the last GET saw so callers can surface the actual state.
+    try:
+        final = client.get_job_detail(job_id)
+    except Exception:
+        logger.debug("terminate: grace window exhausted and final GET failed for %s", job_id)
+        return None
+    logger.debug(
+        "terminate: grace window exhausted; job %s status=%r isFinished=%r",
+        job_id,
+        final.get("status"),
+        final.get("isFinished"),
+    )
+    return final
 
 
 class JobService(BaseService):
@@ -160,6 +319,8 @@ class JobService(BaseService):
         branch_id: int | None = None,
         variable_values_id: str | None = None,
         no_variables: bool = False,
+        poll_strategy: str = DEFAULT_POLL_STRATEGY,
+        log_tail_lines: int = DEFAULT_LOG_TAIL_LINES,
     ) -> dict[str, Any]:
         """Create and optionally wait for a Queue API job.
 
@@ -168,6 +329,21 @@ class JobService(BaseService):
         so the job runs against the deployed values row instead of empty
         strings. Pass ``variable_values_id`` to override, or ``no_variables=True``
         to skip the resolution entirely.
+
+        Wait-mode behavior (``wait=True``):
+
+        - Polls the Queue API using ``poll_strategy`` (default exponential,
+          matching FIIA and the Go CLI cadence: 2s x 30 -> 5s x 48 -> 15s).
+        - When the job lands in a terminal non-success state (``error``,
+          ``warning``, ``terminated``) and ``log_tail_lines > 0``, fetches
+          the job's events via ``fetch_job_events`` and attaches the last
+          ``log_tail_lines`` as the ``logTail`` key on the returned dict.
+        - If the local deadline elapses before the remote job finishes,
+          issues ``kill_job`` to cancel the remote work, waits briefly for
+          termination, and raises ``KeboolaApiError`` with
+          ``error_code="JOB_TIMEOUT_TERMINATED"``. If the kill call itself
+          fails we fall back to the original ``QUEUE_JOB_TIMEOUT`` error so
+          the caller can tell "local gave up" from "remote was cancelled".
 
         Args:
             alias: Project alias.
@@ -184,11 +360,31 @@ class JobService(BaseService):
             no_variables: If True, skip variable-values resolution entirely
                 (useful for components that do not support variables, or
                 when the caller intentionally wants empty-string binding).
+            poll_strategy: Wait cadence. One of VALID_POLL_STRATEGIES.
+            log_tail_lines: Number of trailing events to surface on
+                non-success terminal states. ``0`` disables the fetch.
 
         Returns:
-            Job dict with project_alias. If wait=True, returns the
-            completed job; otherwise returns the initial job response.
+            Job dict with ``project_alias``. If wait=True, returns the
+            completed job, optionally with ``logTail`` attached; otherwise
+            returns the initial job response.
         """
+        if poll_strategy not in VALID_POLL_STRATEGIES:
+            raise KeboolaApiError(
+                message=(
+                    f"Invalid poll_strategy {poll_strategy!r}. "
+                    f"Expected one of: {sorted(VALID_POLL_STRATEGIES)}."
+                ),
+                status_code=0,
+                error_code="INVALID_ARGUMENT",
+            )
+        if log_tail_lines < 0:
+            raise KeboolaApiError(
+                message=f"log_tail_lines must be >= 0, got {log_tail_lines}.",
+                status_code=0,
+                error_code="INVALID_ARGUMENT",
+            )
+
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -213,7 +409,26 @@ class JobService(BaseService):
             job_id = str(job.get("id", ""))
 
             if wait and job_id:
-                job = client.wait_for_queue_job(job_id, max_wait=timeout)
+                try:
+                    job = client.wait_for_queue_job(
+                        job_id,
+                        max_wait=timeout,
+                        poll_strategy=poll_strategy,
+                    )
+                except KeboolaApiError as exc:
+                    job = self._handle_wait_error(
+                        client=client,
+                        job_id=job_id,
+                        exc=exc,
+                        log_tail_lines=log_tail_lines,
+                        timeout=timeout,
+                    )
+                else:
+                    # Successful poll: still attach log tail for warning /
+                    # terminated statuses (not raised; just surfaced).
+                    status = str(job.get("status") or "")
+                    if status in _LOG_TAIL_STATUSES and log_tail_lines > 0:
+                        job["logTail"] = _safe_fetch_log_tail(client, job, log_tail_lines)
         finally:
             client.close()
 
@@ -221,6 +436,84 @@ class JobService(BaseService):
         if resolved_values_id:
             job["resolvedVariableValuesId"] = resolved_values_id
         return job
+
+    def _handle_wait_error(
+        self,
+        client: Any,
+        job_id: str,
+        exc: KeboolaApiError,
+        log_tail_lines: int,
+        timeout: float,
+    ) -> dict[str, Any]:
+        """Handle a terminal wait_for_queue_job error.
+
+        Two error classes land here:
+
+        - ``QUEUE_JOB_FAILED`` -- remote job reached ``error`` status on its
+          own. Fetch the log tail so the caller sees the last events and
+          re-raise with the events attached to ``exc.details``.
+        - ``QUEUE_JOB_TIMEOUT`` -- local deadline exceeded before the job
+          finished. Issue ``kill_job`` to cancel the remote work, wait
+          briefly for termination, fetch the log tail and re-raise with a
+          distinct ``JOB_TIMEOUT_TERMINATED`` code so shells can tell
+          "we cancelled the job" from "job failed on its own".
+
+        We never swallow the error; on any failure path we re-raise so the
+        command layer maps to the correct exit code.
+        """
+        code = exc.error_code
+        if code == "QUEUE_JOB_FAILED":
+            # GET the job to resolve runId (required for Storage events)
+            # and to enrich the error details with the failed job payload.
+            try:
+                failed_job = client.get_job_detail(job_id)
+            except Exception:
+                failed_job = {"id": job_id}
+            tail = _safe_fetch_log_tail(client, failed_job, log_tail_lines)
+            details = _enrich_with_tail(exc.details, tail)
+            raise KeboolaApiError(
+                message=exc.message,
+                status_code=exc.status_code,
+                error_code=exc.error_code,
+                retryable=exc.retryable,
+                details=details or {},
+            ) from exc
+
+        if code == "QUEUE_JOB_TIMEOUT":
+            cancelled = _terminate_and_wait(
+                client, job_id, grace_seconds=JOB_TERMINATE_GRACE_SECONDS
+            )
+            tail = _safe_fetch_log_tail(client, cancelled or {"id": job_id}, log_tail_lines)
+            if cancelled is not None:
+                raise KeboolaApiError(
+                    message=(
+                        f"Queue job {job_id} exceeded the local --timeout "
+                        f"({timeout:.0f}s); issued kill and observed "
+                        f"status={cancelled.get('status')!r}."
+                    ),
+                    status_code=504,
+                    error_code="JOB_TIMEOUT_TERMINATED",
+                    retryable=False,
+                    details={"job": cancelled, "logTail": tail},
+                ) from exc
+            # kill failed: surface the original timeout but keep the tail.
+            details = _enrich_with_tail(exc.details, tail)
+            raise KeboolaApiError(
+                message=exc.message,
+                status_code=exc.status_code,
+                error_code=exc.error_code,
+                retryable=exc.retryable,
+                details=details or {},
+            ) from exc
+
+        # Anything else (network, auth, a future Queue error code we
+        # don't specialise) bubbles up unchanged so the command layer
+        # maps it through map_error_to_exit_code().
+        logger.debug(
+            "run_job: unhandled wait error code=%s; bubbling up unchanged",
+            code,
+        )
+        raise
 
     @staticmethod
     def resolve_variable_values_id(
