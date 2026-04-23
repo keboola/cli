@@ -154,9 +154,26 @@ def apply_firewall_flags(
     )
 
 
+def _version_callback(value: bool) -> None:
+    """Print version and exit -- standard `--version` flag for CLI tools."""
+    if value:
+        from . import __version__
+
+        typer.echo(f"kbagent v{__version__}")
+        raise typer.Exit()
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
+    _version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -220,7 +237,19 @@ def main(
             raise typer.Exit(code=2) from None
     else:
         maybe_auto_update()
-    show_post_update_changelog()
+
+    # If the user explicitly asked for `kbagent changelog`, they'll see the
+    # full changelog below -- prepending the "What's new" summary is pure
+    # duplication. Consume the trigger env var so it does not fire later
+    # on a different command.
+    if ctx.invoked_subcommand == "changelog":
+        import os as _os
+
+        from .changelog import ENV_UPDATED_FROM as _ENV_UPDATED_FROM
+
+        _os.environ.pop(_ENV_UPDATED_FROM, None)
+    else:
+        show_post_update_changelog()
 
     # If no subcommand given, launch REPL on TTY or show help otherwise
     if ctx.invoked_subcommand is None:

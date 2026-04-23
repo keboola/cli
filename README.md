@@ -4,6 +4,8 @@ One CLI to manage all your Keboola projects. Designed to be driven by AI agents 
 
 No more switching between the UI, old CLI, MCP server, and raw API calls. `kbagent` wraps everything into workflow-oriented commands where dev branches propagate automatically, multi-project operations run in parallel, and AI agents can be sandboxed safely.
 
+![kbagent in action](docs/assets/demo-hero.gif)
+
 ## Install
 
 ```bash
@@ -46,6 +48,8 @@ kbagent init --from-global --read-only
 Three protection layers (kbagent policy + filesystem chmod + Claude Code deny rules) prevent the agent from writing, deleting, or bypassing restrictions. See [Permissions Guide](docs/guide.md#permissions) for details.
 
 ## 30-second demo
+
+![30-second demo](docs/assets/demo-readme-main.gif)
 
 ```bash
 # Connect a project (Storage API token from Keboola UI)

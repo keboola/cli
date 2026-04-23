@@ -29,6 +29,8 @@ kbagent doctor
 server, and Claude Code plugin detection. Everything it reports as
 `warn` or `fail` comes with a concrete repair step.
 
+![kbagent doctor output](assets/demo-doctor.gif)
+
 ---
 
 ## 1. Add a single project (you already have a Storage API token)
@@ -64,6 +66,8 @@ Verify:
 kbagent project list --json
 kbagent project status                 # tests connectivity against the API
 ```
+
+![kbagent project add flow](assets/demo-add-project.gif)
 
 Stack URLs by region (use the one matching your Keboola account):
 
