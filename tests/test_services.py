@@ -519,6 +519,181 @@ SAMPLE_COMPONENTS_2 = [
 ]
 
 
+class TestUseAndCurrentProject:
+    """Tests for ProjectService.use_project() / current_project() / resolve_pinned_alias()."""
+
+    def _seed_two(self, tmp_config_dir: Path) -> ConfigStore:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        for alias, pid in (("prod", 1), ("stage", 2)):
+            store.add_project(
+                alias,
+                ProjectConfig(
+                    stack_url="https://connection.keboola.com",
+                    token=f"901-x-{alias}",
+                    project_name=alias.title(),
+                    project_id=pid,
+                ),
+            )
+        return store
+
+    def test_use_project_pins_and_persists(self, tmp_config_dir: Path) -> None:
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        result = service.use_project(alias="stage")
+
+        assert result["alias"] == "stage"
+        assert result["previous"] == "prod"
+        assert result["source"] == "pin"
+        # Persistence check
+        assert ConfigStore(config_dir=tmp_config_dir).load().default_project == "stage"
+
+    def test_use_project_unknown_raises(self, tmp_config_dir: Path) -> None:
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+        with pytest.raises(ConfigError, match="not found"):
+            service.use_project(alias="does-not-exist")
+
+    def test_current_project_pin_only(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        result = service.current_project()
+        assert result["alias"] == "prod"
+        assert result["source"] == "pin"
+        assert result["env_override"] is None
+
+    def test_current_project_env_override(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_PROJECT", "stage")
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        result = service.current_project()
+        assert result["alias"] == "stage"
+        assert result["source"] == "env"
+        assert result["pinned"] == "prod"
+        assert result["env_points_to_configured_project"] is True
+
+    def test_current_project_env_unknown(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_PROJECT", "mystery")
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        result = service.current_project()
+        assert result["alias"] == "mystery"
+        assert result["env_points_to_configured_project"] is False
+
+    def test_current_project_no_pin_no_env(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        # Empty store -- no pin possible
+        store = ConfigStore(config_dir=tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        result = service.current_project()
+        assert result["alias"] is None
+        assert result["source"] == "none"
+
+    # ── resolve_pinned_alias precedence ────────────────────────────────
+
+    def test_resolve_explicit_wins(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_PROJECT", "stage")
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        alias, source = service.resolve_pinned_alias(explicit="prod")
+        assert alias == "prod"
+        assert source == "explicit"
+
+    def test_resolve_env_beats_pin(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_PROJECT", "stage")
+        store = self._seed_two(tmp_config_dir)
+        # default is prod (first added)
+        service = ProjectService(config_store=store)
+
+        alias, source = service.resolve_pinned_alias()
+        assert alias == "stage"
+        assert source == "env"
+
+    def test_resolve_pin_used(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+
+        alias, source = service.resolve_pinned_alias()
+        assert alias == "prod"
+        assert source == "pin"
+
+    def test_resolve_sole_project_fallback(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "only",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="t",
+                project_name="Only",
+                project_id=7,
+            ),
+        )
+        # Clear the pin to exercise the sole-project fallback.
+        cfg = store.load()
+        cfg.default_project = ""
+        store.save(cfg)
+
+        service = ProjectService(config_store=store)
+        alias, source = service.resolve_pinned_alias()
+        assert alias == "only"
+        assert source == "sole"
+
+    def test_resolve_fail_hard_multi_no_pin(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = self._seed_two(tmp_config_dir)
+        cfg = store.load()
+        cfg.default_project = ""
+        store.save(cfg)
+
+        service = ProjectService(config_store=store)
+        with pytest.raises(ConfigError, match="Multiple projects"):
+            service.resolve_pinned_alias()
+
+    def test_resolve_explicit_unknown_raises(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+        with pytest.raises(ConfigError, match="not found"):
+            service.resolve_pinned_alias(explicit="ghost")
+
+    def test_resolve_env_unknown_raises(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_PROJECT", "mystery")
+        store = self._seed_two(tmp_config_dir)
+        service = ProjectService(config_store=store)
+        with pytest.raises(ConfigError, match="not registered"):
+            service.resolve_pinned_alias()
+
+    def test_resolve_no_projects_raises(self, tmp_config_dir: Path, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = ConfigStore(config_dir=tmp_config_dir)
+        service = ProjectService(config_store=store)
+        with pytest.raises(ConfigError, match="No projects configured"):
+            service.resolve_pinned_alias()
+
+    def test_resolve_pinned_alias_points_to_unregistered(
+        self, tmp_config_dir: Path, monkeypatch
+    ) -> None:
+        """Stale pin (pointing at deleted project) raises a repair-friendly ConfigError."""
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = self._seed_two(tmp_config_dir)
+        # Hand-edit default_project to a value that isn't in projects.
+        cfg = store.load()
+        cfg.default_project = "ghost"
+        store.save(cfg)
+
+        service = ProjectService(config_store=store)
+        with pytest.raises(ConfigError, match="not registered"):
+            service.resolve_pinned_alias()
+
+
 class TestConfigServiceListConfigs:
     """Tests for ConfigService.list_configs()."""
 

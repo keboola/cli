@@ -81,6 +81,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Edit an existing Keboola project connection | `kbagent project edit --project ALIAS` |
 | Test connectivity to connected Keboola projects | `kbagent project status` |
 | Refresh expired or invalid Storage API tokens | `kbagent project refresh` |
+| Pin <alias> as the default project for subsequent commands | `kbagent project use <ALIAS>` |
+| Show the effective default project | `kbagent project current` |
 | Get the Keboola dashboard project description | `kbagent project description-get --project PROJECT` |
 | Set the Keboola dashboard project description (markdown) | `kbagent project description-set --project PROJECT` |
 | Set up projects and register them in the kbagent config | `kbagent org setup --url URL` |

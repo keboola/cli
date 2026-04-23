@@ -91,6 +91,10 @@ MAX_PARALLEL_WORKERS_LIMIT: int = 100
 ENV_CONFIG_DIR: str = "KBAGENT_CONFIG_DIR"
 LOCAL_CONFIG_DIR_NAME: str = ".kbagent"
 
+# --- Project Pin ---
+# Overrides the persisted `default_project` pin for a single invocation/session.
+ENV_KBAGENT_PROJECT: str = "KBAGENT_PROJECT"
+
 # --- Environment Variable Names ---
 ENV_MAX_PARALLEL_WORKERS: str = "KBAGENT_MAX_PARALLEL_WORKERS"
 ENV_KBC_TOKEN: str = "KBC_TOKEN"

@@ -473,6 +473,89 @@ def project_refresh(
     formatter.output(result, _format_refresh_result)
 
 
+# ── Project pin (default project) ─────────────────────────────────────
+
+
+@project_app.command("use")
+def project_use(
+    ctx: typer.Context,
+    alias: str = typer.Argument(..., help="Project alias to pin as default"),
+) -> None:
+    """Pin <alias> as the default project for subsequent commands.
+
+    The pin persists in config.json. ``KBAGENT_PROJECT`` overrides it for a
+    single invocation; an explicit ``--project`` flag overrides both.
+    """
+    # No --hint: local-only ConfigStore mutation; no client or service call to render.
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "project_service")
+
+    try:
+        result = service.use_project(alias=alias)
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        raise typer.Exit(code=5) from None
+
+    def _human(c: Console, d: dict[str, Any]) -> None:
+        previous = d.get("previous")
+        if previous and previous != d["alias"]:
+            c.print(
+                f"[bold green]Pinned:[/bold green] default project is now "
+                f"[bold]{d['alias']}[/bold] (was [dim]{previous}[/dim])"
+            )
+        else:
+            c.print(
+                f"[bold green]Pinned:[/bold green] default project is [bold]{d['alias']}[/bold]"
+            )
+        env_override = d.get("env_override")
+        if env_override and env_override != d["alias"]:
+            c.print(
+                f"[yellow]Note:[/yellow] KBAGENT_PROJECT='{env_override}' is set "
+                "and overrides this pin for the current shell."
+            )
+
+    formatter.output(result, _human)
+
+
+@project_app.command("current")
+def project_current(ctx: typer.Context) -> None:
+    """Show the effective default project.
+
+    Reports whether the value comes from the ``KBAGENT_PROJECT`` env var
+    (``env``) or the persisted pin (``pin``). Prints nothing but a hint if
+    neither is set.
+    """
+    # No --hint: local-only ConfigStore read; no client or service call to render.
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "project_service")
+
+    result = service.current_project()
+
+    def _human(c: Console, d: dict[str, Any]) -> None:
+        alias = d.get("alias")
+        source = d.get("source")
+        if alias is None:
+            c.print(
+                "[dim](no default project set)[/dim] -- pass --project, set "
+                "KBAGENT_PROJECT, or run 'kbagent project use <alias>'"
+            )
+            return
+        if source == "env":
+            c.print(f"[bold cyan]{alias}[/bold cyan]  [dim](source: KBAGENT_PROJECT env var)[/dim]")
+            if d.get("env_points_to_configured_project") is False:
+                c.print(
+                    f"[yellow]Warning:[/yellow] '{alias}' is NOT in your "
+                    "configured projects. Commands that use this pin will fail."
+                )
+            pinned = d.get("pinned")
+            if pinned:
+                c.print(f"[dim]  (pinned in config: {pinned}, overridden)[/dim]")
+        else:
+            c.print(f"[bold cyan]{alias}[/bold cyan]  [dim](source: pinned default)[/dim]")
+
+    formatter.output(result, _human)
+
+
 # ── Project description (dashboard KBC.projectDescription) ────────────
 
 

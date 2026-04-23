@@ -169,6 +169,32 @@ kbagent looks for configuration in this order:
 
 Use `kbagent init` to create a local `.kbagent/` workspace for per-directory isolation.
 
+## `KBAGENT_PROJECT` environment variable
+
+Lets callers override the default project for one shell/session without editing
+`config.json`. A few non-obvious rules:
+
+- **Empty string counts as unset.** `KBAGENT_PROJECT=""` (or a value consisting
+  only of whitespace) is treated exactly like the variable not being set at
+  all. This follows the standard Unix shell convention and prevents a stray
+  `export KBAGENT_PROJECT=` from silently breaking every subsequent command.
+- **Points to an unregistered alias -> hard fail.** If the env var names an
+  alias that is NOT in your configured projects, write-ops (the ones that
+  consult the pin) fail with `CONFIG_ERROR` and exit code 5. Repair either by
+  running `kbagent project use <valid-alias>` and unsetting the env var, or by
+  `unset KBAGENT_PROJECT`. The CLI will not fall back silently to the persisted
+  pin -- that would mask a misconfiguration.
+- **Precedence for resolving the target project** (highest wins):
+  1. `--project <alias>` CLI flag (explicit per-command)
+  2. `KBAGENT_PROJECT` env var
+  3. Persisted pin (`default_project` in `config.json`, set via
+     `kbagent project use <alias>`)
+  4. Sole-project fallback (if exactly one project is configured)
+  5. Hard fail with `CONFIG_ERROR` (no ambiguous defaulting)
+- `kbagent project current` reports which of (2) or (3) is active and flags
+  when the env var points to an unregistered alias, so you can diagnose
+  precedence issues without reading the source.
+
 ## config update vs MCP update_config
 
 For updating configuration content, prefer `kbagent config update` over MCP's `update_config` tool:

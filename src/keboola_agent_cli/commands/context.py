@@ -43,11 +43,13 @@ observability -- all API requests will include the X-Conversation-ID header.
 
 ## Global Flags
 
-  --json / -j     JSON output (always use for programmatic parsing)
-  --verbose / -v  Verbose output
-  --no-color      Disable colors (auto-disabled in non-TTY)
-  --config-dir    Override config directory path
-  --hint MODE     Generate Python code instead of executing (MODE: client or service)
+  --json / -j       JSON output (always use for programmatic parsing)
+  --verbose / -v    Verbose output
+  --no-color        Disable colors (auto-disabled in non-TTY)
+  --config-dir      Override config directory path
+  --hint MODE       Generate Python code instead of executing (MODE: client or service)
+  --deny-writes     Session-only firewall: block the WIDE NET -- every write, destructive, AND admin op (project add/remove/edit, org setup, all storage mutations)
+  --deny-destructive  Session-only firewall: NARROW -- block only data-destructive ops in Keboola (delete-table/bucket/column, terminate-job, branch delete). Admin ops (project remove, org setup) stay allowed -- use --deny-writes for those
 
 ## All Commands
 
@@ -82,6 +84,15 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent project description-set --project NAME [--text STR | --file PATH | --stdin]
     Set the dashboard project description. Pass exactly one of --text,
     --file, or --stdin. Writes KBC.projectDescription to the default branch.
+
+  kbagent project use ALIAS
+    Pin ALIAS as the default project. Persists to config.json.
+    Env var KBAGENT_PROJECT=ALIAS overrides the pin for a single shell/session;
+    an explicit --project flag overrides both.
+
+  kbagent project current
+    Print the effective default project and its source (env / pin / none).
+    Resolution order for single-project operations: --project > KBAGENT_PROJECT > pin.
 
 ### Component Discovery
 
@@ -500,6 +511,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
      KBC_MASTER_TOKEN         Master token for sharing ops (global fallback)
      KBC_MASTER_TOKEN_*       Per-project master token (e.g. KBC_MASTER_TOKEN_PROD)
      KBAGENT_CONFIG_DIR       Override config directory
+     KBAGENT_PROJECT          Override the pinned default project for this shell/session (beats pin, loses to --project)
      KBAGENT_MAX_PARALLEL_WORKERS  Max concurrent threads for multi-project ops (default 10, max 100)
      KBAGENT_AUTO_UPDATE      Set to "false" to disable automatic update on startup
      KBAGENT_UPDATED_FROM     Set to an older version to trigger "What's new" display on next run

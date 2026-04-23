@@ -18,6 +18,13 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `project status [--project NAME]` -- test connectivity and response time
 - `project description-get --project NAME` -- read the dashboard project description (KBC.projectDescription on the default branch). Returns `{"description": ""}` if not set, not an error
 - `project description-set --project NAME [--text STR | --file PATH | --stdin]` -- set the dashboard project description (markdown). Pass exactly one of `--text`, `--file`, or `--stdin`. Writes to `KBC.projectDescription` on the default branch -- always the main branch, regardless of any active dev branch
+- `project use ALIAS` -- pin `ALIAS` as the persistent default project. Stored as `default_project` in config.json. Overridden at runtime by `KBAGENT_PROJECT=ALIAS` (env, beats pin) and by `--project ALIAS` (CLI flag, beats both)
+- `project current` -- print the effective default project and its source (`env` / `pin` / `none`). Reports both the env override AND the persisted pin so misconfigurations are visible. Returns `{"alias": null, "source": "none"}` when neither is set
+
+## Permission flags (top-level, session-only)
+- `--deny-writes` -- block all write/destructive/admin operations for this single invocation. Merges with any persisted permission policy; never written to config.json. Exit code 6 (PERMISSION_DENIED) on blocked operations
+- `--deny-destructive` -- block only destructive operations (delete-table, delete-bucket, terminate-job, etc.) for this invocation. Pure-write ops like create-table stay allowed. Use this when you want to keep build-up capabilities but lock out tear-downs
+- Both flags compose: `kbagent --deny-writes --deny-destructive ...` is the safest read-only run
 
 ## Organization
 - `org setup --org-id ID --url URL [--dry-run] [--yes]` -- bulk-onboard all projects from an org (org admin, needs `KBC_MANAGE_API_TOKEN`)
