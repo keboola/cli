@@ -192,6 +192,27 @@ class TestParseCronWindow:
         with pytest.raises(ValueError):
             parse_cron_window("04:00-02:00")
 
+    def test_minute_out_of_range_start(self) -> None:
+        """Minutes outside 00-59 are rejected even though matcher ignores them."""
+        with pytest.raises(ValueError):
+            parse_cron_window("02:70-04:00")
+
+    def test_minute_out_of_range_end(self) -> None:
+        with pytest.raises(ValueError):
+            parse_cron_window("02:00-04:88")
+
+    def test_wraparound_error_message_suggests_split(self) -> None:
+        """Agent prompt: the error should tell the user how to split the window."""
+        with pytest.raises(ValueError) as exc:
+            parse_cron_window("22:00-02:00")
+        msg = str(exc.value)
+        assert "22:00-23:00" in msg and "00:00-02:00" in msg
+
+    def test_valid_minutes_boundary(self) -> None:
+        """Edge: 00 and 59 minutes are still valid."""
+        assert parse_cron_window("02:00-04:59") == (2, 4)
+        assert parse_cron_window("00:59-23:00") == (0, 23)
+
 
 class TestCronInWindow:
     def test_single_hour_in_window(self) -> None:
@@ -486,10 +507,63 @@ class TestFindSchedules:
         result = service.find_schedules()
         assert len(result["schedules"]) == 1
         row = result["schedules"][0]
+        # Audit columns are ALWAYS present on the row...
         assert "matches_cron_window" in row
         assert "last_run_at" in row
+        # ...but stay ``None`` when the corresponding filter is inactive.
+        # A ``True`` default would falsely signal an affirmative match to
+        # LLM/agent consumers; a populated ``last_run_at`` would force an
+        # unrequested Queue API call.
+        assert row["matches_cron_window"] is None
+        assert row["last_run_at"] is None
+        # No Queue API call should have fired because --not-run-since was
+        # inactive.
+        client.list_jobs.assert_not_called()
         assert result["filters"]["cron_window"] is None
         assert result["filters"]["not_run_since_days"] is None
+
+    def test_cron_window_only_leaves_last_run_at_null(self) -> None:
+        """With --cron-window set, matches_cron_window populates but last_run_at stays null."""
+        client = self._setup_client_with_schedules(
+            [
+                _scheduler_cfg(
+                    config_id="sc1",
+                    name="Schedule",
+                    target_component="keboola.orchestrator",
+                    target_config_id="111",
+                    cron="0 3 * * *",
+                )
+            ]
+        )
+        service = _make_service(client)
+        result = service.find_schedules(cron_window="02:00-04:00")
+        assert len(result["schedules"]) == 1
+        row = result["schedules"][0]
+        assert row["matches_cron_window"] is True
+        assert row["last_run_at"] is None
+        client.list_jobs.assert_not_called()
+
+    def test_not_run_since_zero_forces_lookup_on_every_row(self) -> None:
+        """--not-run-since 0 is the escape hatch for "populate last_run_at without filtering"."""
+        client = self._setup_client_with_schedules(
+            [
+                _scheduler_cfg(
+                    config_id="sc1",
+                    name="Schedule",
+                    target_component="keboola.orchestrator",
+                    target_config_id="111",
+                )
+            ]
+        )
+        client.list_jobs.return_value = [{"startTime": "2020-01-01T00:00:00Z"}]
+        service = _make_service(client)
+        result = service.find_schedules(not_run_since_days=0)
+        assert len(result["schedules"]) == 1
+        row = result["schedules"][0]
+        assert row["last_run_at"] == "2020-01-01T00:00:00Z"
+        # matches_cron_window stays None since --cron-window was not set.
+        assert row["matches_cron_window"] is None
+        client.list_jobs.assert_called_once()
 
     def test_cron_window_filter_in_window(self) -> None:
         client = self._setup_client_with_schedules(

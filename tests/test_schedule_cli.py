@@ -225,6 +225,9 @@ class TestScheduleDetailCli:
 
 class TestScheduleFindCli:
     def _find_payload(self, **overrides) -> dict:
+        # Shape reflects "no filters" -- both audit columns None. Tests
+        # that exercise --cron-window / --not-run-since override the
+        # relevant keys via `overrides` or build their own payload.
         payload = {
             "schedules": [
                 {
@@ -237,7 +240,7 @@ class TestScheduleFindCli:
                     "cron": "0 3 * * *",
                     "timezone": "UTC",
                     "enabled": True,
-                    "matches_cron_window": True,
+                    "matches_cron_window": None,
                     "last_run_at": None,
                 }
             ],

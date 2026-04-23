@@ -89,7 +89,14 @@ def _format_schedule_table(
             if col == "Last run":
                 row.append(escape(s.get("last_run_at") or "never"))
             elif col == "In window":
-                row.append(_enabled_badge(bool(s.get("matches_cron_window", True))))
+                match = s.get("matches_cron_window")
+                # ``None`` means the filter was never evaluated -- render
+                # as a neutral dash instead of a green "yes" to avoid
+                # visually implying an affirmative match.
+                if match is None:
+                    row.append("[dim]—[/dim]")
+                else:
+                    row.append(_enabled_badge(bool(match)))
             else:
                 row.append("")
         tbl.add_row(*row)
@@ -268,13 +275,29 @@ def schedule_find(
         None,
         "--not-run-since",
         help="Only include schedules whose parent config has not produced "
-        "a job in the last N days (or never ran).",
+        "a job in the last N days (or never ran). Pass 0 to force the "
+        "last_run_at lookup for every row without applying a staleness "
+        "filter. NOTE: Queue API is not branch-aware -- combining with "
+        "--branch still compares against production jobs.",
     ),
     branch: int | None = typer.Option(
         None, "--branch", help="Dev branch ID (requires single --project)"
     ),
 ) -> None:
     """Audit schedules by cron window or job-freshness.
+
+    The ``last_run_at`` and ``matches_cron_window`` columns are always
+    present in the output but populated only when the corresponding
+    filter is active. Without filters both stay ``None`` -- this avoids
+    N extra Queue API calls per project purely to populate columns the
+    caller did not ask for. Pass ``--not-run-since 0`` to force the
+    ``last_run_at`` lookup for every row (N extra API calls per
+    project).
+
+    ``--not-run-since`` resolves jobs via the Queue API, which has no
+    branch-awareness: ``schedule find --branch <DEV> --not-run-since N``
+    still compares against production jobs. Expect false-positive
+    "stale" matches for dev branches with freshly-deployed configs.
 
     \b
     Examples:
@@ -287,8 +310,12 @@ def schedule_find(
       # Both filters combined (AND)
       kbagent --json schedule find --cron-window "00:00-05:00" --not-run-since 30
 
-      # No filters -> same rows as 'schedule list' plus last_run_at
+      # No filters -> same rows as 'schedule list' plus empty last_run_at +
+      # empty matches_cron_window columns (populated only when filters active)
       kbagent --json schedule find
+
+      # Force last_run_at population on every row (no staleness filter)
+      kbagent --json schedule find --not-run-since 0
     """
     if should_hint(ctx):
         emit_hint(

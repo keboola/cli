@@ -89,7 +89,10 @@ def _extract_schedule_fields(cfg: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-_WINDOW_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$")
+# Minutes are validated strictly (00-59) even though the matcher later
+# ignores them -- rejecting obviously malformed input like ``04:88`` at
+# parse time yields a clearer error than silently accepting garbage.
+_WINDOW_RE = re.compile(r"^\s*(\d{1,2}):([0-5][0-9])\s*-\s*(\d{1,2}):([0-5][0-9])\s*$")
 
 
 def parse_cron_window(spec: str) -> tuple[int, int]:
@@ -97,8 +100,10 @@ def parse_cron_window(spec: str) -> tuple[int, int]:
 
     Minutes in the spec are accepted syntactically (they match the user's
     mental model of "between 02:00 and 04:00") but are ignored by the
-    matcher -- see :func:`cron_in_window`. The range is inclusive on both
-    ends of the hour field.
+    matcher -- see :func:`cron_in_window`. Minute values outside 00-59
+    are still rejected at parse time so obviously malformed inputs fail
+    loudly rather than silently matching at hour granularity. The range
+    is inclusive on both ends of the hour field.
 
     Raises:
         ValueError: on malformed input.
@@ -106,7 +111,8 @@ def parse_cron_window(spec: str) -> tuple[int, int]:
     match = _WINDOW_RE.match(spec)
     if not match:
         raise ValueError(
-            f"Invalid --cron-window '{spec}'. Expected format 'HH:MM-HH:MM' (e.g. '02:00-04:00')."
+            f"Invalid --cron-window '{spec}'. Expected format 'HH:MM-HH:MM' "
+            "with HH in 0-23 and MM in 00-59 (e.g. '02:00-04:00')."
         )
     start_hour = int(match.group(1))
     end_hour = int(match.group(3))
@@ -115,7 +121,9 @@ def parse_cron_window(spec: str) -> tuple[int, int]:
     if end_hour < start_hour:
         raise ValueError(
             f"--cron-window '{spec}' has end hour before start hour. "
-            "Wrap-around windows are not supported; split into two audits."
+            "Wrap-around windows are not supported; split into two audits -- "
+            f"e.g. '22:00-02:00' -> run once with '22:00-23:00' and once with "
+            "'00:00-02:00', then union the results."
         )
     return start_hour, end_hour
 
@@ -410,8 +418,10 @@ class ScheduleService(BaseService):
         """Audit filter combining cron-window + not-run-since constraints.
 
         Both filters are optional and combine with AND. Without either
-        filter this is equivalent to :meth:`list_schedules` plus the
-        ``last_run_at`` and ``hours_in_window`` columns.
+        filter this is equivalent to :meth:`list_schedules` plus two
+        always-present audit columns (``last_run_at`` and
+        ``matches_cron_window``) that stay ``None`` until the
+        corresponding filter opts in.
 
         Args:
             aliases: Project aliases to search (None = all).
@@ -426,8 +436,18 @@ class ScheduleService(BaseService):
 
         Returns:
             ``{"schedules": [...], "errors": [...], "filters": {...}}``.
-            Each row adds the ``last_run_at`` column (ISO-8601 or None) and
-            ``matches_cron_window`` (bool) next to the base schedule fields.
+            Each row adds two audit columns next to the base schedule
+            fields:
+
+            - ``last_run_at`` -- ISO-8601 timestamp or ``None``. Populated
+              only when ``not_run_since_days`` is set; otherwise ``None``
+              to avoid N extra Queue API calls per project purely to
+              populate an unrequested column. Pass
+              ``not_run_since_days=0`` to force the lookup for every row.
+            - ``matches_cron_window`` -- ``bool`` or ``None``. Populated
+              only when ``cron_window`` is set; otherwise ``None`` so
+              downstream consumers do not treat the column as a positive
+              match signal when the filter was not evaluated.
         """
         hour_bounds: tuple[int, int] | None = None
         if cron_window is not None:
@@ -436,8 +456,8 @@ class ScheduleService(BaseService):
             except ValueError as exc:
                 raise ConfigError(str(exc)) from None
 
-        if not_run_since_days is not None and not_run_since_days <= 0:
-            raise ConfigError("--not-run-since must be a positive integer number of days.")
+        if not_run_since_days is not None and not_run_since_days < 0:
+            raise ConfigError("--not-run-since must be a non-negative integer number of days.")
 
         projects = self.resolve_projects(aliases)
 
@@ -488,50 +508,50 @@ class ScheduleService(BaseService):
 
         One ``list_components_with_configs`` round-trip gives us every
         config body plus the parent names we need to join -- no N+1.
+        The response payload is proportional to the **entire project
+        size**, not the schedule count. See ``schedule-workflow.md`` for
+        the trade-off rationale.
         """
         effective_branch = branch_id or project.active_branch_id
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            try:
-                components = client.list_components_with_configs(
-                    branch_id=effective_branch,
-                )
-            except KeboolaApiError as exc:
-                return (
-                    alias,
-                    {
-                        "project_alias": alias,
-                        "error_code": exc.error_code,
-                        "message": exc.message,
-                    },
-                )
-            except Exception as exc:
-                return (
-                    alias,
-                    {
-                        "project_alias": alias,
-                        "error_code": "UNEXPECTED_ERROR",
-                        "message": str(exc),
-                    },
-                )
+            components = client.list_components_with_configs(branch_id=effective_branch)
+
+            scheduler_configs, parent_names = self._partition_components(components)
+
+            schedules: list[dict[str, Any]] = []
+            for cfg in scheduler_configs:
+                row = _extract_schedule_fields(cfg)
+                if enabled_only and not row["enabled"]:
+                    continue
+
+                parent_key = (row["parent_component_id"], row["parent_config_id"])
+                row["project_alias"] = alias
+                row["parent_name"] = parent_names.get(parent_key, "")
+                schedules.append(row)
+
+            return (alias, schedules, True)
+        except KeboolaApiError as exc:
+            return (
+                alias,
+                {
+                    "project_alias": alias,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                },
+            )
+        except Exception as exc:
+            return (
+                alias,
+                {
+                    "project_alias": alias,
+                    "error_code": "UNEXPECTED_ERROR",
+                    "message": str(exc),
+                },
+            )
         finally:
             client.close()
-
-        scheduler_configs, parent_names = self._partition_components(components)
-
-        schedules: list[dict[str, Any]] = []
-        for cfg in scheduler_configs:
-            row = _extract_schedule_fields(cfg)
-            if enabled_only and not row["enabled"]:
-                continue
-
-            parent_key = (row["parent_component_id"], row["parent_config_id"])
-            row["project_alias"] = alias
-            row["parent_name"] = parent_names.get(parent_key, "")
-            schedules.append(row)
-
-        return (alias, schedules, True)
 
     def _find_in_project(
         self,
@@ -549,24 +569,18 @@ class ScheduleService(BaseService):
         to establish the most recent job timestamp. That's at most
         ``#schedules`` extra round-trips per project, not
         ``#schedules * #projects``.
+
+        Uses the same try/except/finally pattern as
+        :meth:`_fetch_project_schedules` so the worker contract is
+        symmetric: any exception short-circuits to the error-dict
+        tuple, the client is always closed, and the caller sees the
+        uniform ``(alias, payload, True?)`` shape.
         """
         effective_branch = branch_id or project.active_branch_id
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            try:
-                components = client.list_components_with_configs(
-                    branch_id=effective_branch,
-                )
-            except KeboolaApiError as exc:
-                return (
-                    alias,
-                    {
-                        "project_alias": alias,
-                        "error_code": exc.error_code,
-                        "message": exc.message,
-                    },
-                )
+            components = client.list_components_with_configs(branch_id=effective_branch)
 
             scheduler_configs, parent_names = self._partition_components(components)
 
@@ -576,7 +590,12 @@ class ScheduleService(BaseService):
                 parent_key = (row["parent_component_id"], row["parent_config_id"])
                 row["project_alias"] = alias
                 row["parent_name"] = parent_names.get(parent_key, "")
-                row["matches_cron_window"] = True
+                # Columns are always present; population is gated on the
+                # corresponding filter. ``None`` (rather than a hard-coded
+                # ``True`` / ``""``) makes the "filter was not evaluated"
+                # state explicit so downstream LLM/agent consumers do not
+                # treat a missing evaluation as a positive match signal.
+                row["matches_cron_window"] = None
                 row["last_run_at"] = None
 
                 if hour_bounds is not None:
@@ -587,6 +606,9 @@ class ScheduleService(BaseService):
                 rows.append(row)
 
             # Resolve last_run_at only for rows that might still match.
+            # Skipped entirely when ``--not-run-since`` is inactive so we do
+            # not pay N extra Queue API calls per project purely to populate
+            # a column the caller did not ask for.
             if not_run_since_days is not None:
                 for row in rows:
                     if hour_bounds is not None and not row["matches_cron_window"]:
@@ -610,6 +632,15 @@ class ScheduleService(BaseService):
                 filtered.append(row)
 
             return (alias, filtered, True)
+        except KeboolaApiError as exc:
+            return (
+                alias,
+                {
+                    "project_alias": alias,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                },
+            )
         except Exception as exc:
             return (
                 alias,
