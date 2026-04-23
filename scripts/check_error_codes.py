@@ -10,7 +10,6 @@ Usage (run from repo root):
 Safe exceptions (not flagged):
   - tests/           -- string comparisons in assertions are fine
   - errors.py        -- the enum definition itself
-  - migrate_error_codes.py -- migration tooling
 """
 
 import ast
@@ -69,7 +68,6 @@ def main() -> int:
 
     if found_any:
         print("\nFAIL: raw error_code string literals found. Replace with ErrorCode.<MEMBER>.")
-        print("      Run: python scripts/migrate_error_codes.py")
         return 1
 
     print("OK: no raw error_code string literals in source.")
