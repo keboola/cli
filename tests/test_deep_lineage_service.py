@@ -605,3 +605,256 @@ class TestLineageDeepCli:
             ],
         )
         assert result.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# Sync layout handling: flat (single project in CWD) vs. nested (multi-project)
+# ---------------------------------------------------------------------------
+
+
+def _create_flat_project(
+    root: Path,
+    *,
+    project_id: int = 42,
+    with_storage: bool = True,
+    with_config: bool = True,
+) -> None:
+    """Create a single-project flat layout directly under ``root``.
+
+    This mirrors what ``kbagent sync pull --project X`` produces: the
+    ``.keboola/manifest.json`` lives at the provided root (no alias subdir).
+    """
+    keboola = root / ".keboola"
+    keboola.mkdir(parents=True)
+    configurations: list[dict] = []
+    if with_config:
+        configurations.append(
+            {
+                "branchId": 1,
+                "componentId": "keboola.snowflake-transformation",
+                "id": "cfg-flat",
+                "path": "transformation/keboola.snowflake-transformation/flat-transform",
+                "rows": [],
+            }
+        )
+    manifest = {
+        "version": 2,
+        "project": {"id": project_id, "name": "Flat Project"},
+        "configurations": configurations,
+        "branches": [],
+    }
+    (keboola / "manifest.json").write_text(json.dumps(manifest))
+
+    if with_storage:
+        storage = root / "storage" / "tables" / "in-c-flat"
+        storage.mkdir(parents=True)
+        (storage / "accounts.json").write_text(
+            json.dumps(
+                {
+                    "id": "in.c-flat.accounts",
+                    "name": "accounts",
+                    "columns": ["id", "name"],
+                    "primary_key": ["id"],
+                    "rows_count": 10,
+                }
+            )
+        )
+
+    if with_config:
+        transform_dir = (
+            root / "main" / "transformation" / "keboola.snowflake-transformation" / "flat-transform"
+        )
+        transform_dir.mkdir(parents=True)
+        (transform_dir / "_config.yml").write_text(
+            yaml.dump(
+                {
+                    "version": 2,
+                    "name": "Flat Transform",
+                    "input": {
+                        "tables": [
+                            {"source": "in.c-flat.accounts", "destination": "accounts"},
+                        ]
+                    },
+                    "output": {"tables": []},
+                }
+            )
+        )
+        (transform_dir / "transform.sql").write_text('SELECT * FROM "in.c-flat"."accounts"\n')
+
+
+class TestDeepLineageLayouts:
+    """Covers the flat vs. nested sync-layout detection in ``_scan_projects``."""
+
+    def test_flat_layout_detects_single_project(self, tmp_path: Path) -> None:
+        """``root/.keboola/manifest.json`` is treated as a single project."""
+        root = tmp_path / "synced-foo"
+        root.mkdir()
+        _create_flat_project(root)
+
+        store = ConfigStore(config_dir=tmp_path / "cfg")
+        (tmp_path / "cfg").mkdir()
+        service = DeepLineageService(config_store=store)
+
+        with patch.object(service, "_add_cross_project_lineage"):
+            result = service.build_lineage(root)
+
+        assert result["summary"]["tables"] == 1
+        assert result["summary"]["configurations"] == 1
+        # Edges: input_mapping + sql_tokenizer (table referenced in SQL)
+        assert result["summary"]["edges"] >= 1
+        assert result["warnings"] == []
+
+    def test_flat_layout_uses_config_store_alias_when_available(self, tmp_path: Path) -> None:
+        """In flat mode the alias comes from ConfigStore, not the CWD name."""
+        from keboola_agent_cli.models import AppConfig, ProjectConfig
+
+        root = tmp_path / "some-random-cwd"
+        root.mkdir()
+        _create_flat_project(root, project_id=77)
+
+        cfg_dir = tmp_path / "cfg"
+        cfg_dir.mkdir()
+        store = ConfigStore(config_dir=cfg_dir)
+        config = AppConfig()
+        config.projects["prod"] = ProjectConfig(
+            stack_url="https://connection.keboola.com",
+            token="test-token",
+            project_id=77,
+        )
+        store.save(config)
+
+        service = DeepLineageService(config_store=store)
+        with patch.object(service, "_add_cross_project_lineage"):
+            result = service.build_lineage(root)
+
+        # Exactly one table keyed by the ConfigStore alias, not by dir name.
+        assert list(result["tables"].keys()) == ["prod:in.c-flat.accounts"]
+
+    def test_flat_layout_falls_back_to_dir_name_without_config_store_match(
+        self, tmp_path: Path
+    ) -> None:
+        """If no alias matches ``project.id`` we keep the directory name."""
+        root = tmp_path / "my-alias"
+        root.mkdir()
+        _create_flat_project(root, project_id=999)
+
+        cfg_dir = tmp_path / "cfg"
+        cfg_dir.mkdir()
+        store = ConfigStore(config_dir=cfg_dir)  # empty store
+        service = DeepLineageService(config_store=store)
+
+        with patch.object(service, "_add_cross_project_lineage"):
+            result = service.build_lineage(root)
+
+        assert list(result["tables"].keys()) == ["my-alias:in.c-flat.accounts"]
+
+    def test_nested_layout_still_works(self, tmp_path: Path) -> None:
+        """Regression guard: nested ``sync pull --all-projects`` layout."""
+        root = _create_sync_tree(tmp_path)  # nested layout helper
+        store = ConfigStore(config_dir=tmp_path / "cfg")
+        (tmp_path / "cfg").mkdir()
+        service = DeepLineageService(config_store=store)
+
+        with patch.object(service, "_add_cross_project_lineage"):
+            result = service.build_lineage(root)
+
+        assert result["summary"]["tables"] == 2
+        assert result["summary"]["configurations"] == 2
+        assert result["warnings"] == []
+
+    def test_empty_directory_emits_warning(self, tmp_path: Path) -> None:
+        """Neither flat nor nested layout -> zero-scan + hint warning."""
+        root = tmp_path / "empty"
+        root.mkdir()
+        store = ConfigStore(config_dir=tmp_path / "cfg")
+        (tmp_path / "cfg").mkdir()
+        service = DeepLineageService(config_store=store)
+
+        with patch.object(service, "_add_cross_project_lineage"):
+            result = service.build_lineage(root)
+
+        assert result["summary"]["tables"] == 0
+        assert result["summary"]["configurations"] == 0
+        assert len(result["warnings"]) == 1
+        warning = result["warnings"][0]
+        assert "No synced projects found" in warning
+        assert "flat layout" in warning
+        assert "nested layout" in warning
+        assert "sync pull --all-projects" in warning
+
+
+class TestLineageBuildCli:
+    """CLI-layer smoke tests for the flat/empty layouts."""
+
+    def _runner(self):
+        return __import__("typer.testing", fromlist=["CliRunner"]).CliRunner()
+
+    def test_build_flat_layout_non_empty_graph(self, tmp_path: Path) -> None:
+        """``lineage build`` against a flat-layout dir produces a non-empty graph."""
+        from keboola_agent_cli.cli import app
+
+        # Place synced project next to cfg dir so cwd doesn't matter.
+        synced = tmp_path / "synced"
+        synced.mkdir()
+        _create_flat_project(synced)
+        cache_path = tmp_path / "lineage.json"
+
+        with patch(
+            "keboola_agent_cli.services.deep_lineage_service."
+            "DeepLineageService._add_cross_project_lineage"
+        ):
+            result = self._runner().invoke(
+                app,
+                [
+                    "--json",
+                    "--config-dir",
+                    str(tmp_path / "cfg"),
+                    "lineage",
+                    "build",
+                    "--directory",
+                    str(synced),
+                    "--output",
+                    str(cache_path),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert data["summary"]["tables"] == 1
+        assert data["summary"]["configurations"] == 1
+        assert data["warnings"] == []
+        assert cache_path.exists()
+
+    def test_build_empty_directory_exits_zero_with_warning(self, tmp_path: Path) -> None:
+        """Empty dir -> exit 0 with a warning describing the expected layouts."""
+        from keboola_agent_cli.cli import app
+
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        cache_path = tmp_path / "lineage.json"
+
+        with patch(
+            "keboola_agent_cli.services.deep_lineage_service."
+            "DeepLineageService._add_cross_project_lineage"
+        ):
+            result = self._runner().invoke(
+                app,
+                [
+                    "--json",
+                    "--config-dir",
+                    str(tmp_path / "cfg"),
+                    "lineage",
+                    "build",
+                    "--directory",
+                    str(empty),
+                    "--output",
+                    str(cache_path),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert data["summary"]["tables"] == 0
+        assert len(data["warnings"]) == 1
+        assert "No synced projects found" in data["warnings"][0]
+        assert cache_path.exists()

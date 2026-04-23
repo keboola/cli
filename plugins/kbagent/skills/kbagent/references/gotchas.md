@@ -392,6 +392,25 @@ seamlessly. This is transparent -- no user action required.
 - Skipped for: dev/editable installs, `update`/`version` commands
 - Never crashes the CLI -- update failures are silently ignored
 
+## `lineage build` and sync layouts
+
+`lineage build` reads synced data from disk and supports both layouts produced by
+`kbagent sync pull`:
+
+- **Flat** (after `sync pull --project X`): `./.keboola/manifest.json` directly in CWD.
+- **Nested** (after `sync pull --all-projects`): `./<alias>/.keboola/manifest.json`
+  for each project side by side.
+
+Pass the matching directory to `--directory` / `-d`:
+
+- Flat: `kbagent lineage build -d . -o lineage.json`
+- Nested: `kbagent lineage build -d /path/to/parent -o lineage.json`
+
+If the scan finds zero projects, the build still writes the cache file but
+emits a warning (both in the human-readable output and as a `warnings` array
+in `--json` mode) with a hint about the expected layouts. In JSON mode, inspect
+`result["data"]["warnings"]` to detect this situation programmatically.
+
 ## Sync and dev branches
 
 When an active branch is set (`branch use --branch ID`), sync commands automatically

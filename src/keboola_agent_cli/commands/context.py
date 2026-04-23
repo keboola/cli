@@ -252,8 +252,12 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent lineage build --directory PATH --output PATH [--ai] [--refresh]
     Build column-level lineage graph from sync'd data. Scans all sync'd projects,
     detects dependencies via config mappings and SQL parsing, saves to cache file.
-    --refresh runs sync pull first. --ai generates .lineage_ai_tasks.json with
-    AI analysis tasks for an AI agent to process (2-step flow).
+    Auto-detects both sync layouts: flat (./.keboola/manifest.json from
+    sync pull --project X) and nested (./<alias>/.keboola/manifest.json from
+    sync pull --all-projects). Emits a warning in response data if no projects
+    are found. --refresh runs sync pull first. --ai generates
+    .lineage_ai_tasks.json with AI analysis tasks for an AI agent to process
+    (2-step flow).
 
   kbagent lineage show --load PATH [--upstream NODE] [--downstream NODE]
       [--column COL] [--columns] [--project ALIAS] [--depth N]

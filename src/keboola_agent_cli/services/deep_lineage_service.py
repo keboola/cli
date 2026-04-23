@@ -375,17 +375,39 @@ class DeepLineageService:
         if present. Use generate_ai_tasks=True to write a task file
         for the AI agent to process.
 
+        Supports both sync layouts:
+          - Flat (``sync pull --project X``): ``root/.keboola/manifest.json``
+          - Nested (``sync pull --all-projects``): ``root/<alias>/.keboola/manifest.json``
+
         Args:
-            root: Root directory containing sync'd project subdirectories.
+            root: Root directory containing sync'd project data. Can be either
+                the project directory itself (flat layout) or a parent directory
+                with one subdirectory per project (nested layout).
             generate_ai_tasks: If True, write .lineage_ai_tasks.json for AI.
 
         Returns:
-            Dict with lineage graph data, summary, and ai_status.
+            Dict with lineage graph data, summary, ai_status, and ``warnings``
+            (list of human-readable warnings emitted during the build, e.g. when
+            no sync'd projects were found).
         """
         project_id_to_alias = self._build_project_map()
+        warnings: list[str] = []
 
         # Phase 1: Scan
         graph = self._scan_projects(root, project_id_to_alias)
+
+        # Empty-scan warning -- most often caused by a layout mismatch between
+        # ``sync pull --project X`` (flat) and ``sync pull --all-projects`` (nested).
+        if not graph.tables and not graph.configurations:
+            warning = (
+                f"No synced projects found in {root}. Expected either:\n"
+                f"  - {root}/.keboola/manifest.json (single-project flat layout), or\n"
+                f"  - {root}/<alias>/.keboola/manifest.json (multi-project nested layout)\n"
+                "Hint: run 'kbagent sync pull --all-projects' or pass --directory "
+                "pointing to the parent of your synced projects."
+            )
+            warnings.append(warning)
+            logger.warning(warning)
 
         # Phase 2: Deterministic edges
         self._build_deterministic_edges(graph, project_id_to_alias)
@@ -403,6 +425,7 @@ class DeepLineageService:
 
         result = graph.to_dict()
         result["ai_status"] = ai_status
+        result["warnings"] = warnings
         return result
 
     def build_and_cache(
@@ -480,53 +503,99 @@ class DeepLineageService:
         return mapping
 
     def _scan_projects(self, root: Path, project_id_to_alias: dict[int, str]) -> LineageGraph:
-        """Scan all sync'd projects and build initial graph."""
+        """Scan all sync'd projects and build initial graph.
+
+        Supports two directory layouts (written by ``kbagent sync pull``):
+          - **Flat** (``sync pull --project X``): manifest lives directly at
+            ``root/.keboola/manifest.json`` and ``root`` itself *is* the project.
+          - **Nested** (``sync pull --all-projects``): each project is a
+            subdirectory, i.e. ``root/<alias>/.keboola/manifest.json``.
+
+        Flat layout is detected first and, when present, returned exclusively
+        (nested iteration would be redundant -- in the flat case there are no
+        sibling project directories under ``root``).
+        """
         graph = LineageGraph()
 
-        for project_dir in sorted(root.iterdir()):
-            if not project_dir.is_dir() or project_dir.name.startswith("."):
-                continue
-            manifest_path = project_dir / ".keboola" / "manifest.json"
-            if not manifest_path.exists():
-                continue
-
-            with open(manifest_path) as f:
-                manifest = json.load(f)
-
-            project_alias = project_dir.name
-            project_id = manifest.get("project", {}).get("id", 0)
-            project_id_to_alias[project_id] = project_alias
-
-            # Scan storage tables
-            storage_dir = project_dir / "storage" / "tables"
-            if storage_dir.exists():
-                for bucket_dir in sorted(storage_dir.iterdir()):
-                    if not bucket_dir.is_dir():
-                        continue
-                    for table_file in sorted(bucket_dir.glob("*.json")):
-                        with open(table_file) as f:
-                            meta = json.load(f)
-                        table = Table(
-                            table_id=meta["id"],
-                            project_alias=project_alias,
-                            project_id=project_id,
-                            bucket_id=meta["id"].rsplit(".", 1)[0],
-                            name=meta["name"],
-                            columns=meta.get("columns", []),
-                            primary_key=meta.get("primary_key", []),
-                            rows_count=meta.get("rows_count", 0),
-                        )
-                        graph.tables[table.fqn] = table
-
-            # Scan configurations
-            for config_entry in manifest.get("configurations", []):
-                self._scan_configuration(
-                    project_dir, config_entry, project_alias, project_id, graph
-                )
+        flat_manifest = root / ".keboola" / "manifest.json"
+        if flat_manifest.exists():
+            project_alias = self._resolve_alias_from_manifest(flat_manifest, fallback=root.name)
+            self._scan_one_project(root, project_alias, project_id_to_alias, graph)
+        else:
+            for project_dir in sorted(root.iterdir()):
+                if not project_dir.is_dir() or project_dir.name.startswith("."):
+                    continue
+                manifest_path = project_dir / ".keboola" / "manifest.json"
+                if not manifest_path.exists():
+                    continue
+                self._scan_one_project(project_dir, project_dir.name, project_id_to_alias, graph)
 
         # Store mapping for cross-project resolution
         graph._project_id_to_alias = project_id_to_alias  # type: ignore[attr-defined]
         return graph
+
+    def _resolve_alias_from_manifest(self, manifest_path: Path, *, fallback: str) -> str:
+        """Resolve a project alias for a flat-layout root.
+
+        In a flat layout the parent directory name is meaningless (it's the
+        user's CWD, not the project alias). We prefer the alias configured in
+        ``ConfigStore`` for the project id recorded in the manifest; if no such
+        mapping exists, we fall back to the directory name so the graph stays
+        consistent but still disambiguated from other projects on disk.
+        """
+        try:
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+            project_id = int(manifest.get("project", {}).get("id", 0) or 0)
+        except (OSError, json.JSONDecodeError, ValueError):
+            return fallback
+
+        if project_id:
+            app_config = self._config_store.load()
+            for alias, project in app_config.projects.items():
+                if project.project_id == project_id:
+                    return alias
+        return fallback
+
+    def _scan_one_project(
+        self,
+        project_dir: Path,
+        project_alias: str,
+        project_id_to_alias: dict[int, str],
+        graph: LineageGraph,
+    ) -> None:
+        """Populate ``graph`` with tables and configs from a single project dir."""
+        manifest_path = project_dir / ".keboola" / "manifest.json"
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+
+        project_id = manifest.get("project", {}).get("id", 0)
+        project_id_to_alias[project_id] = project_alias
+
+        # Scan storage tables
+        storage_dir = project_dir / "storage" / "tables"
+        if storage_dir.exists():
+            for bucket_dir in sorted(storage_dir.iterdir()):
+                if not bucket_dir.is_dir():
+                    continue
+                for table_file in sorted(bucket_dir.glob("*.json")):
+                    with open(table_file) as f:
+                        meta = json.load(f)
+                    table = Table(
+                        table_id=meta["id"],
+                        project_alias=project_alias,
+                        project_id=project_id,
+                        bucket_id=meta["id"].rsplit(".", 1)[0],
+                        name=meta["name"],
+                        columns=meta.get("columns", []),
+                        primary_key=meta.get("primary_key", []),
+                        rows_count=meta.get("rows_count", 0),
+                    )
+                    graph.tables[table.fqn] = table
+
+        # Scan configurations
+        for config_entry in manifest.get("configurations", []):
+            self._scan_configuration(project_dir, config_entry, project_alias, project_id, graph)
 
     def _scan_configuration(
         self,
