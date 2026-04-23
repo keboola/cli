@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+import yaml
 from rich.markup import escape
 from rich.table import Table
 
@@ -309,8 +310,6 @@ def flow_schema(ctx: typer.Context) -> None:
 
 def _load_flow_yaml(raw: str) -> dict[str, Any]:
     """Load flow definition from inline JSON, @file, or - (stdin)."""
-    import yaml
-
     if raw == "-":
         content = sys.stdin.read()
     elif raw.startswith("@"):
@@ -383,7 +382,7 @@ def flow_new(
     if file:
         try:
             flow_def = _load_flow_yaml(file)
-        except (FileNotFoundError, Exception) as exc:
+        except (OSError, yaml.YAMLError, ValueError) as exc:
             formatter.error(
                 message=f"Cannot load flow definition: {exc}", error_code="VALIDATION_ERROR"
             )
@@ -471,7 +470,7 @@ def flow_update(
     if file:
         try:
             flow_def = _load_flow_yaml(file)
-        except (FileNotFoundError, Exception) as exc:
+        except (OSError, yaml.YAMLError, ValueError) as exc:
             formatter.error(
                 message=f"Cannot load flow definition: {exc}", error_code="VALIDATION_ERROR"
             )
