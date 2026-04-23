@@ -369,22 +369,14 @@ def job_run(
         status = result.get("status", "unknown")
         if status in ("success", "terminated"):
             formatter.console.print(f"[bold green]Job {job_id}:[/bold green] {status}")
-        elif status == "error":
-            error_msg = ""
-            job_result = result.get("result", {})
-            if isinstance(job_result, dict):
-                error_msg = job_result.get("message", "")
-            formatter.console.print(f"[bold red]Job {job_id}:[/bold red] {status}")
-            if error_msg:
-                formatter.console.print(f"  Error: {error_msg}")
+        elif status == "warning":
+            # "error" is intentionally absent here: the service layer raises
+            # QUEUE_JOB_FAILED for failed jobs, so this human-mode branch is
+            # only reached for non-error terminal and transient states.
+            formatter.console.print(f"[bold yellow]Job {job_id}:[/bold yellow] {status}")
             _render_log_tail(formatter, {"logTail": result.get("logTail") or []})
-            raise typer.Exit(code=1)
         else:
-            if status == "warning":
-                formatter.console.print(f"[bold yellow]Job {job_id}:[/bold yellow] {status}")
-                _render_log_tail(formatter, {"logTail": result.get("logTail") or []})
-            else:
-                formatter.console.print(f"[bold blue]Job {job_id}:[/bold blue] {status}")
+            formatter.console.print(f"[bold blue]Job {job_id}:[/bold blue] {status}")
             if not wait:
                 formatter.console.print(
                     "  Use --wait to poll until completion, "
