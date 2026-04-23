@@ -667,3 +667,80 @@ class TestFlowScheduleRemove:
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert data["data"]["deleted_count"] == 1
+
+    def test_schedule_remove_dry_run_lists_schedules(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.list_flow_schedules.return_value = {
+            "project_alias": "prod",
+            "component_id": "keboola.orchestrator",
+            "config_id": "flow-1",
+            "schedules": [
+                {
+                    "schedule_id": "sched-1",
+                    "name": "Flow (Schedule)",
+                    "cron_tab": "0 6 * * *",
+                    "timezone": "UTC",
+                    "state": "enabled",
+                }
+            ],
+        }
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.FlowService") as MockFlowService,
+        ):
+            MockStore.return_value = store
+            MockFlowService.return_value = mock_flow
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "flow",
+                    "schedule-remove",
+                    "--project",
+                    "prod",
+                    "--flow-id",
+                    "flow-1",
+                    "--dry-run",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["data"]["would_delete"]["count"] == 1
+        assert data["data"]["would_delete"]["schedules"][0]["cron_tab"] == "0 6 * * *"
+        mock_flow.remove_flow_schedule.assert_not_called()
+
+    def test_schedule_remove_dry_run_no_schedules(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.list_flow_schedules.return_value = {
+            "project_alias": "prod",
+            "component_id": "keboola.orchestrator",
+            "config_id": "flow-1",
+            "schedules": [],
+        }
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.FlowService") as MockFlowService,
+        ):
+            MockStore.return_value = store
+            MockFlowService.return_value = mock_flow
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "flow",
+                    "schedule-remove",
+                    "--project",
+                    "prod",
+                    "--flow-id",
+                    "flow-1",
+                    "--dry-run",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["data"]["would_delete"]["count"] == 0
+        mock_flow.remove_flow_schedule.assert_not_called()

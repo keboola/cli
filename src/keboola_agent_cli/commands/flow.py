@@ -674,6 +674,15 @@ def flow_schedule(
 # ---------------------------------------------------------------------------
 
 
+def _print_schedule_list(formatter: Any, schedules: list[dict[str, Any]]) -> None:
+    """Print one line per schedule: state, cron, timezone, id."""
+    for s in schedules:
+        formatter.console.print(
+            f"  [{escape(s.get('state', ''))}] {escape(s.get('cron_tab', ''))} "
+            f"({escape(s.get('timezone', ''))})  ID={escape(s.get('schedule_id', ''))}"
+        )
+
+
 @flow_app.command("schedule-remove")
 def flow_schedule_remove(
     ctx: typer.Context,
@@ -685,6 +694,11 @@ def flow_schedule_remove(
         help="Flow component ID (default: keboola.orchestrator)",
     ),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="List the scheduler configs that would be removed without executing",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Remove all schedules bound to a flow (deletes keboola.scheduler configs).
@@ -704,6 +718,45 @@ def flow_schedule_remove(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
 
+    if dry_run:
+        try:
+            sched_result = service.list_flow_schedules(
+                alias=project,
+                component_id=component_id,
+                config_id=flow_id,
+                branch_id=branch,
+            )
+        except ConfigError as exc:
+            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            raise typer.Exit(code=5) from None
+        except KeboolaApiError as exc:
+            formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+            raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+        schedules = sched_result.get("schedules", [])
+        payload = {
+            "would_delete": {
+                "project_alias": project,
+                "component_id": component_id,
+                "config_id": flow_id,
+                "branch_id": branch,
+                "schedules": schedules,
+                "count": len(schedules),
+            },
+        }
+        if formatter.json_mode:
+            formatter.output(payload)
+        else:
+            if not schedules:
+                formatter.console.print("[dim]No schedules found for this flow.[/dim]")
+            else:
+                formatter.console.print(
+                    f"[bold blue]Would remove {len(schedules)} schedule(s) "
+                    f"from flow[/bold blue] {escape(component_id)}/{escape(flow_id)}:"
+                )
+                _print_schedule_list(formatter, schedules)
+        return
+
     # Show existing schedules before confirming
     if not yes and not formatter.json_mode:
         try:
@@ -721,11 +774,7 @@ def flow_schedule_remove(
             formatter.console.print("[dim]No schedules found for this flow.[/dim]")
             raise typer.Exit(code=0)
 
-        for s in schedules:
-            formatter.console.print(
-                f"  [{escape(s.get('state', ''))}] {escape(s.get('cron_tab', ''))} "
-                f"({escape(s.get('timezone', ''))})  ID={escape(s.get('schedule_id', ''))}"
-            )
+        _print_schedule_list(formatter, schedules)
         confirmed = typer.confirm(f"Remove {len(schedules)} schedule(s) above?")
         if not confirmed:
             formatter.console.print("[yellow]Aborted.[/yellow]")
