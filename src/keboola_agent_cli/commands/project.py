@@ -486,6 +486,7 @@ def project_use(
     The pin persists in config.json. ``KBAGENT_PROJECT`` overrides it for a
     single invocation; an explicit ``--project`` flag overrides both.
     """
+    # No --hint: local-only ConfigStore mutation; no client or service call to render.
     formatter = get_formatter(ctx)
     service = get_service(ctx, "project_service")
 
@@ -524,6 +525,7 @@ def project_current(ctx: typer.Context) -> None:
     (``env``) or the persisted pin (``pin``). Prints nothing but a hint if
     neither is set.
     """
+    # No --hint: local-only ConfigStore read; no client or service call to render.
     formatter = get_formatter(ctx)
     service = get_service(ctx, "project_service")
 
