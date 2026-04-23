@@ -16,12 +16,14 @@ Auto-updates on every launch. Run `kbagent changelog` to see what changed.
 
 This CLI is built AI-first. Every command outputs structured JSON (`--json`), errors include machine-readable codes, and the permission firewall enforces safety at the code level -- not via prompt instructions.
 
-**Claude Code plugin** (agent learns all 80 commands automatically):
+**Claude Code plugin** (agent learns all 80 commands + gets a specialist subagent for writes):
 
 ```
 /plugin marketplace add padak/keboola_agent_cli
 /plugin install kbagent@keboola-agent-cli
 ```
+
+Then either let the `kbagent` skill auto-trigger from natural prompts, or delegate explicitly with `/keboola <task>` -- the slash command spawns a `kbagent:keboola-expert` subagent with fresh context, hard rules (fresh fetch, dry-run first, prefer CLI over REST/MCP, version gate), and a JSON verification payload. See [docs/TUTORIAL.md §6](docs/TUTORIAL.md#6-using-the-agent-and-slash-commands).
 
 **Any other agent** -- just tell it to run `kbagent context` and it gets the full command reference.
 
@@ -86,24 +88,29 @@ kbagent workspace query --project prod --workspace-id WS_ID \
 
 ## Setup options
 
-**Org admin** (registers all projects at once):
-```bash
-KBC_MANAGE_API_TOKEN=your-manage-token \
-  kbagent org setup --org-id 123 --url https://connection.keboola.com --yes
-```
+Three ways to register projects, depending on what you have.
 
-**Project member** (Personal Access Token, no org-admin rights needed):
-```bash
-KBC_MANAGE_API_TOKEN=your-personal-access-token \
-  kbagent org setup --project-ids 123,456 --url https://connection.keboola.com --yes
-```
-
-**Single project** (manual):
+**Single project** — you have a Storage API token from the UI:
 ```bash
 kbagent project add --project prod --url https://connection.keboola.com --token YOUR_TOKEN
 ```
 
-Run `kbagent doctor` to verify your setup.
+**Many projects by ID** — you have a Manage API or Personal Access Token + the project IDs:
+```bash
+KBC_MANAGE_API_TOKEN=your-manage-or-personal-token \
+  kbagent org setup --project-ids 901,9621,10539 --url https://connection.keboola.com --yes
+```
+
+**Whole organization** — you are org admin:
+```bash
+KBC_MANAGE_API_TOKEN=your-org-admin-manage-token \
+  kbagent org setup --org-id 123 --url https://connection.keboola.com --yes
+```
+
+Run `kbagent doctor` to verify setup (token validity, CLI version, MCP server, Claude Code plugin install).
+
+> **Step-by-step guide with dry-runs, token descriptions, expiry, and
+> global-vs-local config:** see [docs/TUTORIAL.md](docs/TUTORIAL.md).
 
 ## All commands
 
@@ -143,6 +150,7 @@ kbagent             init | context | doctor | version | update | changelog
 
 | Guide | What it covers |
 |-------|---------------|
+| [Tutorial](docs/TUTORIAL.md) | End-to-end walkthrough: register projects (1, N, whole org), global vs local config, plugin install, using the specialist subagent and `/keboola` slash command. |
 | [User Guide](docs/guide.md) | Configuration, permissions, per-directory isolation, workflows |
 | [Contributing](CONTRIBUTING.md) | Architecture, coding style, adding commands, testing checklist |
 

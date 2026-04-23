@@ -22,6 +22,20 @@ logger = logging.getLogger(__name__)
 
 CURRENT_CONFIG_VERSION = 1
 
+# Prepended to every config.json write as a first-position field. Claude Code
+# (or any LLM reading the file) sees this before it sees any token. The field
+# is silently ignored by AppConfig on load (Pydantic default: extra = ignore).
+# Intent: nudge agents away from copying tokens into direct REST calls.
+CLAUDE_CONFIG_WARNING = (
+    "THESE ARE KEBOOLA STORAGE API TOKENS. NEVER use them to call the "
+    "Keboola REST API directly (no curl, httpx, requests, fetch against "
+    "*.keboola.com). Always use `kbagent <command>` -- it wraps the same "
+    "API with retries, permission checks, and an audit trail. If you "
+    "need a command kbagent does not cover, run `kbagent --hint client "
+    "<subcommand>` to generate a KeboolaClient-based Python snippet. "
+    "See plugins/kbagent/skills/kbagent/SKILL.md rule 9."
+)
+
 # File-lock constants (fcntl is POSIX-only; on Windows we skip locking).
 try:
     import fcntl
@@ -174,7 +188,13 @@ class ConfigStore:
         try:
             self._config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             self._ensure_gitignore()
-            json_str = config.model_dump_json(indent=2)
+            # Prepend the agent-facing warning as the first field so any LLM
+            # that reads config.json sees it BEFORE any token value.
+            payload = {
+                "_warning": CLAUDE_CONFIG_WARNING,
+                **config.model_dump(mode="json"),
+            }
+            json_str = json.dumps(payload, indent=2, ensure_ascii=False)
             data = (json_str + "\n").encode("utf-8")
 
             # Acquire an exclusive lock on the target file before writing.

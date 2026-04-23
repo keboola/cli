@@ -7855,6 +7855,51 @@ class TestInit:
         assert gitignore.is_file()
         assert ".kbagent/" in gitignore.read_text(encoding="utf-8")
 
+    def test_init_config_has_claude_warning_first_field(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """config.json starts with a _warning field that steers agents away from REST."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+
+        result = runner.invoke(app, ["--json", "init"])
+        assert result.exit_code == 0
+
+        config_path = tmp_path / ".kbagent" / "config.json"
+        raw = config_path.read_text(encoding="utf-8")
+
+        # The warning must be the very first JSON key (LLMs read top-down).
+        parsed = json.loads(raw)
+        first_key = next(iter(parsed.keys()))
+        assert first_key == "_warning", (
+            f"_warning must be first field; got keys: {list(parsed.keys())}"
+        )
+        # Warning content must mention the key prohibition.
+        warning = parsed["_warning"]
+        assert "NEVER" in warning
+        assert "Keboola REST API" in warning
+        assert "kbagent" in warning
+
+    def test_init_config_warning_ignored_on_load(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AppConfig.load silently ignores the _warning field -- no crash."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+
+        runner.invoke(app, ["--json", "init"])
+
+        # Round-trip: load and re-save. Warning must still be present after save.
+        from keboola_agent_cli.config_store import ConfigStore
+
+        store = ConfigStore(config_dir=tmp_path / ".kbagent", source="local")
+        cfg = store.load()  # must not raise
+        store.save(cfg)
+
+        raw = (tmp_path / ".kbagent" / "config.json").read_text(encoding="utf-8")
+        parsed = json.loads(raw)
+        assert parsed["_warning"].startswith("THESE ARE KEBOOLA STORAGE API TOKENS")
+
     def test_init_from_global_copies_projects(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

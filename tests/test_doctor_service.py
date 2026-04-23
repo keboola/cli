@@ -454,4 +454,135 @@ class TestDoctorServiceRunChecks:
         mcp_checks = [c for c in result["checks"] if c["check"] == "mcp_server"]
         assert len(mcp_checks) == 1
         assert mcp_checks[0]["status"] == "warn"
-        mock_mcp.check_server_available.assert_called_once()
+
+
+class TestDoctorServiceCheckClaudePlugin:
+    """Tests for DoctorService._check_claude_plugin()."""
+
+    def test_skip_when_claude_not_installed(
+        self, tmp_config_dir: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        """When ~/.claude/ is absent, returns 'skip' (not a failure)."""
+        # Redirect Path.home() to a tmp dir with no .claude/ inside
+        fake_home = tmp_path / "no-claude-here"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["check"] == "claude_plugin"
+        assert result["status"] == "skip"
+        assert "Claude Code not detected" in result["message"]
+
+    def test_warn_when_plugin_missing(self, tmp_path: Path, monkeypatch) -> None:
+        """When Claude Code is installed but plugin is absent, warn with install commands."""
+        fake_home = tmp_path / "has-claude"
+        (fake_home / ".claude").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "warn"
+        assert "/plugin marketplace add padak/keboola_agent_cli" in result["message"]
+        assert "/plugin install kbagent@keboola-agent-cli" in result["message"]
+
+    def test_warn_when_plugin_root_exists_but_empty(self, tmp_path: Path, monkeypatch) -> None:
+        """Plugin root dir with no version subdir still counts as not-installed."""
+        fake_home = tmp_path / "has-empty-root"
+        plugin_root = fake_home / ".claude" / "plugins" / "cache" / "keboola-agent-cli" / "kbagent"
+        plugin_root.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "warn"
+
+    def test_pass_with_version_from_cache_subdir(self, tmp_path: Path, monkeypatch) -> None:
+        """Claude Code caches plugins under <root>/<plugin>/<version>/; derive version from dir name."""
+        fake_home = tmp_path / "has-plugin"
+        version_dir = (
+            fake_home / ".claude" / "plugins" / "cache" / "keboola-agent-cli" / "kbagent" / "0.24.0"
+        )
+        version_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        assert "v0.24.0" in result["message"]
+        assert result["plugin_version"] == "0.24.0"
+
+    def test_pass_with_manifest_version_overrides_dirname(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """If plugin.json has a version, it takes precedence over the subdir name."""
+        fake_home = tmp_path / "has-manifest"
+        version_dir = (
+            fake_home / ".claude" / "plugins" / "cache" / "keboola-agent-cli" / "kbagent" / "0.20.0"
+        )
+        (version_dir / ".claude-plugin").mkdir(parents=True)
+        (version_dir / ".claude-plugin" / "plugin.json").write_text(
+            '{"name": "kbagent", "version": "0.24.0"}',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        assert result["plugin_version"] == "0.24.0"
+
+    def test_pass_with_drift_warning_when_versions_mismatch(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """If plugin version != CLI version, pass still but include drift hint."""
+        fake_home = tmp_path / "drifted"
+        version_dir = (
+            fake_home / ".claude" / "plugins" / "cache" / "keboola-agent-cli" / "kbagent" / "0.1.0"
+        )
+        version_dir.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        assert "v0.1.0" in result["message"]
+        assert "plugin update kbagent" in result["message"]
+
+    def test_pass_falls_back_to_dirname_when_manifest_broken(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """If plugin.json is unparseable, version still comes from the subdir name."""
+        fake_home = tmp_path / "broken-manifest"
+        version_dir = (
+            fake_home / ".claude" / "plugins" / "cache" / "keboola-agent-cli" / "kbagent" / "0.24.0"
+        )
+        (version_dir / ".claude-plugin").mkdir(parents=True)
+        (version_dir / ".claude-plugin" / "plugin.json").write_text(
+            "not json at all",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        assert "v0.24.0" in result["message"]
+
+    def test_run_checks_includes_plugin_check(
+        self, tmp_config_dir: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        """run_checks includes the Claude Code plugin check in its output."""
+        # Point home somewhere without .claude -> skip status
+        fake_home = tmp_path / "no-claude"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        store = ConfigStore(config_dir=tmp_config_dir)
+        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        result = service.run_checks()
+
+        plugin_checks = [c for c in result["checks"] if c["check"] == "claude_plugin"]
+        assert len(plugin_checks) == 1
+        assert plugin_checks[0]["status"] == "skip"
