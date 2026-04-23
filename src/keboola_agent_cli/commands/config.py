@@ -91,6 +91,15 @@ def config_list(
         "--branch",
         help="List configs from a specific dev branch ID (defaults to active branch)",
     ),
+    include_rows: bool = typer.Option(
+        False,
+        "--include-rows",
+        help=(
+            "Include full configuration + rows body per config (noticeably larger "
+            "payload). Without this flag the response is summary-level only "
+            "(name/description/component/last_modified/folder)."
+        ),
+    ),
 ) -> None:
     """List configurations from connected projects.
 
@@ -105,6 +114,7 @@ def config_list(
             component_type=component_type,
             component_id=component_id,
             branch=branch,
+            include_rows=include_rows,
         )
 
     formatter = get_formatter(ctx)
@@ -141,6 +151,7 @@ def config_list(
             component_type=component_type,
             component_id=component_id,
             branch_id=effective_branch,
+            include_rows=include_rows,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -158,19 +169,63 @@ def config_list(
 @config_app.command("detail")
 def config_detail(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: list[str] | None = typer.Option(
+        None,
+        "--project",
+        help=(
+            "Project alias to query. Repeat for multiple projects (only valid in "
+            "bulk mode, i.e. when --config-id is omitted)."
+        ),
+    ),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
-    config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
+    config_id: str | None = typer.Option(
+        None,
+        "--config-id",
+        help=(
+            "Configuration ID. When omitted, the command switches to BULK mode "
+            "and returns every configuration under --component-id as a JSON "
+            "array ({'configs': [...], 'errors': [...]})."
+        ),
+    ),
     branch: int | None = typer.Option(
         None,
         "--branch",
         help="Get detail from a specific dev branch ID (defaults to active branch)",
     ),
+    with_state: bool = typer.Option(
+        False,
+        "--with-state",
+        help=(
+            "Attach the runtime state dict to each config under 'state'. "
+            "Single-config mode: one extra call via get_config_state. "
+            "Bulk mode: state is fetched inline via include=state (no N+1)."
+        ),
+    ),
 ) -> None:
-    """Show detailed information about a specific configuration.
+    """Show detailed information about one or many configurations.
 
-    If a dev branch is active (via 'branch use'), the detail is fetched
-    from that branch. Use --branch to override.
+    \b
+    Two modes, switched by --config-id:
+      - Single-config mode (default when --config-id given): returns the
+        full configuration detail dict, shape identical to historical output
+        (callers depending on this shape are unaffected).
+      - Bulk mode (--config-id omitted): returns every config under
+        --component-id as {"configs": [...], "errors": [...]}. Works across
+        multiple projects when --project is repeated (per-project errors
+        surface in the errors list without aborting other projects).
+
+    If a dev branch is active (via 'branch use') the detail is fetched
+    from that branch. --branch overrides; bulk mode with multiple projects
+    rejects --branch (branch IDs are per-project).
+
+    \b
+    Examples:
+      # Single config (unchanged shape)
+      kbagent config detail --project prod --component-id keboola.ex-db-snowflake --config-id 101
+      # Bulk: every Snowflake writer in one project
+      kbagent --json config detail --project prod --component-id keboola.wr-db-snowflake
+      # Bulk: every Snowflake writer across many projects (with runtime state)
+      kbagent --json config detail --project prod --project stage --component-id keboola.wr-db-snowflake --with-state
     """
     if should_hint(ctx):
         emit_hint(
@@ -180,22 +235,66 @@ def config_detail(
             component_id=component_id,
             config_id=config_id,
             branch=branch,
+            with_state=with_state,
         )
 
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    # --project is required (zero, one, or many)
+    if not project:
+        formatter.error(
+            message="--project is required (repeat for multiple projects in bulk mode).",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+
+    # --config-id + multiple --project is ambiguous: a single config lives in
+    # exactly one project. Reject with a clear message instead of picking one.
+    if config_id is not None and len(project) > 1:
+        formatter.error(
+            message=(
+                "--config-id is only valid with exactly one --project. "
+                "Omit --config-id to fan out across multiple projects."
+            ),
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+
+    # --branch requires exactly one --project (branch IDs are per-project).
+    if branch is not None and len(project) != 1:
+        formatter.error(
+            message="--branch requires exactly one --project (branch ID is per-project).",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+
+    # Resolve active branch when only one --project was passed
+    effective_branch: int | None = branch
+    if branch is None and len(project) == 1:
+        _, effective_branch = resolve_branch(config_store, formatter, project[0], None)
 
     try:
-        result = service.get_config_detail(
-            alias=project,
-            component_id=component_id,
-            config_id=config_id,
-            branch_id=effective_branch,
-        )
-        formatter.output(result, format_config_detail)
+        if config_id is not None:
+            # Single-config mode: shape unchanged for backward compat
+            result = service.get_config_detail(
+                alias=project[0],
+                component_id=component_id,
+                config_id=config_id,
+                branch_id=effective_branch,
+                with_state=with_state,
+            )
+        else:
+            # Bulk mode: one call per project, filtered by component_id
+            result = service.get_config_detail(
+                alias=project[0],
+                component_id=component_id,
+                config_id=None,
+                branch_id=effective_branch,
+                with_state=with_state,
+                aliases=project,
+            )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
@@ -204,10 +303,82 @@ def config_detail(
         formatter.error(
             message=exc.message,
             error_code=exc.error_code,
-            project=project,
+            project=project[0],
             retryable=exc.retryable,
         )
         raise typer.Exit(code=exit_code) from None
+
+    if config_id is not None:
+        # Single-config mode: emit unchanged shape
+        formatter.output(result, format_config_detail)
+    else:
+        # Bulk mode: emit {configs: [...], errors: [...]}
+        if formatter.json_mode:
+            formatter.output(result)
+        else:
+            _format_config_detail_bulk(formatter.console, result, component_id, with_state)
+            emit_project_warnings(formatter, result)
+
+
+def _format_config_detail_bulk(
+    console: Any,
+    data: dict,
+    component_id: str,
+    with_state: bool,
+) -> None:
+    """Render bulk config detail results as a Rich table grouped by project.
+
+    Args:
+        console: Rich Console instance.
+        data: ``{"configs": [...], "errors": [...]}`` from the service layer.
+        component_id: The component ID the bulk query was scoped to.
+        with_state: Whether ``state`` was requested (adds a State column).
+    """
+    from rich.table import Table
+
+    configs = data.get("configs", [])
+    if not configs:
+        console.print(
+            f"[dim]No configurations found for [bold]{component_id}[/bold] "
+            "in the selected project(s).[/dim]"
+        )
+        return
+
+    # Group by project_alias for readability
+    grouped: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for cfg in configs:
+        alias = cfg.get("project_alias", "unknown")
+        if alias not in grouped:
+            order.append(alias)
+            grouped[alias] = []
+        grouped[alias].append(cfg)
+
+    for alias in order:
+        table = Table(title=f"{component_id} configs -- {alias} ({len(grouped[alias])})")
+        table.add_column("Config ID", style="bold cyan", justify="right")
+        table.add_column("Name")
+        table.add_column("Rows", justify="right", style="dim")
+        table.add_column("Version", justify="right", style="dim")
+        table.add_column("Disabled", style="dim")
+        if with_state:
+            table.add_column("State Keys", style="dim")
+
+        for cfg in grouped[alias]:
+            row = [
+                str(cfg.get("config_id", "")),
+                str(cfg.get("name", "")),
+                str(len(cfg.get("rows", []) or [])),
+                str(cfg.get("version", "") or ""),
+                "yes" if cfg.get("isDisabled") else "",
+            ]
+            if with_state:
+                state = cfg.get("state") or {}
+                row.append(str(len(state) if isinstance(state, dict) else 0))
+            table.add_row(*row)
+
+        console.print(table)
+        console.print()
 
 
 @config_app.command("search")

@@ -64,6 +64,7 @@ class ConfigService(BaseService):
         component_type: str | None = None,
         component_id: str | None = None,
         branch_id: int | None = None,
+        include_rows: bool = False,
     ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, str]]:
         """Fetch configurations for a single project (runs in a worker thread).
 
@@ -71,14 +72,27 @@ class ConfigService(BaseService):
         closes the client. Returns either (alias, configs_list, True) on success
         or (alias, error_dict) on failure. The 3-tuple convention is required
         by _run_parallel() which uses tuple length to distinguish success/error.
+
+        When ``include_rows=True``, switches to the richer
+        ``list_components_with_configs`` endpoint (``include=configuration,rows``)
+        so each returned row carries the full ``configuration`` and ``rows``
+        bodies. The payload is noticeably larger — use only when the caller
+        actually needs the bodies (e.g. audit dashboards, bulk review).
         """
         client = self._client_factory(project.stack_url, project.token)
         try:
             effective_branch_id = branch_id or project.active_branch_id
-            components = client.list_components(
-                component_type=component_type,
-                branch_id=effective_branch_id,
-            )
+
+            if include_rows:
+                components = client.list_components_with_configs(
+                    branch_id=effective_branch_id,
+                    component_type=component_type,
+                )
+            else:
+                components = client.list_components(
+                    component_type=component_type,
+                    branch_id=effective_branch_id,
+                )
 
             # Fetch folder metadata (requires branch ID — search endpoint is branch-only)
             folder_map: dict[str, str] = {}
@@ -114,21 +128,28 @@ class ConfigService(BaseService):
                     creator_token = current_version.get("creatorToken", {})
                     cfg_id = str(cfg.get("id", ""))
 
-                    configs.append(
-                        {
-                            "project_alias": alias,
-                            "component_id": comp_id,
-                            "component_name": comp_name,
-                            "component_type": comp_type,
-                            "config_id": cfg_id,
-                            "config_name": cfg.get("name", ""),
-                            "config_description": cfg.get("description", ""),
-                            "last_modified": current_version.get("created", ""),
-                            "last_modified_by": creator_token.get("description", ""),
-                            "last_change_description": current_version.get("changeDescription", ""),
-                            "folder": folder_map.get(f"{comp_id}/{cfg_id}", ""),
-                        }
-                    )
+                    entry: dict[str, Any] = {
+                        "project_alias": alias,
+                        "component_id": comp_id,
+                        "component_name": comp_name,
+                        "component_type": comp_type,
+                        "config_id": cfg_id,
+                        "config_name": cfg.get("name", ""),
+                        "config_description": cfg.get("description", ""),
+                        "last_modified": current_version.get("created", ""),
+                        "last_modified_by": creator_token.get("description", ""),
+                        "last_change_description": current_version.get("changeDescription", ""),
+                        "folder": folder_map.get(f"{comp_id}/{cfg_id}", ""),
+                    }
+
+                    # When --include-rows, attach the full configuration + rows
+                    # bodies under their API keys so callers can work with the
+                    # same shape as `config detail`.
+                    if include_rows:
+                        entry["configuration"] = cfg.get("configuration", {})
+                        entry["rows"] = cfg.get("rows", [])
+
+                    configs.append(entry)
             return (alias, configs, True)
         except KeboolaApiError as exc:
             return (
@@ -157,6 +178,7 @@ class ConfigService(BaseService):
         component_type: str | None = None,
         component_id: str | None = None,
         branch_id: int | None = None,
+        include_rows: bool = False,
     ) -> dict[str, Any]:
         """List configurations across one or multiple projects.
 
@@ -172,12 +194,18 @@ class ConfigService(BaseService):
                 (e.g. keboola.ex-db-snowflake).
             branch_id: If set, list configs from a specific dev branch.
                        If None, uses each project's active branch (if any).
+            include_rows: When True, switches to
+                ``list_components_with_configs`` (``include=configuration,rows``)
+                so each returned row includes the full configuration body and
+                config rows. Payload is noticeably larger -- reach for this only
+                when the full bodies are actually needed (e.g. bulk audits).
 
         Returns:
             Dict with keys:
                 - "configs": list of config dicts with project_alias,
                   component_id, component_name, component_type,
-                  config_id, config_name, config_description
+                  config_id, config_name, config_description.
+                  With ``include_rows=True`` also: configuration, rows.
                 - "errors": list of error dicts with project_alias,
                   error_code, message
 
@@ -188,7 +216,12 @@ class ConfigService(BaseService):
 
         def worker(alias: str, project: ProjectConfig) -> tuple[Any, ...]:
             return self._fetch_project_configs(
-                alias, project, component_type, component_id, branch_id=branch_id
+                alias,
+                project,
+                component_type,
+                component_id,
+                branch_id=branch_id,
+                include_rows=include_rows,
             )
 
         successes, errors = self._run_parallel(projects, worker)
@@ -208,26 +241,95 @@ class ConfigService(BaseService):
         self,
         alias: str,
         component_id: str,
-        config_id: str,
+        config_id: str | None = None,
         branch_id: int | None = None,
+        with_state: bool = False,
+        aliases: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Get detailed information about a specific configuration.
+        """Get detailed information about one or many configurations.
+
+        Two modes, switched by ``config_id`` and ``aliases``:
+
+        * **Single-config mode** (``config_id`` given, single ``alias``):
+          returns the full config detail dict from the API, flattened with
+          ``project_alias`` + ``branch_id``. Shape unchanged for backward
+          compatibility. When ``with_state=True``, ensures a ``state`` key
+          is present (the API always returns it inline, so this is a
+          guarantee rather than an extra call -- but ``get_config_state``
+          is invoked as a dedicated refresh so the returned value reflects
+          a fresh read of the runtime state).
+        * **Bulk mode** (``config_id`` is None): returns
+          ``{"configs": [...], "errors": [...]}`` -- every configuration of
+          the given ``component_id`` across one or more projects, each row
+          tagged with ``project_alias``. Uses the component listing endpoint
+          (one request per project, not one per config) so 100+ configs come
+          back in a single round-trip per project. When ``with_state=True``,
+          ``include=state`` is added so each config's state is embedded in
+          the same request (no N+1 state fetches).
 
         Args:
-            alias: Project alias to query.
+            alias: Project alias (single-project). When ``aliases`` is given,
+                this argument is ignored.
             component_id: The component ID (e.g. keboola.ex-db-snowflake).
-            config_id: The configuration ID.
-            branch_id: If set, get detail from a specific dev branch.
-                       If None, uses the project's active branch (if any).
+            config_id: Optional configuration ID. When omitted, enables
+                bulk mode and returns every config under ``component_id``.
+            branch_id: If set, read from a specific dev branch. Only valid
+                with a single project; otherwise ``None`` falls back to each
+                project's active branch.
+            with_state: When True, attach the runtime state dict under the
+                ``state`` key. Single mode: calls ``get_config_state``.
+                Bulk mode: embeds state inline via ``include=state`` on the
+                listing call (one request per project, regardless of config
+                count).
+            aliases: Multi-project bulk form. When a list is given,
+                ``config_id`` must be None and ``branch_id`` must be None.
+                Returns ``{"configs": [...], "errors": [...]}`` with every
+                row tagged by ``project_alias``.
 
         Returns:
-            Dict with the full configuration detail from the API,
-            plus a "project_alias" key.
+            Dict. Shape depends on mode:
+              * Single: full API detail + ``project_alias`` + ``branch_id``
+                (+ ``state`` when ``with_state=True``).
+              * Bulk: ``{"configs": [...], "errors": [...]}`` where each
+                config row has ``project_alias``, ``branch_id``,
+                ``component_id``, ``config_id``, ``name``, ``description``,
+                ``configuration``, ``rows``, ``currentVersion`` (+ ``state``
+                when ``with_state=True``).
 
         Raises:
-            ConfigError: If the alias is not found.
-            KeboolaApiError: If the API call fails.
+            ConfigError: If a specified alias is not found, or if
+                ``aliases`` is combined with ``config_id``/``branch_id``.
+            KeboolaApiError: If the API call fails (single mode only;
+                bulk mode surfaces per-project failures in ``errors``).
         """
+        # --- Bulk mode (fan-out across one or more projects) ----------------
+        if config_id is None:
+            if aliases is None:
+                aliases = [alias]
+            # --branch only makes sense for a single project -- a dev branch ID
+            # is per-project, so reject it when callers fan out. Single-project
+            # bulk still honors --branch.
+            if branch_id is not None and len(aliases) != 1:
+                raise ConfigError(
+                    "--branch is only valid with exactly one --project "
+                    "(branch IDs are per-project)."
+                )
+            return self._get_config_detail_bulk(
+                aliases=aliases,
+                component_id=component_id,
+                branch_id=branch_id,
+                with_state=with_state,
+            )
+
+        # --- Single-config mode (unchanged shape) ---------------------------
+        # Multi-project + explicit config_id is not a supported combination;
+        # reject it explicitly instead of silently using the first alias.
+        if aliases is not None and len(aliases) > 1:
+            raise ConfigError(
+                "Passing multiple --project aliases requires omitting "
+                "--config-id (bulk mode returns all configs per project)."
+            )
+
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -238,12 +340,132 @@ class ConfigService(BaseService):
             detail = client.get_config_detail(
                 component_id, config_id, branch_id=effective_branch_id
             )
+            if with_state:
+                # Refresh state via the dedicated client method so the
+                # returned dict always carries the latest runtime state,
+                # not just whatever snapshot the detail endpoint returned.
+                detail["state"] = client.get_config_state(
+                    component_id, config_id, branch_id=effective_branch_id
+                )
         finally:
             client.close()
 
         detail["project_alias"] = alias
         detail["branch_id"] = effective_branch_id
         return detail
+
+    def _get_config_detail_bulk(
+        self,
+        aliases: list[str],
+        component_id: str,
+        branch_id: int | None,
+        with_state: bool,
+    ) -> dict[str, Any]:
+        """Fan-out helper for bulk-mode ``get_config_detail``.
+
+        Fetches every configuration of ``component_id`` across one or many
+        projects in parallel. One HTTP request per project (not per config);
+        state -- when requested -- rides on the same request via
+        ``include=state``. Per-project failures are captured in ``errors``
+        without aborting other projects.
+        """
+        projects = self.resolve_projects(aliases)
+
+        def worker(alias: str, project: ProjectConfig) -> tuple[Any, ...]:
+            return self._fetch_project_component_configs(
+                alias,
+                project,
+                component_id=component_id,
+                branch_id=branch_id,
+                with_state=with_state,
+            )
+
+        successes, errors = self._run_parallel(projects, worker)
+
+        all_configs: list[dict[str, Any]] = []
+        for _alias, configs, _ok in successes:
+            all_configs.extend(configs)
+
+        # Stable sort: alias, then config_id for deterministic output.
+        all_configs.sort(key=lambda c: (c["project_alias"], str(c.get("config_id", ""))))
+        errors.sort(key=lambda e: e.get("project_alias", ""))
+
+        return {"configs": all_configs, "errors": errors}
+
+    def _fetch_project_component_configs(
+        self,
+        alias: str,
+        project: ProjectConfig,
+        component_id: str,
+        branch_id: int | None = None,
+        with_state: bool = False,
+    ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, str]]:
+        """Worker for bulk ``get_config_detail``: fetch all configs of a component.
+
+        Uses ``list_components_with_configs(include=configuration,rows[,state])``
+        -- a single request returns every configuration body, rows, and
+        optionally state. Filters to ``component_id`` in memory.
+        """
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            effective_branch_id = branch_id or project.active_branch_id
+            components = client.list_components_with_configs(
+                branch_id=effective_branch_id,
+                include_state=with_state,
+            )
+
+            configs: list[dict[str, Any]] = []
+            for component in components:
+                if component.get("id") != component_id:
+                    continue
+                comp_name = component.get("name", "")
+                comp_type = component.get("type", "")
+                for cfg in component.get("configurations", []):
+                    cfg_id = str(cfg.get("id", ""))
+                    entry: dict[str, Any] = {
+                        "project_alias": alias,
+                        "branch_id": effective_branch_id,
+                        "component_id": component_id,
+                        "component_name": comp_name,
+                        "component_type": comp_type,
+                        "config_id": cfg_id,
+                        "name": cfg.get("name", ""),
+                        "description": cfg.get("description", ""),
+                        "configuration": cfg.get("configuration", {}),
+                        "rows": cfg.get("rows", []),
+                        "rowsSortOrder": cfg.get("rowsSortOrder", []),
+                        "version": cfg.get("version"),
+                        "isDisabled": cfg.get("isDisabled", False),
+                        "isDeleted": cfg.get("isDeleted", False),
+                        "changeDescription": cfg.get("changeDescription", ""),
+                        "created": cfg.get("created", ""),
+                        "currentVersion": cfg.get("currentVersion", {}),
+                        "creatorToken": cfg.get("creatorToken", {}),
+                    }
+                    if with_state:
+                        entry["state"] = cfg.get("state", {})
+                    configs.append(entry)
+            return (alias, configs, True)
+        except KeboolaApiError as exc:
+            return (
+                alias,
+                {
+                    "project_alias": alias,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                },
+            )
+        except Exception as exc:
+            return (
+                alias,
+                {
+                    "project_alias": alias,
+                    "error_code": "UNEXPECTED_ERROR",
+                    "message": str(exc),
+                },
+            )
+        finally:
+            client.close()
 
     def update_config(
         self,

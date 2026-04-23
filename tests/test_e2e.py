@@ -1051,6 +1051,119 @@ class TestFullE2E:
         )
         assert len(data["data"]["matches"]) >= 1
 
+        # ── 0.23.0: bulk detail, --include-rows, --with-state (issue #197) ──
+
+        # config detail BULK (no --config-id) should return {configs, errors}
+        data = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+        )
+        bulk = data["data"]
+        assert "configs" in bulk, "bulk mode envelope must include 'configs'"
+        assert "errors" in bulk, "bulk mode envelope must include 'errors'"
+        assert isinstance(bulk["configs"], list)
+        # Our freshly created config must be in the array
+        bulk_ids = [c["config_id"] for c in bulk["configs"]]
+        assert config_id in bulk_ids, f"config_id {config_id} missing from bulk: {bulk_ids}"
+        # Each row must be tagged with project_alias
+        assert all(c.get("project_alias") == self.alias for c in bulk["configs"])
+
+        # Single-config shape must be preserved (backward compat guarantee)
+        data = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        single = data["data"]
+        assert "configs" not in single, "single mode must NOT wrap in {configs: [...]}"
+        assert single["id"] == config_id
+        assert single["name"] == f"{RUN_ID} Test Config"
+
+        # config detail --with-state (single mode): state key must be present
+        data = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--with-state",
+        )
+        assert "state" in data["data"], "--with-state must attach state key"
+        # Fresh config has empty state -- that's expected
+        assert isinstance(data["data"]["state"], dict)
+
+        # config detail --with-state (bulk mode): every row has state
+        data = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--with-state",
+        )
+        bulk_with_state = data["data"]
+        assert bulk_with_state["configs"], "bulk with-state returned empty list"
+        assert all("state" in c for c in bulk_with_state["configs"]), (
+            "--with-state in bulk mode must attach state to every row"
+        )
+
+        # config list --include-rows: bodies attached
+        data = self._run_ok(
+            "config",
+            "list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--include-rows",
+        )
+        rows = data["data"]["configs"]
+        assert rows, "config list --include-rows returned empty"
+        ours = next((r for r in rows if r["config_id"] == config_id), None)
+        assert ours is not None, "include-rows output missing our test config"
+        assert "configuration" in ours, "--include-rows must attach configuration body"
+        assert "rows" in ours, "--include-rows must attach rows list"
+        assert ours["configuration"]["parameters"]["db"]["host"] == "test.example.com"
+
+        # --config-id + multiple --project -> exit 2 (INVALID_ARGUMENT).
+        # We only have one project registered in E2E, but the rule fires before
+        # any API call so we can trigger it by repeating the same alias twice.
+        result = subprocess.run(
+            [
+                "kbagent",
+                "--json",
+                "config",
+                "detail",
+                "--project",
+                self.alias,
+                "--project",
+                self.alias,
+                "--component-id",
+                TEST_COMPONENT_ID,
+                "--config-id",
+                config_id,
+            ],
+            env={**os.environ, "KBAGENT_CONFIG_DIR": str(self.config_dir)},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 2, (
+            f"expected exit 2 for --config-id + multi --project, got {result.returncode}"
+        )
+
         return config_id
 
     def _test_config_update(self, config_id: str) -> None:

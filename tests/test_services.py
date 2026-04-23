@@ -1348,6 +1348,454 @@ class TestConfigServiceGetConfigDetail:
         )
         mock_client.close.assert_called_once()
 
+    def test_get_config_detail_with_state_single_mode(self, tmp_config_dir: Path) -> None:
+        """Single-config --with-state triggers get_config_state and overrides state."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        # Detail endpoint returns stale state; get_config_state returns fresh state.
+        detail_response = {
+            "id": "101",
+            "name": "Production Load",
+            "componentId": "keboola.ex-db-snowflake",
+            "configuration": {"parameters": {}},
+            "rows": [],
+            "state": {"stale": True},
+        }
+        fresh_state = {"last_cursor": "2026-04-23T10:00:00Z", "fresh": True}
+
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = detail_response
+        mock_client.get_config_state.return_value = fresh_state
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="101",
+            with_state=True,
+        )
+
+        assert result["state"] == fresh_state
+        mock_client.get_config_state.assert_called_once_with(
+            "keboola.ex-db-snowflake", "101", branch_id=None
+        )
+        mock_client.close.assert_called_once()
+
+    def test_get_config_detail_bulk_single_project(self, tmp_config_dir: Path) -> None:
+        """Bulk mode (no config_id) returns {configs, errors} for a single project."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        components_response = [
+            {
+                "id": "keboola.ex-db-snowflake",
+                "name": "Snowflake Extractor",
+                "type": "extractor",
+                "configurations": [
+                    {
+                        "id": "101",
+                        "name": "Prod",
+                        "description": "",
+                        "configuration": {"parameters": {"host": "a"}},
+                        "rows": [],
+                        "version": 1,
+                        "isDisabled": False,
+                        "isDeleted": False,
+                    },
+                    {
+                        "id": "102",
+                        "name": "Dev",
+                        "description": "",
+                        "configuration": {"parameters": {"host": "b"}},
+                        "rows": [],
+                        "version": 1,
+                        "isDisabled": False,
+                        "isDeleted": False,
+                    },
+                ],
+            },
+            {
+                "id": "keboola.wr-db-snowflake",
+                "name": "Snowflake Writer",
+                "type": "writer",
+                "configurations": [
+                    {"id": "999", "name": "X", "configuration": {}, "rows": []},
+                ],
+            },
+        ]
+
+        mock_client = MagicMock()
+        mock_client.list_components_with_configs.return_value = components_response
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id=None,
+        )
+
+        assert "configs" in result
+        assert "errors" in result
+        # Only configs of the requested component_id survive the filter
+        assert [c["config_id"] for c in result["configs"]] == ["101", "102"]
+        assert all(c["project_alias"] == "prod" for c in result["configs"])
+        assert all(c["component_id"] == "keboola.ex-db-snowflake" for c in result["configs"])
+        # Bulk call used list_components_with_configs, not per-config detail
+        mock_client.list_components_with_configs.assert_called_once()
+        mock_client.get_config_detail.assert_not_called()
+        mock_client.close.assert_called_once()
+
+    def test_get_config_detail_bulk_multi_project(self, tmp_config_dir: Path) -> None:
+        """Bulk mode across projects aggregates results and tags each row with alias."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+        store.add_project(
+            "stage",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="532-abcdef-ghijklmnopqrst",
+            ),
+        )
+
+        prod_components = [
+            {
+                "id": "keboola.ex-db-snowflake",
+                "name": "Snowflake",
+                "type": "extractor",
+                "configurations": [
+                    {"id": "101", "name": "ProdCfg", "configuration": {}, "rows": []},
+                ],
+            },
+        ]
+        stage_components = [
+            {
+                "id": "keboola.ex-db-snowflake",
+                "name": "Snowflake",
+                "type": "extractor",
+                "configurations": [
+                    {"id": "201", "name": "StageCfg", "configuration": {}, "rows": []},
+                ],
+            },
+        ]
+
+        def factory(url, token):
+            mc = MagicMock()
+            if "901" in token:
+                mc.list_components_with_configs.return_value = prod_components
+            else:
+                mc.list_components_with_configs.return_value = stage_components
+            return mc
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=factory,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id=None,
+            aliases=["prod", "stage"],
+        )
+
+        aliases_seen = {c["project_alias"] for c in result["configs"]}
+        assert aliases_seen == {"prod", "stage"}
+        assert len(result["configs"]) == 2
+        assert len(result["errors"]) == 0
+
+    def test_get_config_detail_bulk_partial_failure(self, tmp_config_dir: Path) -> None:
+        """Bulk mode: one project fails, others succeed; error captured in errors list."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+        store.add_project(
+            "broken",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="999-broken-token-value-here-1234",
+            ),
+        )
+
+        prod_components = [
+            {
+                "id": "keboola.ex-db-snowflake",
+                "name": "Snowflake",
+                "type": "extractor",
+                "configurations": [
+                    {"id": "101", "name": "OK", "configuration": {}, "rows": []},
+                ],
+            },
+        ]
+
+        def factory(url, token):
+            mc = MagicMock()
+            if "901" in token:
+                mc.list_components_with_configs.return_value = prod_components
+            else:
+                mc.list_components_with_configs.side_effect = KeboolaApiError(
+                    message="Invalid token",
+                    status_code=401,
+                    error_code="INVALID_TOKEN",
+                    retryable=False,
+                )
+            return mc
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=factory,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id=None,
+            aliases=["prod", "broken"],
+        )
+
+        assert len(result["configs"]) == 1
+        assert result["configs"][0]["project_alias"] == "prod"
+        assert len(result["errors"]) == 1
+        assert result["errors"][0]["project_alias"] == "broken"
+        assert result["errors"][0]["error_code"] == "INVALID_TOKEN"
+
+    def test_get_config_detail_bulk_with_state(self, tmp_config_dir: Path) -> None:
+        """Bulk --with-state uses include_state on the listing call (no N+1)."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        components_response = [
+            {
+                "id": "keboola.ex-db-snowflake",
+                "name": "Snowflake",
+                "type": "extractor",
+                "configurations": [
+                    {
+                        "id": "101",
+                        "name": "cfg1",
+                        "configuration": {},
+                        "rows": [],
+                        "state": {"cursor": "abc"},
+                    },
+                    {
+                        "id": "102",
+                        "name": "cfg2",
+                        "configuration": {},
+                        "rows": [],
+                        "state": {},
+                    },
+                ],
+            },
+        ]
+
+        mock_client = MagicMock()
+        mock_client.list_components_with_configs.return_value = components_response
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id=None,
+            with_state=True,
+        )
+
+        assert result["configs"][0]["state"] == {"cursor": "abc"}
+        assert result["configs"][1]["state"] == {}
+        # The single call carries include_state=True -- no N+1
+        mock_client.list_components_with_configs.assert_called_once_with(
+            branch_id=None,
+            include_state=True,
+        )
+        mock_client.get_config_state.assert_not_called()
+
+    def test_get_config_detail_bulk_no_configs_for_component(self, tmp_config_dir: Path) -> None:
+        """Bulk mode: component has no configs -> empty configs list, no error."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        mock_client = MagicMock()
+        # Other components exist but none matching our component_id
+        mock_client.list_components_with_configs.return_value = [
+            {
+                "id": "keboola.wr-db-snowflake",
+                "name": "Writer",
+                "type": "writer",
+                "configurations": [{"id": "999", "name": "x", "configuration": {}, "rows": []}],
+            },
+        ]
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id=None,
+        )
+
+        assert result["configs"] == []
+        assert result["errors"] == []
+
+    def test_get_config_detail_bulk_rejects_multi_project_with_branch(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Bulk mode with --branch requires exactly one --project."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        for alias in ("prod", "stage"):
+            store.add_project(
+                alias,
+                ProjectConfig(
+                    stack_url="https://connection.keboola.com",
+                    token=f"{alias}-token-value-XYZ-1234567890",
+                ),
+            )
+        service = ConfigService(config_store=store)
+
+        with pytest.raises(ConfigError, match="exactly one --project"):
+            service.get_config_detail(
+                alias="prod",
+                component_id="keboola.ex-db-snowflake",
+                config_id=None,
+                branch_id=42,
+                aliases=["prod", "stage"],
+            )
+
+
+class TestConfigServiceListConfigsIncludeRows:
+    """Tests for ConfigService.list_configs(include_rows=...)."""
+
+    def test_list_configs_include_rows_switches_to_list_components_with_configs(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """With include_rows=True, list_configs calls list_components_with_configs."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        components_response = [
+            {
+                "id": "keboola.ex-db-snowflake",
+                "name": "Snowflake",
+                "type": "extractor",
+                "configurations": [
+                    {
+                        "id": "101",
+                        "name": "Prod",
+                        "description": "",
+                        "configuration": {"parameters": {"host": "a"}},
+                        "rows": [{"id": "r1", "configuration": {"x": 1}}],
+                    },
+                ],
+            },
+        ]
+
+        mock_client = MagicMock()
+        mock_client.list_components_with_configs.return_value = components_response
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.list_configs(include_rows=True)
+        configs = result["configs"]
+
+        assert len(configs) == 1
+        entry = configs[0]
+        # Full body is attached (this is the point of include_rows)
+        assert entry["configuration"] == {"parameters": {"host": "a"}}
+        assert entry["rows"] == [{"id": "r1", "configuration": {"x": 1}}]
+        # Ordinary summary fields still present
+        assert entry["config_id"] == "101"
+        assert entry["config_name"] == "Prod"
+
+        # list_components_with_configs was called, not list_components
+        mock_client.list_components_with_configs.assert_called_once()
+        mock_client.list_components.assert_not_called()
+
+    def test_list_configs_without_include_rows_uses_list_components(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Default (include_rows=False) preserves the original lightweight listing."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        mock_client = _make_list_components_client(SAMPLE_COMPONENTS)
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.list_configs()
+        configs = result["configs"]
+
+        assert len(configs) >= 1
+        # Default shape: no configuration / rows keys
+        assert "configuration" not in configs[0]
+        assert "rows" not in configs[0]
+        mock_client.list_components.assert_called_once()
+        mock_client.list_components_with_configs.assert_not_called()
+
 
 class TestConfigServiceSearchConfigs:
     """Tests for ConfigService.search_configs() with branch_id support."""

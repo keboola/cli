@@ -104,11 +104,20 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Configuration Browsing
 
-  kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID]
+  kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID] [--include-rows]
     List configs from one/many/all projects. --project repeatable. Branch-aware.
+    --include-rows extends each row with full configuration + rows bodies
+    (significantly larger payload -- use only when bodies are needed).
 
-  kbagent config detail --project NAME --component-id ID --config-id ID [--branch ID]
-    Full config detail including parameters and rows. Branch-aware.
+  kbagent config detail --project NAME [--project NAME ...] --component-id ID [--config-id ID] [--branch ID] [--with-state]
+    Full config detail. TWO MODES:
+      - Single (--config-id given): returns the full config dict (shape unchanged).
+      - Bulk (--config-id omitted): returns {{"configs": [...], "errors": [...]}}
+        with every config of --component-id. --project repeatable for multi-project
+        fan-out (one API call per project, not per config).
+    --with-state attaches the runtime state dict. Single: dedicated get_config_state
+    call. Bulk: include=state ridesalong (no N+1, still one call per project).
+    --branch requires exactly one --project (branch IDs are per-project).
 
   kbagent config update --project NAME --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--dry-run] [--branch ID]
     Update config metadata and/or configuration content. --set targets a
