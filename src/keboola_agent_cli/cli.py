@@ -154,9 +154,26 @@ def apply_firewall_flags(
     )
 
 
+def _version_callback(value: bool) -> None:
+    """Print version and exit -- standard `--version` flag for CLI tools."""
+    if value:
+        from . import __version__
+
+        typer.echo(f"kbagent v{__version__}")
+        raise typer.Exit()
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
+    _version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
