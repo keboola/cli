@@ -115,6 +115,16 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `kai chat --message "msg" [--chat-id ID] [--project NAME]` -- send message in a chat session, returns chat_id for continuation
 - `kai history [--project NAME] [--limit N]` -- list recent Kai chat sessions (default limit: 10)
 
+## Flows (Orchestrator)
+- `flow list [--project NAME] [--branch ID]` -- list all flows (keboola.orchestrator + keboola.flow) across one or all projects
+- `flow detail --project NAME --flow-id ID [--component-id keboola.orchestrator|keboola.flow] [--branch ID]` -- full phase/task breakdown; groups tasks by phase, lists orphan tasks
+- `flow schema` -- print YAML template for flow configuration (phases + tasks); use with `--file @-` or save to a file
+- `flow new --project NAME --name NAME [--component-id keboola.orchestrator|keboola.flow] [--description D] [--file @path.yaml|-|JSON] [--branch ID]` -- create a flow; DAG validated before API call; default component: keboola.flow
+- `flow update --project NAME --flow-id ID [--component-id ID] [--name N] [--description D] [--file @path.yaml|-|JSON] [--branch ID]` -- update name, description, or phases/tasks; requires at least one of --name/--description/--file
+- `flow delete --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]` -- delete a flow config (confirmation guard)
+- `flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--component-id ID] [--timezone TZ] [--disabled] [--branch ID]` -- attach a cron schedule (stored as keboola.scheduler config); replaces any existing schedule
+- `flow schedule-remove --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]` -- remove all cron schedules attached to a flow; idempotent
+
 ## Sync (GitOps)
 - `sync init --project ALIAS [--directory DIR] [--git-branching]` -- initialize sync working directory
 - `sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N]` -- download configs to local files. For large projects (>100 configs), automatically fetches jobs per-config when the grouped API limit is insufficient

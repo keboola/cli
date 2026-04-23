@@ -3761,3 +3761,247 @@ class TestPinAndFirewallE2E:
         assert persisted.permissions is None, (
             f"--deny-* flags leaked to config.json: {persisted.permissions}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Flow E2E tests
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EFlowOperations:
+    """End-to-end tests for all flow subcommands against a real Keboola project.
+
+    Creates a real keboola.flow config, exercises all 8 commands, and cleans up.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-flow"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self._created_flows: list[tuple[str, str]] = []  # (component_id, flow_id)
+
+        from keboola_agent_cli.client import KeboolaClient
+
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        yield
+
+        import contextlib
+
+        for component_id, flow_id in self._created_flows:
+            with contextlib.suppress(Exception):
+                self.client.delete_config(
+                    component_id=component_id, config_id=flow_id, branch_id=None
+                )
+        self.client.close()
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_flow_crud_and_schedule(self, tmp_path: Path) -> None:
+        """Full lifecycle: schema → new → list → detail → update → schedule → schedule-remove → delete."""
+
+        _step(1, "flow schema returns YAML template with phases key")
+        result = self._run("flow", "schema")
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "phases" in data["data"]["schema"]
+
+        _step(2, "flow new -- create a keboola.flow config")
+        result = self._run(
+            "flow",
+            "new",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--name",
+            f"{RUN_ID}-flow",
+            "--description",
+            "E2E flow test",
+        )
+        assert result.exit_code == 0, result.output
+        created = json.loads(result.output)["data"]
+        flow_id = created["id"]
+        assert flow_id
+        assert created["project_alias"] == self.alias
+        self._created_flows.append(("keboola.flow", flow_id))
+
+        _step(3, "flow list -- flow appears in listing")
+        result = self._run("flow", "list", "--project", self.alias)
+        assert result.exit_code == 0
+        listing = json.loads(result.output)["data"]
+        ids = {f["config_id"] for f in listing["flows"]}
+        assert flow_id in ids
+
+        _step(4, "flow detail -- returns phase/task counts")
+        result = self._run(
+            "flow",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+        )
+        assert result.exit_code == 0, result.output
+        detail = json.loads(result.output)["data"]
+        assert detail["id"] == flow_id
+        assert "phase_count" in detail
+
+        _step(5, "flow update -- rename the flow")
+        result = self._run(
+            "flow",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--name",
+            f"{RUN_ID}-flow-renamed",
+        )
+        assert result.exit_code == 0, result.output
+        updated = json.loads(result.output)["data"]
+        assert updated["id"] == flow_id
+
+        _step(6, "flow schedule -- attach a cron schedule")
+        result = self._run(
+            "flow",
+            "schedule",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--cron",
+            "0 6 * * *",
+        )
+        assert result.exit_code == 0, result.output
+        sched = json.loads(result.output)["data"]
+        assert sched["status"] in ("created", "updated")
+        assert sched["config_id"] == flow_id
+        assert sched["cron_tab"] == "0 6 * * *"
+
+        _step(7, "flow schedule-remove -- remove schedule, idempotent")
+        result = self._run(
+            "flow",
+            "schedule-remove",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--yes",
+        )
+        assert result.exit_code == 0, result.output
+        removed = json.loads(result.output)["data"]
+        assert removed["deleted_count"] >= 1
+
+        # Idempotent second call
+        result2 = self._run(
+            "flow",
+            "schedule-remove",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--yes",
+        )
+        assert result2.exit_code == 0
+        assert json.loads(result2.output)["data"]["deleted_count"] == 0
+
+        _step(8, "flow delete -- delete the flow")
+        result = self._run(
+            "flow",
+            "delete",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--yes",
+        )
+        assert result.exit_code == 0, result.output
+        deleted = json.loads(result.output)["data"]
+        assert deleted["status"] == "deleted"
+        assert deleted["config_id"] == flow_id
+        # Remove from cleanup list since we deleted it
+        self._created_flows.remove(("keboola.flow", flow_id))
+
+    def test_flow_dag_validation_rejects_cycle(self) -> None:
+        """flow new with a cyclic phase dependency must fail with INVALID_FLOW_DAG."""
+        cyclic_yaml = (
+            "phases:\n"
+            "  - id: 1\n    name: A\n    dependsOn: [2]\n"
+            "  - id: 2\n    name: B\n    dependsOn: [1]\n"
+            "tasks: []\n"
+        )
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(cyclic_yaml)
+            yaml_path = f.name
+
+        try:
+            result = self._run(
+                "flow",
+                "new",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.flow",
+                "--name",
+                f"{RUN_ID}-cyclic",
+                "--file",
+                f"@{yaml_path}",
+            )
+            assert result.exit_code != 0
+            out = json.loads(result.output)
+            assert out["error"]["code"] == "INVALID_FLOW_DAG"
+        finally:
+            import os as _os
+
+            _os.unlink(yaml_path)
+
+    def test_flow_list_no_project_returns_all(self) -> None:
+        """flow list without --project returns flows from all registered projects."""
+        result = self._run("flow", "list")
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert "flows" in data
+        assert "errors" in data

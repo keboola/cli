@@ -315,6 +315,38 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Use --org-id OR --project-ids (at least one required).
     Token via KBC_MANAGE_API_TOKEN env var or interactive prompt.
 
+### Flows (Orchestrator + Conditional)
+
+  kbagent flow list [--project NAME] [--branch ID]
+    List all flows (keboola.orchestrator + keboola.flow) across projects.
+
+  kbagent flow detail --project NAME --flow-id ID [--component-id keboola.orchestrator|keboola.flow] [--branch ID]
+    Show phases, tasks, and full configuration. --component-id defaults to keboola.orchestrator.
+
+  kbagent flow schema
+    Print the YAML format accepted by 'flow new' and 'flow update'.
+
+  kbagent flow new --project NAME --name "Name" [--component-id keboola.orchestrator|keboola.flow] [--description D] [--file YAML|@file|-] [--branch ID]
+    Create a new flow. --component-id defaults to keboola.flow (newer format).
+    --file accepts YAML with 'phases' and 'tasks' keys. DAG is validated (acyclic, refs exist).
+
+  kbagent flow update --project NAME --flow-id ID [--component-id ID] [--name N] [--description D] [--file YAML] [--branch ID]
+    Update a flow's name, description, or phases/tasks. --file replaces both phases and tasks.
+    Omitting --file leaves the flow body unchanged. DAG re-validated on write.
+
+  kbagent flow delete --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]
+    Delete a flow. Does NOT remove associated keboola.scheduler configs.
+    Run 'flow schedule-remove' first if you want to clean up schedules.
+
+  kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--component-id ID] [--timezone TZ] [--enabled/--disabled] [--name NAME] [--branch ID]
+    Upsert a cron schedule: updates the existing keboola.scheduler config if one exists, creates one
+    otherwise. Calling twice with a new cron replaces the old schedule — no duplicates created.
+    Schedules are stored as Storage API configs, not a separate scheduler service.
+
+  kbagent flow schedule-remove --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]
+    Remove all schedules bound to this flow (deletes all matching keboola.scheduler configs).
+    Idempotent: safe to run when no schedules exist.
+
 ### Development Branches
 
   kbagent branch list [--project NAME]

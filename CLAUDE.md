@@ -331,6 +331,15 @@ kbagent kai ask --message "question" [--project NAME]
 kbagent kai chat --message "msg" [--chat-id ID] [--project NAME]
 kbagent kai history [--project NAME] [--limit N]
 
+kbagent flow list [--project NAME] [--branch ID]
+kbagent flow detail --project NAME --flow-id ID [--component-id keboola.orchestrator|keboola.flow] [--branch ID]
+kbagent flow schema
+kbagent flow new --project NAME --name NAME [--component-id keboola.orchestrator|keboola.flow] [--description D] [--file @path.yaml|-|JSON] [--branch ID]
+kbagent flow update --project NAME --flow-id ID [--component-id ID] [--name N] [--description D] [--file @path.yaml|-|JSON] [--branch ID]
+kbagent flow delete --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]
+kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--component-id ID] [--timezone TZ] [--disabled] [--branch ID]
+kbagent flow schedule-remove --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]
+
 kbagent context
 kbagent init [--from-global]
 kbagent doctor [--fix]

@@ -13,6 +13,7 @@ from .commands.config import config_app
 from .commands.context import context_command
 from .commands.doctor import doctor_command
 from .commands.encrypt import encrypt_app
+from .commands.flow import flow_app
 from .commands.init import init_command
 from .commands.job import job_app
 from .commands.kai import kai_app
@@ -39,6 +40,7 @@ from .services.config_service import ConfigService
 from .services.deep_lineage_service import DeepLineageService
 from .services.doctor_service import DoctorService
 from .services.encrypt_service import EncryptService
+from .services.flow_service import FlowService
 from .services.job_service import JobService
 from .services.kai_service import KaiService
 from .services.lineage_service import LineageService
@@ -83,6 +85,10 @@ app.add_typer(storage_app, name="storage", rich_help_panel=_BROWSE)
 app.add_typer(sharing_app, name="sharing", rich_help_panel=_BROWSE)
 app.add_typer(lineage_app, name="lineage", rich_help_panel=_BROWSE)
 app.add_typer(kai_app, name="kai", rich_help_panel=_BROWSE)
+
+# -- Flows --
+_FLOWS = "Flows"
+app.add_typer(flow_app, name="flow", rich_help_panel=_FLOWS)
 
 # -- Development --
 _DEV = "Development"
@@ -260,6 +266,7 @@ def main(
     sync_service = SyncService(config_store=config_store)
     variables_service = VariablesService(config_store=config_store)
     encrypt_service = EncryptService(config_store=config_store)
+    flow_service = FlowService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
     kai_service = KaiService(config_store=config_store)
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
@@ -310,6 +317,7 @@ def main(
     ctx.obj["sync_service"] = sync_service
     ctx.obj["variables_service"] = variables_service
     ctx.obj["encrypt_service"] = encrypt_service
+    ctx.obj["flow_service"] = flow_service
     ctx.obj["workspace_service"] = workspace_service
     ctx.obj["kai_service"] = kai_service
     ctx.obj["doctor_service"] = doctor_service
