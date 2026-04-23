@@ -15,6 +15,21 @@ from .base import BaseService
 logger = logging.getLogger(__name__)
 
 
+def _is_orphaned_workspace(ws: dict[str, Any], config_names: dict[str, str]) -> bool:
+    """Return True if a workspace has no backing keboola.sandboxes config.
+
+    A workspace is orphaned when it is tied to keboola.sandboxes (the normal
+    kbagent creation path) but the sandbox config no longer exists — either it
+    was deleted separately or was never created.
+    """
+    component_id = ws.get("component_id", "")
+    config_id = str(ws.get("config_id", ""))
+    if component_id != "keboola.sandboxes":
+        return False
+    # config_names keys are sandbox config IDs; absence means orphan
+    return not config_id or config_id not in config_names
+
+
 class WorkspaceService(BaseService):
     """Business logic for managing Keboola workspaces.
 
@@ -257,11 +272,14 @@ class WorkspaceService(BaseService):
     def list_workspaces(
         self,
         aliases: list[str] | None = None,
+        orphaned_only: bool = False,
     ) -> dict[str, Any]:
         """List workspaces across one or multiple projects.
 
         Args:
             aliases: Project aliases to query. None means all projects.
+            orphaned_only: If True, return only orphaned workspaces — those
+                whose keboola.sandboxes config no longer exists.
 
         Returns:
             Dict with "workspaces" and "errors" lists.
@@ -283,20 +301,24 @@ class WorkspaceService(BaseService):
                 for ws in raw_workspaces:
                     connection = ws.get("connection", {})
                     config_id = ws.get("configurationId") or ""
-                    workspaces.append(
-                        {
-                            "project_alias": alias,
-                            "id": ws.get("id"),
-                            "name": config_names.get(str(config_id), ws.get("name", "")),
-                            "backend": connection.get("backend", ""),
-                            "host": connection.get("host", ""),
-                            "schema": connection.get("schema", ""),
-                            "user": connection.get("user", ""),
-                            "created": ws.get("created", ""),
-                            "component_id": ws.get("component") or "",
-                            "config_id": config_id,
-                        }
-                    )
+                    component_id = ws.get("component") or ""
+                    entry = {
+                        "project_alias": alias,
+                        "id": ws.get("id"),
+                        "name": config_names.get(str(config_id), ws.get("name", "")),
+                        "backend": connection.get("backend", ""),
+                        "host": connection.get("host", ""),
+                        "schema": connection.get("schema", ""),
+                        "user": connection.get("user", ""),
+                        "created": ws.get("created", ""),
+                        "component_id": component_id,
+                        "config_id": config_id,
+                    }
+                    if orphaned_only:
+                        if _is_orphaned_workspace(entry, config_names):
+                            workspaces.append(entry)
+                    else:
+                        workspaces.append(entry)
                 return (alias, workspaces, True)
             except KeboolaApiError as exc:
                 return (
@@ -331,6 +353,75 @@ class WorkspaceService(BaseService):
         return {
             "workspaces": all_workspaces,
             "errors": errors,
+        }
+
+    def gc_workspaces(
+        self,
+        aliases: list[str] | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Delete all orphaned workspaces (workspace GC).
+
+        An orphan is a keboola.sandboxes-backed workspace whose config no longer
+        exists. Reuses delete_workspace for each orphan so the sandbox config
+        cleanup path is also exercised.
+
+        Args:
+            aliases: Project aliases to query. None means all projects.
+            dry_run: If True, list orphans without deleting.
+
+        Returns:
+            Dict with dry_run flag, would_delete/deleted list, errors, count.
+        """
+        orphan_result = self.list_workspaces(aliases=aliases, orphaned_only=True)
+        orphans = orphan_result["workspaces"]
+        list_errors = orphan_result["errors"]
+
+        if dry_run:
+            return {
+                "dry_run": True,
+                "would_delete": orphans,
+                "count": len(orphans),
+                "errors": list_errors,
+                "message": (
+                    f"DRY RUN: {len(orphans)} orphaned workspace(s) would be deleted."
+                    + (" No errors." if not list_errors else f" {len(list_errors)} list error(s).")
+                ),
+            }
+
+        deleted: list[dict[str, Any]] = []
+        delete_errors: list[dict[str, Any]] = []
+        for ws in orphans:
+            try:
+                self.delete_workspace(alias=ws["project_alias"], workspace_id=ws["id"])
+                deleted.append(ws)
+            except Exception as exc:
+                # Full traceback goes to the logger (observability for unexpected
+                # errors like AttributeError); user-facing flow is unchanged.
+                logger.exception(
+                    "Failed to delete orphaned workspace %s in project %s",
+                    ws["id"],
+                    ws["project_alias"],
+                )
+                delete_errors.append(
+                    {
+                        "workspace_id": ws["id"],
+                        "project_alias": ws["project_alias"],
+                        "error": str(exc),
+                    }
+                )
+
+        all_errors = list_errors + delete_errors
+        return {
+            "dry_run": False,
+            "deleted": deleted,
+            "errors": all_errors,
+            "count_deleted": len(deleted),
+            "count_errors": len(all_errors),
+            "message": (
+                f"GC complete: {len(deleted)} orphaned workspace(s) deleted"
+                + (f", {len(all_errors)} error(s)." if all_errors else ".")
+            ),
         }
 
     def get_workspace(self, alias: str, workspace_id: int) -> dict[str, Any]:
@@ -384,6 +475,7 @@ class WorkspaceService(BaseService):
         try:
             # Get workspace details to find associated config
             config_id = None
+            component = None
             try:
                 ws_data = client.get_workspace(workspace_id, branch_id=branch_id)
                 component = ws_data.get("component")

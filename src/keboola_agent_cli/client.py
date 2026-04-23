@@ -352,6 +352,64 @@ class KeboolaClient(BaseHttpClient):
                 folder_map[f"{comp_id}/{config_id}"] = meta["value"]
         return folder_map
 
+    def list_config_metadata(
+        self,
+        component_id: str,
+        config_id: str,
+        branch_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List metadata entries on a configuration.
+
+        GET /v2/storage/[branch/{b}/]components/{c}/configs/{id}/metadata
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        response = self._request(
+            "GET",
+            f"{prefix}/components/{quote(component_id, safe='')}/configs/{quote(config_id, safe='')}/metadata",
+        )
+        return response.json()
+
+    def set_config_metadata(
+        self,
+        component_id: str,
+        config_id: str,
+        entries: list[tuple[str, str]],
+        branch_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Bulk-set metadata key/value pairs on a configuration.
+
+        POST /v2/storage/[branch/{b}/]components/{c}/configs/{id}/metadata
+        Same PHP-style indexed form as set_branch_metadata.
+        """
+        form: dict[str, str] = {}
+        for i, (key, value) in enumerate(entries):
+            form[f"metadata[{i}][key]"] = key
+            form[f"metadata[{i}][value]"] = value
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        response = self._request(
+            "POST",
+            f"{prefix}/components/{quote(component_id, safe='')}/configs/{quote(config_id, safe='')}/metadata",
+            data=form,
+        )
+        return response.json()
+
+    def delete_config_metadata(
+        self,
+        component_id: str,
+        config_id: str,
+        metadata_id: int | str,
+        branch_id: int | None = None,
+    ) -> None:
+        """Delete a single metadata entry on a configuration by its numeric ID.
+
+        DELETE /v2/storage/[branch/{b}/]components/{c}/configs/{id}/metadata/{mid}
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        self._request(
+            "DELETE",
+            f"{prefix}/components/{quote(component_id, safe='')}/configs/{quote(config_id, safe='')}/metadata/{metadata_id}",
+        )
+
     def create_config(
         self,
         component_id: str,

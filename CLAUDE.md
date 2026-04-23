@@ -255,6 +255,11 @@ kbagent config rename --project NAME --component-id ID --config-id ID --name "Ne
 kbagent config variables-set --project NAME --component-id ID --config-id ID --var KEY=VALUE [--var ...] [--replace] [--variables-id ID] [--values-id ID] [--branch ID] [--dry-run]
 kbagent config variables-get --project NAME --component-id ID --config-id ID [--branch ID]
 kbagent config variables-clear --project NAME --component-id ID --config-id ID [--branch ID] [--yes]
+kbagent config metadata-list --project NAME --component-id ID --config-id ID [--branch ID]
+kbagent config get-metadata --project NAME --component-id ID --config-id ID --key KEY [--branch ID]
+kbagent config set-metadata --project NAME --component-id ID --config-id ID --key KEY --value VALUE [--branch ID]
+kbagent config delete-metadata --project NAME --component-id ID --config-id ID --metadata-id ID [--branch ID] [--yes]
+kbagent config set-folder --project NAME --component-id ID --config-id ID --name FOLDER [--branch ID]
 
 kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
 kbagent job detail --project NAME --job-id ID
@@ -311,13 +316,14 @@ kbagent branch metadata-set --project NAME --key KEY [--text STR | --file PATH |
 kbagent branch metadata-delete --project NAME --metadata-id ID [--branch ID|default]
 
 kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
-kbagent workspace list [--project NAME]
+kbagent workspace list [--project NAME ...] [--orphaned]
 kbagent workspace detail --project ALIAS --workspace-id ID
 kbagent workspace delete --project ALIAS --workspace-id ID
 kbagent workspace password --project ALIAS --workspace-id ID
 kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [--tables ...] [--preserve]
 kbagent workspace query --project ALIAS --workspace-id ID --sql "SELECT ..." [--transactional]
 kbagent workspace query --project ALIAS --workspace-id ID --file query.sql
+kbagent workspace gc [--project NAME ...] [--dry-run] [--yes]
 kbagent workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]

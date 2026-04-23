@@ -45,6 +45,11 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `config variables-set --project NAME --component-id ID --config-id ID --var KEY=VALUE [--var ...] [--replace] [--variables-id ID] [--values-id ID] [--branch ID] [--dry-run] [--allow-plaintext-on-encrypt-failure] [--yes]` -- attach variable values to a config. Auto-creates a sibling `keboola.variables` config + default row on first use and links it via the parent's `runtime.variables_id` / `variables_values_id`. Defaults to merge; `--replace` drops keys not in `--var`. `#`-prefixed values encrypt via the Encryption API (fail-closed; exit non-zero on `ENCRYPTION_FAILED`). See `variables-workflow.md`
 - `config variables-get --project NAME --component-id ID --config-id ID [--branch ID]` -- resolve `variables_id` + `values_id` from the parent config and fetch the current KEY=VALUE map. Returns `{linked: bool, variables_id, values_id, values}`; `linked=false` means the parent has no variables attached
 - `config variables-clear --project NAME --component-id ID --config-id ID [--branch ID] [--yes]` -- unlink variables from the parent config (strips `variables_id` + `variables_values_id`). **Does NOT delete** the backing `keboola.variables` config -- use `config delete` explicitly if you've verified nothing else references it
+- `config metadata-list --project NAME --component-id ID --config-id ID [--branch ID]` -- list all metadata entries on a configuration (id, key, value, provider, timestamp). Branch-aware
+- `config get-metadata --project NAME --component-id ID --config-id ID --key KEY [--branch ID]` -- read a single metadata value by key. Exits with `NOT_FOUND` (exit 1) if absent
+- `config set-metadata --project NAME --component-id ID --config-id ID --key KEY --value VALUE [--branch ID]` -- set (upsert) a metadata key/value on a configuration. Common keys: `KBC.configuration.folderName`, plus any custom `KBC.*` agent-facing tags
+- `config delete-metadata --project NAME --component-id ID --config-id ID --metadata-id ID [--branch ID] [--yes]` -- delete a configuration metadata entry by its numeric ID (from `metadata-list`)
+- `config set-folder --project NAME --component-id ID --config-id ID --name FOLDER [--branch ID]` -- set (or clear, with empty `--name`) the `KBC.configuration.folderName` metadata, which groups configs into named folders in the Keboola UI. See `config-metadata-workflow.md`
 
 ## Job History
 - `job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N]` -- list jobs (default 50, max 500)
@@ -97,12 +102,13 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 
 ## Workspaces (SQL Debugging)
 - `workspace create --project ALIAS [--name NAME] [--ui] [--read-only]` -- create workspace (headless ~1s, `--ui` ~15s)
-- `workspace list [--project NAME]` -- list workspaces
+- `workspace list [--project NAME ...] [--orphaned]` -- list workspaces. `--project` repeatable for multi-project; `--orphaned` filters to workspaces whose backing `keboola.sandboxes` config is missing
 - `workspace detail --project ALIAS --workspace-id ID` -- show connection details
 - `workspace delete --project ALIAS --workspace-id ID` -- delete workspace
 - `workspace password --project ALIAS --workspace-id ID` -- reset and return new password
 - `workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [...] [--preserve]` -- load storage tables
 - `workspace query --project ALIAS --workspace-id ID --sql "..." [--file F] [--transactional]` -- run SQL via Query Service
+- `workspace gc [--project NAME ...] [--dry-run] [--yes]` -- garbage-collect orphaned workspaces (and any lingering `keboola.sandboxes` configs). `--dry-run` previews without deleting; `--project` repeatable, omit to GC across all connected projects
 - `workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]` -- workspace from existing transform
 
 ## MCP Tools
