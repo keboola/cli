@@ -373,8 +373,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
 ### Flows (Orchestrator + Conditional)
 
-  kbagent flow list [--project NAME] [--branch ID]
+  kbagent flow list [--project NAME] [--branch ID] [--with-schedules]
     List all flows (keboola.orchestrator + keboola.flow) across projects.
+    --with-schedules enriches each row with {{schedule_id, cron, timezone, enabled}}
+    entries from keboola.scheduler (one extra API call per project, NOT per flow).
 
   kbagent flow detail --project NAME --flow-id ID [--component-id keboola.orchestrator|keboola.flow] [--branch ID]
     Show phases, tasks, and full configuration. --component-id defaults to keboola.orchestrator.
@@ -402,6 +404,28 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent flow schedule-remove --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]
     Remove all schedules bound to this flow (deletes all matching keboola.scheduler configs).
     Idempotent: safe to run when no schedules exist.
+
+### Schedule Discovery & Audit (Fleet-Wide)
+
+  kbagent schedule list [--project NAME ...] [--enabled-only] [--branch ID]
+    Fleet-wide list of every keboola.scheduler config across one, many, or all
+    projects (multi-project fan-out; no --project means all). Each row shows
+    project_alias, schedule_id, schedule_name, parent_component_id, parent_config_id,
+    parent_name, cron, timezone, and enabled. Use --enabled-only to hide disabled
+    schedules. Answers issue #195: "which flows are on cron triggers across N projects?".
+
+  kbagent schedule detail --project NAME --schedule-id ID [--branch ID]
+    Full detail for a single schedule: cron, timezone, enabled state, plus the
+    parent config's component_id/config_id/name. Orphaned schedules (parent
+    deleted) still return with parent_name="" -- never hard-fails.
+
+  kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--project NAME ...] [--branch ID]
+    Audit filters, combinable with AND:
+    * --cron-window "02:00-04:00" matches schedules whose cron's hour field
+      is entirely inside the window. Hour-level approximation -- see gotchas.md.
+    * --not-run-since N matches schedules whose parent config's latest job is
+      older than N days (or never ran).
+    Without filters: lists all schedules plus last_run_at + matches_cron_window.
 
 ### Development Branches
 

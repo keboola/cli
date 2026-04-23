@@ -4219,6 +4219,298 @@ class TestE2EFlowOperations:
         assert "flows" in data
         assert "errors" in data
 
+    def test_flow_list_with_schedules(self) -> None:
+        """flow list --with-schedules enriches rows with schedule metadata.
+
+        Creates a flow + schedule, verifies the enrichment appears on the
+        correct flow row (and is empty on other flows), then cleans up.
+        """
+        # Create a flow
+        result = self._run(
+            "flow",
+            "new",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--name",
+            f"{RUN_ID}-flow-ws",
+            "--description",
+            "E2E with-schedules test",
+        )
+        assert result.exit_code == 0, result.output
+        flow_id = json.loads(result.output)["data"]["id"]
+        self._created_flows.append(("keboola.flow", flow_id))
+
+        # Attach a schedule
+        sched_result = self._run(
+            "flow",
+            "schedule",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--cron",
+            "0 6 * * *",
+        )
+        assert sched_result.exit_code == 0, sched_result.output
+
+        try:
+            # flow list --with-schedules must expose schedules inline
+            result = self._run(
+                "flow",
+                "list",
+                "--project",
+                self.alias,
+                "--with-schedules",
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)["data"]
+            enriched = [f for f in data["flows"] if f["config_id"] == flow_id]
+            assert len(enriched) == 1
+            assert "schedules" in enriched[0]
+            assert len(enriched[0]["schedules"]) >= 1
+            assert enriched[0]["schedules"][0]["cron"] == "0 6 * * *"
+        finally:
+            # Clean up the schedule so the flow deletion in setup's teardown works
+            self._run(
+                "flow",
+                "schedule-remove",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.flow",
+                "--flow-id",
+                flow_id,
+                "--yes",
+            )
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EScheduleOperations:
+    """End-to-end tests for schedule discovery and audit commands.
+
+    Creates a keboola.flow + cron schedule, then exercises
+    schedule list / detail / find against the real Keboola project.
+    Cleans up flow + schedule on teardown.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-sched"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        self._created_flows: list[tuple[str, str]] = []
+
+        from keboola_agent_cli.client import KeboolaClient
+
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        # Create a flow + schedule up-front so every test has data to work with.
+        flow_result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "flow",
+                "new",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.flow",
+                "--name",
+                f"{RUN_ID}-sched-flow",
+                "--description",
+                "E2E schedule discovery fixture",
+            ],
+        )
+        assert flow_result.exit_code == 0, flow_result.output
+        self.flow_id = json.loads(flow_result.output)["data"]["id"]
+        self._created_flows.append(("keboola.flow", self.flow_id))
+
+        sched_result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "flow",
+                "schedule",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.flow",
+                "--flow-id",
+                self.flow_id,
+                "--cron",
+                "0 3 * * *",
+                "--timezone",
+                "UTC",
+            ],
+        )
+        assert sched_result.exit_code == 0, sched_result.output
+        self.schedule_id = json.loads(sched_result.output)["data"]["schedule_id"]
+
+        yield
+
+        import contextlib
+
+        # Clean up schedule (best-effort), then flow
+        with contextlib.suppress(Exception):
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "flow",
+                    "schedule-remove",
+                    "--project",
+                    self.alias,
+                    "--component-id",
+                    "keboola.flow",
+                    "--flow-id",
+                    self.flow_id,
+                    "--yes",
+                ],
+            )
+        for component_id, flow_id in self._created_flows:
+            with contextlib.suppress(Exception):
+                self.client.delete_config(
+                    component_id=component_id, config_id=flow_id, branch_id=None
+                )
+        self.client.close()
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def test_schedule_list_surfaces_fixture(self) -> None:
+        _step(1, "schedule list shows the fixture schedule")
+        result = self._run("schedule", "list", "--project", self.alias)
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        ids = {s["schedule_id"] for s in data["schedules"]}
+        assert self.schedule_id in ids
+        match = next(s for s in data["schedules"] if s["schedule_id"] == self.schedule_id)
+        assert match["parent_component_id"] == "keboola.flow"
+        assert match["parent_config_id"] == self.flow_id
+        assert match["cron"] == "0 3 * * *"
+        assert match["enabled"] is True
+
+    def test_schedule_list_enabled_only(self) -> None:
+        _step(2, "schedule list --enabled-only keeps the enabled fixture schedule")
+        result = self._run("schedule", "list", "--project", self.alias, "--enabled-only")
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        ids = {s["schedule_id"] for s in data["schedules"]}
+        assert self.schedule_id in ids
+
+    def test_schedule_detail_returns_parent_name(self) -> None:
+        _step(3, "schedule detail joins parent_name from the flow config")
+        result = self._run(
+            "schedule",
+            "detail",
+            "--project",
+            self.alias,
+            "--schedule-id",
+            self.schedule_id,
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert data["schedule_id"] == self.schedule_id
+        assert data["parent_config_id"] == self.flow_id
+        assert data["parent_name"] == f"{RUN_ID}-sched-flow"
+        assert data["cron"] == "0 3 * * *"
+
+    def test_schedule_find_cron_window_match(self) -> None:
+        _step(4, "schedule find --cron-window catches the 03:00 fixture schedule")
+        result = self._run(
+            "schedule",
+            "find",
+            "--project",
+            self.alias,
+            "--cron-window",
+            "02:00-04:00",
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        ids = {s["schedule_id"] for s in data["schedules"]}
+        assert self.schedule_id in ids
+
+    def test_schedule_find_cron_window_exclude(self) -> None:
+        _step(5, "schedule find --cron-window excludes schedules outside window")
+        result = self._run(
+            "schedule",
+            "find",
+            "--project",
+            self.alias,
+            "--cron-window",
+            "10:00-12:00",
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        ids = {s["schedule_id"] for s in data["schedules"]}
+        assert self.schedule_id not in ids
+
+    def test_schedule_find_not_run_since_includes_fresh_fixture(self) -> None:
+        """The fixture flow has never run so it counts as stale for any N."""
+        _step(6, "schedule find --not-run-since 30 includes never-run schedules")
+        result = self._run(
+            "schedule",
+            "find",
+            "--project",
+            self.alias,
+            "--not-run-since",
+            "30",
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        ids = {s["schedule_id"] for s in data["schedules"]}
+        assert self.schedule_id in ids
+
+    def test_schedule_find_invalid_window_exits_5(self) -> None:
+        _step(7, "schedule find rejects malformed --cron-window at service boundary")
+        result = self._run(
+            "schedule",
+            "find",
+            "--project",
+            self.alias,
+            "--cron-window",
+            "garbage",
+        )
+        assert result.exit_code == 5
+
+    def test_schedule_detail_not_found_exits_1(self) -> None:
+        _step(8, "schedule detail on unknown ID returns a KeboolaApiError")
+        result = self._run(
+            "schedule",
+            "detail",
+            "--project",
+            self.alias,
+            "--schedule-id",
+            "0000000000000000000000000000",
+        )
+        assert result.exit_code != 0
+        assert result.exit_code in (1, 3, 4)
+
 
 # ---------------------------------------------------------------------------
 # PR8: Config metadata + Workspace GC (standalone, no storage dependency)

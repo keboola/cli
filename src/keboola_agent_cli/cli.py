@@ -22,6 +22,7 @@ from .commands.org import org_app
 from .commands.permissions import permissions_app
 from .commands.project import project_app
 from .commands.repl import repl_command
+from .commands.schedule import schedule_app
 from .commands.sharing import sharing_app
 from .commands.storage import storage_app
 from .commands.sync import sync_app
@@ -47,6 +48,7 @@ from .services.lineage_service import LineageService
 from .services.mcp_service import McpService
 from .services.org_service import OrgService
 from .services.project_service import ProjectService
+from .services.schedule_service import ScheduleService
 from .services.sharing_service import SharingService
 from .services.storage_service import StorageService
 from .services.sync_service import SyncService
@@ -89,6 +91,7 @@ app.add_typer(kai_app, name="kai", rich_help_panel=_BROWSE)
 # -- Flows --
 _FLOWS = "Flows"
 app.add_typer(flow_app, name="flow", rich_help_panel=_FLOWS)
+app.add_typer(schedule_app, name="schedule", rich_help_panel=_FLOWS)
 
 # -- Development --
 _DEV = "Development"
@@ -267,6 +270,7 @@ def main(
     variables_service = VariablesService(config_store=config_store)
     encrypt_service = EncryptService(config_store=config_store)
     flow_service = FlowService(config_store=config_store)
+    schedule_service = ScheduleService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
     kai_service = KaiService(config_store=config_store)
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
@@ -318,6 +322,7 @@ def main(
     ctx.obj["variables_service"] = variables_service
     ctx.obj["encrypt_service"] = encrypt_service
     ctx.obj["flow_service"] = flow_service
+    ctx.obj["schedule_service"] = schedule_service
     ctx.obj["workspace_service"] = workspace_service
     ctx.obj["kai_service"] = kai_service
     ctx.obj["doctor_service"] = doctor_service

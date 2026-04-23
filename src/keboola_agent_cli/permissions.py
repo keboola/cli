@@ -139,6 +139,10 @@ OPERATION_REGISTRY: dict[str, str] = {
     "flow.delete": "destructive",
     "flow.schedule": "write",
     "flow.schedule-remove": "destructive",
+    # Schedule discovery / audit (read-only)
+    "schedule.list": "read",
+    "schedule.detail": "read",
+    "schedule.find": "read",
     # Top-level commands
     "init": "admin",
     "doctor": "read",

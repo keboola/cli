@@ -684,6 +684,18 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   row — use it to confirm which variant a flow lives under before issuing
   detail/update/delete/schedule commands.
 
+## `schedule find --cron-window` is an hour-field approximation
+
+`kbagent schedule find --cron-window "02:00-04:00"` is an **audit helper, not a real cron evaluator**. It parses the *hour* field of the cron expression and asks whether every hour at which the cron fires falls inside the passed window. It deliberately does **not** account for minute precision, day-of-month restrictions, or day-of-week restrictions.
+
+- **Minutes in `--cron-window` are syntactic sugar.** The spec `02:00-04:00` is accepted in the `HH:MM-HH:MM` format because it matches how people describe time windows, but the matcher only uses the hour part. A cron expression `*/10 2-4 * * *` (every 10 minutes within hours 2-4) matches `--cron-window "02:30-04:30"` exactly the same as `--cron-window "02:00-04:00"`.
+- **Hour field `*` (fires every hour) never matches a bounded window.** This is intentional: from an audit standpoint, "fires every hour" is the opposite of "confined to a 2-hour window". If you wanted to catch those, pass `--cron-window "00:00-23:00"` (or skip the window filter entirely).
+- **Wrap-around windows are not supported.** `--cron-window "22:00-02:00"` returns an error. Split into two passes (`22:00-23:00` and `00:00-02:00`) or use a script that re-unions the results.
+- **`,` lists, `-` ranges, and `*/N` steps on the hour field are all expanded.** Unparseable inputs fail safe to "no match" rather than "match everything" -- cleanup audits should never accidentally widen.
+- **Day-of-week / day-of-month restrictions are ignored.** A cron that only runs on Mondays is matched as if it fired every day. For most audit use-cases this is the right default: "which schedules *can* fire in this window?" is more operationally useful than "which schedules *will* fire today?".
+
+If you need full cron semantics (e.g. "what's the next time this cron fires?") pipe the schedule list into `croniter` or a similar library from your own script -- the CLI deliberately stays out of that space.
+
 ## Flow: `schedule` is an upsert (no `schedule-update`)
 
 - `kbagent flow schedule` creates a `keboola.scheduler` config on first run
