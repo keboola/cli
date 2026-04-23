@@ -56,6 +56,7 @@ class ErrorCode(StrEnum):
     EXPORT_NO_FILE = "EXPORT_NO_FILE"
     EXPORT_NO_URL = "EXPORT_NO_URL"
     NOT_SLICED = "NOT_SLICED"
+    FILE_NO_URL = "FILE_NO_URL"
 
     # I/O
     FILE_NOT_FOUND = "FILE_NOT_FOUND"
@@ -81,9 +82,6 @@ class ErrorCode(StrEnum):
 
     # Sync
     PARENT_CONFIG_NOT_TRACKED = "PARENT_CONFIG_NOT_TRACKED"
-
-    # Storage
-    FILE_NO_URL = "FILE_NO_URL"
 
     # Encryption
     ENCRYPTION_FAILED = "ENCRYPTION_FAILED"
