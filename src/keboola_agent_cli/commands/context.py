@@ -341,7 +341,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Project Sync
 
-  kbagent sync init --project ALIAS [--directory DIR] [--git-branching]
+  kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
     Initialize sync working directory. --git-branching enables git-to-Keboola branch mapping.
 
   kbagent sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N]
