@@ -48,7 +48,7 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 ## Storage
 - `storage buckets [--project NAME] [--branch ID]` -- list buckets with sharing/linked info (branch-aware)
 - `storage bucket-detail --project NAME --bucket-id ID [--branch ID]` -- bucket detail with Snowflake paths (branch-aware)
-- `storage tables --project NAME [--bucket-id ID] [--branch ID]` -- list tables, optionally by bucket (branch-aware)
+- `storage tables [--project NAME ...] [--bucket-id ID] [--branch ID]` -- list tables across all connected projects in parallel (multi-project by default, same as `storage buckets`); repeat `--project` to target a subset; `--bucket-id` is applied independently per project (missing buckets become per-project errors); `--branch` requires exactly one `--project`
 - `storage table-detail --project NAME --table-id ID [--branch ID]` -- table detail with columns, types, primary key, row count (branch-aware)
 - `storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]` -- create bucket (branch-aware)
 - `storage create-table --project NAME --bucket-id ID --name NAME --column COL:TYPE [...] [--primary-key COL] [--branch ID]` -- create typed table (branch-aware)

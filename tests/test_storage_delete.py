@@ -884,7 +884,7 @@ class TestStorageTablesBranch:
         ):
             MockStore.return_value = store
             svc = MockSvc.return_value
-            svc.list_tables.return_value = {"tables": [], "project_alias": "test"}
+            svc.list_tables.return_value = {"tables": [], "errors": []}
             result = runner.invoke(
                 app,
                 [
@@ -900,6 +900,8 @@ class TestStorageTablesBranch:
         assert result.exit_code == 0
         call_kwargs = svc.list_tables.call_args.kwargs
         assert call_kwargs["branch_id"] == 30
+        # Multi-project CLI passes --project as a list
+        assert call_kwargs["aliases"] == ["test"]
 
 
 class TestDeleteColumnBranch:

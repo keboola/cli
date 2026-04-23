@@ -102,7 +102,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Terminate one or more Queue API jobs (use to stop runaway or stuck jobs) | `kbagent job terminate --project PROJECT` |
 | List storage buckets with sharing/linked bucket information | `kbagent storage buckets` |
 | Show detailed bucket info including Snowflake direct access paths | `kbagent storage bucket-detail --project PROJECT --bucket-id BUCKET-ID` |
-| List storage tables from a project | `kbagent storage tables --project PROJECT` |
+| List storage tables from one or more projects | `kbagent storage tables` |
 | Show detailed table info including columns and types | `kbagent storage table-detail --project PROJECT --table-id TABLE-ID` |
 | Create a new storage bucket | `kbagent storage create-bucket --project PROJECT --stage STAGE --name NAME` |
 | Create a new storage table with typed columns | `kbagent storage create-table --project PROJECT --bucket-id BUCKET-ID --name NAME --column COLUMN` |

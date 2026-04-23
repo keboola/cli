@@ -139,7 +139,7 @@ HintRegistry.register(
 HintRegistry.register(
     CommandHint(
         cli_command="storage.tables",
-        description="List tables in a project",
+        description="List tables in one or more projects",
         steps=[
             HintStep(
                 comment="List tables",
@@ -158,7 +158,7 @@ HintRegistry.register(
                     service_module="storage_service",
                     method="list_tables",
                     args={
-                        "alias": "{project}",
+                        "aliases": "{project}",
                         "bucket_id": "{bucket_id}",
                         "branch_id": "{branch}",
                     },
