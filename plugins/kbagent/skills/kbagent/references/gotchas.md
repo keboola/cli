@@ -1,5 +1,60 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## `config detail` has a bulk mode (since 0.23.0)
+
+- **Omit `--config-id`** to get every configuration under `--component-id`
+  as `{"configs": [...], "errors": [...]}`. Each row is tagged with
+  `project_alias` and `branch_id`. Shape is identical to `config list`,
+  `storage tables`, etc. Use this instead of forking 100 parallel
+  `config detail` subprocesses -- one request per project, not per config.
+- **Single-config shape unchanged.** Passing `--config-id` returns the
+  original flat dict (`.id`, `.name`, `.configuration`, `.rows`, ...) --
+  callers that already parse this shape are unaffected.
+- **`--config-id` + multiple `--project` is rejected** (exit 2 /
+  `INVALID_ARGUMENT`). A single config lives in exactly one project; the
+  CLI refuses to guess. Drop `--config-id` for multi-project fan-out.
+- **`--branch` requires exactly one `--project`** in both modes (branch
+  IDs are per-project; bulk across branches would mix meanings).
+- Bulk mode uses the same `list_components_with_configs` call `config search`
+  already uses (include=configuration,rows) -- filtering to `--component-id`
+  happens in memory. `config list` returns every component's summary;
+  `config detail --component-id X` returns every configuration body of
+  component X. Different use cases, same underlying endpoint.
+
+## `config list --include-rows` payload size warning (since 0.23.0)
+
+- The default `config list` response is summary-level: just name,
+  description, component, last_modified, folder per config. Cheap and fast.
+- `--include-rows` switches the service to
+  `list_components_with_configs(include=configuration,rows)` so each row
+  carries the full `configuration` dict and its `rows` list. Payload
+  grows proportionally to configuration complexity -- a project with
+  heavy Snowflake writers can easily return 5-10x more bytes. Use only
+  when you actually need the bodies (bulk audit dashboards, scripted
+  review across many projects). For just finding strings, prefer
+  `config search` -- same endpoint, tighter response.
+
+## `config detail --with-state` runtime-state fetch (since 0.23.0)
+
+- The `state` dict on a configuration is mutable runtime data components
+  persist between jobs (last sync cursors, auth refresh tokens, OAuth
+  intermediate state). It is **not** part of the summary; you have to
+  opt in with `--with-state`.
+- **Single mode:** adds one dedicated call to `get_config_state`
+  (`GET /v2/storage/components/{cid}/configs/{id}` -- the dedicated
+  `.../state` resource is not implemented by Storage API; the state
+  field rides on the detail response, which is what `get_config_state`
+  reads). The returned `state` key always holds the latest snapshot.
+- **Bulk mode:** does NOT fan out one HTTP call per config. Instead it
+  adds `include=state` to the single `list_components_with_configs`
+  call, so a project with 100 configs returns 100 states in one
+  request. No N+1. Parallelism bound by `BaseService._run_parallel`'s
+  thread pool (default max_parallel_workers = 10; overridable via
+  `KBAGENT_MAX_PARALLEL_WORKERS` or `config.json`).
+- Most configs return `state: {}` -- this is normal (the component has
+  never written state yet, or state was cleared). Treat `{}` as
+  "no state", not an error.
+
 ## Variables: attach, don't manage (since 0.21.0)
 
 - `keboola.variables` is an implementation detail. Use

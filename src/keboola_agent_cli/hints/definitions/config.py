@@ -11,9 +11,15 @@ HintRegistry.register(
         description="List configurations from connected projects",
         steps=[
             HintStep(
-                comment="List all components with their configurations",
+                comment=(
+                    "List all components with their configurations. "
+                    "When --include-rows is set, switch to "
+                    "list_components_with_configs(include=configuration,rows) "
+                    "so each config carries its full body and rows "
+                    "(significantly larger payload)."
+                ),
                 client=ClientCall(
-                    method="list_components",
+                    method="list_components_with_configs",
                     args={
                         "component_type": "{component_type}",
                         "branch_id": "{branch}",
@@ -30,6 +36,7 @@ HintRegistry.register(
                         "component_type": "{component_type}",
                         "component_id": "{component_id}",
                         "branch_id": "{branch}",
+                        "include_rows": "{include_rows}",
                     },
                 ),
             ),
@@ -37,6 +44,12 @@ HintRegistry.register(
         notes=[
             "Each component in the response has a 'configurations' list.",
             "Service layer returns {'configs': [...], 'errors': [...]} with flattened results.",
+            "Without --include-rows the call uses list_components (summary only: "
+            "name/description/component/last_modified/folder) -- the default.",
+            "With --include-rows the service switches to list_components_with_configs "
+            "(include=configuration,rows) so each row includes the full body. Payload "
+            "size grows proportionally to configuration complexity -- use only when "
+            "you need the bodies.",
         ],
     )
 )
@@ -46,10 +59,19 @@ HintRegistry.register(
 HintRegistry.register(
     CommandHint(
         cli_command="config.detail",
-        description="Show detailed information about a specific configuration",
+        description=(
+            "Show detailed information about one or many configurations. "
+            "With --config-id: single-config mode (unchanged shape). "
+            "Without --config-id: bulk mode -- every config under "
+            "--component-id, optionally across many projects."
+        ),
         steps=[
             HintStep(
-                comment="Get configuration detail",
+                comment=(
+                    "Single-config mode (--config-id set): fetch the config detail. "
+                    "The state field is already part of the response; --with-state "
+                    "triggers an explicit get_config_state call to refresh it."
+                ),
                 client=ClientCall(
                     method="get_config_detail",
                     args={
@@ -69,9 +91,51 @@ HintRegistry.register(
                         "component_id": "{component_id}",
                         "config_id": "{config_id}",
                         "branch_id": "{branch}",
+                        "with_state": "{with_state}",
                     },
                 ),
             ),
+            HintStep(
+                comment=(
+                    "Bulk mode (no --config-id): list components with configs and "
+                    "filter to --component-id. One HTTP request per project returns "
+                    "every config body + rows (+ state when include_state=True). "
+                    "For many projects, use ConfigService.get_config_detail with "
+                    "aliases=[...] for parallel fan-out via _run_parallel."
+                ),
+                client=ClientCall(
+                    method="list_components_with_configs",
+                    args={
+                        "branch_id": "{branch}",
+                        "include_state": "{with_state}",
+                    },
+                    result_var="components",
+                    result_hint="list[dict]",
+                ),
+                service=ServiceCall(
+                    service_class="ConfigService",
+                    service_module="config_service",
+                    method="get_config_detail",
+                    args={
+                        "alias": "{project}",
+                        "aliases": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": None,
+                        "branch_id": "{branch}",
+                        "with_state": "{with_state}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Single-config JSON shape preserved exactly for backward compat "
+            "(callers parsing detail.id, detail.configuration, etc. are unaffected).",
+            "Bulk mode returns {'configs': [...], 'errors': [...]} with per-row "
+            "project_alias -- identical envelope to config list, storage tables.",
+            "--with-state in bulk mode: include=state is added to the listing call "
+            "(still a single request per project, no N+1).",
+            "--config-id + multiple --project is rejected (exit 2) -- a single config "
+            "lives in one project.",
         ],
     )
 )

@@ -12,13 +12,33 @@ from typing import Any
 
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
-from ..constants import ENV_MAX_PARALLEL_WORKERS
+from ..constants import ENV_MAX_PARALLEL_WORKERS, UNEXPECTED_ERROR_MAX_MESSAGE_LEN
 from ..errors import ConfigError
 from ..models import ProjectConfig
 
 logger = logging.getLogger(__name__)
 
 ClientFactory = Callable[[str, str], KeboolaClient]
+
+
+def sanitize_unexpected_error(exc: BaseException) -> str:
+    """Truncate an exception message to a safe length for JSON error envelopes.
+
+    Any unhandled ``Exception`` surfaced as ``UNEXPECTED_ERROR`` may embed
+    URLs with query params, internal state formatting, or (under
+    ``--with-state``) fragments of runtime credentials such as OAuth
+    refresh tokens. Truncating to
+    :data:`keboola_agent_cli.constants.UNEXPECTED_ERROR_MAX_MESSAGE_LEN`
+    characters keeps the envelope diagnostic without surfacing full
+    response/state buffers. CWE-209.
+
+    The full exception is still written to the debug log so operators
+    retain the information when they explicitly opt in to verbose output.
+    """
+    raw = str(exc)
+    if len(raw) > UNEXPECTED_ERROR_MAX_MESSAGE_LEN:
+        return raw[:UNEXPECTED_ERROR_MAX_MESSAGE_LEN] + "..."
+    return raw
 
 
 def default_client_factory(stack_url: str, token: str) -> KeboolaClient:
@@ -137,7 +157,7 @@ class BaseService:
                         {
                             "project_alias": proj_alias,
                             "error_code": "UNEXPECTED_ERROR",
-                            "message": str(exc),
+                            "message": sanitize_unexpected_error(exc),
                         }
                     )
                     continue

@@ -475,6 +475,109 @@ class TestGetConfigDetail:
             assert result["name"] == "My Config"
 
 
+class TestGetConfigState:
+    """Tests for get_config_state()."""
+
+    def test_get_config_state_returns_state_dict(self, httpx_mock) -> None:
+        """get_config_state() returns the state field from the config detail."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components/keboola.ex-db-snowflake/configs/42",
+            json={
+                "id": "42",
+                "name": "cfg",
+                "configuration": {},
+                "state": {"cursor": "2026-04-23T10:00:00Z", "count": 42},
+            },
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            state = client.get_config_state("keboola.ex-db-snowflake", "42")
+            assert state == {"cursor": "2026-04-23T10:00:00Z", "count": 42}
+
+    def test_get_config_state_returns_empty_dict_when_state_missing(self, httpx_mock) -> None:
+        """When the API response has no state field, return {} (not None)."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components/keboola.ex-db-snowflake/configs/42",
+            json={"id": "42", "name": "cfg", "configuration": {}},
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            state = client.get_config_state("keboola.ex-db-snowflake", "42")
+            assert state == {}
+
+    def test_get_config_state_with_branch_id(self, httpx_mock) -> None:
+        """get_config_state(branch_id) uses branch-scoped URL."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/123/components/keboola.ex-db-snowflake/configs/42",
+            json={"id": "42", "state": {"key": "value"}},
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            state = client.get_config_state("keboola.ex-db-snowflake", "42", branch_id=123)
+            assert state == {"key": "value"}
+
+
+class TestListComponentsWithConfigs:
+    """Tests for list_components_with_configs() including the include_state flag."""
+
+    def test_list_components_with_configs_default(self, httpx_mock) -> None:
+        """Default call sends include=configuration,rows."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components?include=configuration%2Crows",
+            json=[],
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.list_components_with_configs()
+            assert result == []
+
+    def test_list_components_with_configs_include_state(self, httpx_mock) -> None:
+        """include_state=True adds ``state`` to the include query param."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/components?include=configuration%2Crows%2Cstate",
+            json=[],
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.list_components_with_configs(include_state=True)
+            assert result == []
+
+    def test_list_components_with_configs_include_state_with_branch(self, httpx_mock) -> None:
+        """include_state+branch_id combines correctly in the URL."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/123/components?include=configuration%2Crows%2Cstate",
+            json=[],
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        ) as client:
+            result = client.list_components_with_configs(branch_id=123, include_state=True)
+            assert result == []
+
+
 class TestMalformedJsonResponse:
     """Tests for handling malformed JSON responses from the API."""
 

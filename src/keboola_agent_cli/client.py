@@ -249,25 +249,37 @@ class KeboolaClient(BaseHttpClient):
         self,
         branch_id: int | None = None,
         component_type: str | None = None,
+        include_state: bool = False,
     ) -> list[dict[str, Any]]:
         """List all components with full configuration bodies and rows.
 
         Makes a single API call to fetch everything needed for sync pull and
         for deep search (row-level configuration). Uses the
         include=configuration,rows parameter to get full config bodies and
-        config rows in one request.
+        config rows in one request. When ``include_state`` is True, the
+        response also embeds each configuration's runtime ``state`` dict
+        (same data as ``get_config_state``) so bulk-state retrieval stays a
+        single request instead of N+1. Also used by the bulk-detail caller
+        in ``ConfigService`` when ``--with-state`` is set on
+        ``config detail`` without a specific ``--config-id``.
 
         Args:
             branch_id: If set, target a specific dev branch.
             component_type: Optional filter (extractor, writer, transformation,
                 application). Passed to the API as ``componentType``.
+            include_state: When True, adds ``state`` to the ``include``
+                resource list so each returned configuration carries its
+                runtime state dict.
 
         Returns:
             List of component dicts, each containing a 'configurations' list
             with full config bodies and nested 'rows'.
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
-        params: dict[str, str] = {"include": "configuration,rows"}
+        include_parts = ["configuration", "rows"]
+        if include_state:
+            include_parts.append("state")
+        params: dict[str, str] = {"include": ",".join(include_parts)}
         if component_type:
             params["componentType"] = component_type
         resp = self._request(
@@ -345,6 +357,49 @@ class KeboolaClient(BaseHttpClient):
             f"{prefix}/components/{safe_component_id}/configs/{safe_config_id}",
         )
         return response.json()
+
+    def get_config_state(
+        self,
+        component_id: str,
+        config_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Get the runtime state dict of a specific configuration.
+
+        Convenience wrapper over
+        ``get_config_detail(...).get("state", {})``: Storage API does not
+        expose a standalone ``GET .../state`` resource (production returns
+        404, branch-scoped returns 501 Not Implemented), so the state is
+        only served inline as a field inside the configuration detail
+        response. This wrapper is retained for API discoverability, but
+        callers that already have a detail response should read ``state``
+        from it directly instead of issuing this second identical request
+        -- the service layer's single-mode ``--with-state`` does exactly
+        that (see ``ConfigService.get_config_detail``).
+
+        For bulk state retrieval across many configs, prefer the
+        ``include=state`` query param on
+        ``list_components_with_configs(include="configuration,rows,state")``
+        -- one request serves every config's state instead of N requests.
+
+        Args:
+            component_id: The component ID (e.g. keboola.ex-db-snowflake).
+            config_id: The configuration ID.
+            branch_id: If set, fetch state from a specific dev branch.
+
+        Returns:
+            The state dict (empty ``{}`` when the config has no saved state).
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_component_id = quote(component_id, safe="")
+        safe_config_id = quote(config_id, safe="")
+        response = self._request(
+            "GET",
+            f"{prefix}/components/{safe_component_id}/configs/{safe_config_id}",
+        )
+        body = response.json()
+        state = body.get("state")
+        return state if isinstance(state, dict) else {}
 
     def list_config_folder_metadata(self, branch_id: int) -> dict[str, str]:
         """Fetch folder names for all configurations via metadata search.

@@ -2064,6 +2064,511 @@ class TestConfigDetail:
             call_kwargs[1].get("branch_id") == 123 if call_kwargs[1] else call_kwargs[0][-1] == 123
         )
 
+    # --- Bulk mode (--component-id without --config-id) ---------------------
+
+    def test_config_detail_bulk_mode_returns_array_envelope(self, tmp_path: Path) -> None:
+        """config detail without --config-id -> {"configs":[...],"errors":[...]}."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        bulk_result = {
+            "configs": [
+                {
+                    "project_alias": "prod",
+                    "branch_id": None,
+                    "component_id": "keboola.ex-db-snowflake",
+                    "config_id": "101",
+                    "name": "cfg A",
+                    "configuration": {"parameters": {}},
+                    "rows": [],
+                },
+                {
+                    "project_alias": "prod",
+                    "branch_id": None,
+                    "component_id": "keboola.ex-db-snowflake",
+                    "config_id": "102",
+                    "name": "cfg B",
+                    "configuration": {"parameters": {}},
+                    "rows": [],
+                },
+            ],
+            "errors": [],
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            cfg_service = MagicMock()
+            cfg_service.get_config_detail.return_value = bulk_result
+            MockCfgService.return_value = cfg_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        data = output["data"]
+        assert "configs" in data
+        assert "errors" in data
+        assert len(data["configs"]) == 2
+        # Verify the service was called without config_id
+        call = cfg_service.get_config_detail.call_args
+        assert call.kwargs.get("config_id") is None
+
+    def test_config_detail_bulk_mode_multi_project(self, tmp_path: Path) -> None:
+        """config detail with multiple --project and no --config-id fans out."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "stage": {"token": "532-abcdef-ghijklmnopqrst"},
+            },
+        )
+
+        bulk_result = {
+            "configs": [
+                {
+                    "project_alias": "prod",
+                    "component_id": "keboola.ex-db-snowflake",
+                    "config_id": "101",
+                    "name": "p",
+                    "configuration": {},
+                    "rows": [],
+                },
+                {
+                    "project_alias": "stage",
+                    "component_id": "keboola.ex-db-snowflake",
+                    "config_id": "201",
+                    "name": "s",
+                    "configuration": {},
+                    "rows": [],
+                },
+            ],
+            "errors": [],
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            cfg_service = MagicMock()
+            cfg_service.get_config_detail.return_value = bulk_result
+            MockCfgService.return_value = cfg_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--project",
+                    "stage",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        data = output["data"]
+        aliases = {c["project_alias"] for c in data["configs"]}
+        assert aliases == {"prod", "stage"}
+        # Service received aliases=[prod, stage]
+        call = cfg_service.get_config_detail.call_args
+        assert list(call.kwargs.get("aliases") or []) == ["prod", "stage"]
+
+    def test_config_detail_config_id_with_multi_project_rejected(self, tmp_path: Path) -> None:
+        """--config-id with multiple --project exits 2 (INVALID_ARGUMENT)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {
+                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "stage": {"token": "532-abcdef-ghijklmnopqrst"},
+            },
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--project",
+                    "stage",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "101",
+                ],
+            )
+
+        assert result.exit_code == 2, f"Exit code {result.exit_code}: {result.output}"
+
+    def test_config_detail_single_shape_preserved_for_backward_compat(self, tmp_path: Path) -> None:
+        """config detail --config-id XYZ returns the original flat dict shape."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        detail_response = {
+            "id": "101",
+            "name": "Production Load",
+            "componentId": "keboola.ex-db-snowflake",
+            "configuration": {"parameters": {"db": "prod"}},
+            "rows": [],
+        }
+
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = detail_response
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(
+                config_store=store,
+                client_factory=lambda url, token: mock_client,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "101",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        # Back-compat shape: flat dict, NOT wrapped in {"configs": [...]}
+        assert output["data"]["id"] == "101"
+        assert output["data"]["name"] == "Production Load"
+        assert "configs" not in output["data"]
+
+    def test_config_detail_with_state_single_mode(self, tmp_path: Path) -> None:
+        """config detail --with-state single mode passes with_state=True to service."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            cfg_service = MagicMock()
+            cfg_service.get_config_detail.return_value = {
+                "id": "101",
+                "name": "n",
+                "project_alias": "prod",
+                "configuration": {},
+                "rows": [],
+                "state": {"cursor": "abc"},
+            }
+            MockCfgService.return_value = cfg_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "101",
+                    "--with-state",
+                ],
+            )
+
+        assert result.exit_code == 0
+        call = cfg_service.get_config_detail.call_args
+        assert call.kwargs.get("with_state") is True
+
+    def test_config_detail_bulk_with_state_flag(self, tmp_path: Path) -> None:
+        """Bulk mode + --with-state forwards with_state=True to the service."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        bulk_result = {
+            "configs": [
+                {
+                    "project_alias": "prod",
+                    "component_id": "keboola.ex-db-snowflake",
+                    "config_id": "101",
+                    "name": "n",
+                    "configuration": {},
+                    "rows": [],
+                    "state": {"cursor": "abc"},
+                }
+            ],
+            "errors": [],
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            cfg_service = MagicMock()
+            cfg_service.get_config_detail.return_value = bulk_result
+            MockCfgService.return_value = cfg_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--with-state",
+                ],
+            )
+
+        assert result.exit_code == 0
+        call = cfg_service.get_config_detail.call_args
+        assert call.kwargs.get("with_state") is True
+        assert call.kwargs.get("config_id") is None
+
+    def test_config_detail_requires_project(self, tmp_path: Path) -> None:
+        """config detail with no --project exits 2 (INVALID_ARGUMENT)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                ],
+            )
+
+        assert result.exit_code == 2
+
+    def test_config_detail_rejects_empty_component_id(self, tmp_path: Path) -> None:
+        """M3: ``--component-id ""`` fails fast with INVALID_ARGUMENT (exit 2)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            cfg_service = MagicMock()
+            MockCfgService.return_value = cfg_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "",
+                ],
+            )
+
+        assert result.exit_code == 2
+        # Service must not be called when the fail-fast guard trips.
+        cfg_service.get_config_detail.assert_not_called()
+        # Also guard against whitespace-only IDs.
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            cfg_service = MagicMock()
+            MockCfgService.return_value = cfg_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "   ",
+                ],
+            )
+        assert result.exit_code == 2
+        cfg_service.get_config_detail.assert_not_called()
+
+
+class TestConfigListIncludeRows:
+    """Tests for `kbagent config list --include-rows` flag."""
+
+    def test_config_list_include_rows_passes_flag_to_service(self, tmp_path: Path) -> None:
+        """--include-rows forwards include_rows=True to list_configs."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            cfg_service = MagicMock()
+            cfg_service.list_configs.return_value = {"configs": [], "errors": []}
+            MockCfgService.return_value = cfg_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "list",
+                    "--project",
+                    "prod",
+                    "--include-rows",
+                ],
+            )
+
+        assert result.exit_code == 0
+        call = cfg_service.list_configs.call_args
+        assert call.kwargs.get("include_rows") is True
+
+    def test_config_list_without_include_rows_defaults_false(self, tmp_path: Path) -> None:
+        """Default behavior: include_rows=False (backward compat)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            cfg_service = MagicMock()
+            cfg_service.list_configs.return_value = {"configs": [], "errors": []}
+            MockCfgService.return_value = cfg_service
+
+            result = runner.invoke(
+                app,
+                ["--json", "config", "list", "--project", "prod"],
+            )
+
+        assert result.exit_code == 0
+        call = cfg_service.list_configs.call_args
+        assert call.kwargs.get("include_rows") is False
+
 
 # ---------------------------------------------------------------------------
 # Job list command tests

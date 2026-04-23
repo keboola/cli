@@ -22,6 +22,13 @@ DEFAULT_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=30.0, write=10.
 # --- API Error Handling ---
 MAX_API_ERROR_LENGTH: int = 500
 
+# --- UNEXPECTED_ERROR truncation ---
+# Unhandled ``Exception`` messages surfaced to per-project error envelopes are
+# truncated to this many characters before being returned. Exceptions can
+# otherwise embed URLs with query params, response-buffer fragments, or, with
+# ``--with-state``, OAuth refresh tokens from the runtime state dict. CWE-209.
+UNEXPECTED_ERROR_MAX_MESSAGE_LEN: int = 256
+
 # --- Default Stack URL ---
 DEFAULT_STACK_URL: str = "https://connection.keboola.com"
 

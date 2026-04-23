@@ -247,8 +247,8 @@ kbagent project description-set --project NAME [--text STR | --file PATH | --std
 kbagent project use ALIAS
 kbagent project current
 
-kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID]
-kbagent config detail --project NAME --component-id ID --config-id ID [--branch ID]
+kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID] [--include-rows]
+kbagent config detail --project NAME [--project NAME ...] --component-id ID [--config-id ID] [--branch ID] [--with-state]
 kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [--ignore-case] [--regex] [--branch ID]
 kbagent config update --project NAME --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--dry-run] [--branch ID]
 kbagent config rename --project NAME --component-id ID --config-id ID --name "New Name" [--branch ID] [--directory DIR]

@@ -8,6 +8,13 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.23.0": [
+        "New: `kbagent config detail --component-id ID` (without --config-id) -- bulk mode returning an array of all configs for the component across one/many/all projects in parallel. Preserves single-config JSON shape when --config-id is also passed. Addresses the 102-subprocess audit pattern from #197.",
+        "New: `kbagent config detail --with-state` -- attaches runtime state dict to each config. Bulk mode fetches state inline via include=state on the listing endpoint (no N+1). Single mode reads state directly from the detail endpoint response (no extra HTTP call -- Storage API embeds state inline; there is no standalone state resource).",
+        "New: `kbagent config list --include-rows` -- opt-in flag that adds configuration+rows bodies to each row via list_components_with_configs(include=configuration,rows). Without the flag, list remains the summary-level endpoint.",
+        "Client: `get_config_state` convenience wrapper over `get_config_detail().get('state', {})`; `list_components_with_configs` gained optional `include_state` parameter for bulk state fetching.",
+        "Security: UNEXPECTED_ERROR envelopes now truncate exception messages to 256 chars with a trailing `...` sentinel before emission. Prevents OAuth refresh tokens, URL query strings, and other credential-bearing fragments from leaking into JSON error output under --with-state (CWE-209). Full message still reaches debug logs.",
+    ],
     "0.22.0": [
         "New: `kbagent project use <alias>` -- pin a project as the default for subsequent commands. Persists `default_project` in config.json (the field already existed; now there is an explicit CLI verb to set it).",
         "New: `kbagent project current` -- print the effective default project and its source (env / pin / none). Reports both the env override and the persisted pin so misconfigurations are visible, not silent.",

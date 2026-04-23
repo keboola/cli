@@ -89,7 +89,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List available components from connected projects | `kbagent component list` |
 | Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
 | List configurations from connected projects | `kbagent config list` |
-| Show detailed information about a specific configuration | `kbagent config detail --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Show detailed information about one or many configurations | `kbagent config detail --component-id COMPONENT-ID` |
 | Search through configuration bodies for a string or pattern | `kbagent config search --query QUERY` |
 | Update a configuration's metadata and/or content | `kbagent config update --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Rename a configuration (update name via API + rename local sync directory) | `kbagent config rename --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
