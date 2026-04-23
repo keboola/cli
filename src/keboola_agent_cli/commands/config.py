@@ -197,8 +197,12 @@ def config_detail(
         "--with-state",
         help=(
             "Attach the runtime state dict to each config under 'state'. "
-            "Single-config mode: one extra call via get_config_state. "
-            "Bulk mode: state is fetched inline via include=state (no N+1)."
+            "Single-config mode: state is read from the same detail response "
+            "(no extra HTTP call). Bulk mode: state is fetched inline via "
+            "include=state (no N+1). WARNING: --with-state output may contain "
+            "OAuth tokens, refresh tokens, and other credential-bearing runtime "
+            "data. Do not pipe into logs, scratch files, or shared workspaces "
+            "without redaction."
         ),
     ),
 ) -> None:
@@ -246,6 +250,16 @@ def config_detail(
     if not project:
         formatter.error(
             message="--project is required (repeat for multiple projects in bulk mode).",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+
+    # Typer ``...`` enforces presence but not non-emptiness; guard here so
+    # ``--component-id ""`` fails fast with a clear message instead of
+    # constructing a malformed /components//configs URL downstream.
+    if not component_id.strip():
+        formatter.error(
+            message="--component-id must not be empty.",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
@@ -336,10 +350,15 @@ def _format_config_detail_bulk(
     """
     from rich.table import Table
 
+    # ``component_id`` is user-supplied and Rich interprets ``[tag]`` syntax.
+    # Escape before embedding in Rich-rendered strings so an ID like
+    # ``keboola.[red]evil[/red]`` cannot paint the terminal.
+    safe_component_id = escape(component_id)
+
     configs = data.get("configs", [])
     if not configs:
         console.print(
-            f"[dim]No configurations found for [bold]{component_id}[/bold] "
+            f"[dim]No configurations found for [bold]{safe_component_id}[/bold] "
             "in the selected project(s).[/dim]"
         )
         return
@@ -355,7 +374,7 @@ def _format_config_detail_bulk(
         grouped[alias].append(cfg)
 
     for alias in order:
-        table = Table(title=f"{component_id} configs -- {alias} ({len(grouped[alias])})")
+        table = Table(title=f"{safe_component_id} configs -- {alias} ({len(grouped[alias])})")
         table.add_column("Config ID", style="bold cyan", justify="right")
         table.add_column("Name")
         table.add_column("Rows", justify="right", style="dim")

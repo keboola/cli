@@ -2436,6 +2436,68 @@ class TestConfigDetail:
 
         assert result.exit_code == 2
 
+    def test_config_detail_rejects_empty_component_id(self, tmp_path: Path) -> None:
+        """M3: ``--component-id ""`` fails fast with INVALID_ARGUMENT (exit 2)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            cfg_service = MagicMock()
+            MockCfgService.return_value = cfg_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "",
+                ],
+            )
+
+        assert result.exit_code == 2
+        # Service must not be called when the fail-fast guard trips.
+        cfg_service.get_config_detail.assert_not_called()
+        # Also guard against whitespace-only IDs.
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            cfg_service = MagicMock()
+            MockCfgService.return_value = cfg_service
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "   ",
+                ],
+            )
+        assert result.exit_code == 2
+        cfg_service.get_config_detail.assert_not_called()
+
 
 class TestConfigListIncludeRows:
     """Tests for `kbagent config list --include-rows` flag."""
