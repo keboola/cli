@@ -1860,8 +1860,8 @@ class TestJobServiceRunJob:
 class TestJobServiceVariableValuesResolution:
     """Tests for `resolve_variable_values_id` + auto-resolution in `run_job`.
 
-    Locks the P0-2 contract: transformations with linked variables must
-    run against the deployed values row, not empty strings.
+    Locks the contract: transformations with linked variables must run
+    against the deployed values row, not empty strings.
     """
 
     def _store(self, tmp_config_dir: Path) -> ConfigStore:
@@ -1963,8 +1963,7 @@ class TestJobServiceVariableValuesResolution:
         Locks the fail-loud contract: if the Storage API ever returns a row
         without a usable ``id``, the resolver must refuse rather than
         returning ``""`` and letting the Queue body quietly omit
-        ``variableValuesId`` -- same silent-skip class as the PR1
-        encryption-asymmetry bug.
+        ``variableValuesId``.
         """
         mock_client = MagicMock()
         mock_client.get_config_detail.return_value = {
@@ -2045,7 +2044,7 @@ class TestJobServiceVariableValuesResolution:
         mock_client = MagicMock()
         mock_client.create_job.return_value = {"id": 702, "status": "waiting"}
 
-        self._service(store, mock_client).run_job(
+        result = self._service(store, mock_client).run_job(
             alias="prod",
             component_id="keboola.snowflake-transformation",
             config_id="100",
@@ -2054,6 +2053,39 @@ class TestJobServiceVariableValuesResolution:
 
         mock_client.get_config_detail.assert_not_called()
         assert mock_client.create_job.call_args.kwargs["variable_values_id"] is None
+        assert "resolvedVariableValuesId" not in result
+
+    def test_run_job_wait_preserves_resolved_variable_values_id(self, tmp_config_dir: Path) -> None:
+        """resolvedVariableValuesId is stamped on the waited job, not the initial create result.
+
+        Locks the ordering: `job = wait_for_queue_job(...)` replaces the dict
+        returned by `create_job`; the stamp must happen AFTER the wait so the
+        final returned dict carries it.
+        """
+        store = self._store(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {
+            "configuration": {"variables_id": "vars-cfg-99"}
+        }
+        mock_client.list_config_rows.return_value = [{"id": "row-waited"}]
+        mock_client.create_job.return_value = {"id": 750, "status": "waiting"}
+        mock_client.wait_for_queue_job.return_value = {
+            "id": 750,
+            "status": "success",
+            "isFinished": True,
+        }
+
+        result = self._service(store, mock_client).run_job(
+            alias="prod",
+            component_id="keboola.snowflake-transformation",
+            config_id="100",
+            wait=True,
+            timeout=30.0,
+        )
+
+        assert result["status"] == "success"
+        assert result["resolvedVariableValuesId"] == "row-waited"
+        mock_client.wait_for_queue_job.assert_called_once_with("750", max_wait=30.0)
 
     def test_run_job_closes_client_when_resolver_raises(self, tmp_config_dir: Path) -> None:
         """NO_VARIABLE_ROWS raised by the resolver inside run_job still closes the client.

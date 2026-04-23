@@ -2331,6 +2331,9 @@ class TestJobRun:
         kwargs = job_service.run_job.call_args.kwargs
         assert kwargs["no_variables"] is True
         assert kwargs["variable_values_id"] is None
+        # resolvedVariableValuesId must be absent when resolution was skipped.
+        payload = json.loads(result.output).get("data", {})
+        assert "resolvedVariableValuesId" not in payload
 
     def test_job_run_mutually_exclusive_flags_rejected(self, tmp_path: Path) -> None:
         """--variable-values-id + --no-variables is an invalid combination (exit 2)."""
@@ -2380,8 +2383,7 @@ class TestJobRun:
 
         Locks the fail-loud contract: an empty string must not fall through
         to create_job(variable_values_id="") where it would silently be
-        omitted from the Queue body (same silent-skip class as the PR1
-        encryption asymmetry).
+        omitted from the Queue body.
         """
         config_dir = tmp_path / "config"
         config_dir.mkdir()
@@ -2510,6 +2512,92 @@ class TestJobRun:
 
         assert result.exit_code != 0
         assert "NO_VARIABLE_ROWS" in result.output
+
+    def test_job_run_rich_mode_echoes_resolved_values_id(self, tmp_path: Path) -> None:
+        """Rich (non-JSON) output echoes ``resolvedVariableValuesId`` so auto-resolve is visible."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            job_service = MagicMock()
+            job_service.run_job.return_value = {
+                "id": 800,
+                "status": "waiting",
+                "resolvedVariableValuesId": "row-auto-resolved",
+            }
+            MockJobService.return_value = job_service
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "job",
+                    "run",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.snowflake-transformation",
+                    "--config-id",
+                    "100",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "row-auto-resolved" in result.output
+        assert "Bound variable values row" in result.output
+
+    def test_job_run_strips_whitespace_around_variable_values_id(self, tmp_path: Path) -> None:
+        """`--variable-values-id '  row-1  '` is trimmed before reaching the service."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            job_service = MagicMock()
+            job_service.run_job.return_value = {"id": 801, "status": "waiting"}
+            MockJobService.return_value = job_service
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "job",
+                    "run",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.snowflake-transformation",
+                    "--config-id",
+                    "100",
+                    "--variable-values-id",
+                    "  row-trimmed  ",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert job_service.run_job.call_args.kwargs["variable_values_id"] == "row-trimmed"
 
 
 class TestJobTerminate:
