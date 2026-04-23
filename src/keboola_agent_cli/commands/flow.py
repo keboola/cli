@@ -33,6 +33,11 @@ flow_app = typer.Typer(help="Manage flows (keboola.orchestrator + keboola.flow)"
 _FLOW_COMPONENT_CHOICES = ["keboola.orchestrator", "keboola.flow"]
 
 # YAML/JSON schema snippet shown by 'flow schema'
+#
+# Tasks use the nested ``task: {mode, componentId, configId}`` form that matches
+# the keboola-as-code convention. The API also accepts the flat form
+# (``componentId``/``configId`` at task root) for backward compatibility, but
+# new flows should use the nested form shown below.
 _FLOW_SCHEMA = """\
 # kbagent flow schema -- keboola.flow configuration format
 #
@@ -54,23 +59,30 @@ tasks:
   - id: 1
     name: "Extract Data"
     phase: 1               # phase.id this task belongs to
-    componentId: "keboola.ex-http"
-    configId: "123456789"
-    continueOnFailure: false
     enabled: true
+    continueOnFailure: false
+    task:
+      mode: run
+      componentId: "keboola.ex-http"
+      configId: "123456789"
   - id: 2
     name: "Run Transformation"
     phase: 2
-    componentId: "keboola.snowflake-transformation"
-    configId: "987654321"
-    continueOnFailure: false
     enabled: true
+    continueOnFailure: false
+    task:
+      mode: run
+      componentId: "keboola.snowflake-transformation"
+      configId: "987654321"
 
 # Notes:
 #  - dependsOn: IDs form a directed acyclic graph (kbagent validates this)
-#  - configId values must be string IDs of existing configs in the project
+#  - task.configId values must be string IDs of existing configs in the project
+#  - task.mode defaults to "run" (the only supported value today)
 #  - For keboola.orchestrator (legacy), phases are referenced by name (string),
 #    not ID (integer); use keboola.flow for new flows
+#  - The flat shape (componentId/configId at task root) is still accepted by
+#    the API but is deprecated in the schema; prefer the nested task: form
 """
 
 

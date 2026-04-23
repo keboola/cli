@@ -289,6 +289,35 @@ class TestFlowSchema:
         data = json.loads(result.output)
         assert "phases" in data["data"]["schema"]
 
+    def test_schema_uses_nested_task_form(self, tmp_path: Path) -> None:
+        """Schema output must use the nested ``task: {mode, componentId, configId}``
+        form that matches the keboola-as-code convention (see flow-workflow.md)."""
+        store = _setup_config(tmp_path / "cfg")
+        mock_flow = MagicMock()
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.FlowService") as MockFlowService,
+        ):
+            MockStore.return_value = store
+            MockFlowService.return_value = mock_flow
+            result = runner.invoke(app, ["--json", "flow", "schema"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        schema = data["data"]["schema"]
+        # Nested form: "task:" introduces a mapping with mode/componentId/configId
+        assert "task:" in schema
+        assert "mode: run" in schema
+        # No flat componentId/configId at task-root level (indented directly under "- id:")
+        # We check that "componentId:" never appears at the top indent level under tasks -
+        # in the nested form it's always indented further under "task:".
+        for line in schema.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("componentId:") or stripped.startswith("configId:"):
+                # Count indent: nested form has 6+ spaces (2 for list, 4 for task dict)
+                indent = len(line) - len(stripped)
+                assert indent >= 6, f"Found flat componentId/configId at top level: {line!r}"
+
 
 # ---------------------------------------------------------------------------
 # flow new
