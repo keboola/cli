@@ -396,6 +396,13 @@ class WorkspaceService(BaseService):
                 self.delete_workspace(alias=ws["project_alias"], workspace_id=ws["id"])
                 deleted.append(ws)
             except Exception as exc:
+                # Full traceback goes to the logger (observability for unexpected
+                # errors like AttributeError); user-facing flow is unchanged.
+                logger.exception(
+                    "Failed to delete orphaned workspace %s in project %s",
+                    ws["id"],
+                    ws["project_alias"],
+                )
                 delete_errors.append(
                     {
                         "workspace_id": ws["id"],
