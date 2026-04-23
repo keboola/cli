@@ -7,6 +7,7 @@ metadata that MCP tools strip from responses.
 import csv
 import logging
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from ..constants import VALID_COLUMN_TYPES
@@ -1611,6 +1612,7 @@ class StorageService(BaseService):
         alias: str,
         from_file: Path,
         branch_id: int | None = None,
+        progress_callback: Callable[[str, str, int, int], None] | None = None,
     ) -> dict[str, Any]:
         """Apply bucket, table, and column descriptions from a YAML file.
 
@@ -1634,6 +1636,12 @@ class StorageService(BaseService):
             alias: Project alias.
             from_file: Path to a YAML file with the schema above.
             branch_id: If set, target a specific dev branch.
+            progress_callback: Optional ``(obj_type, obj_id, current, total)``
+                callable invoked **before** each item is processed. ``obj_type``
+                is ``"bucket"``, ``"table"``, or ``"columns"``; ``current`` is
+                1-based; ``total`` is the total number of items across all
+                sections. Used by the CLI to render a Rich progress indicator
+                in human mode; JSON mode leaves it unset.
 
         Returns:
             Dict with project_alias, applied, errors, applied_count, error_count.
@@ -1655,7 +1663,13 @@ class StorageService(BaseService):
         tables: dict[str, str] = raw.get("tables") or {}
         columns: dict[str, dict[str, str]] = raw.get("columns") or {}
 
+        total = len(buckets) + len(tables) + len(columns)
+        current = 0
+
         for bucket_id, desc in buckets.items():
+            current += 1
+            if progress_callback is not None:
+                progress_callback("bucket", bucket_id, current, total)
             try:
                 self.describe_bucket(alias, bucket_id, str(desc), branch_id=branch_id)
                 applied.append({"type": "bucket", "id": bucket_id, "description": desc})
@@ -1665,6 +1679,9 @@ class StorageService(BaseService):
                 errors.append({"type": "bucket", "id": bucket_id, "error": msg})
 
         for table_id, desc in tables.items():
+            current += 1
+            if progress_callback is not None:
+                progress_callback("table", table_id, current, total)
             try:
                 self.describe_table(alias, table_id, str(desc), branch_id=branch_id)
                 applied.append({"type": "table", "id": table_id, "description": desc})
@@ -1673,6 +1690,9 @@ class StorageService(BaseService):
                 errors.append({"type": "table", "id": table_id, "error": msg})
 
         for table_id, col_map in columns.items():
+            current += 1
+            if progress_callback is not None:
+                progress_callback("columns", table_id, current, total)
             if not isinstance(col_map, dict):
                 errors.append(
                     {"type": "columns", "id": table_id, "error": "columns entry must be a mapping"}

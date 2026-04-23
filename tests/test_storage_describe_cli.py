@@ -603,10 +603,12 @@ class TestStorageDescribeBatch:
         assert output["status"] == "ok"
         assert len(output["data"]["applied"]) == 3
         assert output["data"]["errors"] == []
+        # JSON mode must never wire a progress callback; human mode does.
         mock_storage.describe_batch.assert_called_once_with(
             alias="prod",
             from_file=batch_file,
             branch_id=None,
+            progress_callback=None,
         )
 
     def test_describe_batch_file_not_found(self, tmp_path: Path) -> None:
@@ -652,6 +654,58 @@ class TestStorageDescribeBatch:
         output = json.loads(result.output)
         assert output["status"] == "error"
         assert output["error"]["code"] == "INVALID_ARGUMENT"
+
+    def test_describe_batch_human_mode_wires_progress_callback(self, tmp_path: Path) -> None:
+        """Human mode must pass a progress_callback; JSON mode must not."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        batch_file = tmp_path / "descriptions.yaml"
+        batch_file.write_text("buckets:\n  in.c-sales: Sales data\n", encoding="utf-8")
+
+        mock_storage = MagicMock()
+        mock_storage.describe_batch.return_value = {
+            "project_alias": "prod",
+            "applied": [{"type": "bucket", "id": "in.c-sales", "description": "Sales data"}],
+            "errors": [],
+            "applied_count": 1,
+            "error_count": 0,
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.StorageService") as MockStorageService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockStorageService.return_value = mock_storage
+
+            # No --json flag -> human mode -> progress_callback must be wired.
+            result = runner.invoke(
+                app,
+                [
+                    "storage",
+                    "describe-batch",
+                    "--project",
+                    "prod",
+                    "--from-file",
+                    str(batch_file),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        kwargs = mock_storage.describe_batch.call_args.kwargs
+        assert kwargs["alias"] == "prod"
+        assert kwargs["from_file"] == batch_file
+        assert kwargs["branch_id"] is None
+        # Key assertion: human mode supplies a callable; JSON mode supplies None.
+        assert callable(kwargs["progress_callback"])
 
     def test_describe_batch_partial_errors(self, tmp_path: Path) -> None:
         """describe-batch with partial errors still exits 0 (errors collected, not raised)."""

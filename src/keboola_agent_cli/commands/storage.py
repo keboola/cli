@@ -5,6 +5,7 @@ that is not available via MCP tools.
 """
 
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -1380,12 +1381,64 @@ def storage_describe_batch(
     config_store: ConfigStore = ctx.obj["config_store"]
     _, effective_branch = resolve_branch(config_store, formatter, project, branch)
 
+    # In human mode, show a live progress indicator so that large batches
+    # (100+ items) do not look frozen. JSON mode must remain silent on stderr
+    # so structured output is the only thing on stdout.
+    progress_cm: Any = None
+    progress_task: Any = None
+    progress_callback = None
+    if not formatter.json_mode:
+        from rich.progress import (
+            BarColumn,
+            MofNCompleteColumn,
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            TimeElapsedColumn,
+        )
+
+        progress_cm = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+            console=formatter.console,
+            transient=True,
+        )
+
+        def _on_item(obj_type: str, obj_id: str, current: int, total: int) -> None:
+            # Guard against progress_task/progress_cm not being ready yet.
+            if progress_task is None or progress_cm is None:
+                return
+            # total is known up-front (passed the first time), but re-setting
+            # is a no-op after the first call.
+            progress_cm.update(
+                progress_task,
+                total=total,
+                completed=max(current - 1, 0),
+                description=f"Describing {obj_type} {obj_id}",
+            )
+
+        progress_callback = _on_item
+
     try:
+        if progress_cm is not None:
+            progress_cm.start()
+            progress_task = progress_cm.add_task("Applying descriptions...", total=None)
         result = service.describe_batch(
             alias=project,
             from_file=from_file,
             branch_id=effective_branch,
+            progress_callback=progress_callback,
         )
+        if progress_cm is not None and progress_task is not None:
+            # Mark the task complete so the final render shows N / N.
+            progress_cm.update(
+                progress_task,
+                completed=result["applied_count"] + result["error_count"],
+            )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
         raise typer.Exit(code=2) from None
@@ -1395,6 +1448,10 @@ def storage_describe_batch(
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    finally:
+        if progress_cm is not None:
+            # .stop() is idempotent; safe for both happy and error paths.
+            progress_cm.stop()
 
     if formatter.json_mode:
         formatter.output(result)
