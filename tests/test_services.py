@@ -1349,7 +1349,7 @@ class TestConfigServiceGetConfigDetail:
         mock_client.close.assert_called_once()
 
     def test_get_config_detail_with_state_single_mode(self, tmp_config_dir: Path) -> None:
-        """Single-config --with-state triggers get_config_state and overrides state."""
+        """Single-config --with-state reuses the state inline from detail response."""
         store = ConfigStore(config_dir=tmp_config_dir)
         store.add_project(
             "prod",
@@ -1359,20 +1359,20 @@ class TestConfigServiceGetConfigDetail:
             ),
         )
 
-        # Detail endpoint returns stale state; get_config_state returns fresh state.
+        # Storage API always returns ``state`` inline with the detail
+        # response; the service layer must trust that value rather than
+        # issuing a second identical request.
         detail_response = {
             "id": "101",
             "name": "Production Load",
             "componentId": "keboola.ex-db-snowflake",
             "configuration": {"parameters": {}},
             "rows": [],
-            "state": {"stale": True},
+            "state": {"last_cursor": "2026-04-23T10:00:00Z", "fresh": True},
         }
-        fresh_state = {"last_cursor": "2026-04-23T10:00:00Z", "fresh": True}
 
         mock_client = MagicMock()
         mock_client.get_config_detail.return_value = detail_response
-        mock_client.get_config_state.return_value = fresh_state
 
         service = ConfigService(
             config_store=store,
@@ -1386,11 +1386,99 @@ class TestConfigServiceGetConfigDetail:
             with_state=True,
         )
 
-        assert result["state"] == fresh_state
-        mock_client.get_config_state.assert_called_once_with(
-            "keboola.ex-db-snowflake", "101", branch_id=None
-        )
+        assert result["state"] == {"last_cursor": "2026-04-23T10:00:00Z", "fresh": True}
         mock_client.close.assert_called_once()
+
+    def test_with_state_single_uses_one_api_call(self, tmp_config_dir: Path) -> None:
+        """Regression (B1): single-mode --with-state must not issue a second GET.
+
+        Before this fix the service called ``get_config_detail`` and then
+        ``get_config_state``, which both hit the same URL. The second call
+        was pure waste (identical response) and also widened the surface
+        for the UNEXPECTED_ERROR leak covered by B2. Lock in the single
+        call.
+        """
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {
+            "id": "101",
+            "name": "Production Load",
+            "configuration": {},
+            "rows": [],
+            "state": {"cursor": "abc"},
+        }
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="101",
+            with_state=True,
+        )
+
+        assert mock_client.get_config_detail.call_count == 1
+        assert mock_client.get_config_state.call_count == 0
+
+    def test_with_state_single_normalises_missing_state(self, tmp_config_dir: Path) -> None:
+        """When the detail response omits/malforms state, service returns ``{}``."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        mock_client = MagicMock()
+        # No 'state' key at all.
+        mock_client.get_config_detail.return_value = {
+            "id": "101",
+            "name": "n",
+            "configuration": {},
+            "rows": [],
+        }
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="101",
+            with_state=True,
+        )
+        assert result["state"] == {}
+
+        # Non-dict value is coerced to {}.
+        mock_client.get_config_detail.return_value = {
+            "id": "101",
+            "name": "n",
+            "configuration": {},
+            "rows": [],
+            "state": "not-a-dict",
+        }
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="101",
+            with_state=True,
+        )
+        assert result["state"] == {}
 
     def test_get_config_detail_bulk_single_project(self, tmp_config_dir: Path) -> None:
         """Bulk mode (no config_id) returns {configs, errors} for a single project."""
@@ -1642,9 +1730,12 @@ class TestConfigServiceGetConfigDetail:
 
         assert result["configs"][0]["state"] == {"cursor": "abc"}
         assert result["configs"][1]["state"] == {}
-        # The single call carries include_state=True -- no N+1
+        # The single call carries include_state=True -- no N+1. The
+        # ``component_type`` hint is derived from the keboola.ex-* prefix
+        # so the API returns the narrower extractor-only payload.
         mock_client.list_components_with_configs.assert_called_once_with(
             branch_id=None,
+            component_type="extractor",
             include_state=True,
         )
         mock_client.get_config_state.assert_not_called()
@@ -1708,6 +1799,126 @@ class TestConfigServiceGetConfigDetail:
                 branch_id=42,
                 aliases=["prod", "stage"],
             )
+
+    def test_unexpected_error_message_truncated_single_mode(self, tmp_config_dir: Path) -> None:
+        """B2: single-mode UNEXPECTED_ERROR does not leak long str(exc) buffers.
+
+        Exception messages can embed URLs, response-buffer fragments, or (with
+        --with-state) OAuth refresh tokens. Truncate to
+        UNEXPECTED_ERROR_MAX_MESSAGE_LEN with a trailing ``"..."`` sentinel.
+        """
+        from keboola_agent_cli.constants import UNEXPECTED_ERROR_MAX_MESSAGE_LEN
+
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        giant = "x" * 500  # well past the truncation threshold
+        mock_client = MagicMock()
+        mock_client.list_components_with_configs.side_effect = Exception(giant)
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id=None,
+        )
+        assert len(result["errors"]) == 1
+        err = result["errors"][0]
+        assert err["error_code"] == "UNEXPECTED_ERROR"
+        assert err["message"].endswith("...")
+        # Truncated length = threshold + len("...")
+        assert len(err["message"]) == UNEXPECTED_ERROR_MAX_MESSAGE_LEN + 3
+        # Make sure the message is NOT the untruncated giant.
+        assert giant not in err["message"]
+
+    def test_bulk_passes_inferred_component_type_to_api(self, tmp_config_dir: Path) -> None:
+        """A2: bulk mode hints ``componentType`` to the listing endpoint.
+
+        For a ``keboola.ex-*``/``keboola.wr-*``/``keboola.*-transformation``/
+        ``keboola.app-*`` component_id, the service derives the type prefix
+        and forwards it to ``list_components_with_configs`` so the API can
+        return a narrower payload. Custom prefixes (e.g. ``kds-team.*``)
+        omit the hint and fall back to the unfiltered listing.
+        """
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        mock_client = MagicMock()
+        mock_client.list_components_with_configs.return_value = []
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        cases = [
+            ("keboola.ex-db-snowflake", "extractor"),
+            ("keboola.wr-db-snowflake", "writer"),
+            ("keboola.snowflake-transformation", "transformation"),
+            ("keboola.python-transformation", "transformation"),
+            ("keboola.app-orchestrator", "application"),
+        ]
+        for component_id, expected_type in cases:
+            mock_client.list_components_with_configs.reset_mock()
+            service.get_config_detail(
+                alias="prod",
+                component_id=component_id,
+                config_id=None,
+            )
+            kwargs = mock_client.list_components_with_configs.call_args.kwargs
+            assert kwargs["component_type"] == expected_type, component_id
+
+        # Unknown/custom prefix → no hint (None).
+        mock_client.list_components_with_configs.reset_mock()
+        service.get_config_detail(
+            alias="prod",
+            component_id="kds-team.ex-custom",
+            config_id=None,
+        )
+        kwargs = mock_client.list_components_with_configs.call_args.kwargs
+        assert kwargs["component_type"] is None
+
+    def test_unexpected_error_message_short_not_truncated(self, tmp_config_dir: Path) -> None:
+        """Short exception messages pass through unchanged (no phantom ``...``)."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+
+        mock_client = MagicMock()
+        mock_client.list_components_with_configs.side_effect = Exception("boom")
+
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id=None,
+        )
+        assert result["errors"][0]["message"] == "boom"
 
 
 class TestConfigServiceListConfigsIncludeRows:

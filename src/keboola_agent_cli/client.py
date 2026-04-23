@@ -259,7 +259,9 @@ class KeboolaClient(BaseHttpClient):
         config rows in one request. When ``include_state`` is True, the
         response also embeds each configuration's runtime ``state`` dict
         (same data as ``get_config_state``) so bulk-state retrieval stays a
-        single request instead of N+1.
+        single request instead of N+1. Also used by the bulk-detail caller
+        in ``ConfigService`` when ``--with-state`` is set on
+        ``config detail`` without a specific ``--config-id``.
 
         Args:
             branch_id: If set, target a specific dev branch.
@@ -364,13 +366,16 @@ class KeboolaClient(BaseHttpClient):
     ) -> dict[str, Any]:
         """Get the runtime state dict of a specific configuration.
 
-        Component configurations carry a mutable ``state`` dict that writers
-        and extractors use to persist runtime data between jobs (e.g. last
-        incremental sync cursor, auth refresh tokens, OAuth state). Storage
-        API does not expose a standalone ``GET .../state`` resource (it
-        responds 501 Not Implemented / 404); the state field is only served
-        inline as part of the configuration detail response. This method
-        therefore reads the detail endpoint and extracts ``state``.
+        Convenience wrapper over
+        ``get_config_detail(...).get("state", {})``: Storage API does not
+        expose a standalone ``GET .../state`` resource (production returns
+        404, branch-scoped returns 501 Not Implemented), so the state is
+        only served inline as a field inside the configuration detail
+        response. This wrapper is retained for API discoverability, but
+        callers that already have a detail response should read ``state``
+        from it directly instead of issuing this second identical request
+        -- the service layer's single-mode ``--with-state`` does exactly
+        that (see ``ConfigService.get_config_detail``).
 
         For bulk state retrieval across many configs, prefer the
         ``include=state`` query param on

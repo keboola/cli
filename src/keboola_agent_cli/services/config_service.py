@@ -17,9 +17,38 @@ from ..json_utils import compute_diff, deep_merge, set_nested_value
 from ..models import ProjectConfig
 from ..sync.manifest import Manifest, load_manifest, save_manifest
 from ..sync.naming import sanitize_name
-from .base import BaseService
+from .base import BaseService, sanitize_unexpected_error
 
 logger = logging.getLogger(__name__)
+
+
+def _infer_component_type(component_id: str) -> str | None:
+    """Infer ``componentType`` for Storage API filtering from a component ID.
+
+    The list-components endpoint accepts ``componentType=extractor|writer|
+    transformation|application`` as a pre-filter. When the caller already
+    provides a fully-qualified ``component_id`` whose prefix encodes the
+    type (standard ``keboola.<type>-...`` convention), we pass the hint
+    along so the API can skip the unrelated component buckets entirely --
+    on projects with many components this can shrink the response
+    considerably. Returns ``None`` for custom/unknown layouts (e.g.
+    ``kds-team.*``) so we fall back to the unfiltered listing rather than
+    sending a guess to the API.
+    """
+    if not component_id:
+        return None
+    # keboola.ex-* extractors, keboola.wr-* writers, keboola.app-* applications
+    if component_id.startswith("keboola.ex-"):
+        return "extractor"
+    if component_id.startswith("keboola.wr-"):
+        return "writer"
+    if component_id.startswith("keboola.app-"):
+        return "application"
+    # Transformations live under keboola.<backend>-transformation
+    # (keboola.snowflake-transformation, keboola.python-transformation, etc.).
+    if component_id.startswith("keboola.") and component_id.endswith("-transformation"):
+        return "transformation"
+    return None
 
 
 def _find_matches_in_json(
@@ -161,12 +190,13 @@ class ConfigService(BaseService):
                 },
             )
         except Exception as exc:
+            logger.debug("Unexpected error listing configs for %s: %s", alias, exc)
             return (
                 alias,
                 {
                     "project_alias": alias,
                     "error_code": "UNEXPECTED_ERROR",
-                    "message": str(exc),
+                    "message": sanitize_unexpected_error(exc),
                 },
             )
         finally:
@@ -253,11 +283,11 @@ class ConfigService(BaseService):
         * **Single-config mode** (``config_id`` given, single ``alias``):
           returns the full config detail dict from the API, flattened with
           ``project_alias`` + ``branch_id``. Shape unchanged for backward
-          compatibility. When ``with_state=True``, ensures a ``state`` key
-          is present (the API always returns it inline, so this is a
-          guarantee rather than an extra call -- but ``get_config_state``
-          is invoked as a dedicated refresh so the returned value reflects
-          a fresh read of the runtime state).
+          compatibility. When ``with_state=True``, the ``state`` key
+          returned inline by ``get_config_detail`` is normalised to a dict
+          (Storage API already embeds ``state`` in the detail response --
+          there is no separate endpoint to refresh it with, so no extra
+          HTTP call is made).
         * **Bulk mode** (``config_id`` is None): returns
           ``{"configs": [...], "errors": [...]}`` -- every configuration of
           the given ``component_id`` across one or more projects, each row
@@ -277,10 +307,11 @@ class ConfigService(BaseService):
                 with a single project; otherwise ``None`` falls back to each
                 project's active branch.
             with_state: When True, attach the runtime state dict under the
-                ``state`` key. Single mode: calls ``get_config_state``.
-                Bulk mode: embeds state inline via ``include=state`` on the
-                listing call (one request per project, regardless of config
-                count).
+                ``state`` key. Single mode: reuses the ``state`` field
+                already embedded in the detail response (no extra HTTP
+                call). Bulk mode: embeds state inline via ``include=state``
+                on the listing call (one request per project, regardless
+                of config count).
             aliases: Multi-project bulk form. When a list is given,
                 ``config_id`` must be None and ``branch_id`` must be None.
                 Returns ``{"configs": [...], "errors": [...]}`` with every
@@ -341,12 +372,13 @@ class ConfigService(BaseService):
                 component_id, config_id, branch_id=effective_branch_id
             )
             if with_state:
-                # Refresh state via the dedicated client method so the
-                # returned dict always carries the latest runtime state,
-                # not just whatever snapshot the detail endpoint returned.
-                detail["state"] = client.get_config_state(
-                    component_id, config_id, branch_id=effective_branch_id
-                )
+                # Storage API embeds ``state`` inline in the detail
+                # response -- there is no standalone state endpoint to
+                # refresh with (see get_config_state docstring). Normalise
+                # the field to a dict so callers can rely on the shape.
+                detail.setdefault("state", {})
+                if not isinstance(detail["state"], dict):
+                    detail["state"] = {}
         finally:
             client.close()
 
@@ -409,8 +441,14 @@ class ConfigService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             effective_branch_id = branch_id or project.active_branch_id
+            # Pre-filter to the matching component bucket when the
+            # component_id prefix encodes a known type (keboola.ex-*,
+            # keboola.wr-*, keboola.*-transformation, keboola.app-*). The
+            # API then returns a smaller payload; we still filter by the
+            # exact component_id in memory below to handle same-type peers.
             components = client.list_components_with_configs(
                 branch_id=effective_branch_id,
+                component_type=_infer_component_type(component_id),
                 include_state=with_state,
             )
 
@@ -456,12 +494,13 @@ class ConfigService(BaseService):
                 },
             )
         except Exception as exc:
+            logger.debug("Unexpected error fetching component configs for %s: %s", alias, exc)
             return (
                 alias,
                 {
                     "project_alias": alias,
                     "error_code": "UNEXPECTED_ERROR",
-                    "message": str(exc),
+                    "message": sanitize_unexpected_error(exc),
                 },
             )
         finally:
