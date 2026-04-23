@@ -14,6 +14,7 @@ import json
 import os
 import stat
 import time
+from pathlib import Path
 from typing import Any
 
 from .. import __version__
@@ -77,6 +78,10 @@ class DoctorService:
         # Check 6: Conversation ID
         conversation_check = self._check_conversation_id()
         all_checks.append(conversation_check)
+
+        # Check 7: Claude Code plugin installation
+        plugin_check = self._check_claude_plugin()
+        all_checks.append(plugin_check)
 
         # Build summary
         total = len(all_checks)
@@ -293,6 +298,82 @@ class DoctorService:
             "name": "Conversation ID",
             "status": "pass",
             "message": f"X-Conversation-ID: {conversation_id}",
+        }
+
+    @staticmethod
+    def _check_claude_plugin() -> dict[str, Any]:
+        """Check 7: Claude Code plugin installation.
+
+        Detects whether the kbagent Claude Code plugin (this repo's plugin
+        marketplace entry) is installed under ``~/.claude/plugins/cache/``.
+        Emits a 'skip' if Claude Code is not detected at all on the host;
+        'warn' with copy-pasteable install commands if Claude Code is
+        present but the plugin is missing; 'pass' with the installed
+        version otherwise.
+
+        Intentionally does NOT auto-fix: Claude Code's plugin install flow
+        goes through the user's in-session ``/plugin`` commands, which a
+        background CLI cannot invoke. The most we can do is surface the
+        gap and show the exact commands to run.
+        """
+        claude_home = Path.home() / ".claude"
+        if not claude_home.is_dir():
+            return {
+                "check": "claude_plugin",
+                "name": "Claude Code plugin",
+                "status": "skip",
+                "message": (
+                    "Claude Code not detected (~/.claude/ absent). "
+                    "Install instructions: https://github.com/padak/keboola_agent_cli#claude-code-plugin"
+                ),
+            }
+
+        plugin_root = claude_home / "plugins" / "cache" / "keboola-agent-cli" / "kbagent"
+        # Claude Code caches each plugin version under its own subdir
+        # (~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/).
+        version_dirs: list[Path] = []
+        if plugin_root.is_dir():
+            version_dirs = [p for p in plugin_root.iterdir() if p.is_dir()]
+
+        if not version_dirs:
+            return {
+                "check": "claude_plugin",
+                "name": "Claude Code plugin",
+                "status": "warn",
+                "message": (
+                    "kbagent Claude Code plugin not installed. In Claude Code, run:\n"
+                    "  /plugin marketplace add padak/keboola_agent_cli\n"
+                    "  /plugin install kbagent@keboola-agent-cli\n"
+                    "This enables the /keboola slash command and the "
+                    "keboola-expert specialist subagent."
+                ),
+            }
+
+        # Take the newest version dir name as the installed version.
+        # Fallback to manifest lookup if the dir name is not parseable.
+        latest = max(version_dirs, key=lambda p: p.name)
+        plugin_version = latest.name
+        manifest = latest / ".claude-plugin" / "plugin.json"
+        if manifest.is_file():
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+                plugin_version = data.get("version", plugin_version)
+            except (OSError, json.JSONDecodeError):
+                pass
+
+        cli_version = __version__
+        drift = (
+            ""
+            if plugin_version == cli_version
+            else f" (CLI is v{cli_version} -- run `/plugin update kbagent` in Claude Code to sync)"
+        )
+        return {
+            "check": "claude_plugin",
+            "name": "Claude Code plugin",
+            "status": "pass",
+            "message": f"kbagent plugin v{plugin_version} installed at {latest}{drift}",
+            "plugin_path": str(latest),
+            "plugin_version": plugin_version,
         }
 
     @staticmethod

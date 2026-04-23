@@ -4174,6 +4174,248 @@ class TestE2EFlowOperations:
         # Remove from cleanup list since we deleted it
         self._created_flows.remove(("keboola.flow", flow_id))
 
+    def test_flow_update_preserves_behavior_onerror(self, tmp_path: Path) -> None:
+        """Verify that ``kbagent flow update`` preserves ``behavior.onError``.
+
+        If any assertion fails, the pilot agent prompt must route flow writes
+        through ``--hint client`` + direct API instead of ``kbagent flow
+        update`` as the first choice.
+
+        Covered scenarios:
+            A. Rename-only update (no ``--file``) must leave behavior intact.
+            B. ``--file`` update with explicit behavior must propagate the
+               supplied value (documented pass-through).
+            C. ``--file`` update where phases omit behavior documents the
+               actual server response (strip vs default-applied). Printed
+               diagnostically; not a hard assertion since the strip itself
+               is expected replace-semantics, not a bug.
+        """
+        import yaml as _yaml
+
+        initial_def = {
+            "phases": [
+                {
+                    "id": 1,
+                    "name": "Phase One",
+                    "dependsOn": [],
+                    "behavior": {"onError": "warning"},
+                },
+                {
+                    "id": 2,
+                    "name": "Phase Two",
+                    "dependsOn": [1],
+                    "behavior": {"onError": "stop"},
+                },
+            ],
+            "tasks": [
+                {
+                    "id": 1,
+                    "name": "Phase 1 task",
+                    "phase": 1,
+                    "enabled": True,
+                    "continueOnFailure": False,
+                    "task": {
+                        "mode": "run",
+                        "componentId": "keboola.ex-db-snowflake",
+                        "configId": "nonexistent-placeholder-1",
+                    },
+                },
+                {
+                    "id": 2,
+                    "name": "Phase 2 task",
+                    "phase": 2,
+                    "enabled": True,
+                    "continueOnFailure": False,
+                    "task": {
+                        "mode": "run",
+                        "componentId": "keboola.ex-db-snowflake",
+                        "configId": "nonexistent-placeholder-2",
+                    },
+                },
+            ],
+        }
+
+        initial_yaml = tmp_path / "flow_initial.yaml"
+        initial_yaml.write_text(_yaml.safe_dump(initial_def))
+
+        _step(1, "flow new -- create flow with behavior.onError on both phases")
+        result = self._run(
+            "flow",
+            "new",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--name",
+            f"{RUN_ID}-behavior-flow",
+            "--file",
+            f"@{initial_yaml}",
+        )
+        assert result.exit_code == 0, result.output
+        created = json.loads(result.output)["data"]
+        flow_id = created["id"]
+        self._created_flows.append(("keboola.flow", flow_id))
+
+        _step(2, "verify behavior stored correctly on creation")
+        detail = self._run_ok(
+            "flow",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+        )
+        phases = detail["data"]["phases"]
+        assert len(phases) == 2, f"Expected 2 phases, got {len(phases)}"
+        assert phases[0].get("behavior", {}).get("onError") == "warning", (
+            f"Create did not store phases[0].behavior.onError correctly. "
+            f"Got: {phases[0].get('behavior')!r}"
+        )
+        assert phases[1].get("behavior", {}).get("onError") == "stop", (
+            f"Create did not store phases[1].behavior.onError correctly. "
+            f"Got: {phases[1].get('behavior')!r}"
+        )
+
+        # --- Scenario A: rename-only update, no --file -----------------
+        _step(3, "Scenario A -- rename only (no --file); behavior must survive")
+        result = self._run(
+            "flow",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--name",
+            f"{RUN_ID}-behavior-flow-renamed",
+        )
+        assert result.exit_code == 0, result.output
+        after_rename = self._run_ok(
+            "flow",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+        )
+        rphases = after_rename["data"]["phases"]
+        assert rphases[0].get("behavior", {}).get("onError") == "warning", (
+            "BLOCKER: rename-only flow update stripped "
+            f"phases[0].behavior.onError. Expected 'warning', got "
+            f"{rphases[0].get('behavior')!r}. Plan §6.6 tool matrix must be "
+            "revised -- 'kbagent flow update' is NOT safe for partial updates."
+        )
+        assert rphases[1].get("behavior", {}).get("onError") == "stop", (
+            "BLOCKER: rename-only flow update stripped "
+            f"phases[1].behavior.onError. Expected 'stop', got "
+            f"{rphases[1].get('behavior')!r}."
+        )
+
+        # --- Scenario B: --file with explicit (changed) behavior -------
+        _step(4, "Scenario B -- --file with explicit behavior; pass-through")
+        v2_def = {
+            "phases": [
+                {
+                    "id": 1,
+                    "name": "Phase One",
+                    "dependsOn": [],
+                    "behavior": {"onError": "stop"},  # flipped
+                },
+                {
+                    "id": 2,
+                    "name": "Phase Two",
+                    "dependsOn": [1],
+                    "behavior": {"onError": "warning"},  # flipped
+                },
+            ],
+            "tasks": initial_def["tasks"],
+        }
+        v2_yaml = tmp_path / "flow_v2.yaml"
+        v2_yaml.write_text(_yaml.safe_dump(v2_def))
+
+        result = self._run(
+            "flow",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--file",
+            f"@{v2_yaml}",
+        )
+        assert result.exit_code == 0, result.output
+        after_v2 = self._run_ok(
+            "flow",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+        )
+        v2phases = after_v2["data"]["phases"]
+        assert v2phases[0].get("behavior", {}).get("onError") == "stop", (
+            "--file with explicit behavior did not propagate: "
+            f"expected 'stop', got {v2phases[0].get('behavior')!r}"
+        )
+        assert v2phases[1].get("behavior", {}).get("onError") == "warning", (
+            "--file with explicit behavior did not propagate: "
+            f"expected 'warning', got {v2phases[1].get('behavior')!r}"
+        )
+
+        # --- Scenario C: --file WITHOUT behavior (document actual) -----
+        _step(5, "Scenario C -- --file without behavior; document server response")
+        v3_def = {
+            "phases": [
+                {"id": 1, "name": "Phase One", "dependsOn": []},
+                {"id": 2, "name": "Phase Two", "dependsOn": [1]},
+            ],
+            "tasks": initial_def["tasks"],
+        }
+        v3_yaml = tmp_path / "flow_v3.yaml"
+        v3_yaml.write_text(_yaml.safe_dump(v3_def))
+
+        result = self._run(
+            "flow",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+            "--file",
+            f"@{v3_yaml}",
+        )
+        assert result.exit_code == 0, result.output
+        after_v3 = self._run_ok(
+            "flow",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
+            "--flow-id",
+            flow_id,
+        )
+        v3phases = after_v3["data"]["phases"]
+        assert len(v3phases) == 2
+        # Diagnostic: capture what Keboola did with a behavior-less phase
+        # (either echoes empty dict, fills default, or omits the field entirely)
+        print(
+            f"\n  [DIAGNOSTIC] --file without behavior -> "
+            f"phases[0].behavior = {v3phases[0].get('behavior')!r}, "
+            f"phases[1].behavior = {v3phases[1].get('behavior')!r}"
+        )
+
     def test_flow_dag_validation_rejects_cycle(self) -> None:
         """flow new with a cyclic phase dependency must fail with INVALID_FLOW_DAG."""
         cyclic_yaml = (
