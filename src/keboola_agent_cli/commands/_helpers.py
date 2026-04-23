@@ -176,6 +176,8 @@ def resolve_branch(
     formatter: OutputFormatter,
     project: str | None,
     branch: int | None,
+    *,
+    ignore_active_branch: bool = False,
 ) -> tuple[str | None, int | None]:
     """Resolve the effective branch and project.
 
@@ -192,6 +194,14 @@ def resolve_branch(
         formatter: Output formatter for info messages.
         project: Explicit --project alias or None.
         branch: Explicit --branch integer or None.
+        ignore_active_branch: When True, the implicit active_branch_id from
+            config is ignored and the production endpoint (branch_id=None) is
+            used unless --branch was passed explicitly. An info message is
+            printed so the user can see the active dev branch was skipped.
+            Intended for storage READ commands -- the Storage API
+            branch-scoped endpoint returns only locally-modified resources,
+            which for a freshly created dev branch is an empty set. Explicit
+            --branch still overrides.
 
     Returns:
         Tuple of (effective_project, effective_branch_id).
@@ -202,6 +212,14 @@ def resolve_branch(
     if project is not None:
         proj_config = config_store.get_project(project)
         if proj_config and proj_config.active_branch_id is not None:
+            if ignore_active_branch:
+                if not formatter.json_mode:
+                    formatter.err_console.print(
+                        f"[bold blue]Info:[/bold blue] Using production branch for read "
+                        f"(active dev branch '{proj_config.active_branch_id}' ignored; "
+                        f"pass --branch {proj_config.active_branch_id} to override)"
+                    )
+                return project, None
             if not formatter.json_mode:
                 formatter.err_console.print(
                     f"[bold blue]Info:[/bold blue] Using active branch "
@@ -217,6 +235,14 @@ def resolve_branch(
         ]
         if len(active_projects) == 1:
             alias, proj = active_projects[0]
+            if ignore_active_branch:
+                if not formatter.json_mode:
+                    formatter.err_console.print(
+                        f"[bold blue]Info:[/bold blue] Using production branch for read "
+                        f"(active dev branch '{proj.active_branch_id}' on project '{alias}' "
+                        f"ignored; pass --branch {proj.active_branch_id} to override)"
+                    )
+                return alias, None
             if not formatter.json_mode:
                 formatter.err_console.print(
                     f"[bold blue]Info:[/bold blue] Using active branch "

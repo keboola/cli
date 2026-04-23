@@ -143,6 +143,12 @@ One project failing does not block others. Check the `errors` array:
 - **Branch scope**: when active branch is set, MCP tools and config commands automatically scope to that branch.
   `branch_id` is a **CLI flag** (`--branch`), NOT a tool input parameter -- do not pass it inside `--input`.
   Config read commands (`config list`, `config detail`, `config search`) also support `--branch`.
+- **Storage read commands are the exception**: `storage buckets`, `storage bucket-detail`,
+  `storage tables`, `storage table-detail`, and `storage files` **ignore the implicit active
+  dev branch** and query production by default. The Storage API branch-scoped endpoint only
+  returns resources locally modified in the dev branch (empty for a fresh branch), so
+  auto-scoping would surprise users with "No tables found". Explicit `--branch ID` still
+  works. Storage **write** commands (create-*, upload-*, delete-*, file-*) stay branch-aware.
 - **Schema discovery**: use `kbagent --json tool list` to inspect each tool's `inputSchema` and find
   accepted parameters. For example, `get_configs` takes `configs` (a list of `{component_id, configuration_id}`
   objects), not a flat `config_id` string.

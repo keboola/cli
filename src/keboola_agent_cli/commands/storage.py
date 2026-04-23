@@ -53,6 +53,12 @@ def storage_buckets(
     Shows which buckets are linked from other projects, including the
     source project ID and name. This information is not available via
     MCP tools.
+
+    Branch handling: this read command uses the production endpoint by
+    default, even when a dev branch is active via `branch use`. The
+    Storage API branch-scoped endpoint only returns locally-modified
+    buckets, so a fresh dev branch lists nothing. Pass --branch to query
+    a dev branch explicitly.
     """
     if should_hint(ctx):
         emit_hint(ctx, "storage.buckets", project=project, branch=branch)
@@ -69,10 +75,16 @@ def storage_buckets(
         )
         raise typer.Exit(code=2)
 
-    # Resolve active branch for single-project queries
+    # Resolve active branch for single-project queries.
+    # Storage read commands ignore the implicit active dev branch: the
+    # Storage API branch-scoped endpoint returns only locally-modified
+    # buckets, which for a freshly created dev branch is an empty set.
+    # Explicit --branch still wins.
     effective_branch: int | None = branch
     if branch is None and project and len(project) == 1:
-        _, effective_branch = resolve_branch(config_store, formatter, project[0], None)
+        _, effective_branch = resolve_branch(
+            config_store, formatter, project[0], None, ignore_active_branch=True
+        )
 
     try:
         result = service.list_buckets(aliases=project, branch_id=effective_branch)
@@ -151,7 +163,10 @@ def storage_bucket_detail(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    # Read command: ignore implicit active dev branch (empty listing trap).
+    _, effective_branch = resolve_branch(
+        config_store, formatter, project, branch, ignore_active_branch=True
+    )
 
     try:
         result = service.get_bucket_detail(
@@ -227,14 +242,24 @@ def storage_tables(
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
 ) -> None:
-    """List storage tables from a project."""
+    """List storage tables from a project.
+
+    Branch handling: this read command uses the production endpoint by
+    default, even when a dev branch is active via `branch use`. The
+    Storage API branch-scoped endpoint only returns tables that were
+    locally modified in the dev branch, so a fresh dev branch lists
+    nothing. Pass --branch to query a dev branch explicitly.
+    """
     if should_hint(ctx):
         emit_hint(ctx, "storage.tables", project=project, bucket_id=bucket_id, branch=branch)
 
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    # Read command: ignore implicit active dev branch (empty listing trap).
+    _, effective_branch = resolve_branch(
+        config_store, formatter, project, branch, ignore_active_branch=True
+    )
 
     try:
         result = service.list_tables(
@@ -306,7 +331,10 @@ def storage_table_detail(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    # Read command: ignore implicit active dev branch (empty listing trap).
+    _, effective_branch = resolve_branch(
+        config_store, formatter, project, branch, ignore_active_branch=True
+    )
 
     try:
         result = service.get_table_detail(
@@ -1152,7 +1180,10 @@ def storage_file_list(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    # Read command: ignore implicit active dev branch (empty listing trap).
+    _, effective_branch = resolve_branch(
+        config_store, formatter, project, branch, ignore_active_branch=True
+    )
 
     try:
         result = service.list_files(
