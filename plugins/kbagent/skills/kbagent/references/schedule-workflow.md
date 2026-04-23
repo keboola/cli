@@ -88,6 +88,8 @@ kbagent --json schedule find --not-run-since 90
 
 The service fetches the latest job for each parent (single `list_jobs(limit=1)` call per unique parent config) and compares against the `startTime` / `createdTime`. A parent with no job history at all counts as stale -- that is usually what you want when auditing abandoned schedules.
 
+**Branch-awareness caveat:** the Queue API has no branch parameter, so `schedule find --branch <DEV_ID> --not-run-since N` still compares against *production* jobs. Dev branches with freshly-deployed configs will appear stale even if they ran on main moments ago. If you need per-branch job history, drop `--not-run-since` and script the Queue API with `job list` scoping.
+
 ### Combined filters
 
 ```bash
@@ -97,12 +99,25 @@ kbagent --json schedule find \
   --not-run-since 30
 ```
 
-### No filters -- enriched listing
+### No filters -- base listing with unevaluated audit columns
 
 ```bash
-# Same rows as 'schedule list' plus last_run_at + matches_cron_window
+# Same rows as 'schedule list' plus two audit columns left null
 kbagent --json schedule find
 ```
+
+Every response row from `schedule find` always carries `last_run_at` and `matches_cron_window`, but they are populated **only when the corresponding filter is active**:
+
+| Filter state | `last_run_at` | `matches_cron_window` |
+|---|---|---|
+| No filters | `null` | `null` |
+| `--cron-window ...` | `null` | `true` / `false` |
+| `--not-run-since N` | ISO timestamp / `null` | `null` |
+| Both filters | ISO timestamp / `null` | `true` / `false` |
+
+This keeps the response schema stable (JSON consumers can rely on the keys being present) while avoiding N extra Queue API calls per project just to populate columns nobody asked for. If you want `last_run_at` populated on every row *without* applying a staleness filter, pass `--not-run-since 0` -- that fires the lookup for every row (caveat: N extra API calls per project) but includes every row in the result.
+
+LLM/agent callers: do not treat `matches_cron_window: true` as an affirmative signal unless you also see `filters.cron_window` populated in the response envelope -- otherwise the column was never evaluated.
 
 ## `flow list --with-schedules` -- flow-centric view
 
@@ -121,6 +136,19 @@ Prefer `schedule list` when you care about schedules (e.g. "how many cron-trigge
 - All three commands fan out across projects in parallel. Per-project errors are collected into `data.errors[]` without aborting -- one broken token doesn't blind you to the rest of the fleet.
 - `schedule detail` on a single project follows the standard single-project write/detail pattern: `KeboolaApiError` exits with the standard code (1/3/4), `ConfigError` exits 5.
 - `schedule find` validates `--cron-window` and `--not-run-since` at the service boundary and raises `ConfigError` (exit 5) on malformed input before any API calls.
+- **`_fetch_latest_job_ts` silently returns `None` on Queue API errors.** This is intentional for the audit use-case (`None` = stale, matching the "never ran" semantics), but it means a permission issue on Queue API for one project is invisible in the `errors[]` envelope -- every schedule in that project will just look stale. If you audit results show a suspiciously uniform "never ran" cluster in one project, run `kbagent job list --project <alias>` to check whether the token even has Queue API read access.
+
+## Payload cost -- one big API call per project
+
+Under the hood `schedule list` and `schedule find` each call `list_components_with_configs(branch_id=...)` once per project. That endpoint returns **every** component's configs + rows + full configuration bodies, not just `keboola.scheduler`. For a 50-component x 5-config project this is 250 configurations on the wire per project, just to extract a handful of schedules and parent names.
+
+Why not hit `list_component_configs("keboola.scheduler")` instead (much smaller response)? Because we'd still need `get_config_detail` per unique parent to resolve `parent_name`, which turns the O(projects) round-trip into O(projects + unique-parents). For projects with a large `keboola.scheduler` surface this is usually worse, not better; for projects with many components but few schedules it is faster but more complex. The current implementation optimises for **call count** at the cost of **payload size**.
+
+Practical implications:
+
+- Audits against 14 projects with moderate component counts finish in a few seconds -- no action needed.
+- If you hit memory pressure (tens of thousands of configs per project, unusual) consider splitting the audit per-project via `--project X --project Y` calls.
+- `flow list --with-schedules` uses the *lighter* `list_component_configs("keboola.scheduler")` path precisely because it only needs the scheduler bodies (flows are already enumerated separately) -- so prefer that view when you don't need the parent-name join that only scheduler-side audits require.
 
 ## Permissions
 

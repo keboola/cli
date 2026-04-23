@@ -424,8 +424,13 @@ remain branch-aware because modifying a dev branch is the expected intent.
     * --cron-window "02:00-04:00" matches schedules whose cron's hour field
       is entirely inside the window. Hour-level approximation -- see gotchas.md.
     * --not-run-since N matches schedules whose parent config's latest job is
-      older than N days (or never ran).
-    Without filters: lists all schedules plus last_run_at + matches_cron_window.
+      older than N days (or never ran). Pass N=0 to force last_run_at lookup
+      without applying a staleness filter.
+    Columns last_run_at and matches_cron_window are ALWAYS present in the
+    output but populated only when the corresponding filter is active --
+    they stay None otherwise so LLM consumers do not treat unevaluated
+    cells as positive match signals. Queue API is not branch-aware:
+    --branch + --not-run-since still compares against production jobs.
 
 ### Development Branches
 
