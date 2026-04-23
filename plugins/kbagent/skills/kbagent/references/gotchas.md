@@ -450,6 +450,35 @@ They live at different endpoints in the Storage API
 (`/v2/storage/branch/{id}/metadata` vs. `/v2/storage/dev-branches/{id}`),
 so setting a branch's description will **not** update the dashboard.
 
+## Storage descriptions: key convention + precedence + partial failures
+
+`kbagent storage describe-bucket / describe-table / describe-column / describe-batch`
+write descriptive metadata onto storage objects. Three behaviors are easy to miss:
+
+- **Column descriptions use a metadata-key convention, not a column endpoint.**
+  The Keboola Storage API has no user-writable column-level metadata endpoint,
+  so `describe-column` stores each description as a `KBC.column.{name}.description`
+  entry on the **table's** metadata (upsert). `storage table-detail` reads them
+  back via the same key and surfaces them under `column_details[].description`.
+  Renaming or deleting a column does NOT automatically clean these entries up
+  (they remain on the table's metadata under the old name). Same convention for
+  table and bucket descriptions: stored as `KBC.description` (provider=user) on
+  the object's metadata.
+- **`describe-batch` is partial-failure-tolerant.** Item-level errors are
+  collected into `result.errors[]` but the batch keeps processing the remaining
+  items. The CLI exits non-zero only if `error_count > 0`, so in scripts always
+  inspect `errors[]` (or at least `error_count`) rather than relying solely on
+  the exit code — and when consuming `--json` output, never trust a zero-exit
+  as "everything applied."
+- **Description-field precedence: metadata wins.** When both the native Storage
+  API `description` field and a user-provided `KBC.description` (provider=user)
+  metadata entry are present, `storage bucket-detail` / `storage table-detail`
+  surface the **metadata value**. The native field is only settable at object
+  creation time via the Storage API; all user updates flow through the metadata
+  endpoint, so the metadata entry is the authoritative source. `KBC.description`
+  entries whose provider is not `user` (e.g. `system`) are ignored during
+  read-back and the native field is used as fallback.
+
 ## `job terminate` quirks
 
 Queue API's kill endpoint (`POST /jobs/{id}/kill`) has a few non-obvious behaviors the
