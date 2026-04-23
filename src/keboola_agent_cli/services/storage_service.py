@@ -6,8 +6,8 @@ metadata that MCP tools strip from responses.
 
 import csv
 import logging
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from ..constants import VALID_COLUMN_TYPES
