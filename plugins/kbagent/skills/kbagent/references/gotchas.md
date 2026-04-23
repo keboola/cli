@@ -506,3 +506,30 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   addressing. When exporting multiple tables, each ends up in a predictable
   subdirectory and there is no risk of name collisions. Override with
   `--output DIR` if you need a custom location.
+
+## Flow: default `--component-id` differs between commands
+
+- `kbagent flow new` defaults to **`keboola.flow`** (the newer format).
+- `kbagent flow detail / update / delete / schedule / schedule-remove` all
+  default to **`keboola.orchestrator`** (the legacy format, since most
+  existing flows still use it).
+- Consequence: if you create a flow with `flow new` and then call
+  `flow detail` without `--component-id`, you will get a `NOT_FOUND` error
+  because kbagent looks up the ID under `keboola.orchestrator`. Always pass
+  `--component-id keboola.flow` when round-tripping a flow you just created
+  via `flow new` (or, equivalently, pass `--component-id keboola.orchestrator`
+  on `flow new` to keep things consistent).
+- `flow list` returns both component IDs and surfaces `component_id` on each
+  row — use it to confirm which variant a flow lives under before issuing
+  detail/update/delete/schedule commands.
+
+## Flow: `schedule` is an upsert (no `schedule-update`)
+
+- `kbagent flow schedule` creates a `keboola.scheduler` config on first run
+  and **updates the existing one in-place** on subsequent runs. Running it
+  twice with different `--cron` values replaces the schedule — it does not
+  create a second one. That's why there is no separate `flow schedule-update`
+  command.
+- To inspect or remove schedules: `kbagent flow schedule-remove` deletes all
+  scheduler configs that target the flow. Pair it with `--dry-run` to see the
+  affected configs (cron + timezone) without calling `delete_config`.
