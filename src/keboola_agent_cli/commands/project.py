@@ -18,7 +18,7 @@ from ..constants import (
     ENV_KBC_STORAGE_API_URL,
     ENV_KBC_TOKEN,
 )
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
     emit_hint,
@@ -178,7 +178,7 @@ def project_add(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -192,7 +192,7 @@ def project_list(ctx: typer.Context) -> None:
         projects = service.list_projects()
         formatter.output(projects, _format_project_table)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -211,7 +211,7 @@ def project_remove(
             result, lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}")
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -249,7 +249,7 @@ def project_edit(
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
 
@@ -353,7 +353,7 @@ def project_status(
         statuses = service.get_status(aliases=aliases)
         formatter.output(statuses, _format_status_table)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
@@ -410,13 +410,13 @@ def project_refresh(
     if project and all_projects:
         formatter.error(
             message="Provide --project or --all, not both",
-            error_code="usage_error",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
     if not project and not all_projects:
         formatter.error(
             message="Provide --project or --all",
-            error_code="usage_error",
+            error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
 
@@ -493,7 +493,7 @@ def project_use(
     try:
         result = service.use_project(alias=alias)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     def _human(c: Console, d: dict[str, Any]) -> None:
@@ -587,7 +587,7 @@ def project_description_get(
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     formatter.output(
@@ -626,7 +626,7 @@ def project_description_set(
     try:
         description = resolve_text_input(text=text, file=file, stdin=stdin)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="INVALID_ARGUMENT")
+        formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
 
     if should_hint(ctx):
@@ -650,5 +650,5 @@ def project_description_set(
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None

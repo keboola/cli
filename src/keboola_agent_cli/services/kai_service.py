@@ -11,7 +11,7 @@ from typing import Any
 from kai_client import KaiClient, KaiError
 
 from ..constants import KAI_FEATURE_FLAG, KAI_REQUEST_TIMEOUT, KAI_STREAM_TIMEOUT
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ class KaiService(BaseService):
                     "Enable the 'AI Agent Chat' feature in project settings."
                 ),
                 status_code=0,
-                error_code="KAI_NOT_ENABLED",
+                error_code=ErrorCode.KAI_NOT_ENABLED,
             )
 
     # ------------------------------------------------------------------
@@ -129,7 +129,7 @@ class KaiService(BaseService):
             raise KeboolaApiError(
                 message=f"Kai ping failed: {exc.message}",
                 status_code=0,
-                error_code="KAI_ERROR",
+                error_code=ErrorCode.KAI_ERROR,
             ) from exc
 
     def ask(self, alias: str, message: str) -> dict[str, Any]:
@@ -161,7 +161,7 @@ class KaiService(BaseService):
             raise KeboolaApiError(
                 message=f"Kai ask failed: {exc.message}",
                 status_code=0,
-                error_code="KAI_ERROR",
+                error_code=ErrorCode.KAI_ERROR,
             ) from exc
 
     def chat_message(self, alias: str, message: str, chat_id: str | None = None) -> dict[str, Any]:
@@ -198,7 +198,7 @@ class KaiService(BaseService):
             raise KeboolaApiError(
                 message=f"Kai chat failed: {exc.message}",
                 status_code=0,
-                error_code="KAI_ERROR",
+                error_code=ErrorCode.KAI_ERROR,
             ) from exc
 
     def get_history(self, alias: str, limit: int = 10) -> dict[str, Any]:
@@ -238,5 +238,5 @@ class KaiService(BaseService):
             raise KeboolaApiError(
                 message=f"Kai history failed: {exc.message}",
                 status_code=0,
-                error_code="KAI_ERROR",
+                error_code=ErrorCode.KAI_ERROR,
             ) from exc

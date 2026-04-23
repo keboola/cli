@@ -14,7 +14,7 @@ import json
 import logging
 from typing import Any
 
-from ..errors import KeboolaApiError
+from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -254,7 +254,7 @@ class FlowService(BaseService):
                 raise KeboolaApiError(
                     message=f"Flow DAG validation failed: {'; '.join(dag_errors)}",
                     status_code=400,
-                    error_code="INVALID_FLOW_DAG",
+                    error_code=ErrorCode.INVALID_FLOW_DAG,
                     retryable=False,
                 )
 
@@ -324,7 +324,7 @@ class FlowService(BaseService):
                         raise KeboolaApiError(
                             message=f"Flow DAG validation failed: {'; '.join(dag_errors)}",
                             status_code=400,
-                            error_code="INVALID_FLOW_DAG",
+                            error_code=ErrorCode.INVALID_FLOW_DAG,
                             retryable=False,
                         )
 
@@ -603,7 +603,7 @@ class FlowService(BaseService):
             raise KeboolaApiError(
                 message=f"Failed to delete schedules: {'; '.join(errors)}",
                 status_code=0,
-                error_code="SCHEDULE_DELETE_FAILED",
+                error_code=ErrorCode.SCHEDULE_DELETE_FAILED,
                 retryable=False,
             )
 

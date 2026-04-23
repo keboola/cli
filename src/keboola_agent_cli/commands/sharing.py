@@ -8,7 +8,7 @@ Enable data sharing between Keboola projects:
 
 import typer
 
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
     emit_hint,
@@ -57,7 +57,7 @@ def sharing_list(
     try:
         result = service.list_shared(aliases=project)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -157,7 +157,7 @@ def sharing_share(
         if not target_project_ids:
             formatter.error(
                 message="--target-project-ids is required for --type selected-projects",
-                error_code="USAGE_ERROR",
+                error_code=ErrorCode.USAGE_ERROR,
             )
             raise typer.Exit(code=2)
         parsed_project_ids = [int(pid.strip()) for pid in target_project_ids.split(",")]
@@ -166,7 +166,7 @@ def sharing_share(
         if not target_users:
             formatter.error(
                 message="--target-users is required for --type selected-users",
-                error_code="USAGE_ERROR",
+                error_code=ErrorCode.USAGE_ERROR,
             )
             raise typer.Exit(code=2)
         parsed_users = [u.strip() for u in target_users.split(",")]
@@ -180,7 +180,7 @@ def sharing_share(
             target_users=parsed_users,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -221,7 +221,7 @@ def sharing_unshare(
     try:
         result = service.unshare(alias=project, bucket_id=bucket_id)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -286,7 +286,7 @@ def sharing_link(
             name=name,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -326,7 +326,7 @@ def sharing_unlink(
     try:
         result = service.unlink(alias=project, bucket_id=bucket_id)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -363,7 +363,7 @@ def sharing_edges(
     try:
         result = service.get_lineage(aliases=project)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:

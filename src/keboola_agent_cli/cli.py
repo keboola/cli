@@ -30,7 +30,7 @@ from .commands.version import update_command, version_command
 from .commands.workspace import workspace_app
 from .config_store import ConfigStore, resolve_config_dir
 from .constants import EXIT_PERMISSION_DENIED
-from .errors import PermissionDeniedError
+from .errors import ErrorCode, PermissionDeniedError
 from .models import PermissionPolicy
 from .output import OutputFormatter
 from .permissions import PermissionEngine
@@ -362,7 +362,7 @@ def main(
         try:
             permission_engine.check_or_raise(ctx.invoked_subcommand)
         except PermissionDeniedError as exc:
-            formatter.error(message=exc.message, error_code="PERMISSION_DENIED")
+            formatter.error(message=exc.message, error_code=ErrorCode.PERMISSION_DENIED)
             raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
 
     # Launch REPL if no subcommand was given (set above)

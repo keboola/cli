@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..json_utils import compute_diff, deep_merge, set_nested_value
 from ..models import ProjectConfig
 from ..sync.manifest import Manifest, load_manifest, save_manifest
@@ -291,7 +291,7 @@ class ConfigService(BaseService):
         if not has_content and not has_metadata:
             raise KeboolaApiError(
                 status_code=400,
-                error_code="VALIDATION_ERROR",
+                error_code=ErrorCode.VALIDATION_ERROR,
                 message=(
                     "At least one of --name, --description, --configuration, "
                     "--configuration-file, or --set must be provided."
@@ -734,7 +734,7 @@ class ConfigService(BaseService):
         raise KeboolaApiError(
             message=f"Metadata key '{key}' not found on config '{component_id}/{config_id}'.",
             status_code=404,
-            error_code="NOT_FOUND",
+            error_code=ErrorCode.NOT_FOUND,
             retryable=False,
         )
 

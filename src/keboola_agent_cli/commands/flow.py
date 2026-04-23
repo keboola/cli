@@ -16,7 +16,7 @@ import yaml
 from rich.markup import escape
 from rich.table import Table
 
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
     emit_hint,
@@ -120,7 +120,7 @@ def flow_list(
     if branch is not None and (not project or len(project) != 1):
         formatter.error(
             message="--branch requires exactly one --project",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -131,7 +131,7 @@ def flow_list(
     try:
         result = service.list_flows(aliases=project, branch_id=effective_branch)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -215,7 +215,7 @@ def flow_detail(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -384,7 +384,7 @@ def flow_new(
             flow_def = _load_flow_yaml(file)
         except (OSError, yaml.YAMLError, ValueError) as exc:
             formatter.error(
-                message=f"Cannot load flow definition: {exc}", error_code="VALIDATION_ERROR"
+                message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR
             )
             raise typer.Exit(code=2) from None
         phases = flow_def.get("phases", [])
@@ -401,7 +401,7 @@ def flow_new(
             branch_id=branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -472,7 +472,7 @@ def flow_update(
             flow_def = _load_flow_yaml(file)
         except (OSError, yaml.YAMLError, ValueError) as exc:
             formatter.error(
-                message=f"Cannot load flow definition: {exc}", error_code="VALIDATION_ERROR"
+                message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR
             )
             raise typer.Exit(code=2) from None
         phases = flow_def.get("phases")
@@ -481,7 +481,7 @@ def flow_update(
     if name is None and description is None and phases is None and tasks is None:
         formatter.error(
             message="At least one of --name, --description, or --file must be provided.",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
 
@@ -497,7 +497,7 @@ def flow_update(
             branch_id=branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -587,7 +587,7 @@ def flow_delete(
             branch_id=branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -662,7 +662,7 @@ def flow_schedule(
             branch_id=branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -738,7 +738,7 @@ def flow_schedule_remove(
                 branch_id=branch,
             )
         except ConfigError as exc:
-            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
         except KeboolaApiError as exc:
             formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -799,7 +799,7 @@ def flow_schedule_remove(
             branch_id=branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)

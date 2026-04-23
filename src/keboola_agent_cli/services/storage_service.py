@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import VALID_COLUMN_TYPES
+from ..errors import ErrorCode
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -672,7 +673,7 @@ class StorageService(BaseService):
                 raise KeboolaApiError(
                     message="Export job completed but no file ID in results",
                     status_code=500,
-                    error_code="EXPORT_NO_FILE",
+                    error_code=ErrorCode.EXPORT_NO_FILE,
                     retryable=False,
                 )
 
@@ -683,7 +684,7 @@ class StorageService(BaseService):
                 raise KeboolaApiError(
                     message=f"No download URL for file {file_id}",
                     status_code=500,
-                    error_code="EXPORT_NO_URL",
+                    error_code=ErrorCode.EXPORT_NO_URL,
                     retryable=False,
                 )
 
@@ -699,7 +700,7 @@ class StorageService(BaseService):
                             "produced a single file. Re-run without --keep-slices."
                         ),
                         status_code=400,
-                        error_code="NOT_SLICED",
+                        error_code=ErrorCode.NOT_SLICED,
                         retryable=False,
                     )
                 slice_info = client.download_sliced_file_to_dir(file_detail, output_path)
@@ -1121,7 +1122,7 @@ class StorageService(BaseService):
                     raise KeboolaApiError(
                         message=f"No files found matching tags: {tag_str}",
                         status_code=404,
-                        error_code="FILE_NOT_FOUND",
+                        error_code=ErrorCode.FILE_NOT_FOUND,
                         retryable=False,
                     )
                 file_id = files[0]["id"]
@@ -1160,7 +1161,7 @@ class StorageService(BaseService):
                     raise KeboolaApiError(
                         message=f"No download URL for file {file_id}",
                         status_code=500,
-                        error_code="FILE_NO_URL",
+                        error_code=ErrorCode.FILE_NO_URL,
                         retryable=False,
                     )
                 bytes_written = client.download_file(download_url, effective_output)
@@ -1375,7 +1376,7 @@ class StorageService(BaseService):
             raise KeboolaApiError(
                 message=f"file_type must be 'csv' or 'parquet', got {file_type!r}",
                 status_code=400,
-                error_code="VALIDATION_ERROR",
+                error_code=ErrorCode.VALIDATION_ERROR,
                 retryable=False,
             )
 
@@ -1400,7 +1401,7 @@ class StorageService(BaseService):
                 raise KeboolaApiError(
                     message="Export job completed but no file ID in results",
                     status_code=500,
-                    error_code="EXPORT_NO_FILE",
+                    error_code=ErrorCode.EXPORT_NO_FILE,
                     retryable=False,
                 )
 
@@ -1458,7 +1459,7 @@ class StorageService(BaseService):
                                 "file is a single non-sliced CSV. Drop the flag."
                             ),
                             status_code=400,
-                            error_code="NOT_SLICED",
+                            error_code=ErrorCode.NOT_SLICED,
                             retryable=False,
                         )
                     effective_output = output_path or f"{table_short}.csv"
@@ -1471,7 +1472,7 @@ class StorageService(BaseService):
                             raise KeboolaApiError(
                                 message=f"No download URL for file {file_id}",
                                 status_code=500,
-                                error_code="FILE_NO_URL",
+                                error_code=ErrorCode.FILE_NO_URL,
                                 retryable=False,
                             )
                         bytes_written = client.download_file(download_url, effective_output)

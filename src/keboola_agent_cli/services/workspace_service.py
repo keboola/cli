@@ -8,7 +8,7 @@ single-project operations.
 import logging
 from typing import Any
 
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -233,7 +233,7 @@ class WorkspaceService(BaseService):
             raise KeboolaApiError(
                 message=f"Sandbox job completed but no workspace found for config {config_id}",
                 status_code=500,
-                error_code="WORKSPACE_NOT_FOUND",
+                error_code=ErrorCode.WORKSPACE_NOT_FOUND,
                 retryable=False,
             )
 

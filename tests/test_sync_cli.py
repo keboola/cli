@@ -1562,3 +1562,159 @@ class TestSyncBranchStatusCli:
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         assert "not enabled" in result.output
+
+
+class TestSyncInitAdoptExistingCli:
+    """Tests for `kbagent sync init --adopt-existing`."""
+
+    def test_adopt_existing_flag_present_in_help(self) -> None:
+        """sync init --help shows --adopt-existing flag."""
+        result = runner.invoke(app, ["sync", "init", "--help"])
+        assert result.exit_code == 0
+        assert "--adopt-existing" in _strip_ansi(result.output)
+
+    def test_adopt_existing_json_output(self, tmp_path: Path) -> None:
+        """sync init --adopt-existing --json returns adopted status."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN, "project_id": 258}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.init_sync.return_value = {
+            "status": "adopted",
+            "project_id": 258,
+            "project_alias": "prod",
+            "api_host": "connection.keboola.com",
+            "git_branching": False,
+            "default_branch": "main",
+            "files_created": [],
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "init",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                    "--adopt-existing",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["status"] == "adopted"
+        assert output["data"]["files_created"] == []
+
+        # Verify adopt_existing=True was passed through to the service
+        call_kwargs = mock_sync.init_sync.call_args
+        assert call_kwargs.kwargs.get("adopt_existing") is True
+
+    def test_adopt_existing_human_output_shows_adopted(self, tmp_path: Path) -> None:
+        """sync init --adopt-existing shows 'Adopted' instead of 'Initialized'."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN, "project_id": 258}},
+        )
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.init_sync.return_value = {
+            "status": "adopted",
+            "project_id": 258,
+            "project_alias": "prod",
+            "api_host": "connection.europe-west3.gcp.keboola.com",
+            "git_branching": False,
+            "default_branch": "main",
+            "files_created": [],
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "init",
+                    "--project",
+                    "prod",
+                    "--directory",
+                    str(tmp_path),
+                    "--adopt-existing",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = _strip_ansi(result.output)
+        assert "Adopted" in output or "adopted" in output.lower()
+
+    def test_adopt_existing_config_error_exits_5(self, tmp_path: Path) -> None:
+        """sync init --adopt-existing returns exit code 5 on project_id mismatch."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"prod": {"token": TEST_TOKEN, "project_id": 258}},
+        )
+
+        from keboola_agent_cli.errors import ConfigError
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.init_sync.side_effect = ConfigError(
+            "Manifest project_id=999 does not match alias 'prod' project_id=258"
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "init",
+                    "--project",
+                    "prod",
+                    "--adopt-existing",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 5
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert "project_id" in output["error"]["message"]

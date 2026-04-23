@@ -4749,3 +4749,150 @@ class TestE2EJobRunQueuePollingParity:
         # A completed python-transformation job always emits at least one event
         # (startup + completion). Guard against an empty-but-silent regression.
         assert len(events) > 0
+
+
+# ===========================================================================
+
+
+@pytest.mark.e2e
+@skip_without_credentials
+class TestE2ESyncAdoptExisting:
+    """E2E test for 'sync init --adopt-existing' against a real Keboola project.
+
+    Simulates a directory that was set up by the kbc CLI (or a previous kbagent
+    version) by writing a minimal valid manifest, then verifies that:
+      1. kbagent sync init --adopt-existing succeeds (status=adopted)
+      2. kbagent sync status works on the adopted directory
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-adopt"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self.project_dir = tmp_path / "project"
+        self.project_dir.mkdir()
+
+        # Register the project
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+    def _run(self, *args: str):
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict:
+        return _json_ok(self._run(*args))
+
+    def test_adopt_existing_manifest(self) -> None:
+        """init --adopt-existing adopts a kbc-style manifest; sync status works after."""
+        import json as _json
+
+        # 1. Write a kbc-style manifest for the real project.
+        #    We first call sync init normally to learn the real project_id, then
+        #    delete and rewrite as a "legacy" manifest.
+        _step(1, "sync init (normal) to learn project_id")
+        resp = self._run_ok(
+            "sync",
+            "init",
+            "--project",
+            self.alias,
+            "--directory",
+            str(self.project_dir),
+        )
+        project_id = resp["data"]["project_id"]
+        branch_id = None
+        keboola_dir = self.project_dir / ".keboola"
+        manifest_path = keboola_dir / "manifest.json"
+        raw = _json.loads(manifest_path.read_text())
+        if raw.get("branches"):
+            branch_id = raw["branches"][0]["id"]
+
+        # 2. Rewrite as a minimal kbc-style manifest (drop gitBranching field).
+        _step(2, "rewrite as kbc-style manifest (drop gitBranching)")
+        kbc_manifest = {
+            "version": 2,
+            "project": {"id": project_id, "apiHost": self.url.replace("https://", "")},
+            "allowTargetEnv": True,
+            "sortBy": "id",
+            "naming": {"branch": "{branch_name}"},
+            "branches": [{"id": branch_id, "path": "main"}] if branch_id else [],
+            "configurations": [],
+        }
+        manifest_path.write_text(_json.dumps(kbc_manifest, indent=4), encoding="utf-8")
+
+        # 3. sync init --adopt-existing should succeed without error.
+        _step(3, "sync init --adopt-existing")
+        resp = self._run_ok(
+            "sync",
+            "init",
+            "--project",
+            self.alias,
+            "--directory",
+            str(self.project_dir),
+            "--adopt-existing",
+        )
+        inner = resp["data"]
+        assert inner["status"] == "adopted", f"Expected 'adopted', got {inner['status']}"
+        assert inner["project_id"] == project_id
+        assert inner["files_created"] == []
+
+        # 4. sync status should work on the adopted directory.
+        _step(4, "sync status on adopted directory")
+        resp = self._run_ok(
+            "sync",
+            "status",
+            "--directory",
+            str(self.project_dir),
+        )
+        # Status should be parseable (may show no changes on an empty dir)
+        inner = resp["data"]
+        assert "modified" in inner or "unchanged" in inner or "added" in inner
+
+    def test_adopt_existing_rejects_wrong_project(self) -> None:
+        """init --adopt-existing rejects a manifest with a different project_id."""
+        import json as _json
+
+        keboola_dir = self.project_dir / ".keboola"
+        keboola_dir.mkdir()
+        # Write a manifest with a clearly wrong project_id
+        wrong_manifest = {
+            "version": 2,
+            "project": {"id": 999999999, "apiHost": "connection.keboola.com"},
+            "allowTargetEnv": True,
+            "sortBy": "id",
+            "naming": {"branch": "{branch_name}"},
+            "branches": [],
+            "configurations": [],
+        }
+        (keboola_dir / "manifest.json").write_text(_json.dumps(wrong_manifest), encoding="utf-8")
+
+        result = self._run(
+            "sync",
+            "init",
+            "--project",
+            self.alias,
+            "--directory",
+            str(self.project_dir),
+            "--adopt-existing",
+        )
+        assert result.exit_code == 5, f"Expected exit 5, got {result.exit_code}: {result.output}"
+        output = _json.loads(result.output)
+        assert output["status"] == "error"
+        assert "999999999" in output["error"]["message"]

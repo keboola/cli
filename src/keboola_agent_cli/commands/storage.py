@@ -10,7 +10,7 @@ from typing import Any
 import typer
 
 from ..config_store import ConfigStore
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
     emit_hint,
@@ -72,7 +72,7 @@ def storage_buckets(
     if branch is not None and (not project or len(project) != 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -90,7 +90,7 @@ def storage_buckets(
     try:
         result = service.list_buckets(aliases=project, branch_id=effective_branch)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -176,7 +176,7 @@ def storage_bucket_detail(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -269,7 +269,7 @@ def storage_tables(
     if branch is not None and (not project or len(project) != 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -291,7 +291,7 @@ def storage_tables(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -377,7 +377,7 @@ def storage_table_detail(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -478,10 +478,10 @@ def storage_create_bucket(
             branch_id=effective_branch,
         )
     except ValueError as exc:
-        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -562,10 +562,10 @@ def storage_create_table(
             branch_id=effective_branch,
         )
     except ValueError as exc:
-        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -649,7 +649,7 @@ def storage_upload_table(
 
     p = Path(file)
     if not p.is_file():
-        formatter.error(message=f"File not found: {file}", error_code="FILE_NOT_FOUND")
+        formatter.error(message=f"File not found: {file}", error_code=ErrorCode.FILE_NOT_FOUND)
         raise typer.Exit(code=2) from None
 
     if not formatter.json_mode:
@@ -670,10 +670,10 @@ def storage_upload_table(
             branch_id=effective_branch,
         )
     except ValueError as exc:
-        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -795,10 +795,10 @@ def storage_download_table(
             keep_slices=keep_slices,
         )
     except ValueError as exc:
-        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -888,7 +888,7 @@ def storage_delete_table(
                 branch_id=effective_branch,
             )
         except ConfigError as exc:
-            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
         if formatter.json_mode:
@@ -916,7 +916,7 @@ def storage_delete_table(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -1005,7 +1005,7 @@ def storage_delete_column(
                 branch_id=effective_branch,
             )
         except ConfigError as exc:
-            formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
         if formatter.json_mode:
@@ -1036,7 +1036,7 @@ def storage_delete_column(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -1119,7 +1119,7 @@ def storage_delete_bucket(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
@@ -1202,7 +1202,7 @@ def storage_describe_bucket(
     try:
         description = resolve_text_input(text=text, file=file, stdin=stdin)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="INVALID_ARGUMENT")
+        formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
 
     try:
@@ -1213,7 +1213,7 @@ def storage_describe_bucket(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1278,7 +1278,7 @@ def storage_describe_table(
     try:
         description = resolve_text_input(text=text, file=file, stdin=stdin)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="INVALID_ARGUMENT")
+        formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
 
     try:
@@ -1289,7 +1289,7 @@ def storage_describe_table(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1354,7 +1354,7 @@ def storage_describe_column(
         if "=" not in entry:
             formatter.error(
                 message=f"--column must be NAME=DESCRIPTION, got: {entry!r}",
-                error_code="INVALID_ARGUMENT",
+                error_code=ErrorCode.INVALID_ARGUMENT,
             )
             raise typer.Exit(code=2) from None
         name, _, desc = entry.partition("=")
@@ -1362,7 +1362,7 @@ def storage_describe_column(
         if not name:
             formatter.error(
                 message=f"Column name cannot be empty in: {entry!r}",
-                error_code="INVALID_ARGUMENT",
+                error_code=ErrorCode.INVALID_ARGUMENT,
             )
             raise typer.Exit(code=2) from None
         parsed[name] = desc
@@ -1375,10 +1375,10 @@ def storage_describe_column(
             branch_id=effective_branch,
         )
     except ValueError as exc:
-        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1501,10 +1501,10 @@ def storage_describe_batch(
                 completed=result["applied_count"] + result["error_count"],
             )
     except ValueError as exc:
-        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1624,7 +1624,7 @@ def storage_file_list(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1688,7 +1688,7 @@ def storage_file_info(
     try:
         result = service.get_file_info(alias=project, file_id=file_id)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1772,7 +1772,7 @@ def storage_file_upload(
 
     p = Path(file)
     if not p.is_file():
-        formatter.error(message=f"File not found: {file}", error_code="FILE_NOT_FOUND")
+        formatter.error(message=f"File not found: {file}", error_code=ErrorCode.FILE_NOT_FOUND)
         raise typer.Exit(code=2) from None
 
     if not formatter.json_mode:
@@ -1789,7 +1789,7 @@ def storage_file_upload(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1856,7 +1856,7 @@ def storage_file_download(
     if not file_id and not tag:
         formatter.error(
             message="Either --file-id or --tag must be provided",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
 
@@ -1874,10 +1874,10 @@ def storage_file_download(
             output_path=output,
         )
     except ValueError as exc:
-        formatter.error(message=str(exc), error_code="INVALID_ARGUMENT")
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -1930,7 +1930,7 @@ def storage_file_tag(
     if not add and not remove:
         formatter.error(
             message="At least one of --add or --remove must be provided",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
 
@@ -1942,7 +1942,7 @@ def storage_file_tag(
             remove_tags=remove,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -2003,7 +2003,7 @@ def storage_file_delete(
             dry_run=dry_run,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -2105,7 +2105,7 @@ def storage_load_file(
             branch_id=effective_branch,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -2202,7 +2202,7 @@ def storage_unload_table(
         formatter = get_formatter(ctx)
         formatter.error(
             message=f"--file-type must be 'csv' or 'parquet', got {file_type!r}",
-            error_code="VALIDATION_ERROR",
+            error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2) from None
     if should_hint(ctx):
@@ -2247,7 +2247,7 @@ def storage_unload_table(
             keep_slices=keep_slices,
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)

@@ -18,7 +18,7 @@ from ..constants import (
     KILLABLE_JOB_STATUSES,
     VALID_POLL_STRATEGIES,
 )
-from ..errors import KeboolaApiError
+from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -341,7 +341,7 @@ class JobService(BaseService):
         - If the local deadline elapses before the remote job finishes,
           issues ``kill_job`` to cancel the remote work, waits briefly for
           termination, and raises ``KeboolaApiError`` with
-          ``error_code="JOB_TIMEOUT_TERMINATED"``. If the kill call itself
+          ``error_code=ErrorCode.JOB_TIMEOUT_TERMINATED``. If the kill call itself
           fails we fall back to the original ``QUEUE_JOB_TIMEOUT`` error so
           the caller can tell "local gave up" from "remote was cancelled".
 
@@ -376,13 +376,13 @@ class JobService(BaseService):
                     f"Expected one of: {sorted(VALID_POLL_STRATEGIES)}."
                 ),
                 status_code=0,
-                error_code="INVALID_ARGUMENT",
+                error_code=ErrorCode.INVALID_ARGUMENT,
             )
         if log_tail_lines < 0:
             raise KeboolaApiError(
                 message=f"log_tail_lines must be >= 0, got {log_tail_lines}.",
                 status_code=0,
-                error_code="INVALID_ARGUMENT",
+                error_code=ErrorCode.INVALID_ARGUMENT,
             )
 
         projects = self.resolve_projects([alias])
@@ -492,7 +492,7 @@ class JobService(BaseService):
                         f"status={cancelled.get('status')!r}."
                     ),
                     status_code=504,
-                    error_code="JOB_TIMEOUT_TERMINATED",
+                    error_code=ErrorCode.JOB_TIMEOUT_TERMINATED,
                     retryable=False,
                     details={"job": cancelled, "logTail": tail},
                 ) from exc
@@ -571,7 +571,7 @@ class JobService(BaseService):
                     f"`--no-variables` to skip resolution."
                 ),
                 status_code=0,
-                error_code="NO_VARIABLE_ROWS",
+                error_code=ErrorCode.NO_VARIABLE_ROWS,
             )
 
         # A row without a usable `id` would otherwise coerce to `""`, which
@@ -587,7 +587,7 @@ class JobService(BaseService):
                     f"with empty variable bindings."
                 ),
                 status_code=0,
-                error_code="MALFORMED_VARIABLES_ROW",
+                error_code=ErrorCode.MALFORMED_VARIABLES_ROW,
             )
         return str(first_row_id)
 

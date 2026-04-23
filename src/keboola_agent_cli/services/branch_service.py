@@ -10,7 +10,7 @@ the ``KBC.projectDescription`` metadata key on the default branch.
 from typing import Any
 
 from ..constants import METADATA_NOT_FOUND
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -408,7 +408,7 @@ class BranchService(BaseService):
                     f"Metadata key '{key}' not found on branch '{branch_id}' of project '{alias}'."
                 ),
                 status_code=404,
-                error_code="NOT_FOUND",
+                error_code=ErrorCode.NOT_FOUND,
                 retryable=False,
             )
         return {

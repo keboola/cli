@@ -17,6 +17,7 @@ from rich.table import Table
 
 from ..config_store import ConfigStore
 from ..constants import EXIT_PERMISSION_DENIED
+from ..errors import ErrorCode
 from ..models import PermissionPolicy
 from ..permissions import PermissionEngine
 from ._helpers import get_formatter, get_service
@@ -271,14 +272,14 @@ def permissions_set(
     if mode not in ("allow", "deny"):
         formatter.error(
             message="Mode must be 'allow' or 'deny'",
-            error_code="VALIDATION_ERROR",
+            error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2) from None
 
     if not _require_interactive_confirmation("update permission policy"):
         formatter.error(
             message="Confirmation failed. Permission policy not changed.",
-            error_code="PERMISSION_DENIED",
+            error_code=ErrorCode.PERMISSION_DENIED,
         )
         raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
 
@@ -330,7 +331,7 @@ def permissions_reset(
     if not _require_interactive_confirmation("remove permission policy"):
         formatter.error(
             message="Confirmation failed. Permission policy not changed.",
-            error_code="PERMISSION_DENIED",
+            error_code=ErrorCode.PERMISSION_DENIED,
         )
         raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
 

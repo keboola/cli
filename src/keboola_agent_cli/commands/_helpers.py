@@ -20,7 +20,7 @@ from ..constants import (
     EXIT_JOB_TIMEOUT_TERMINATED,
     EXIT_PERMISSION_DENIED,
 )
-from ..errors import KeboolaApiError, PermissionDeniedError
+from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError
 from ..output import OutputFormatter
 
 
@@ -164,7 +164,7 @@ def check_cli_permission(ctx: typer.Context, group_name: str) -> None:
         engine.check_or_raise(operation)
     except PermissionDeniedError as exc:
         formatter = get_formatter(ctx)
-        formatter.error(message=exc.message, error_code="PERMISSION_DENIED")
+        formatter.error(message=exc.message, error_code=ErrorCode.PERMISSION_DENIED)
         raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
 
 
@@ -200,7 +200,7 @@ def resolve_project_alias(
     try:
         alias, _source = service.resolve_pinned_alias(explicit=explicit)
     except _ConfigError as exc:
-        formatter.error(message=exc.message, error_code="CONFIG_ERROR")
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     return alias
 
@@ -218,7 +218,7 @@ def validate_branch_requires_project(
     if branch is not None and not project:
         formatter.error(
             message="--branch requires --project (branch ID is per-project)",
-            error_code="INVALID_ARGUMENT",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
 
