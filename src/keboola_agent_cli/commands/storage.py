@@ -53,6 +53,12 @@ def storage_buckets(
     Shows which buckets are linked from other projects, including the
     source project ID and name. This information is not available via
     MCP tools.
+
+    Branch handling: this read command uses the production endpoint by
+    default, even when a dev branch is active via `branch use`. The
+    Storage API branch-scoped endpoint only returns locally-modified
+    buckets, so a fresh dev branch lists nothing. Pass --branch to query
+    a dev branch explicitly.
     """
     if should_hint(ctx):
         emit_hint(ctx, "storage.buckets", project=project, branch=branch)
@@ -69,10 +75,16 @@ def storage_buckets(
         )
         raise typer.Exit(code=2)
 
-    # Resolve active branch for single-project queries
+    # Resolve active branch for single-project queries.
+    # Storage read commands ignore the implicit active dev branch: the
+    # Storage API branch-scoped endpoint returns only locally-modified
+    # buckets, which for a freshly created dev branch is an empty set.
+    # Explicit --branch still wins.
     effective_branch: int | None = branch
     if branch is None and project and len(project) == 1:
-        _, effective_branch = resolve_branch(config_store, formatter, project[0], None)
+        _, effective_branch = resolve_branch(
+            config_store, formatter, project[0], None, ignore_active_branch=True
+        )
 
     try:
         result = service.list_buckets(aliases=project, branch_id=effective_branch)
@@ -151,7 +163,10 @@ def storage_bucket_detail(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    # Read command: ignore implicit active dev branch (empty listing trap).
+    _, effective_branch = resolve_branch(
+        config_store, formatter, project, branch, ignore_active_branch=True
+    )
 
     try:
         result = service.get_bucket_detail(
@@ -211,15 +226,16 @@ def storage_bucket_detail(
 @storage_app.command("tables", rich_help_panel=_TABLES)
 def storage_tables(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
+    project: list[str] | None = typer.Option(
+        None,
         "--project",
-        help="Project alias",
+        help="Project alias (can be repeated for multiple projects). "
+        "Omit to query all connected projects in parallel.",
     ),
     bucket_id: str | None = typer.Option(
         None,
         "--bucket-id",
-        help="Filter tables by bucket ID",
+        help="Filter tables by bucket ID (applied independently per project)",
     ),
     branch: int | None = typer.Option(
         None,
@@ -227,18 +243,49 @@ def storage_tables(
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
 ) -> None:
-    """List storage tables from a project."""
+    """List storage tables from one or more projects.
+
+    Queries all connected projects in parallel by default, matching the
+    behaviour of ``storage buckets``, ``config list``, ``job list``, and other
+    read commands. Each row in the output is tagged with ``project_alias``
+    so results from multiple projects can be distinguished.
+
+    Branch handling: this read command uses the production endpoint by
+    default, even when a dev branch is active via `branch use`. The
+    Storage API branch-scoped endpoint only returns tables that were
+    locally modified in the dev branch, so a fresh dev branch lists
+    nothing. Pass --branch to query a dev branch explicitly.
+    """
     if should_hint(ctx):
         emit_hint(ctx, "storage.tables", project=project, bucket_id=bucket_id, branch=branch)
 
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    # --branch requires exactly one --project (branch ID is per-project).
+    # Mirrors the validation used by `storage buckets` and `config list`.
+    if branch is not None and (not project or len(project) != 1):
+        formatter.error(
+            message="--branch requires exactly one --project (branch ID is per-project)",
+            error_code="INVALID_ARGUMENT",
+        )
+        raise typer.Exit(code=2)
+
+    # Resolve active branch only for single-project queries; multi-project
+    # listing intentionally skips active-branch resolution because branches
+    # are per-project state. Read commands use ignore_active_branch=True:
+    # Storage API branch endpoint only returns locally modified tables, so
+    # auto-scoping to the active branch traps users into an empty listing.
+    effective_branch: int | None = branch
+    if branch is None and project and len(project) == 1:
+        _, effective_branch = resolve_branch(
+            config_store, formatter, project[0], None, ignore_active_branch=True
+        )
 
     try:
         result = service.list_tables(
-            alias=project,
+            aliases=project,
             bucket_id=bucket_id,
             branch_id=effective_branch,
         )
@@ -257,27 +304,38 @@ def storage_tables(
         tables = result["tables"]
         if not tables:
             formatter.console.print("[dim]No tables found.[/dim]")
+            emit_project_warnings(formatter, result)
             return
 
-        table = Table(title=f"Tables - {result['project_alias']}")
-        table.add_column("Table ID", style="bold cyan")
-        table.add_column("Rows", justify="right")
-        table.add_column("Size", justify="right", style="dim")
-        table.add_column("Last Import", style="dim")
-
+        # Group by project so multi-project output stays readable.
+        by_project: dict[str, list[dict]] = {}
         for t in tables:
-            size_mb = t["data_size_bytes"] / (1024 * 1024) if t["data_size_bytes"] else 0
-            last_import = t.get("last_import_date", "")
-            if last_import and "T" in last_import:
-                last_import = last_import.split("T")[0]
-            table.add_row(
-                t["id"],
-                str(t["rows_count"]),
-                f"{size_mb:.1f} MB",
-                last_import,
-            )
+            alias = t["project_alias"]
+            by_project.setdefault(alias, []).append(t)
 
-        formatter.console.print(table)
+        for alias, proj_tables in by_project.items():
+            table = Table(title=f"Tables - {alias}")
+            table.add_column("Table ID", style="bold cyan")
+            table.add_column("Rows", justify="right")
+            table.add_column("Size", justify="right", style="dim")
+            table.add_column("Last Import", style="dim")
+
+            for t in proj_tables:
+                size_mb = t["data_size_bytes"] / (1024 * 1024) if t["data_size_bytes"] else 0
+                last_import = t.get("last_import_date", "")
+                if last_import and "T" in last_import:
+                    last_import = last_import.split("T")[0]
+                table.add_row(
+                    t["id"],
+                    str(t["rows_count"]),
+                    f"{size_mb:.1f} MB",
+                    last_import,
+                )
+
+            formatter.console.print(table)
+            formatter.console.print()
+
+        emit_project_warnings(formatter, result)
 
 
 @storage_app.command("table-detail", rich_help_panel=_TABLES)
@@ -306,7 +364,10 @@ def storage_table_detail(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    # Read command: ignore implicit active dev branch (empty listing trap).
+    _, effective_branch = resolve_branch(
+        config_store, formatter, project, branch, ignore_active_branch=True
+    )
 
     try:
         result = service.get_table_detail(
@@ -1152,7 +1213,10 @@ def storage_file_list(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    # Read command: ignore implicit active dev branch (empty listing trap).
+    _, effective_branch = resolve_branch(
+        config_store, formatter, project, branch, ignore_active_branch=True
+    )
 
     try:
         result = service.list_files(

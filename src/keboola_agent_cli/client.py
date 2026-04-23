@@ -216,25 +216,35 @@ class KeboolaClient(BaseHttpClient):
         response = self._request("GET", f"{prefix}/components", params=params)
         return response.json()
 
-    def list_components_with_configs(self, branch_id: int | None = None) -> list[dict[str, Any]]:
+    def list_components_with_configs(
+        self,
+        branch_id: int | None = None,
+        component_type: str | None = None,
+    ) -> list[dict[str, Any]]:
         """List all components with full configuration bodies and rows.
 
-        Makes a single API call to fetch everything needed for sync pull.
-        Uses the include=configuration,rows parameter to get full config
-        bodies and config rows in one request.
+        Makes a single API call to fetch everything needed for sync pull and
+        for deep search (row-level configuration). Uses the
+        include=configuration,rows parameter to get full config bodies and
+        config rows in one request.
 
         Args:
             branch_id: If set, target a specific dev branch.
+            component_type: Optional filter (extractor, writer, transformation,
+                application). Passed to the API as ``componentType``.
 
         Returns:
             List of component dicts, each containing a 'configurations' list
             with full config bodies and nested 'rows'.
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        params: dict[str, str] = {"include": "configuration,rows"}
+        if component_type:
+            params["componentType"] = component_type
         resp = self._request(
             "GET",
             f"{prefix}/components",
-            params={"include": "configuration,rows"},
+            params=params,
         )
         return resp.json()
 

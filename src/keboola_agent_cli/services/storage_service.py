@@ -291,47 +291,59 @@ class StorageService(BaseService):
 
     def list_tables(
         self,
-        alias: str,
+        aliases: list[str] | None = None,
         bucket_id: str | None = None,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """List tables from a project, optionally filtered by bucket.
+        """List tables from one or more projects (in parallel).
+
+        When ``bucket_id`` is specified with multiple projects, the filter is
+        applied independently in each project -- a missing bucket in a given
+        project is recorded as a per-project error without aborting the others.
 
         Args:
-            alias: Project alias.
-            bucket_id: Optional bucket ID filter.
-            branch_id: If set, target a specific dev branch.
+            aliases: Project aliases to query. If None, queries all.
+            bucket_id: Optional bucket ID filter applied per project.
+            branch_id: If set, target a specific dev branch
+                (only valid with a single project).
 
         Returns:
-            Dict with 'tables' list.
+            Dict with 'tables' list (each row tagged with ``project_alias``)
+            and 'errors' list (per-project failures).
         """
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
+        projects = self.resolve_projects(aliases)
 
-        client = self._client_factory(project.stack_url, project.token)
-        try:
-            raw_tables = client.list_tables(bucket_id=bucket_id, branch_id=branch_id)
-        finally:
-            client.close()
+        def _worker(alias: str, project: ProjectConfig) -> tuple[str, list[dict[str, Any]], bool]:
+            return self._fetch_tables(
+                alias,
+                project,
+                bucket_id=bucket_id,
+                branch_id=branch_id,
+            )
 
-        tables = [
-            {
-                "project_alias": alias,
-                "id": t.get("id", ""),
-                "name": t.get("name", ""),
-                "display_name": t.get("displayName", t.get("name", "")),
-                "bucket_id": t.get("bucket", {}).get("id", "")
-                if isinstance(t.get("bucket"), dict)
-                else "",
-                "rows_count": t.get("rowsCount", 0),
-                "data_size_bytes": t.get("dataSizeBytes", 0),
-                "is_alias": t.get("isAlias", False),
-                "last_import_date": t.get("lastImportDate", ""),
-            }
-            for t in raw_tables
-        ]
+        successes, errors = self._run_parallel(projects, _worker)
 
-        return {"tables": tables, "project_alias": alias}
+        tables: list[dict[str, Any]] = []
+        for result in successes:
+            alias = result[0]
+            for t in result[1]:
+                tables.append(
+                    {
+                        "project_alias": alias,
+                        "id": t.get("id", ""),
+                        "name": t.get("name", ""),
+                        "display_name": t.get("displayName", t.get("name", "")),
+                        "bucket_id": t.get("bucket", {}).get("id", "")
+                        if isinstance(t.get("bucket"), dict)
+                        else "",
+                        "rows_count": t.get("rowsCount", 0),
+                        "data_size_bytes": t.get("dataSizeBytes", 0),
+                        "is_alias": t.get("isAlias", False),
+                        "last_import_date": t.get("lastImportDate", ""),
+                    }
+                )
+
+        return {"tables": tables, "errors": errors}
 
     # ------------------------------------------------------------------
     # Write operations
@@ -1462,6 +1474,36 @@ class StorageService(BaseService):
         try:
             buckets = client.list_buckets(include="linkedBuckets", branch_id=branch_id)
             return (alias, buckets, True)
+        except KeboolaApiError as exc:
+            return (
+                alias,
+                {
+                    "project_alias": alias,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                },
+            )
+        finally:
+            client.close()
+
+    def _fetch_tables(
+        self,
+        alias: str,
+        project: ProjectConfig,
+        bucket_id: str | None = None,
+        branch_id: int | None = None,
+    ) -> tuple[str, list[dict[str, Any]], bool]:
+        """Fetch tables for a single project (worker for _run_parallel).
+
+        Per-project failures (e.g. bucket not found in this project, invalid
+        token) are returned as error tuples so other projects still complete.
+        """
+        from ..errors import KeboolaApiError
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            tables = client.list_tables(bucket_id=bucket_id, branch_id=branch_id)
+            return (alias, tables, True)
         except KeboolaApiError as exc:
             return (
                 alias,

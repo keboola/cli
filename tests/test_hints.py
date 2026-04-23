@@ -157,6 +157,37 @@ class TestClientRenderer:
         assert "KBC_MANAGE_API_TOKEN" in code
         assert "KeboolaClient" not in code
 
+    def test_job_run_hint_threads_branch_id_through_all_steps(self) -> None:
+        """Branch is passed to all three client calls in the job.run hint.
+
+        Locks the contract: if branch_id is dropped from any of the
+        get_config_detail / list_config_rows / create_job calls, the rendered
+        hint would silently hit the production branch even when --branch is
+        supplied.
+        """
+        import keboola_agent_cli.hints.definitions.job  # noqa: F401 — trigger registration
+
+        hint = HintRegistry.get("job.run")
+        code = ClientRenderer.render(
+            hint,
+            params={
+                "component_id": '"keboola.snowflake-transformation"',
+                "config_id": '"123"',
+                "row_id": None,
+                "branch": 42,
+            },
+            stack_url=STACK_URL,
+            branch_id=42,
+        )
+        # The renderer may also inject branch_id into the poll-loop steps, so
+        # assert >= 3 (one per resolver/create step) rather than an exact count.
+        assert code.count("branch_id=42") >= 3
+        # Confirm each of the three key methods is actually present.
+        assert "get_config_detail" in code
+        assert "list_config_rows" in code
+        assert "create_job" in code
+        compile(code, "<hint>", "exec")
+
     def test_poll_loop_rendering(self) -> None:
         """Poll loop steps generate a while loop with sleep."""
         hint = CommandHint(

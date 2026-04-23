@@ -85,6 +85,7 @@ HintRegistry.register(
                     args={
                         "component_id": "{component_id}",
                         "config_id": "{config_id}",
+                        "branch_id": "{branch}",
                     },
                     result_var="detail",
                     result_hint="dict",
@@ -97,6 +98,7 @@ HintRegistry.register(
                     args={
                         "component_id": '"keboola.variables"',
                         "config_id": 'detail["configuration"]["variables_id"]',
+                        "branch_id": "{branch}",
                     },
                     result_var="var_rows",
                     result_hint="list",
@@ -110,6 +112,7 @@ HintRegistry.register(
                         "component_id": "{component_id}",
                         "config_id": "{config_id}",
                         "config_row_ids": "{row_id}",
+                        "branch_id": "{branch}",
                         "variable_values_id": 'var_rows[0]["id"] if var_rows else None',
                     },
                     result_var="job",

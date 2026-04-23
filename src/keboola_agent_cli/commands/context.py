@@ -155,17 +155,36 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Storage
 
+Note on branches: storage READ commands (buckets, bucket-detail, tables,
+table-detail, files, file-detail) use the production endpoint by default,
+even when a dev branch is active via `branch use`. The Storage API
+branch-scoped endpoint returns only resources that were locally modified
+in the dev branch, so a freshly-created branch lists nothing. Pass
+`--branch ID` explicitly to query dev-branch-local tables/buckets.
+Storage WRITE commands (create-*, upload-*, delete-*, file-upload, etc.)
+remain branch-aware because modifying a dev branch is the expected intent.
+
   kbagent storage buckets [--project NAME] [--branch ID]
-    List buckets with sharing/linked info. Shows source project for linked buckets. Branch-aware.
+    List buckets with sharing/linked info. Shows source project for linked buckets.
+    Uses production by default; pass --branch to query a dev branch explicitly.
 
   kbagent storage bucket-detail --project NAME --bucket-id BUCKET_ID [--branch ID]
-    Bucket detail with Snowflake direct access paths. Resolves linked bucket source DB. Branch-aware.
+    Bucket detail with Snowflake direct access paths. Resolves linked bucket source DB.
+    Uses production by default; pass --branch to query a dev branch explicitly.
 
-  kbagent storage tables --project NAME [--bucket-id BUCKET_ID] [--branch ID]
-    List storage tables, optionally filtered by bucket. Branch-aware.
+  kbagent storage tables [--project NAME ...] [--bucket-id BUCKET_ID] [--branch ID]
+    List storage tables from one or more projects (in parallel). Omit --project
+    to query all connected projects. Repeat --project for a specific subset.
+    Multi-project by default, matching `storage buckets`, `config list`, `job list`.
+    Each row is tagged with project_alias; per-project errors accumulate in the
+    response envelope. --branch is only valid with a single --project.
+    --bucket-id is applied independently per project; missing buckets are
+    reported as per-project errors, not fatal.
+    Uses production by default; pass --branch to query a dev branch explicitly.
 
   kbagent storage table-detail --project NAME --table-id TABLE_ID [--branch ID]
-    Show detailed table info: columns (with types if available), primary key, row count, size, last import date. Branch-aware.
+    Show detailed table info: columns (with types if available), primary key, row count, size, last import date.
+    Uses production by default; pass --branch to query a dev branch explicitly.
 
   kbagent storage create-bucket --project NAME --stage STAGE --name BUCKET_NAME [--description D] [--backend B] [--branch ID]
     Create a new storage bucket. Stage must be "in" or "out". Branch-aware.
@@ -196,7 +215,8 @@ Use `kbagent <command> --help` for full flag details and examples.
 ### Storage Files
 
   kbagent storage files --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]
-    List Storage Files. --tag filters by tags (AND logic, repeat for multiple). --query for full-text search on name. Branch-aware.
+    List Storage Files. --tag filters by tags (AND logic, repeat for multiple). --query for full-text search on name.
+    Uses production by default; pass --branch to query a dev branch explicitly.
 
   kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID]
     Upload any file to Storage Files. --tag assigns tags (repeatable). --permanent prevents auto-deletion after 15 days.
@@ -252,8 +272,12 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent lineage build --directory PATH --output PATH [--ai] [--refresh]
     Build column-level lineage graph from sync'd data. Scans all sync'd projects,
     detects dependencies via config mappings and SQL parsing, saves to cache file.
-    --refresh runs sync pull first. --ai generates .lineage_ai_tasks.json with
-    AI analysis tasks for an AI agent to process (2-step flow).
+    Auto-detects both sync layouts: flat (./.keboola/manifest.json from
+    sync pull --project X) and nested (./<alias>/.keboola/manifest.json from
+    sync pull --all-projects). Emits a warning in response data if no projects
+    are found. --refresh runs sync pull first. --ai generates
+    .lineage_ai_tasks.json with AI analysis tasks for an AI agent to process
+    (2-step flow).
 
   kbagent lineage show --load PATH [--upstream NODE] [--downstream NODE]
       [--column COL] [--columns] [--project ALIAS] [--depth N]

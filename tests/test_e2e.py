@@ -3069,7 +3069,7 @@ class TestE2EToolCommands:
 
 
 # ---------------------------------------------------------------------------
-# Job run variable values resolution (PR2 / P0-2)
+# Job run variable values resolution
 # ---------------------------------------------------------------------------
 
 

@@ -281,11 +281,9 @@ class JobService(BaseService):
                 error_code="NO_VARIABLE_ROWS",
             )
 
-        # Defense against a malformed Storage API response: a row without a
-        # usable `id` would otherwise be returned as `""`, which the client
-        # treats as "omit from Queue body" -- silently running the job with
-        # empty variable bindings. Fail loud instead (same silent-skip class
-        # as the PR1 encryption asymmetry bug).
+        # A row without a usable `id` would otherwise coerce to `""`, which
+        # the HTTP client treats as "omit from Queue body" -- silently
+        # submitting a job with empty variable bindings. Fail loud instead.
         first_row = rows[0] if isinstance(rows[0], dict) else {}
         first_row_id = first_row.get("id")
         if not first_row_id:
