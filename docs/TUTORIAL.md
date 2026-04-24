@@ -440,6 +440,202 @@ file an issue with the prompt and the payload it returned.
 
 ---
 
+## 7. GitOps: sync configs as local files + git branches
+
+Once projects are registered, you can treat their configurations as
+ordinary source code: a directory tree of YAML/SQL/Python files under
+git. `kbagent sync pull` downloads the configs; edits go through git
+(`git diff`, PR review, merge); `kbagent sync push` uploads the result.
+
+The killer feature is **git-branching mode**: each git feature branch
+is bound to its own Keboola development branch. `sync pull`/`sync push`
+from `main` touches production; from `feature/X` touches **only** the
+dev branch `X`. Unlinked branches are refused outright -- there is no
+path to accidentally push `feature/risky-experiment` to prod.
+
+![kbagent sync pull + branch-link workflow](assets/demo-sync-pull.gif)
+
+### 7.1 First-time setup
+
+Run these in a dedicated directory (a fresh repo, or a subfolder of an
+existing one). The sync state lives in `.keboola/`, the local project
+config in `.kbagent/`, and the actual configs under `main/` (and later
+`feature-*/`, one per linked branch).
+
+```bash
+cd ~/projects/padak
+git init -q -b main
+kbagent sync init --project padak-2-0 --git-branching
+# -> creates .keboola/manifest.json      (project ID, apiHost, naming rules)
+# -> creates .keboola/branch-mapping.json (git-branch -> Keboola-branch)
+
+kbagent sync pull --project padak-2-0
+# -> Pulled 55 configurations (42 rows) into main/
+# -> Files written: 194
+# -> Storage: 12 buckets, 87 tables
+# -> Jobs: 55 configs with job history
+
+git add -A && git commit -m "initial sync"
+```
+
+What you end up with on disk:
+
+```
+.
+├── .kbagent/config.json              # token, local to this workspace
+├── .keboola/
+│   ├── manifest.json                 # config index + hashes (tracked)
+│   └── branch-mapping.json           # git-branch -> Keboola-branch
+├── .git/
+└── main/                             # <-- production snapshot
+    ├── extractor/
+    │   └── keboola.ex-db-mysql/
+    │       └── Academy/
+    │           ├── _config.yml       # YAML: name, parameters, storage
+    │           ├── _description.md   # description as Markdown
+    │           └── _jobs.jsonl       # last N runs (JSONL)
+    ├── transformation/
+    │   └── keboola.snowflake-transformation/
+    │       └── Adaptive/
+    │           ├── _config.yml       # blocks EXCLUDED
+    │           └── transform.sql     # SQL with /* ===== BLOCK: ... ===== */
+    ├── application/
+    │   └── kds-team.app-custom-python/
+    │       └── MyApp/
+    │           ├── _config.yml       # code + packages EXCLUDED
+    │           ├── code.py
+    │           └── pyproject.toml    # [tool.keboola] + dependencies
+    └── storage/
+        ├── buckets.json
+        └── tables/                   # read-only metadata (not in manifest)
+```
+
+Two things to notice:
+
+- SQL / Python code is **extracted** into real `.sql` / `.py` files,
+  not stored as a YAML multiline string. Your IDE gets syntax
+  highlighting, linters, and type-checkers; `git diff` shows per-line
+  changes, not YAML escape chaos.
+- Encrypted values stay as-is (`KBC::ProjectSecure::...`). sync pull
+  never decrypts; sync push re-encrypts `#`-prefixed keys before
+  upload. Nonce-only diffs are ignored in `sync diff` (no false
+  positives).
+
+### 7.2 Working on a feature branch
+
+```bash
+git checkout -b feature/update-etl
+kbagent sync branch-link --project padak-2-0
+# -> Success: Linked feature/update-etl -> Keboola branch 1294xxx
+
+kbagent sync branch-status
+# Branch: feature/update-etl
+# Keboola: 1294xxx (feature/update-etl)
+# Status: Linked
+```
+
+Every `sync pull` / `sync push` invoked from this git branch now
+targets the Keboola dev branch. The first `sync pull` on a linked
+branch writes into `feature-update-etl/` (the git-branch name,
+slug-sanitised); subsequent pulls update it.
+
+Edit loop:
+
+```bash
+# 1. Edit files with a normal editor
+vim main/transformation/keboola.snowflake-transformation/Adaptive/transform.sql
+#   (or feature-update-etl/... once you've pulled on the dev branch)
+
+# 2. See what changed locally (no API call)
+kbagent sync status
+#   ~ main/transformation/keboola.snowflake-transformation/Adaptive/transform.sql
+
+# 3. Compare local vs. remote dev branch (3-way diff, API call)
+kbagent sync diff --project padak-2-0
+#   Local changes (push would apply):
+#     ~ MODIFIED keboola.snowflake-transformation/Adaptive
+#       parameters.blocks.0.codes.0.script[0] changed: ...
+
+# 4. Preview push (no writes)
+kbagent sync push --project padak-2-0 --dry-run
+
+# 5. Apply
+kbagent sync push --project padak-2-0
+#   Pushed: 0 created, 1 updated, 0 deleted
+#   (version bumped in Keboola; change description: "Updated via kbagent sync push")
+```
+
+### 7.3 Merging back to production
+
+```bash
+# Get the Keboola UI merge URL for the dev branch
+kbagent branch merge --project padak-2-0
+# -> https://connection.keboola.com/admin/projects/10539/dev-branches/1294xxx
+
+# Click the URL, confirm the merge in the Keboola UI.
+# The dev branch is now merged into production and auto-deleted.
+
+# Locally: merge the git branch, unlink, refresh main/
+git checkout main
+git merge --no-ff feature/update-etl
+kbagent sync branch-unlink                      # mapping removed, Keboola branch not touched
+kbagent sync pull --project padak-2-0 --force   # re-sync main/ with merged state
+```
+
+### 7.4 The safety model (why `--git-branching` is non-negotiable)
+
+Without git-branching, `sync pull/push` always target whatever Keboola
+branch is currently "active" for the alias -- which is easy to get
+wrong. With git-branching, the target is a **pure function of the
+current git branch**:
+
+| git branch | `branch-mapping.json` entry | `sync push` target |
+|---|---|---|
+| `main` / `master` | `{"id": null, "name": "Main"}` | production |
+| `feature/X` (linked) | `{"id": "1294xxx", "name": "feature/X"}` | dev branch 1294xxx |
+| `feature/Y` (not linked) | *missing* | **refused, exit 5** |
+
+Three consequences:
+
+1. **You cannot push to prod from a feature branch.** The mapping
+   simply doesn't point there. There is no flag to override this.
+2. **An unlinked branch is blocked, not defaulted.** `sync pull/push`
+   from a branch without a mapping exits with code 5 and a message
+   telling you to run `sync branch-link` first. Silent fallback to
+   production would be the dangerous behaviour; kbagent refuses.
+3. **`main` is opt-in for production writes.** Pushing on `main`
+   targets prod by design, so production changes go through
+   `git checkout main && git merge` -- the same gate as any other
+   prod deploy.
+
+Test this once on a throwaway project (e.g. `kbagent org setup
+--project-ids`). The only way to understand the safety boundary is
+to hit it:
+
+```bash
+git checkout -b feature/unlinked
+kbagent sync pull --project padak-2-0
+# Error: Git branch 'feature/unlinked' is not linked to a Keboola branch.
+# Run 'kbagent sync branch-link --project ALIAS' first.    (exit 5)
+```
+
+### 7.5 Common gotchas
+
+| Situation | What to do |
+|---|---|
+| `sync pull` says `Skipped (N) -- locally modified` | A file was edited since the last pull. Run `sync diff` to inspect, `sync push` to upload your edits, or `sync pull --force` to overwrite local. |
+| `sync push` reports `name drift warnings` | The local directory name doesn't match the config name (someone renamed the dir directly). Run `kbagent config rename` or `sync pull` to fix. |
+| You already have a `.keboola/manifest.json` from the Go `kbc` CLI | `kbagent sync init --project X --adopt-existing` -- validates `project_id` against the alias's token, no overwrite. |
+| You want a preview of a huge pull | `sync pull --dry-run --no-storage --no-jobs` -- prints what would be written without touching the disk. |
+| You need CSV data samples too | `sync pull --with-samples` -- adds `storage/samples/{bucket}/{table}/sample.csv`. Encrypted columns mask to `***ENCRYPTED***`. |
+
+For the full GitOps reference (3-way diff internals, row-level sync
+for variables, secret encryption contract, `kbc` Go CLI compatibility),
+see
+[plugins/kbagent/skills/kbagent/references/sync-workflow.md](../plugins/kbagent/skills/kbagent/references/sync-workflow.md).
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
