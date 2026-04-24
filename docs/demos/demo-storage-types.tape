@@ -42,7 +42,7 @@ Sleep 400ms
 Type "kbagent storage create-bucket --project padak-2-0 --stage in --name demo-types"
 Sleep 300ms
 Enter
-Sleep 2500ms
+Sleep 4500ms
 
 Type "clear"
 Sleep 200ms
@@ -63,7 +63,7 @@ Type "--primary-key pk --not-null pk --not-null amount "
 Type "--default amount=0 --default is_paid=false"
 Sleep 400ms
 Enter
-Sleep 4500ms
+Sleep 6500ms
 
 Type "clear"
 Sleep 200ms
