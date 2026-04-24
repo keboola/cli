@@ -91,6 +91,7 @@ a critical failure.
 | Fetch a specific config | `kbagent config detail --project P --component-id C --config-id K --json` | `tool call get_config` | re-using an earlier JSON dump |
 | Cross-project migration | `kbagent sync pull` + edit files locally + `kbagent sync push --dry-run` | custom script via `kbagent --hint client` | repeated `tool call` loops, one per resource |
 | Retype table columns | fetch types via `workspace query`, draft types YAML, write new transformation that produces typed output table, redirect downstream configs via `kbagent config update` | `kbagent --hint client create_table_definition` if the future `storage retype` composite (§14.3) is not yet present | `POST /v2/storage/buckets/.../tables-definition` (REST) |
+| Create typed table with native types | `kbagent storage create-table --column pk:VARCHAR(40) --column amount:NUMBER(18,2) --not-null pk --default amount=0` (0.25.0+) | `tool call create_table` (accepts the same `definition.length` shape via MCP) | re-creating via raw REST to `/v2/storage/...tables-definition` |
 | Debug a failed job | `kbagent job detail --project P --job-id J --json` + `kbagent job run ... --log-tail-lines 200` | `kbagent workspace from-transformation` for SQL repro | "I think the issue is..." without reading logs |
 | Ad-hoc SQL / row-count / type audit | `kbagent workspace create` + `kbagent workspace load` + `kbagent workspace query --sql "..."` | `kbagent workspace from-transformation` for existing transform debugging | querying Keboola Storage directly via Snowflake credentials outside the workspace abstraction |
 | Inspect dev branch | `kbagent branch list --project P`, `kbagent branch use --project P --branch ID` | `tool call get_branch` | acting on `main` when a dev branch exists |
@@ -144,6 +145,22 @@ success, not a failure.
   to create a new table with the desired name and update all downstream
   configs that reference the old name. Do NOT propose a rename in a
   plan -- it sets up the user for an impossible step.
+
+- **`storage create-table` in a dev branch auto-materializes the bucket**
+  (0.25.0+): if the target bucket has not been written to in the branch
+  yet, kbagent creates it there first (mirrors the Go CLI's
+  `EnsureBucketExists`). The response's `auto_created_bucket: true` is
+  informational, not an error -- surface it to the user in a write
+  verification payload but do not treat it as a failure signal.
+  Production writes never materialize anything.
+
+- **Native column types vs. base types** (0.25.0+): `--column pk:VARCHAR(40)`
+  and `--column amount:NUMBER(18,2)` now pass through to the Storage API
+  (no CLI whitelist). `BOOLEAN` defaults must be **lowercase**
+  (`--default flag=false`); uppercase is rejected. `INTEGER(10)` is
+  invalid -- use `NUMBER(3,0)` for narrow integers. `--not-null` and
+  `--default NAME=VALUE` must reference a defined `--column` name
+  (typos exit 2).
 
 - **`column_metadata: {}` in synced files**: A sync-pull without the
   right flags leaves column metadata empty in the local JSON. That does

@@ -226,6 +226,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | MCP tools (multi-project read/write) | [mcp-workflow](references/mcp-workflow.md) |
 | Workspace SQL debugging | [workspace-workflow](references/workspace-workflow.md) |
 | Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
+| **Storage column types** (native types, NOT NULL, DEFAULT, branch materialize) | [storage-types-workflow](references/storage-types-workflow.md) |
 | Bucket sharing & linking | [sharing-workflow](references/sharing-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
 | Encrypting secrets for MCP tools | [encrypt-workflow](references/encrypt-workflow.md) |

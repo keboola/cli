@@ -95,11 +95,6 @@ JOB_TERMINATE_GRACE_SECONDS: float = 10.0
 # callers (see _terminate_and_wait in services/job_service.py).
 JOB_TERMINATE_POLL_INTERVAL: float = 1.0
 
-# --- Storage Write Validation ---
-VALID_COLUMN_TYPES: frozenset[str] = frozenset(
-    {"STRING", "INTEGER", "NUMERIC", "FLOAT", "BOOLEAN", "DATE", "TIMESTAMP"}
-)
-
 # --- File Upload Timeout ---
 FILE_UPLOAD_TIMEOUT: httpx.Timeout = httpx.Timeout(
     connect=30.0, read=300.0, write=3600.0, pool=30.0

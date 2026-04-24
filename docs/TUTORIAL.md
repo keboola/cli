@@ -636,6 +636,124 @@ see
 
 ---
 
+## 8. Advanced storage: native column types + dev-branch materialize
+
+`kbagent storage create-table` accepts the seven Keboola base types
+(`STRING`, `INTEGER`, `NUMERIC`, `FLOAT`, `BOOLEAN`, `DATE`, `TIMESTAMP`)
+**and** any native backend type the Storage API supports. The CLI does
+only syntactic validation; length/precision/scale validation is delegated
+to Keboola, which returns precise per-backend errors.
+
+In a dev branch, a `create-table` call against an unmaterialized bucket
+does not fail with `Bucket not found` -- kbagent auto-creates the bucket
+in the branch first, mirroring the official Keboola Go CLI's
+`EnsureBucketExists`. The response surfaces this via
+`auto_created_bucket: true`.
+
+![storage create-table with native types and branch auto-materialize](assets/demo-storage-types.gif)
+
+### 8.1 `--column` grammar
+
+```
+--column name                      # bare name -> STRING (backend default)
+--column name:TYPE                 # e.g. id:INTEGER
+--column name:TYPE(length)         # e.g. amount:NUMERIC(18,2), pk:VARCHAR(40)
+```
+
+Attribute flags (repeatable):
+
+- `--not-null COL` -- marks a defined column `nullable: false`
+- `--default NAME=VALUE` -- sets a `DEFAULT` expression. Booleans must be
+  lowercase (`--default flag=false`); uppercase is rejected by the API.
+
+Unknown names passed to `--not-null` or `--default` exit 2
+(`INVALID_ARGUMENT`) before any API call -- typos fail fast.
+
+### 8.2 Retyping after profiling -- a real use case
+
+Picture an existing table `out.c-adaptive.out` with 128k rows. You ran
+`kbagent workspace query` to profile it and now know exactly what fits:
+
+- `pkey` is a SHA-1, exactly 40 characters long
+- `tz_offset` is always within `[-25200, 25200]`
+- `num_members` tops out at 51
+- `ts` is an RFC-822 datetime
+
+The old `--column` flag hid all of that information and collapsed every
+string to the default `VARCHAR(16777216)`. With 0.25.0+:
+
+```bash
+kbagent --json storage create-table \
+  --project prod --bucket-id in.c-slack --name messages \
+  --column 'pkey:VARCHAR(40)' \
+  --column 'channel_id:VARCHAR(20)' \
+  --column 'tz_offset:NUMBER(6,0)' \
+  --column 'num_members:NUMBER(3,0)' \
+  --column 'ts:TIMESTAMP_TZ' \
+  --column 'ch_name:VARCHAR(80)' \
+  --column 'is_admin:BOOLEAN' \
+  --primary-key pkey \
+  --not-null pkey --not-null ts \
+  --default num_members=0 --default is_admin=false
+```
+
+Wrap each `name:TYPE(length)` spec in single quotes (or escape the
+parentheses with `\(...\)`); the shell otherwise treats `(` and `)`
+specially.
+
+### 8.3 Dev branch auto-materialize
+
+Keboola dev branches have an isolated storage namespace. A production
+bucket is transparently readable from a branch but cannot accept
+branch-scoped writes until it is **materialized** there (a branch-local
+bucket with the same ID). Without kbagent, you had to manually call
+`create-bucket --branch <id>` first; with 0.25.0+ `create-table` does it
+for you:
+
+```bash
+# Production bucket in.c-archive exists but this branch is fresh.
+kbagent --json storage create-table \
+  --project prod --branch 1234567 \
+  --bucket-id in.c-archive --name snapshot \
+  --column id:INTEGER --column payload:VARIANT \
+  | jq '.data.auto_created_bucket'
+# true
+```
+
+The second `create-table` against the same bucket in the same branch
+returns `auto_created_bucket: false` -- the bucket is already there.
+
+Production writes (no `--branch`) never materialize anything.
+
+### 8.4 Snowflake type cheat sheet
+
+| CLI input | Snowflake result | `basetype` |
+|---|---|---|
+| `STRING` | `VARCHAR(16777216)` | `STRING` |
+| `VARCHAR(n)` / `CHAR(n)` | `VARCHAR(n)` | `STRING` |
+| `TEXT` | `VARCHAR(16777216)` | `STRING` |
+| `INTEGER` | `NUMBER(38,0)` | `INTEGER` |
+| `NUMERIC` | `NUMBER(38,9)` | `NUMERIC` |
+| `NUMBER(p,s)` / `DECIMAL(p,s)` | `NUMBER(p,s)` | `NUMERIC` |
+| `FLOAT` / `DOUBLE` | `FLOAT` | `FLOAT` |
+| `BOOLEAN` | `BOOLEAN` | `BOOLEAN` |
+| `DATE` | `DATE` | `DATE` |
+| `TIMESTAMP` / `TIMESTAMP_NTZ` | `TIMESTAMP_NTZ(9)` | `TIMESTAMP` |
+| `TIMESTAMP_LTZ` | `TIMESTAMP_LTZ(9)` | `TIMESTAMP` |
+| `TIMESTAMP_TZ` | `TIMESTAMP_TZ(9)` | `TIMESTAMP` |
+| `TIME` | `TIME` | `STRING` |
+| `VARIANT` / `OBJECT` / `ARRAY` | `VARIANT` / `OBJECT` / `ARRAY` | `STRING` |
+
+The `basetype` column is what the API derives automatically and what
+downstream Keboola components read for schema inference. You do not
+need to pass `basetype` manually.
+
+For the full reference including the BOOLEAN/INTEGER gotchas and the
+`--hint client|service` code-generation contract, see
+[plugins/kbagent/skills/kbagent/references/storage-types-workflow.md](../plugins/kbagent/skills/kbagent/references/storage-types-workflow.md).
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |

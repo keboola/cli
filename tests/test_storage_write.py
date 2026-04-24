@@ -207,12 +207,36 @@ class TestCreateTableService:
             branch_id=None,
         )
 
-    def test_invalid_column_type_raises(self, tmp_path: Path) -> None:
+    def test_unknown_type_is_passed_through_to_api(self, tmp_path: Path) -> None:
+        """Non-base types are no longer rejected by CLI -- API decides validity.
+
+        Keboola Storage API has accurate per-backend validation ("'10' is not
+        valid length for INTEGER") and accepts a huge native-type surface
+        (VARCHAR, NUMBER, TIMESTAMP_TZ, VARIANT, ...) that varies per backend.
+        Maintaining a CLI whitelist is both wrong (rejects legitimate native
+        types) and redundant (API already validates). This regression test
+        pins the pass-through behaviour.
+        """
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.return_value = {"id": "in.c-b.t"}
+        service = _make_service(store, mock_client)
+
+        service.create_table(alias="test", bucket_id="in.c-b", name="t", columns=["x:BANANA"])
+
+        assert mock_client.create_table.call_args.kwargs["columns"] == [
+            {"name": "x", "definition": {"type": "BANANA"}}
+        ]
+
+    def test_malformed_spec_raises(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service = _make_service(store, MagicMock())
 
-        with pytest.raises(ValueError, match="Invalid column type 'BANANA'"):
-            service.create_table(alias="test", bucket_id="in.c-b", name="t", columns=["x:BANANA"])
+        # Length argument must be numeric. 'abc' is not -- rejected at CLI.
+        with pytest.raises(ValueError, match="Invalid column spec"):
+            service.create_table(
+                alias="test", bucket_id="in.c-b", name="t", columns=["x:TYPE(abc)"]
+            )
 
     def test_api_error_propagates(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -226,6 +250,208 @@ class TestCreateTableService:
             service.create_table(alias="test", bucket_id="in.c-b", name="t", columns=["x:STRING"])
 
         mock_client.close.assert_called_once()
+
+    # ---- Native types with length -----------------------------------------
+
+    def test_native_type_with_length(self, tmp_path: Path) -> None:
+        """VARCHAR(40), NUMBER(18,2) etc. produce definition.length on the API body."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.return_value = {"id": "in.c-b.t"}
+        service = _make_service(store, mock_client)
+
+        service.create_table(
+            alias="test",
+            bucket_id="in.c-b",
+            name="t",
+            columns=[
+                "pk:VARCHAR(40)",
+                "amount:NUMERIC(18,2)",
+                "ts:TIMESTAMP_TZ",
+                "meta:VARIANT",
+            ],
+        )
+
+        assert mock_client.create_table.call_args.kwargs["columns"] == [
+            {"name": "pk", "definition": {"type": "VARCHAR", "length": "40"}},
+            {"name": "amount", "definition": {"type": "NUMERIC", "length": "18,2"}},
+            {"name": "ts", "definition": {"type": "TIMESTAMP_TZ"}},
+            {"name": "meta", "definition": {"type": "VARIANT"}},
+        ]
+
+    def test_length_with_spaces_is_stripped(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.return_value = {"id": "in.c-b.t"}
+        service = _make_service(store, mock_client)
+
+        service.create_table(
+            alias="test",
+            bucket_id="in.c-b",
+            name="t",
+            columns=["amt:NUMBER(18, 2)"],
+        )
+
+        assert (
+            mock_client.create_table.call_args.kwargs["columns"][0]["definition"]["length"]
+            == "18,2"
+        )
+
+    # ---- NOT NULL + DEFAULT -----------------------------------------------
+
+    def test_not_null_and_default(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.return_value = {"id": "in.c-b.sales"}
+        service = _make_service(store, mock_client)
+
+        service.create_table(
+            alias="test",
+            bucket_id="in.c-b",
+            name="sales",
+            columns=["pk:VARCHAR(40)", "amount:NUMERIC(18,2)", "is_paid:BOOLEAN"],
+            primary_key=["pk"],
+            not_null_columns=["pk", "amount"],
+            defaults=["amount=0", "is_paid=false"],
+        )
+
+        assert mock_client.create_table.call_args.kwargs["columns"] == [
+            {"name": "pk", "definition": {"type": "VARCHAR", "length": "40", "nullable": False}},
+            {
+                "name": "amount",
+                "definition": {
+                    "type": "NUMERIC",
+                    "length": "18,2",
+                    "nullable": False,
+                    "default": "0",
+                },
+            },
+            {
+                "name": "is_paid",
+                "definition": {"type": "BOOLEAN", "default": "false"},
+            },
+        ]
+
+    def test_not_null_references_unknown_column(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service = _make_service(store, MagicMock())
+
+        with pytest.raises(ValueError, match="--not-null references unknown column"):
+            service.create_table(
+                alias="test",
+                bucket_id="in.c-b",
+                name="t",
+                columns=["id:INTEGER"],
+                not_null_columns=["typo_id"],
+            )
+
+    def test_default_references_unknown_column(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service = _make_service(store, MagicMock())
+
+        with pytest.raises(ValueError, match="--default references unknown column"):
+            service.create_table(
+                alias="test",
+                bucket_id="in.c-b",
+                name="t",
+                columns=["id:INTEGER"],
+                defaults=["other=42"],
+            )
+
+    def test_malformed_default_assignment(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service = _make_service(store, MagicMock())
+
+        with pytest.raises(ValueError, match="Invalid --default"):
+            service.create_table(
+                alias="test",
+                bucket_id="in.c-b",
+                name="t",
+                columns=["id:INTEGER"],
+                defaults=["no_equals_sign"],
+            )
+
+    # ---- Auto-materialize bucket in dev branch ----------------------------
+
+    def test_branch_auto_materialize_bucket_on_404(self, tmp_path: Path) -> None:
+        """In a dev branch, a 404 on get_bucket_detail triggers create_bucket."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_bucket_detail.side_effect = KeboolaApiError(
+            "Bucket not found", status_code=404, error_code="NOT_FOUND"
+        )
+        mock_client.create_bucket.return_value = {"id": "in.c-my-bucket"}
+        mock_client.create_table.return_value = {"id": "in.c-my-bucket.t"}
+        service = _make_service(store, mock_client)
+
+        result = service.create_table(
+            alias="test",
+            bucket_id="in.c-my-bucket",
+            name="t",
+            columns=["id:INTEGER"],
+            branch_id=12345,
+        )
+
+        mock_client.get_bucket_detail.assert_called_once_with("in.c-my-bucket", branch_id=12345)
+        mock_client.create_bucket.assert_called_once_with(
+            stage="in", name="my-bucket", branch_id=12345
+        )
+        assert result["auto_created_bucket"] is True
+
+    def test_branch_no_materialize_when_bucket_exists(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_bucket_detail.return_value = {"id": "in.c-b"}
+        mock_client.create_table.return_value = {"id": "in.c-b.t"}
+        service = _make_service(store, mock_client)
+
+        result = service.create_table(
+            alias="test",
+            bucket_id="in.c-b",
+            name="t",
+            columns=["id:INTEGER"],
+            branch_id=777,
+        )
+
+        mock_client.create_bucket.assert_not_called()
+        assert result["auto_created_bucket"] is False
+
+    def test_production_never_materializes(self, tmp_path: Path) -> None:
+        """Without --branch, we never peek at bucket existence (production path)."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.return_value = {"id": "in.c-b.t"}
+        service = _make_service(store, mock_client)
+
+        result = service.create_table(
+            alias="test",
+            bucket_id="in.c-b",
+            name="t",
+            columns=["id:INTEGER"],
+        )
+
+        mock_client.get_bucket_detail.assert_not_called()
+        mock_client.create_bucket.assert_not_called()
+        assert result["auto_created_bucket"] is False
+
+    def test_branch_non_404_propagates(self, tmp_path: Path) -> None:
+        """403/500 on bucket check must not swallow the error into a silent create."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_bucket_detail.side_effect = KeboolaApiError(
+            "Forbidden", status_code=403, error_code="FORBIDDEN"
+        )
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError, match="Forbidden"):
+            service.create_table(
+                alias="test",
+                bucket_id="in.c-b",
+                name="t",
+                columns=["id:INTEGER"],
+                branch_id=42,
+            )
+        mock_client.create_bucket.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -703,7 +929,71 @@ class TestCreateTableCLI:
             columns=["id:INTEGER", "name:STRING"],
             primary_key=["id"],
             branch_id=None,
+            not_null_columns=None,
+            defaults=None,
         )
+
+    def test_create_table_native_types_and_attributes(self, tmp_path: Path) -> None:
+        """End-to-end CLI smoke test covering VARCHAR(40), NUMERIC(18,2),
+        TIMESTAMP_TZ plus --not-null and --default flags."""
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.create_table.return_value = {
+                "project_alias": "test",
+                "table_id": "in.c-b.sales",
+                "name": "sales",
+                "bucket_id": "in.c-b",
+                "primary_key": ["pk"],
+                "columns": ["pk", "amount", "ts", "is_paid"],
+                "auto_created_bucket": False,
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "create-table",
+                    "--project",
+                    "test",
+                    "--bucket-id",
+                    "in.c-b",
+                    "--name",
+                    "sales",
+                    "--column",
+                    "pk:VARCHAR(40)",
+                    "--column",
+                    "amount:NUMERIC(18,2)",
+                    "--column",
+                    "ts:TIMESTAMP_TZ",
+                    "--column",
+                    "is_paid:BOOLEAN",
+                    "--primary-key",
+                    "pk",
+                    "--not-null",
+                    "pk",
+                    "--not-null",
+                    "amount",
+                    "--default",
+                    "amount=0",
+                    "--default",
+                    "is_paid=false",
+                ],
+            )
+        assert result.exit_code == 0
+        kwargs = svc.create_table.call_args.kwargs
+        assert kwargs["columns"] == [
+            "pk:VARCHAR(40)",
+            "amount:NUMERIC(18,2)",
+            "ts:TIMESTAMP_TZ",
+            "is_paid:BOOLEAN",
+        ]
+        assert kwargs["not_null_columns"] == ["pk", "amount"]
+        assert kwargs["defaults"] == ["amount=0", "is_paid=false"]
 
     def test_create_table_no_primary_key(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -741,7 +1031,9 @@ class TestCreateTableCLI:
             )
         assert result.exit_code == 0
 
-    def test_create_table_invalid_column_type(self, tmp_path: Path) -> None:
+    def test_create_table_malformed_column_spec(self, tmp_path: Path) -> None:
+        """Malformed specs exit 2 (INVALID_ARGUMENT); unknown type strings no
+        longer trigger a CLI-side rejection -- they are sent to the API."""
         store = _make_store(tmp_path)
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
@@ -749,7 +1041,7 @@ class TestCreateTableCLI:
         ):
             MockStore.return_value = store
             MockSvc.return_value.create_table.side_effect = ValueError(
-                "Invalid column type 'BANANA'"
+                "Invalid column spec 'bad col:STR'."
             )
             result = runner.invoke(
                 app,
@@ -764,7 +1056,7 @@ class TestCreateTableCLI:
                     "--name",
                     "t",
                     "--column",
-                    "x:BANANA",
+                    "bad col:STR",
                 ],
             )
         assert result.exit_code == 2
@@ -1093,6 +1385,8 @@ class TestCreateTableBranch:
             primary_key=None,
             branch_id=77,
         )
+        # In a branch we check bucket existence first (auto-materialize).
+        mock_client.get_bucket_detail.assert_called_once_with("in.c-b", branch_id=77)
 
     def test_cli_branch_flag(self, tmp_path: Path) -> None:
         """storage create-table --branch 77 passes branch_id to service."""

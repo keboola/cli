@@ -206,7 +206,7 @@ HintRegistry.register(
         description="Create a new table with typed columns",
         steps=[
             HintStep(
-                comment="Create table",
+                comment="Create table (optionally with native types like VARCHAR(40), NUMBER(18,2))",
                 client=ClientCall(
                     method="create_table",
                     args={
@@ -230,11 +230,19 @@ HintRegistry.register(
                         "columns": "{column}",
                         "primary_key": "{primary_key}",
                         "branch_id": "{branch}",
+                        "not_null_columns": "{not_null}",
+                        "defaults": "{default}",
                     },
                 ),
             ),
         ],
-        notes=["Columns format: 'name:TYPE' (e.g. 'id:INTEGER', 'name:STRING')."],
+        notes=[
+            "Column specs accept 'name', 'name:TYPE', or 'name:TYPE(length)'.",
+            "Native types (VARCHAR, NUMBER, TIMESTAMP_TZ, VARIANT, ...) pass through to the Storage API.",
+            "Service mode: --not-null and --default flags add nullable/default to column definitions.",
+            "Client mode: build column dicts directly as [{'name': 'pk', 'definition': {'type': 'VARCHAR', 'length': '40', 'nullable': False}}].",
+            "In a dev branch, service layer auto-materializes the bucket on 404 (mirrors Keboola Go CLI's EnsureBucketExists). Client mode does not -- call get_bucket_detail + create_bucket first.",
+        ],
     )
 )
 

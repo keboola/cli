@@ -240,9 +240,18 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent storage create-bucket --project NAME --stage STAGE --name BUCKET_NAME [--description D] [--backend B] [--branch ID]
     Create a new storage bucket. Stage must be "in" or "out". Branch-aware.
 
-  kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME --column col:TYPE [...] [--primary-key COL] [--branch ID]
-    Create a typed table. --column repeatable. Types: STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP.
-    Column type defaults to STRING if omitted (e.g. --column name is equivalent to --column name:STRING). Branch-aware.
+  kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME --column col:TYPE[(length)] [...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--branch ID]
+    Create a typed table. --column repeatable.
+    - Base types: STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP. Type defaults to STRING if omitted.
+    - Native backend types with length pass through to the Storage API: VARCHAR(40), NUMBER(18,2), CHAR(10), TIMESTAMP_TZ, TIMESTAMP_NTZ, VARIANT, OBJECT, ARRAY, etc.
+      The API validates type/length per backend; e.g. INTEGER(10) is rejected with "'10' is not valid length for INTEGER".
+    - --not-null COL marks a column NOT NULL (nullable=false). Must match a defined --column name.
+    - --default NAME=VALUE sets a DEFAULT expression. Booleans must be lowercase (true/false).
+    - In a dev branch, the bucket is auto-materialized if it has not yet been written to in the branch
+      (response includes auto_created_bucket=true). Mirrors the official Keboola Go CLI's EnsureBucketExists.
+    Branch-aware. Examples:
+      --column pk:VARCHAR(40) --column amount:NUMERIC(18,2) --not-null pk --default amount=0
+      --column ts:TIMESTAMP_TZ --column meta:VARIANT
 
   kbagent storage upload-table --project NAME --table-id TABLE_ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--branch ID]
     Upload CSV into a table. Auto-creates bucket and table if missing (columns inferred as STRING from CSV header).
