@@ -6,16 +6,28 @@ metadata that MCP tools strip from responses.
 
 import csv
 import logging
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..constants import VALID_COLUMN_TYPES
-from ..errors import ErrorCode
+from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
+
+# "name:TYPE" or "name:TYPE(length)" -- type is pass-through to the Keboola
+# Storage API, which validates type/length combinations per backend and
+# returns clear errors (e.g. "'10' is not valid length for INTEGER"). This
+# lets the CLI accept any native backend type (VARCHAR, NUMBER, TIMESTAMP_TZ,
+# VARIANT, ...) without maintaining a per-backend whitelist.
+_COL_SPEC_RE = re.compile(
+    r"^\s*(?P<name>[^:\s][^:]*?)"
+    r"\s*:\s*(?P<type>[A-Za-z_][A-Za-z0-9_]*)"
+    r"\s*(?:\(\s*(?P<length>[0-9][0-9,\s]*)\s*\))?"
+    r"\s*$"
+)
 
 
 def _read_csv_header(file_path: str, delimiter: str = ",") -> list[str]:
@@ -34,6 +46,126 @@ def _read_csv_header(file_path: str, delimiter: str = ",") -> list[str]:
     if not columns:
         raise ValueError("CSV file has no column headers in the first row.")
     return columns
+
+
+def _parse_column_spec(
+    col_spec: str,
+    not_null: set[str],
+    defaults: dict[str, str],
+) -> dict[str, Any]:
+    """Parse a single --column argument into a Storage API column definition.
+
+    Accepted shapes:
+
+    - ``name``                  bare name; implicit STRING default
+    - ``name:TYPE``             e.g. ``id:INTEGER``, ``name:STRING``
+    - ``name:TYPE(length)``     e.g. ``amount:NUMERIC(18,2)``, ``pk:VARCHAR(40)``
+
+    The TYPE value is uppercased and passed through to the Storage API
+    unmodified -- Keboola validates type/length per backend (Snowflake,
+    BigQuery, Redshift) and returns precise errors for invalid combinations.
+    No per-backend whitelist is maintained here.
+    """
+    if ":" not in col_spec:
+        col_name, col_type, col_length = col_spec.strip(), "STRING", None
+    else:
+        m = _COL_SPEC_RE.match(col_spec)
+        if not m:
+            raise ValueError(
+                f"Invalid column spec {col_spec!r}. Expected 'name:TYPE' or "
+                f"'name:TYPE(length)' (e.g. 'amount:NUMERIC(18,2)', "
+                f"'pk:VARCHAR(40)', 'ts:TIMESTAMP_TZ')."
+            )
+        col_name = m.group("name").strip()
+        col_type = m.group("type").upper()
+        raw_length = m.group("length")
+        col_length = re.sub(r"\s+", "", raw_length) if raw_length is not None else None
+
+    if not col_name:
+        raise ValueError(f"Column name is empty in spec {col_spec!r}.")
+
+    definition: dict[str, Any] = {"type": col_type}
+    if col_length:
+        definition["length"] = col_length
+    if col_name in not_null:
+        definition["nullable"] = False
+    if col_name in defaults:
+        definition["default"] = defaults[col_name]
+    return {"name": col_name, "definition": definition}
+
+
+def _parse_default_assignments(defaults: list[str] | None) -> dict[str, str]:
+    """Parse ``--default NAME=VALUE`` assignments into a mapping.
+
+    An empty VALUE (e.g. ``--default flag=``) is accepted and produces an
+    empty-string default, consistent with how most shells pass trailing
+    ``=`` arguments.
+    """
+    if not defaults:
+        return {}
+    result: dict[str, str] = {}
+    for spec in defaults:
+        if "=" not in spec:
+            raise ValueError(
+                f"Invalid --default {spec!r}. Expected 'NAME=VALUE' (e.g. 'flag=false')."
+            )
+        name, _, value = spec.partition("=")
+        name = name.strip()
+        if not name:
+            raise ValueError(f"Invalid --default {spec!r}: empty column name.")
+        result[name] = value
+    return result
+
+
+def _ensure_bucket_exists_in_branch(
+    client: Any,
+    bucket_id: str,
+    branch_id: int | None,
+) -> bool:
+    """Ensure ``bucket_id`` exists in the target branch; materialize it on 404.
+
+    Keboola dev branches have an isolated storage namespace: a production
+    bucket is visible to a branch for READS (transparent fallback to the
+    main branch) but a branch-scoped WRITE against an unmaterialized bucket
+    returns ``Bucket not found``. This helper mirrors ``EnsureBucketExists``
+    from the official Go CLI (keboola-as-code: pkg/lib/operation/project/
+    remote/table/import/operation.go) -- on 404, it creates the bucket in
+    the branch with the same ``stage`` + ``name`` so the subsequent write
+    has a target.
+
+    No-op when ``branch_id`` is None (production writes do not need
+    materialization).
+
+    Returns:
+        True if the bucket was auto-created, False otherwise.
+    """
+    if branch_id is None:
+        return False
+
+    try:
+        client.get_bucket_detail(bucket_id, branch_id=branch_id)
+        return False
+    except KeboolaApiError as exc:
+        if exc.status_code != 404:
+            raise
+
+    parts = bucket_id.split(".", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError(
+            f"Cannot materialize bucket {bucket_id!r} in branch {branch_id}: "
+            f"expected 'stage.c-name' format."
+        )
+    stage, slug = parts
+    bucket_name = slug[2:] if slug.startswith("c-") else slug
+    client.create_bucket(stage=stage, name=bucket_name, branch_id=branch_id)
+    logger.info(
+        "Auto-materialized bucket %s in branch %s (stage=%s, name=%s)",
+        bucket_id,
+        branch_id,
+        stage,
+        bucket_name,
+    )
+    return True
 
 
 def _write_columns_sidecar(output_dir: str, columns: list[str]) -> None:
@@ -292,10 +424,21 @@ class StorageService(BaseService):
             col_info: dict[str, Any] = {"name": col}
             meta = column_metadata.get(col, [])
             for m in meta:
-                if m.get("key") == "KBC.datatype.basetype":
-                    col_info["type"] = m.get("value", "")
-                elif m.get("key") == "KBC.datatype.nullable":
-                    col_info["nullable"] = m.get("value", "") == "1"
+                key = m.get("key", "")
+                value = m.get("value", "")
+                if key == "KBC.datatype.basetype":
+                    col_info["type"] = value
+                elif key == "KBC.datatype.type":
+                    # Native backend type (e.g. "VARCHAR", "NUMBER", "TIMESTAMP_TZ")
+                    # -- distinct from the Keboola basetype it maps to.
+                    col_info["native_type"] = value
+                elif key == "KBC.datatype.length":
+                    # Length as stored: "40", "18,2", "255", ...
+                    col_info["length"] = value
+                elif key == "KBC.datatype.nullable":
+                    col_info["nullable"] = value == "1"
+                elif key == "KBC.datatype.default":
+                    col_info["default"] = value
             if col in col_descriptions:
                 col_info["description"] = col_descriptions[col]
             column_details.append(col_info)
@@ -439,39 +582,76 @@ class StorageService(BaseService):
         columns: list[str],
         primary_key: list[str] | None = None,
         branch_id: int | None = None,
+        not_null_columns: list[str] | None = None,
+        defaults: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create a new table with typed columns.
 
+        Column specs accept base Keboola types (STRING, INTEGER, NUMERIC,
+        FLOAT, BOOLEAN, DATE, TIMESTAMP) *and* native backend types with
+        optional length/precision. Examples: ``amount:NUMERIC(18,2)``,
+        ``pk:VARCHAR(40)``, ``ts:TIMESTAMP_TZ``, ``meta:VARIANT``. The Keboola
+        Storage API derives ``basetype`` automatically and returns precise
+        errors for invalid type/length pairs per backend.
+
+        When ``branch_id`` targets a dev branch and the bucket has not been
+        materialized there yet, this method auto-creates it (mirrors the
+        official Go CLI's ``EnsureBucketExists`` pattern). The response
+        surfaces this via ``auto_created_bucket``.
+
         Args:
             alias: Project alias.
-            bucket_id: Target bucket ID.
+            bucket_id: Target bucket ID (e.g. ``in.c-my-bucket``).
             name: Table name.
-            columns: List of "name:TYPE" strings (e.g. ["id:INTEGER", "name:STRING"]).
-            primary_key: Optional list of primary key column names.
-            branch_id: If set, create table in a specific dev branch.
+            columns: List of column specs -- ``name``, ``name:TYPE``, or
+                ``name:TYPE(length)``.
+            primary_key: Optional list of primary-key column names.
+            branch_id: If set, create the table in this dev branch and
+                auto-materialize the bucket when missing.
+            not_null_columns: Column names to mark NOT NULL (``nullable=false``
+                in the API definition).
+            defaults: ``NAME=VALUE`` assignments for DEFAULT expressions
+                (e.g. ``is_admin=false``, ``amount=0``). Boolean defaults
+                must be lowercase per Keboola API validation.
 
         Returns:
-            Dict with created table details.
+            Dict with created table details and ``auto_created_bucket`` flag.
+
+        Raises:
+            ValueError: Malformed column spec or ``--default`` assignment,
+                or ``--not-null`` / ``--default`` references an unknown
+                column.
         """
-        parsed_columns = []
-        for col_spec in columns:
-            if ":" in col_spec:
-                col_name, col_type = col_spec.split(":", 1)
-                col_type = col_type.upper()
-            else:
-                col_name, col_type = col_spec, "STRING"
-            if col_type not in VALID_COLUMN_TYPES:
-                raise ValueError(
-                    f"Invalid column type '{col_type}' for column '{col_name}'. "
-                    f"Valid types: {', '.join(sorted(VALID_COLUMN_TYPES))}"
-                )
-            parsed_columns.append({"name": col_name, "definition": {"type": col_type}})
+        not_null_set = set(not_null_columns or [])
+        defaults_map = _parse_default_assignments(defaults)
+
+        parsed_columns = [
+            _parse_column_spec(col_spec, not_null_set, defaults_map) for col_spec in columns
+        ]
+
+        # Reject attribute references to columns not actually defined. Without
+        # this check a typo like `--not-null pk --column pkey:VARCHAR(40)`
+        # silently has no effect -- failing fast surfaces the bug.
+        col_names = {c["name"] for c in parsed_columns}
+        unknown_not_null = sorted(not_null_set - col_names)
+        if unknown_not_null:
+            raise ValueError(
+                f"--not-null references unknown column(s): {', '.join(unknown_not_null)}. "
+                f"Defined columns: {', '.join(sorted(col_names))}."
+            )
+        unknown_defaults = sorted(set(defaults_map.keys()) - col_names)
+        if unknown_defaults:
+            raise ValueError(
+                f"--default references unknown column(s): {', '.join(unknown_defaults)}. "
+                f"Defined columns: {', '.join(sorted(col_names))}."
+            )
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
         client = self._client_factory(project.stack_url, project.token)
         try:
+            auto_created_bucket = _ensure_bucket_exists_in_branch(client, bucket_id, branch_id)
             results = client.create_table(
                 bucket_id=bucket_id,
                 name=name,
@@ -489,6 +669,7 @@ class StorageService(BaseService):
             "bucket_id": bucket_id,
             "primary_key": primary_key or [],
             "columns": [c["name"] for c in parsed_columns],
+            "auto_created_bucket": auto_created_bucket,
         }
 
     def upload_table(

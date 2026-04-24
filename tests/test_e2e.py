@@ -5543,3 +5543,185 @@ class TestE2ESyncAdoptExisting:
         output = _json.loads(result.output)
         assert output["status"] == "error"
         assert "999999999" in output["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# Issues #192 + #222: native column types + dev-branch bucket materialization
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+class TestE2EStorageNativeTypesAndBranchMaterialize:
+    """End-to-end coverage for ``storage create-table`` native types and the
+    dev-branch auto-materialize path.
+
+    Verifies the two behaviours that issues #192 and #222 ask for:
+
+    - ``--column pk:VARCHAR(40)`` / ``amount:NUMERIC(18,2)`` / ``ts:TIMESTAMP_TZ``
+      flow through to the Storage API with ``definition.length`` intact and
+      Snowflake produces the correct native types (``VARCHAR(40)``,
+      ``NUMBER(18,2)``, ``TIMESTAMP_TZ(9)``).
+    - ``--not-null`` and ``--default`` flags map to ``nullable=false`` and
+      ``default=...`` on the column definition.
+    - Creating a table in a dev branch against an unmaterialized bucket
+      auto-creates the bucket first (response includes
+      ``auto_created_bucket=true``), mirroring the official Go CLI's
+      ``EnsureBucketExists`` pattern.
+
+    Requires ``E2E_API_TOKEN`` + ``E2E_URL`` and a real project; skipped
+    otherwise.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-nt"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+
+        self._created_branch_ids: list[int] = []
+        self._created_buckets: list[str] = []
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        yield
+
+        # Teardown: branches first (delete cascades to their buckets/tables),
+        # then any buckets we created outside of a branch.
+        for branch_id in self._created_branch_ids:
+            with contextlib.suppress(Exception):
+                self.client.delete_dev_branch(branch_id)
+        for bucket_id in self._created_buckets:
+            with contextlib.suppress(Exception):
+                self.client.delete_bucket(bucket_id, force=True)
+        self.client.close()
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(_invoke(self.config_dir, ["--json", *args]))
+
+    def test_native_types_and_branch_materialize(self) -> None:
+        """Single scenario covers both issues end-to-end against a live API."""
+
+        _step(1, "branch create", "isolate the test in a short-lived dev branch")
+        branch = self._run_ok(
+            "branch", "create", "--project", self.alias, "--name", f"{RUN_ID}-nt-branch"
+        )["data"]
+        branch_id = int(branch["branch_id"])
+        self._created_branch_ids.append(branch_id)
+
+        _step(
+            2,
+            "storage create-table (native types, branch not materialized)",
+            "expect auto_created_bucket=true",
+        )
+        bucket_id = f"in.c-{RUN_ID.replace('-', '_')}_nt"
+        table_name = f"{RUN_ID.replace('-', '_')}_native"
+        created = self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            table_name,
+            "--branch",
+            str(branch_id),
+            "--column",
+            "pk:VARCHAR(40)",
+            "--column",
+            "amount:NUMERIC(18,2)",
+            "--column",
+            "ts:TIMESTAMP_TZ",
+            "--column",
+            "is_paid:BOOLEAN",
+            "--column",
+            "meta:VARIANT",
+            "--primary-key",
+            "pk",
+            "--not-null",
+            "pk",
+            "--not-null",
+            "amount",
+            "--default",
+            "amount=0",
+            "--default",
+            "is_paid=false",
+        )["data"]
+
+        assert created["table_id"] == f"{bucket_id}.{table_name}"
+        assert created.get("auto_created_bucket") is True, (
+            "Service should auto-materialize a bucket that does not yet exist "
+            "in the target dev branch."
+        )
+
+        _step(
+            3,
+            "storage table-detail",
+            "verify length/nullable/default made it to Snowflake",
+        )
+        table = self.client.get_table_detail(f"{bucket_id}.{table_name}", branch_id=branch_id)
+        by_name = {c["name"]: c for c in table["definition"]["columns"]}
+
+        pk_def = by_name["pk"]["definition"]
+        assert pk_def["type"] in ("VARCHAR", "TEXT")  # Snowflake stores both as VARCHAR
+        assert pk_def["length"] == "40"
+        assert pk_def["nullable"] is False
+
+        amount_def = by_name["amount"]["definition"]
+        # NUMERIC routes to NUMBER on Snowflake.
+        assert amount_def["type"] in ("NUMBER", "NUMERIC")
+        assert amount_def["length"] == "18,2"
+        assert amount_def["nullable"] is False
+        assert amount_def.get("default") == "0"
+
+        ts_def = by_name["ts"]["definition"]
+        assert ts_def["type"] == "TIMESTAMP_TZ"
+
+        is_paid_def = by_name["is_paid"]["definition"]
+        assert is_paid_def["type"] == "BOOLEAN"
+        # Keboola normalises lowercase bools to uppercase in the stored default.
+        assert is_paid_def.get("default", "").upper() == "FALSE"
+
+        variant_def = by_name["meta"]["definition"]
+        assert variant_def["type"] == "VARIANT"
+
+        _step(
+            4,
+            "storage create-table (same bucket, second table)",
+            "expect auto_created_bucket=false on the second call",
+        )
+        second = self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            f"{table_name}_second",
+            "--branch",
+            str(branch_id),
+            "--column",
+            "id:INTEGER",
+        )["data"]
+        assert second.get("auto_created_bucket") is False, (
+            "Second create against an already-materialized bucket should not re-create it."
+        )

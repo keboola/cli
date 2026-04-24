@@ -201,6 +201,41 @@ One project failing does not block others. Check the `errors` array:
 - Blocked operation exits **6** with `error.code = PERMISSION_DENIED`. Read commands stay unaffected.
 - Safe to run under either flag without mutating the saved policy -- useful when your agent needs a one-shot read-only run on a machine with a write-enabled config.
 
+## `storage create-table` native types + dev-branch materialize (since 0.25.0)
+
+- **Native types pass through to the Storage API.** `--column pk:VARCHAR(40)`,
+  `--column amount:NUMERIC(18,2)`, `--column ts:TIMESTAMP_TZ`,
+  `--column meta:VARIANT` all work -- the CLI does only syntactic validation
+  (valid identifier, digits+commas length) and Keboola validates
+  type/length semantics per backend. Any backend-specific native type
+  (Snowflake, BigQuery, Redshift, Synapse) is accepted. The earlier
+  whitelist (`STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP`)
+  was removed in 0.25.0.
+- **The Storage API derives `basetype`** (`VARCHAR`→`STRING`, `NUMBER`→
+  `NUMERIC`, `TIMESTAMP_TZ`→`TIMESTAMP`, `VARIANT`→`STRING`). Do NOT pass
+  `basetype` manually; the API will override or reject it.
+- **`INTEGER(10)` is invalid.** Keboola's `INTEGER` base type rejects
+  length (`'10' is not valid length for INTEGER`). Use
+  `--column age:NUMBER(3,0)` instead for narrow integers.
+- **`BOOLEAN` defaults must be lowercase.** `--default flag=false`
+  succeeds; `--default flag=FALSE` fails with
+  `storage.tables.definitionValidation`. The value is normalised to
+  uppercase in storage but the input requires lowercase.
+- **`--not-null` / `--default` must reference a defined column.**
+  Typos exit 2 (`INVALID_ARGUMENT`) before any API call.
+- **Dev-branch `create-table` auto-materializes the bucket** when the
+  target bucket has not been written to in the branch yet (mirrors the
+  official Keboola Go CLI's `EnsureBucketExists`). Response includes
+  `auto_created_bucket: true` when this happens. Production writes
+  (no `--branch`) never materialize anything.
+- **`storage buckets --branch ID` returns only locally-modified buckets**
+  in the branch -- a fresh dev branch lists nothing. That is Storage API
+  behaviour, not a CLI bug. Use `storage buckets` (no `--branch`) to see
+  production buckets that the branch can read-through.
+
+See [storage-types-workflow.md](storage-types-workflow.md) for the full
+type inventory and examples.
+
 ## `sync init --adopt-existing` (since 0.22.0)
 
 - Adopts a `.keboola/manifest.json` written by the kbc Go CLI **in place** instead of overwriting. Idempotent; re-running is a no-op.

@@ -518,12 +518,30 @@ def storage_create_table(
     column: list[str] = typer.Option(
         ...,
         "--column",
-        help="Column definition as 'name:TYPE' (e.g. 'id:INTEGER'). Can be repeated. Types: STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP",
+        help=(
+            "Column as 'name:TYPE' or 'name:TYPE(length)'. Repeatable. Base types: "
+            "STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP. Native types "
+            "are passed through to the Storage API (e.g. 'pk:VARCHAR(40)', "
+            "'amount:NUMERIC(18,2)', 'ts:TIMESTAMP_TZ', 'meta:VARIANT')."
+        ),
     ),
     primary_key: list[str] | None = typer.Option(
         None,
         "--primary-key",
         help="Primary key column name. Can be repeated.",
+    ),
+    not_null: list[str] | None = typer.Option(
+        None,
+        "--not-null",
+        help="Column name to mark NOT NULL. Can be repeated. Must match a --column name.",
+    ),
+    default: list[str] | None = typer.Option(
+        None,
+        "--default",
+        help=(
+            "Column default as 'name=value'. Can be repeated. Boolean values must be "
+            "lowercase ('true'/'false') per Keboola API validation."
+        ),
     ),
     branch: int | None = typer.Option(
         None,
@@ -533,7 +551,26 @@ def storage_create_table(
 ) -> None:
     """Create a new storage table with typed columns.
 
-    Column types: STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP.
+    Base types (`STRING`, `INTEGER`, `NUMERIC`, `FLOAT`, `BOOLEAN`, `DATE`,
+    `TIMESTAMP`) plus any native backend type (`VARCHAR(n)`, `NUMBER(p,s)`,
+    `TIMESTAMP_TZ`, `VARIANT`, etc.) are accepted. Type/length validation
+    is delegated to the Keboola Storage API, which has precise per-backend
+    rules and returns actionable errors.
+
+    When `--branch` targets a dev branch and the bucket has not been
+    materialized there yet, kbagent auto-creates it (mirrors the official
+    Go CLI's `EnsureBucketExists`). The response's `auto_created_bucket`
+    flag reports whether this happened.
+
+    Examples:
+        kbagent storage create-table --project p --bucket-id in.c-b --name t \\
+            --column id:INTEGER --column name:STRING --primary-key id
+
+        kbagent storage create-table --project p --bucket-id in.c-b --name sales \\
+            --column pk:VARCHAR(40) --column amount:NUMERIC(18,2) \\
+            --column ts:TIMESTAMP_TZ --column is_paid:BOOLEAN \\
+            --primary-key pk --not-null pk --not-null amount \\
+            --default amount=0 --default is_paid=false
     """
     if should_hint(ctx):
         emit_hint(
@@ -544,6 +581,8 @@ def storage_create_table(
             name=name,
             column=column,
             primary_key=primary_key,
+            not_null=not_null,
+            default=default,
             branch=branch,
         )
 
@@ -560,6 +599,8 @@ def storage_create_table(
             columns=column,
             primary_key=primary_key,
             branch_id=effective_branch,
+            not_null_columns=not_null,
+            defaults=default,
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
@@ -575,6 +616,11 @@ def storage_create_table(
         formatter.output(result)
     else:
         formatter.console.print(f"[bold green]Created table:[/bold green] {result['table_id']}")
+        if result.get("auto_created_bucket"):
+            formatter.console.print(
+                f"  [yellow]Note:[/yellow] bucket {result['bucket_id']} was "
+                f"auto-materialized in this branch."
+            )
         if result["primary_key"]:
             formatter.console.print(f"  Primary key: {', '.join(result['primary_key'])}")
         formatter.console.print(f"  Columns: {', '.join(result['columns'])}")
