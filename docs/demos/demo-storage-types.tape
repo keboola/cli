@@ -1,16 +1,15 @@
 # Demo for docs/TUTORIAL.md §8 (Storage column types).
 #
-# Live walkthrough of the 0.25.0 `storage create-table` upgrades:
-#   1. create a fresh short-lived dev branch
-#   2. create-table with native types (VARCHAR(40), NUMBER(18,2), TIMESTAMP_TZ,
-#      VARIANT, BOOLEAN) + --not-null + --default; bucket auto-materializes
-#      in the branch on the first write
-#   3. table-detail (raw API column_details) showing type + length + nullable
-#   4. branch cleanup (cascades bucket + table)
+# Simple linear walkthrough of 0.25.0 `storage create-table` upgrades:
+#   1. create a bucket (plain production, no branch)
+#   2. create a table with native types: VARCHAR(40), NUMERIC(18,2),
+#      TIMESTAMP_TZ, VARIANT, BOOLEAN + --not-null + --default
+#   3. inspect column_details -- native_type / length / nullable / default
+#      all round-trip through to Snowflake
+#   4. cleanup (delete-bucket --force cascades to the table)
 #
-# Uses the existing /tmp/kbagent-e2e sandbox (project "padak-2-0" already
-# registered) via KBAGENT_CONFIG_DIR so the demo does NOT touch the user's
-# global kbagent config.
+# Uses the existing /tmp/kbagent-e2e sandbox via KBAGENT_CONFIG_DIR so the
+# demo does not touch the user's global kbagent config.
 #
 # Regenerate:
 #   vhs docs/demos/demo-storage-types.tape
@@ -32,17 +31,13 @@ Env KBAGENT_CONFIG_DIR "/tmp/kbagent-e2e/.kbagent"
 
 Sleep 700ms
 
-Type "# Step 1: create a short-lived dev branch to isolate the demo"
+Type "# Step 1: create a fresh bucket"
 Enter
+Sleep 400ms
+Type "kbagent storage create-bucket --project padak-2-0 --stage in --name demo-types"
 Sleep 300ms
-Type "BRANCH_ID=$(kbagent --json branch create --project padak-2-0 --name demo-types | jq -r '.data.branch_id')"
-Sleep 200ms
 Enter
-Sleep 3500ms
-Type "echo BRANCH_ID=$BRANCH_ID"
-Sleep 200ms
-Enter
-Sleep 1500ms
+Sleep 2500ms
 
 Type "clear"
 Sleep 200ms
@@ -52,71 +47,71 @@ Sleep 200ms
 Type "# Step 2: create a typed table with native Snowflake types"
 Enter
 Sleep 200ms
-Type "#   VARCHAR(40) / NUMERIC(18,2) / TIMESTAMP_TZ / VARIANT / BOOLEAN"
-Enter
-Sleep 200ms
-Type "#   + --not-null and --default (maps to definition.nullable / .default)"
-Enter
-Sleep 300ms
-Type "#   Bucket in.c-demo-orders is NOT materialized in this branch yet --"
-Enter
-Sleep 200ms
-Type "#   kbagent auto-creates it (EnsureBucketExists pattern)."
-Enter
-Sleep 800ms
-
-Type "kbagent --json storage create-table --project padak-2-0 --branch $BRANCH_ID \\"
-Enter
-Sleep 100ms
-Type "  --bucket-id in.c-demo-orders --name sales \\"
-Enter
-Sleep 100ms
-Type "  --column 'pk:VARCHAR(40)' --column 'amount:NUMERIC(18,2)' \\"
-Enter
-Sleep 100ms
-Type "  --column 'ts:TIMESTAMP_TZ' --column 'is_paid:BOOLEAN' --column 'meta:VARIANT' \\"
-Enter
-Sleep 100ms
-Type "  --primary-key pk --not-null pk --not-null amount \\"
-Enter
-Sleep 100ms
-Type "  --default amount=0 --default is_paid=false \\"
-Enter
-Sleep 100ms
-Type "  | jq '{ auto_created_bucket: .data.auto_created_bucket, table_id: .data.table_id }'"
-Sleep 300ms
-Enter
-Sleep 5500ms
-
-Type "clear"
-Sleep 200ms
-Enter
-Sleep 200ms
-
-Type "# Step 3: inspect the stored column definitions"
-Enter
-Sleep 200ms
-Type "#   definition.length carried through; Snowflake picked the right native type."
+Type "#   VARCHAR(40) / NUMERIC(18,2) / TIMESTAMP_TZ / VARIANT + --not-null / --default"
 Enter
 Sleep 500ms
 
-Type "kbagent --json storage table-detail --project padak-2-0 --branch $BRANCH_ID \\"
+Type "kbagent storage create-table --project padak-2-0 \\"
 Enter
 Sleep 100ms
-Type "  --table-id in.c-demo-orders.sales | jq '.data.column_details'"
+Type "  --bucket-id in.c-demo-types --name sales \\"
+Enter
+Sleep 100ms
+Type "  --column 'pk:VARCHAR(40)' \\"
+Enter
+Sleep 100ms
+Type "  --column 'amount:NUMERIC(18,2)' \\"
+Enter
+Sleep 100ms
+Type "  --column 'ts:TIMESTAMP_TZ' \\"
+Enter
+Sleep 100ms
+Type "  --column 'meta:VARIANT' \\"
+Enter
+Sleep 100ms
+Type "  --column 'is_paid:BOOLEAN' \\"
+Enter
+Sleep 100ms
+Type "  --primary-key pk \\"
+Enter
+Sleep 100ms
+Type "  --not-null pk --not-null amount \\"
+Enter
+Sleep 100ms
+Type "  --default amount=0 --default is_paid=false"
 Sleep 300ms
 Enter
-Sleep 4000ms
+Sleep 4500ms
 
 Type "clear"
 Sleep 200ms
 Enter
 Sleep 200ms
 
-Type "# Step 4: cleanup (deleting the branch cascades to its bucket and table)"
+Type "# Step 3: inspect what Snowflake actually stored"
 Enter
-Sleep 300ms
-Type "kbagent branch delete --project padak-2-0 --branch $BRANCH_ID"
+Sleep 200ms
+Type "#   native_type + length + nullable + default all survive the round-trip"
+Enter
+Sleep 500ms
+
+Type "kbagent --json storage table-detail --project padak-2-0 \\"
+Enter
+Sleep 100ms
+Type "  --table-id in.c-demo-types.sales | jq '.data.column_details'"
 Sleep 300ms
 Enter
-Sleep 3000ms
+Sleep 4500ms
+
+Type "clear"
+Sleep 200ms
+Enter
+Sleep 200ms
+
+Type "# Step 4: cleanup (--force cascades to the sales table)"
+Enter
+Sleep 400ms
+Type "kbagent storage delete-bucket --project padak-2-0 --bucket-id in.c-demo-types --force --yes"
+Sleep 300ms
+Enter
+Sleep 2800ms
