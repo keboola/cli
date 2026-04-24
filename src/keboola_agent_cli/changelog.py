@@ -8,6 +8,10 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.24.2": [
+        "Docs: new §7 in `docs/TUTORIAL.md` -- GitOps workflow connecting `kbagent sync pull` with local git branches. Covers first-time setup (with the full on-disk file tree showing extracted `transform.sql` / `code.py` / `pyproject.toml` and preserved `KBC::ProjectSecure::` encrypted values), feature-branch edit loop, merge-back via `branch merge`, the git-branching safety model (linked/unlinked/main mapping table + hit-the-wall example), and common gotchas (locally modified skips, name drift, `--adopt-existing`, `--dry-run`, `--with-samples`).",
+        "Docs: new VHS demo `docs/demos/demo-sync-pull.tape` + rendered `docs/assets/demo-sync-pull.gif` -- live recording of the full GitOps workflow (project add -> git init -> sync init --git-branching -> sync pull -> git checkout -b -> sync branch-link -> sync branch-status) against an isolated demo project. Tape uses `KBAGENT_CONFIG_DIR` to keep the sandbox isolated from the user's global config.",
+    ],
     "0.24.1": [
         "New: top-level `--version` / `-V` flag on `kbagent` -- standard CLI convention that previously only worked as the `kbagent version` subcommand. Eager callback prints `kbagent vX.Y.Z` and exits before any further parsing.",
         "Docs: README and `docs/TUTORIAL.md` now embed four short animated terminal demos (VHS-generated GIFs under `docs/assets/`): hero demo at the top of README, 30-second workflow overview, `kbagent doctor` output in the tutorial prerequisites, and the `project add` flow in §1. Tape sources are under `docs/demos/*.tape` and can be regenerated with `vhs docs/demos/<name>.tape`.",
