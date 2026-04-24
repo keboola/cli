@@ -11,6 +11,11 @@
 # Uses the existing /tmp/kbagent-e2e sandbox via KBAGENT_CONFIG_DIR so the
 # demo does not touch the user's global kbagent config.
 #
+# IMPORTANT: VHS does NOT support backslash line continuation -- `Type "...\\"`
+# sends literal backslashes to the shell. Each command must be a single
+# `Type "..."` call. Append more arguments via additional `Type` calls
+# WITHOUT `Enter` between them -- the shell receives one continuous line.
+#
 # Regenerate:
 #   vhs docs/demos/demo-storage-types.tape
 
@@ -21,7 +26,7 @@ Set FontSize 14
 Set Width 1200
 Set Height 900
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 45ms
+Set TypingSpeed 30ms
 Set CursorBlink false
 Set PlaybackSpeed 1.0
 
@@ -49,37 +54,14 @@ Enter
 Sleep 200ms
 Type "#   VARCHAR(40) / NUMERIC(18,2) / TIMESTAMP_TZ / VARIANT + --not-null / --default"
 Enter
-Sleep 500ms
+Sleep 600ms
 
-Type "kbagent storage create-table --project padak-2-0 \\"
-Enter
-Sleep 100ms
-Type "  --bucket-id in.c-demo-types --name sales \\"
-Enter
-Sleep 100ms
-Type "  --column 'pk:VARCHAR(40)' \\"
-Enter
-Sleep 100ms
-Type "  --column 'amount:NUMERIC(18,2)' \\"
-Enter
-Sleep 100ms
-Type "  --column 'ts:TIMESTAMP_TZ' \\"
-Enter
-Sleep 100ms
-Type "  --column 'meta:VARIANT' \\"
-Enter
-Sleep 100ms
-Type "  --column 'is_paid:BOOLEAN' \\"
-Enter
-Sleep 100ms
-Type "  --primary-key pk \\"
-Enter
-Sleep 100ms
-Type "  --not-null pk --not-null amount \\"
-Enter
-Sleep 100ms
-Type "  --default amount=0 --default is_paid=false"
-Sleep 300ms
+Type "kbagent storage create-table --project padak-2-0 --bucket-id in.c-demo-types --name sales "
+Type "--column 'pk:VARCHAR(40)' --column 'amount:NUMERIC(18,2)' "
+Type "--column 'ts:TIMESTAMP_TZ' --column 'meta:VARIANT' --column 'is_paid:BOOLEAN' "
+Type "--primary-key pk --not-null pk --not-null amount "
+Type "--default amount=0 --default is_paid=false"
+Sleep 400ms
 Enter
 Sleep 4500ms
 
@@ -95,10 +77,7 @@ Type "#   native_type + length + nullable + default all survive the round-trip"
 Enter
 Sleep 500ms
 
-Type "kbagent --json storage table-detail --project padak-2-0 \\"
-Enter
-Sleep 100ms
-Type "  --table-id in.c-demo-types.sales | jq '.data.column_details'"
+Type "kbagent --json storage table-detail --project padak-2-0 --table-id in.c-demo-types.sales | jq '.data.column_details'"
 Sleep 300ms
 Enter
 Sleep 4500ms
