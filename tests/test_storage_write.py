@@ -381,6 +381,7 @@ class TestCreateTableService:
             "Bucket not found", status_code=404, error_code="NOT_FOUND"
         )
         mock_client.create_bucket.return_value = {"id": "in.c-my-bucket"}
+        mock_client.set_bucket_metadata.return_value = []
         mock_client.create_table.return_value = {"id": "in.c-my-bucket.t"}
         service = _make_service(store, mock_client)
 
@@ -396,6 +397,48 @@ class TestCreateTableService:
         mock_client.create_bucket.assert_called_once_with(
             stage="in", name="my-bucket", branch_id=12345
         )
+        # Issue #224: after create_bucket, KBC.createdBy.branch.id must be
+        # set with provider="system" so output-mapping's branched-storage
+        # check (BucketCreator::checkDevBucketMetadata) passes.
+        mock_client.set_bucket_metadata.assert_called_once_with(
+            bucket_id="in.c-my-bucket",
+            entries=[("KBC.createdBy.branch.id", "12345")],
+            provider="system",
+            branch_id=12345,
+        )
+        assert result["auto_created_bucket"] is True
+
+    def test_branch_auto_materialize_metadata_failure_does_not_abort(self, tmp_path: Path) -> None:
+        """If set_bucket_metadata fails, the materialize+table-create still proceeds.
+
+        The metadata write is best-effort: an Insufficient-Permissions or
+        flaky 5xx must not block the user's create-table call. The runner
+        will fail later with a clearer message if the bucket really cannot
+        be assigned.
+        """
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_bucket_detail.side_effect = KeboolaApiError(
+            "Bucket not found", status_code=404, error_code="NOT_FOUND"
+        )
+        mock_client.create_bucket.return_value = {"id": "in.c-my-bucket"}
+        mock_client.set_bucket_metadata.side_effect = KeboolaApiError(
+            "Forbidden", status_code=403, error_code="FORBIDDEN"
+        )
+        mock_client.create_table.return_value = {"id": "in.c-my-bucket.t"}
+        service = _make_service(store, mock_client)
+
+        result = service.create_table(
+            alias="test",
+            bucket_id="in.c-my-bucket",
+            name="t",
+            columns=["id:INTEGER"],
+            branch_id=12345,
+        )
+
+        mock_client.create_bucket.assert_called_once()
+        mock_client.set_bucket_metadata.assert_called_once()
+        mock_client.create_table.assert_called_once()
         assert result["auto_created_bucket"] is True
 
     def test_branch_no_materialize_when_bucket_exists(self, tmp_path: Path) -> None:
@@ -414,6 +457,10 @@ class TestCreateTableService:
         )
 
         mock_client.create_bucket.assert_not_called()
+        # No materialize -> no metadata write either; we only set the
+        # branch-id stamp on buckets we just created (existing buckets
+        # already have whatever metadata they need).
+        mock_client.set_bucket_metadata.assert_not_called()
         assert result["auto_created_bucket"] is False
 
     def test_production_never_materializes(self, tmp_path: Path) -> None:
