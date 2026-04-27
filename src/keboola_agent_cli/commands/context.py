@@ -249,6 +249,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     - --default NAME=VALUE sets a DEFAULT expression. Booleans must be lowercase (true/false).
     - In a dev branch, the bucket is auto-materialized if it has not yet been written to in the branch
       (response includes auto_created_bucket=true). Mirrors the official Keboola Go CLI's EnsureBucketExists.
+    - Auto-materialized buckets get KBC.createdBy.branch.id system metadata stamped on them,
+      so transformation runners on branched-storage projects accept them as output destinations.
+      A 403/5xx on the metadata write is logged and the create-table call still proceeds.
     Branch-aware. Examples:
       --column pk:VARCHAR(40) --column amount:NUMERIC(18,2) --not-null pk --default amount=0
       --column ts:TIMESTAMP_TZ --column meta:VARIANT

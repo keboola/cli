@@ -228,6 +228,18 @@ One project failing does not block others. Check the `errors` array:
   official Keboola Go CLI's `EnsureBucketExists`). Response includes
   `auto_created_bucket: true` when this happens. Production writes
   (no `--branch`) never materialize anything.
+- **Auto-materialized buckets get `KBC.createdBy.branch.id` stamped**
+  (since 0.25.1). On projects with **branched storage** feature flag ON,
+  the transformation runner's `output-mapping` rejects buckets without
+  this system metadata with `bucket is not assigned to any development
+  branch.` kbagent stamps it automatically; the metadata write is
+  best-effort (a 403/5xx is logged, create-table still proceeds). If
+  another tool created the bucket via raw `POST /v2/storage/branch/<id>/buckets`
+  and bypassed kbagent, the bucket will be missing the stamp -- you can
+  re-stamp it manually with the Storage API metadata endpoint
+  (`POST .../buckets/<id>/metadata` with `provider=system`, key
+  `KBC.createdBy.branch.id`, value = branch ID). See
+  [storage-types-workflow.md#branched-storage-metadata-stamp-since-0251](../references/storage-types-workflow.md). Closes #224.
 - **`storage buckets --branch ID` returns only locally-modified buckets**
   in the branch -- a fresh dev branch lists nothing. That is Storage API
   behaviour, not a CLI bug. Use `storage buckets` (no `--branch`) to see

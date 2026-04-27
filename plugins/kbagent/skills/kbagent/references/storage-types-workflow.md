@@ -79,10 +79,40 @@ against an unmaterialized bucket returns `Bucket not found`.
 1. Check bucket existence in the branch (`GET /v2/storage/branch/{id}/buckets/{bucket_id}`).
 2. On 404, create the bucket in the branch with the same stage+name
    (mirrors the official Go CLI's `EnsureBucketExists`).
-3. Then proceed with the table creation.
+3. Stamp `KBC.createdBy.branch.id = <branch_id>` system metadata on the
+   freshly-created bucket (see "Branched-storage metadata stamp" below).
+4. Then proceed with the table creation.
 
 The response surfaces this via `auto_created_bucket: true`. Production
 writes (no `--branch`) never materialize anything.
+
+### Branched-storage metadata stamp (since 0.25.1)
+
+On projects with the **branched storage** feature flag enabled, the
+transformation runner's `output-mapping` library
+(`Storage/BucketCreator::checkDevBucketMetadata`) refuses to write into a
+dev-branch bucket that does not carry the `KBC.createdBy.branch.id` system
+metadata equal to the current branch ID. The error surfaces as:
+
+```
+Trying to create a table in the development bucket "X" on branch "Y"
+(ID "Z"), but the bucket is not assigned to any development branch.
+```
+
+Storage API does **not** auto-populate that key on
+`POST /v2/storage/branch/<id>/buckets`, so kbagent stamps it explicitly
+right after creation (provider=`system` -- `user` is rejected on the
+reserved `KBC.*` namespace). Failure of the metadata write is logged but
+**non-fatal**: the table-create call still proceeds. If a user lacks
+bucket-metadata permission, the runner will surface the original
+"not assigned" error later, which is no worse than today.
+
+The same bug exists in the Go CLI's `EnsureBucketExists` -- tracked in
+[`keboola/connection`](https://github.com/keboola/connection) as a
+backend-side fix request, but kbagent users hit it first and need a
+client-side workaround.
+
+Closes #224.
 
 ## Examples
 

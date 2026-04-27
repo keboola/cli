@@ -3005,6 +3005,38 @@ _STORAGE_META_RESPONSE = [
 ]
 
 
+class TestListBucketMetadata:
+    """Tests for list_bucket_metadata() - GET /v2/storage/buckets/{id}/metadata."""
+
+    def test_list_bucket_metadata_no_branch(self, httpx_mock) -> None:
+        from urllib.parse import quote as url_quote
+
+        safe_id = url_quote("in.c-bucket", safe="")
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/buckets/{safe_id}/metadata",
+            method="GET",
+            json=_STORAGE_META_RESPONSE,
+            status_code=200,
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            result = client.list_bucket_metadata(bucket_id="in.c-bucket")
+        assert result == _STORAGE_META_RESPONSE
+
+    def test_list_bucket_metadata_with_branch(self, httpx_mock) -> None:
+        from urllib.parse import quote as url_quote
+
+        safe_id = url_quote("in.c-bucket", safe="")
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/branch/42/buckets/{safe_id}/metadata",
+            method="GET",
+            json=_STORAGE_META_RESPONSE,
+            status_code=200,
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            result = client.list_bucket_metadata(bucket_id="in.c-bucket", branch_id=42)
+        assert result == _STORAGE_META_RESPONSE
+
+
 class TestSetBucketMetadata:
     """Tests for set_bucket_metadata() - POST /v2/storage/buckets/{id}/metadata."""
 
@@ -3075,6 +3107,33 @@ class TestSetBucketMetadata:
         body = httpx_mock.get_request().content.decode().replace("%5B", "[").replace("%5D", "]")
         assert "metadata[0][key]=k1" in body
         assert "metadata[1][key]=k2" in body
+
+    def test_set_bucket_metadata_system_provider(self, httpx_mock) -> None:
+        """provider='system' is required for KBC.* keys (issue #224 fix path).
+
+        The Storage API rejects user-provider writes on the reserved KBC.*
+        namespace (e.g. ``KBC.createdBy.branch.id``); auto-materialize must
+        be able to opt into system provider explicitly.
+        """
+        from urllib.parse import quote as url_quote
+
+        safe_id = url_quote("in.c-bucket", safe="")
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/buckets/{safe_id}/metadata",
+            method="POST",
+            json=_STORAGE_META_RESPONSE,
+            status_code=201,
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client.set_bucket_metadata(
+                bucket_id="in.c-bucket",
+                entries=[("KBC.createdBy.branch.id", "1295438")],
+                provider="system",
+            )
+        body = httpx_mock.get_request().content.decode().replace("%5B", "[").replace("%5D", "]")
+        assert "provider=system" in body
+        assert "metadata[0][key]=KBC.createdBy.branch.id" in body
+        assert "metadata[0][value]=1295438" in body
 
 
 class TestSetTableMetadata:

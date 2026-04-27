@@ -5672,6 +5672,25 @@ class TestE2EStorageNativeTypesAndBranchMaterialize:
             "in the target dev branch."
         )
 
+        # Issue #224: the auto-materialized bucket must carry
+        # ``KBC.createdBy.branch.id`` system metadata, otherwise
+        # output-mapping (BucketCreator::checkDevBucketMetadata) rejects every
+        # subsequent transformation write on branched-storage projects.
+        bucket_meta = self.client.list_bucket_metadata(bucket_id, branch_id=branch_id)
+        branch_id_entries = [m for m in bucket_meta if m.get("key") == "KBC.createdBy.branch.id"]
+        assert len(branch_id_entries) == 1, (
+            f"Expected exactly one KBC.createdBy.branch.id metadata entry on "
+            f"auto-materialized bucket {bucket_id}; got {bucket_meta}"
+        )
+        entry = branch_id_entries[0]
+        assert entry["value"] == str(branch_id), (
+            f"KBC.createdBy.branch.id should equal current branch ID {branch_id}; "
+            f"got {entry['value']!r}"
+        )
+        assert entry["provider"] == "system", (
+            f"KBC.* metadata must be written with provider=system; got {entry.get('provider')!r}"
+        )
+
         _step(
             3,
             "storage table-detail",

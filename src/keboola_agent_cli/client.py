@@ -847,30 +847,55 @@ class KeboolaClient(BaseHttpClient):
         """
         return self.list_buckets(include="metadata")
 
+    def list_bucket_metadata(
+        self,
+        bucket_id: str,
+        branch_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List metadata entries on a single storage bucket.
+
+        GET /v2/storage/[branch/{b}/]buckets/{id}/metadata
+
+        Args:
+            bucket_id: Bucket ID (e.g. 'in.c-db').
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            List of metadata dicts (id/key/value/provider/timestamp).
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_id = quote(bucket_id, safe="")
+        response = self._request("GET", f"{prefix}/buckets/{safe_id}/metadata")
+        return response.json()
+
     def set_bucket_metadata(
         self,
         bucket_id: str,
         entries: list[tuple[str, str]],
         branch_id: int | None = None,
+        provider: str = "user",
     ) -> list[dict[str, Any]]:
         """Upsert metadata key/value pairs on a storage bucket.
 
         POST /v2/storage/buckets/{id}/metadata
 
         Uses the same PHP-style array form encoding as ``set_branch_metadata``.
-        Provider is always ``"user"`` for CLI-originated descriptions.
 
         Args:
             bucket_id: Bucket ID (e.g. 'in.c-db').
             entries: Ordered list of ``(key, value)`` metadata tuples.
             branch_id: If set, target a specific dev branch.
+            provider: Metadata provider. Defaults to ``"user"`` for
+                CLI-originated descriptions; pass ``"system"`` for reserved
+                ``KBC.*`` keys (e.g. ``KBC.createdBy.branch.id``) -- the API
+                rejects user-provider writes on that namespace.
 
         Returns:
             Full metadata list for the bucket after the upsert.
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         safe_id = quote(bucket_id, safe="")
-        form: dict[str, str] = {"provider": "user"}
+        form: dict[str, str] = {"provider": provider}
         for i, (key, value) in enumerate(entries):
             form[f"metadata[{i}][key]"] = key
             form[f"metadata[{i}][value]"] = value

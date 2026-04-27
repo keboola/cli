@@ -133,6 +133,18 @@ def _ensure_bucket_exists_in_branch(
     the branch with the same ``stage`` + ``name`` so the subsequent write
     has a target.
 
+    On projects with the "branched storage" feature enabled, the
+    transformation runner's output mapping (``keboola/output-mapping``,
+    ``Storage/BucketCreator::checkDevBucketMetadata``) requires the bucket
+    to carry ``KBC.createdBy.branch.id`` metadata equal to the current
+    branch id; without it the runner aborts with "bucket is not assigned
+    to any development branch." Storage API does not auto-populate the
+    field on ``POST /branch/{id}/buckets``, so we set it explicitly right
+    after creation. Failure to write the metadata is logged but does not
+    abort the operation -- the table-create call still happens, and on
+    branched-storage projects it will surface the assignment error there.
+    Closes #224.
+
     No-op when ``branch_id`` is None (production writes do not need
     materialization).
 
@@ -165,6 +177,22 @@ def _ensure_bucket_exists_in_branch(
         stage,
         bucket_name,
     )
+    try:
+        client.set_bucket_metadata(
+            bucket_id=bucket_id,
+            entries=[("KBC.createdBy.branch.id", str(branch_id))],
+            provider="system",
+            branch_id=branch_id,
+        )
+    except KeboolaApiError as exc:
+        logger.warning(
+            "Auto-materialized bucket %s in branch %s but failed to set "
+            "KBC.createdBy.branch.id metadata (%s); transformation runners "
+            "with branched-storage may reject writes to this bucket.",
+            bucket_id,
+            branch_id,
+            exc,
+        )
     return True
 
 
