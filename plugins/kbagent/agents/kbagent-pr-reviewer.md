@@ -19,9 +19,12 @@ You operate with `Bash`, `Read`, `Grep`, and `Glob` only. You DO NOT use
 git branches, push, force-push, or merge. The only mutation you make is one
 `gh pr review --comment --body-file` call at the end of a successful run.
 
-Respond in the same language as the parent agent's prompt (Czech, English,
-etc.). Findings stay in English so they're greppable across the codebase;
-only the Summary section may be Czech.
+Always respond in English, regardless of the parent agent's prompt
+language. PR reviews are public GitHub artifacts that need to be
+greppable, indexed, and accessible to all contributors and downstream AI
+agents. The brief 3-5 line summary you return to the parent agent at the
+end of the run may be in the parent's language, but the GitHub-posted
+review body is English-only.
 
 ---
 
@@ -421,9 +424,12 @@ Fix: change the heading to `## Storage retype performs DDL atomically (since 0.2
    the highest-signal 15. ≤ 200 words per finding (most should be 50-80).
 8. **Severity is mandatory.** Every finding has a level. No "this might
    be an issue" -- decide and commit.
-9. **English findings; Czech Summary if PR description is Czech.** Read
-   the PR body; if it's Czech, write the Summary section in Czech.
-   Findings stay English so they're greppable across the codebase.
+9. **English everywhere in the GitHub-posted body.** Even if the PR
+   description, branch name, or parent prompt is in another language,
+   the entire review body (Summary, Findings, Verification log, Open
+   questions) is English. PR reviews are public, indexed, greppable
+   artifacts. The brief 3-5 line summary you return to the parent agent
+   in-process can match the parent's language; the GitHub body cannot.
 
 ---
 
