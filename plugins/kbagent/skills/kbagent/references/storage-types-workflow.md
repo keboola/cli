@@ -114,6 +114,62 @@ client-side workaround.
 
 Closes #224.
 
+### Fake-branch vs `storage-branches`: when `--branch X` is a no-op for the runner (since 0.25.2)
+
+Keboola Storage has **two parallel branch-isolation models**:
+
+| Model | Triggered by | Bucket isolation | Runner behavior |
+|---|---|---|---|
+| `storage-branches` (modern) | Project owner has the `storage-branches` feature flag | `POST /v2/storage/branch/<id>/buckets` produces a **branch-scoped bucket**; bucket carries `KBC.createdBy.branch.id` metadata; visible only via `--branch <id>` view | Reads/writes the branch-scoped bucket directly. The metadata stamp from §"Branched-storage metadata stamp" is **required** -- without it the runner aborts with "bucket is not assigned to any development branch". |
+| Legacy fake-branch | Project owner does **not** have `storage-branches` | The same `POST /branch/<id>/buckets` call also succeeds, but at job time the runner **rewrites bucket IDs**: a transformation that targets `out.c-foo.tbl` writes to `out.c-<branch_id>-foo.tbl` in the **default branch** instead. | Creates its own `out.c-<branch_id>-*` bucket with literal branch ID in the bucket name. The kbagent-materialized bucket is never read or written by the runner. |
+
+**What kbagent does on a write call with `--branch X`** (`storage create-bucket
+--branch X` and `storage create-table --branch X`):
+
+1. Runs the existing auto-materialize + metadata-stamp logic.
+2. Calls `verify_token()` once per session (cache lives on the
+   `KeboolaClient` instance) and inspects `owner.features` for
+   `"storage-branches"`.
+3. If absent, surfaces `legacy_branch_storage: true` in the JSON response
+   and prints a Rich `[yellow]Warning:[/yellow]` line in human mode
+   explaining that the runner will create a parallel bucket. Behavior of
+   the actual API call is unchanged -- the warning is purely informational.
+4. If present, the field is `false` and no warning is printed.
+
+**How an AI agent should react to `legacy_branch_storage: true`:**
+
+- Do **not** plan downstream "look in `out.c-foo` for the result" steps
+  after a transformation runs. The result lives in
+  `out.c-<branch_id>-foo` in the default branch. Use that ID for
+  follow-up queries / table-detail / unload.
+- The kbagent-materialized bucket (`out.c-foo` in `--branch X` view) is
+  reachable from the branch view and from direct Snowflake queries, but
+  is otherwise an orphan. Garbage-collect it manually if the user does
+  not need it.
+- The right long-term fix is upstream Storage migrating the project to
+  `storage-branches`. kbagent does not implement automatic bucket-name
+  rewrites because magic ID rewrites are confusing in cleanup commands.
+
+**Reproducing the difference**: project 10539 (`padak-2-0`) is the canonical
+fake-branch test target; project 10546 (`kbagent-e2e`) is `storage-branches`
+ON. Direct comparison:
+
+```bash
+# verify the feature flag delta
+kbagent --json project status --project kbagent-e2e   # has storage-branches
+kbagent --json project status --project padak-2-0     # does not
+
+# fake-branch project: warning fires
+kbagent storage create-bucket --project padak-2-0 --branch <ID> \
+    --stage out --name probe
+#   → "Warning: this project uses legacy fake-branch storage..."
+
+# storage-branches project: no warning
+kbagent storage create-bucket --project kbagent-e2e --branch <ID> \
+    --stage out --name probe
+#   → no warning line
+```
+
 ## Examples
 
 Basic typed table (backward-compatible, unchanged):

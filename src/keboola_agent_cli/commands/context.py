@@ -239,6 +239,11 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   kbagent storage create-bucket --project NAME --stage STAGE --name BUCKET_NAME [--description D] [--backend B] [--branch ID]
     Create a new storage bucket. Stage must be "in" or "out". Branch-aware.
+    On projects WITHOUT the `storage-branches` feature (legacy fake-branch), --branch
+    writes succeed at the API level but the transformation runner ignores the bucket
+    and creates a parallel `out.c-<branch_id>-*` bucket in the default branch at job
+    time. Response includes `legacy_branch_storage: true` and human mode prints a
+    warning when this applies. See storage-types-workflow.md.
 
   kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME --column col:TYPE[(length)] [...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--branch ID]
     Create a typed table. --column repeatable.
@@ -252,6 +257,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
     - Auto-materialized buckets get KBC.createdBy.branch.id system metadata stamped on them,
       so transformation runners on branched-storage projects accept them as output destinations.
       A 403/5xx on the metadata write is logged and the create-table call still proceeds.
+    - On legacy fake-branch projects (no `storage-branches` feature), response carries
+      `legacy_branch_storage: true` and human mode prints a warning. The bucket and
+      metadata stamp still happen but the runner will not use them -- it creates a
+      parallel `out.c-<branch_id>-*` bucket in the default branch at job time.
     Branch-aware. Examples:
       --column pk:VARCHAR(40) --column amount:NUMERIC(18,2) --not-null pk --default amount=0
       --column ts:TIMESTAMP_TZ --column meta:VARIANT

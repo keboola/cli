@@ -248,6 +248,41 @@ One project failing does not block others. Check the `errors` array:
 See [storage-types-workflow.md](storage-types-workflow.md) for the full
 type inventory and examples.
 
+## Legacy fake-branch storage warning on `--branch` writes (since 0.25.2)
+
+- **What it is.** Projects without the `storage-branches` feature flag use
+  Keboola's legacy fake-branch storage. Writes via `kbagent storage
+  create-bucket --branch X` and `storage create-table --branch X` succeed
+  at the Storage API level, but the **transformation runner ignores those
+  buckets** -- at job time it rewrites `out.c-foo.tbl` to
+  `out.c-<X>-foo.tbl` and creates a parallel bucket in the **default
+  branch** with the literal branch ID embedded in the bucket name.
+- **What kbagent does.** Both write paths consult `verify_token().features`
+  once per session (cached on the client) and surface
+  `legacy_branch_storage: true` in the JSON response on fake-branch projects.
+  Human mode prints a Rich `[yellow]Warning:[/yellow]` line below the success
+  message. The behavior of the API call itself is unchanged -- the bucket is
+  still created and metadata still stamped (best-effort) -- only the warning
+  is new. On `storage-branches`=ON projects the field is `false` and no
+  warning is printed.
+- **Why it matters for AI agents.** A `kbagent storage create-table --branch
+  X` followed by a transformation that targets the same bucket on a
+  fake-branch project will see two buckets after the job runs: the one
+  kbagent materialized (orphaned, reachable only from `--branch X` view) and
+  the one the runner created (`out.c-<X>-...`, in default branch). When the
+  user is debugging "why isn't my data here?" the answer is: it's in the
+  runner-created bucket, not the kbagent-materialized one. Read the
+  warning and surface it to the user.
+- **Detection in your own scripts.** Inspect `data.legacy_branch_storage` on
+  the JSON response, or call `verify_token().features` directly and check
+  for `"storage-branches"`. Both `create-bucket --branch` and `create-table
+  --branch` paths surface the flag identically.
+- **Migration path.** The right long-term fix is for Keboola Storage to
+  finish migrating fake-branch projects to `storage-branches`. Until then,
+  the warning is the cleanest signal kbagent can give without changing the
+  user-facing command surface. See `storage-types-workflow.md` for the full
+  fake-branch vs storage-branches mechanics.
+
 ## `sync init --adopt-existing` (since 0.22.0)
 
 - Adopts a `.keboola/manifest.json` written by the kbc Go CLI **in place** instead of overwriting. Idempotent; re-running is a no-op.

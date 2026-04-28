@@ -5671,6 +5671,15 @@ class TestE2EStorageNativeTypesAndBranchMaterialize:
             "Service should auto-materialize a bucket that does not yet exist "
             "in the target dev branch."
         )
+        # Issue #224 follow-up: kbagent-e2e has the `storage-branches` feature,
+        # so the legacy fake-branch warning must NOT fire here. Coverage for
+        # the OFF case is in the unit suite (test_create_table_branch_legacy_storage_flagged)
+        # and was reproduced manually against project 10539 (padak-2-0); we
+        # don't gate CI on a fake-branch credential.
+        assert created.get("legacy_branch_storage") is False, (
+            "kbagent-e2e has storage-branches enabled; legacy_branch_storage "
+            "must report False in this scenario."
+        )
 
         # Issue #224: the auto-materialized bucket must carry
         # ``KBC.createdBy.branch.id`` system metadata, otherwise

@@ -29,6 +29,22 @@ _BUCKETS = "Buckets"
 _TABLES = "Tables"
 _FILES = "Files"
 
+# Surfaced in human mode whenever a branch-aware write completes against a
+# project lacking the `storage-branches` feature. The transformation runner
+# on such projects ignores buckets created via /v2/storage/branch/<id>/buckets
+# and rewrites destinations to `out.c-<branch_id>-*` in the default branch
+# at job time -- so the bucket the user just created here is reachable only
+# from the branch view (and via direct Snowflake) but will NOT receive
+# transformation output. JSON mode surfaces the same signal as the
+# `legacy_branch_storage: true` field on the response.
+_LEGACY_BRANCH_STORAGE_WARNING: str = (
+    "  [yellow]Warning:[/yellow] this project uses legacy fake-branch storage "
+    "(no `storage-branches` feature). The transformation runner will create "
+    "a separate `out.c-<branch_id>-...` bucket on its own at job time; the "
+    "bucket created here is reachable from the branch view and direct "
+    "Snowflake queries, but transformations will not write into it."
+)
+
 
 @storage_app.callback(invoke_without_command=True)
 def _storage_permission_check(ctx: typer.Context) -> None:
@@ -495,6 +511,8 @@ def storage_create_bucket(
         formatter.console.print(f"  Backend: {result['backend']}")
         if result["description"]:
             formatter.console.print(f"  Description: {result['description']}")
+        if result.get("legacy_branch_storage"):
+            formatter.console.print(_LEGACY_BRANCH_STORAGE_WARNING)
 
 
 @storage_app.command("create-table", rich_help_panel=_TABLES)
@@ -624,6 +642,8 @@ def storage_create_table(
         if result["primary_key"]:
             formatter.console.print(f"  Primary key: {', '.join(result['primary_key'])}")
         formatter.console.print(f"  Columns: {', '.join(result['columns'])}")
+        if result.get("legacy_branch_storage"):
+            formatter.console.print(_LEGACY_BRANCH_STORAGE_WARNING)
 
 
 @storage_app.command("upload-table", rich_help_panel=_TABLES)

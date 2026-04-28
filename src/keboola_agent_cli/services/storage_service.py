@@ -11,11 +11,38 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ..constants import STORAGE_BRANCHES_FEATURE
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
+
+
+def _detect_legacy_branch_storage(client: Any, branch_id: int | None) -> bool:
+    """Return True when ``--branch`` is targeting a project without ``storage-branches``.
+
+    Called from branch-aware write paths so the response can warn the user
+    that the materialized bucket will not be picked up by the transformation
+    runner (which uses the legacy ``out.c-<branch_id>-*`` rewrite scheme on
+    such projects). Production-context calls (``branch_id is None``) skip
+    the check entirely -- there is no fake-branch behavior to warn about.
+
+    Errors during the verify_token roundtrip degrade gracefully to ``False``.
+    The feature flag is purely informational here; we do not want a transient
+    network blip to suppress the actual write the user asked for.
+    """
+    if branch_id is None:
+        return False
+    try:
+        return not client.has_feature(STORAGE_BRANCHES_FEATURE)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "Could not determine project features for legacy-branch-storage check: %s",
+            exc,
+        )
+        return False
+
 
 # "name:TYPE" or "name:TYPE(length)" -- type is pass-through to the Keboola
 # Storage API, which validates type/length combinations per backend and
@@ -590,6 +617,7 @@ class StorageService(BaseService):
                 backend=backend,
                 branch_id=branch_id,
             )
+            legacy_branch_storage = _detect_legacy_branch_storage(client, branch_id)
         finally:
             client.close()
 
@@ -600,6 +628,7 @@ class StorageService(BaseService):
             "stage": bucket.get("stage", ""),
             "backend": bucket.get("backend", ""),
             "description": bucket.get("description", ""),
+            "legacy_branch_storage": legacy_branch_storage,
         }
 
     def create_table(
@@ -687,6 +716,7 @@ class StorageService(BaseService):
                 primary_key=primary_key,
                 branch_id=branch_id,
             )
+            legacy_branch_storage = _detect_legacy_branch_storage(client, branch_id)
         finally:
             client.close()
 
@@ -698,6 +728,7 @@ class StorageService(BaseService):
             "primary_key": primary_key or [],
             "columns": [c["name"] for c in parsed_columns],
             "auto_created_bucket": auto_created_bucket,
+            "legacy_branch_storage": legacy_branch_storage,
         }
 
     def upload_table(
