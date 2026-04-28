@@ -1,10 +1,22 @@
 # kbagent plugin — operational guidance
 
-This plugin exposes a CLI (`kbagent`), a skill (`kbagent`), a slash
-command (`/keboola`), and a specialist subagent (`keboola-expert`).
-All are namespaced under `kbagent:`.
+This plugin exposes a CLI (`kbagent`), a skill (`kbagent`), two slash
+commands (`/keboola`, `/kbagent:review`), and two specialist subagents
+(`keboola-expert`, `kbagent-pr-reviewer`). All are namespaced under
+`kbagent:`. The two subagents serve disjoint domains:
+
+| Subagent | Use for | Slash command | Trigger phrases |
+|---|---|---|---|
+| `keboola-expert` | Operations on a Keboola Connection PROJECT (configs, flows, jobs, storage, branches, sync, MCP, migrations) | `/keboola <task>` | "update flow", "list configs", "run a job", "migrate", "debug a transformation" |
+| `kbagent-pr-reviewer` | Code review of a `keboola-agent-cli` PULL REQUEST (this repo) | `/kbagent:review [PR_NUM]` | "review PR", "review this branch", "code review", "PR comments" |
+
+Mismatching the subagent to the domain wastes a fresh context window.
+`keboola-expert` does not know how to grep CONTRIBUTING.md silent-drift
+surfaces; `kbagent-pr-reviewer` does not know how to run a Keboola job.
 
 ## For Claude Code main agents reading this file
+
+### Path A: user wants Keboola Connection work done
 
 When the user's task touches Keboola Connection (configs, flows, jobs,
 storage, branches, sync, MCP tools, migrations):
@@ -22,6 +34,37 @@ Task(
 
 or equivalently the user types `/keboola <task>`.
 
+### Path B: user wants a PR on this repo reviewed
+
+When the user is on a feature branch with an open PR and asks for a
+code review (or runs `/kbagent:review`):
+
+**Default strategy: invoke `kbagent:kbagent-pr-reviewer` via the
+`/kbagent:review` slash command.** The slash command resolves the PR
+from the current branch (or accepts an explicit number) and spawns
+the subagent with the PR context. The subagent runs the full
+review playbook from `CONTRIBUTING.md` (3-layer architecture, Plugin
+synchronization map, silent-drift hunt, test coverage, behavior
+verification) and posts a single `gh pr review --comment` to the PR.
+
+```
+# Either:
+/kbagent:review                # detect PR for current branch
+/kbagent:review 227            # explicit number / URL
+
+# Or directly via Task tool:
+Task(
+  subagent_type="kbagent-pr-reviewer",
+  description="Review PR #227",
+  prompt="Review the kbagent PR below. ..."   # see commands/review.md for shape
+)
+```
+
+The reviewer is **read-only on the working tree** (no `Write`/`Edit`,
+no branch switching, no push) and **comment-only on GitHub** (never
+`--approve`, never `--request-changes`, never `gh pr merge`). Verdict
+in the comment body is advice; the human author retains every veto.
+
 ### Why delegate
 
 The keboola-expert subagent runs in a fresh context window with a
@@ -37,7 +80,7 @@ These rules are observably NOT followed reliably when the main agent
 tries to do the work in the saturated session context. Delegation buys
 a clean slate per task.
 
-### When NOT to delegate
+### When NOT to delegate (Path A, `keboola-expert`)
 
 - Trivial read (`list projects`, `version`, `changelog`): fine to shell
   out to `kbagent --json ...` directly from the main context.
@@ -46,6 +89,18 @@ a clean slate per task.
 - User explicitly asks for a raw command (`just show me the curl
   equivalent`): subagent would refuse; politely decline and show the
   `kbagent --hint client <cmd>` snippet instead.
+
+### When NOT to delegate (Path B, `kbagent-pr-reviewer`)
+
+- User asks "what does PR #N change?" -- a summary, not a review. Read
+  the diff directly via `gh pr diff <N>` and summarise; do not spawn the
+  subagent (it would burn a context window producing a full report).
+- User wants to actually approve / request-changes. The subagent is
+  comment-only; that ergonomic decision is the user's via GitHub UI or
+  `gh pr review --approve` themselves.
+- User asks for a review of a non-kbagent repo. The reviewer's playbook
+  is hard-wired to this codebase's CONTRIBUTING.md / Plugin sync map; it
+  has no value on other repos.
 
 ### Handoff protocol
 
@@ -64,7 +119,11 @@ When the subagent returns:
 - Initialize a project workspace: `kbagent init --from-global`
   (writes `.kbagent/config.json` whose first field is a `_warning`
   steering any LLM that reads the file away from direct REST calls)
-- Use `/keboola <task>` to explicitly invoke the expert subagent
+- Use `/keboola <task>` to explicitly invoke the expert subagent for
+  Keboola Connection work
+- Use `/kbagent:review` (with no args, while on a PR's branch) to ask
+  the read-only reviewer to leave a structured comment review on the
+  PR. Requires `gh auth login`
 - Or let description-matching auto-trigger the skill for ambient help
 
 ## Version
