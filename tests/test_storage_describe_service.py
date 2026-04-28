@@ -475,6 +475,165 @@ class TestGetBucketDetailDescriptionExtraction:
         assert result["description"] == "Native wins here"
 
 
+class TestGetBucketDetailBackendPaths:
+    """Verify dialect-aware path quoting in get_bucket_detail (Snowflake vs BigQuery).
+
+    Background: prior to 0.25.3, ``get_bucket_detail`` always emitted
+    ``snowflake_path`` with double-quoted identifiers regardless of backend,
+    which is a syntax error on BigQuery. Now we surface backend-native keys
+    (``snowflake_*`` for Snowflake, ``bigquery_*`` for BigQuery) plus
+    backend-agnostic ``sql_dialect`` + per-table ``sql_path``.
+    """
+
+    def test_snowflake_uses_double_quotes_and_keeps_legacy_keys(self, tmp_path: Path) -> None:
+        """Snowflake keeps ``snowflake_database`` / ``snowflake_schema`` /
+        per-table ``snowflake_path`` (BC), and adds ``sql_dialect`` / ``sql_path``."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.verify_token.return_value = _token_info()
+        mock_client.get_bucket_detail.return_value = {
+            "id": "in.c-sales",
+            "displayName": "sales",
+            "stage": "in",
+            "description": "",
+            "backend": "snowflake",
+            "backendPath": ["SAPI_258", "in.c-sales"],
+            "metadata": [],
+            "tables": [
+                {
+                    "id": "in.c-sales.orders",
+                    "name": "orders",
+                    "displayName": "orders",
+                    "isAlias": False,
+                }
+            ],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.get_bucket_detail(alias="prod", bucket_id="in.c-sales")
+
+        assert result["sql_dialect"] == "snowflake"
+        assert result["snowflake_database"] == "SAPI_258"
+        assert result["snowflake_schema"] == "in.c-sales"
+        assert "bigquery_dataset" not in result
+        assert "bigquery_project" not in result
+
+        table = result["tables"][0]
+        expected_sf = '"SAPI_258"."in.c-sales"."orders"'
+        assert table["snowflake_path"] == expected_sf
+        assert table["sql_path"] == expected_sf
+        assert "bigquery_path" not in table
+
+    def test_bigquery_uses_backticks_and_omits_snowflake_keys(self, tmp_path: Path) -> None:
+        """BigQuery emits ``bigquery_dataset`` and backtick-quoted ``bigquery_path``;
+        misleading ``snowflake_*`` keys are NOT included."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.verify_token.return_value = _token_info(project_id=9621)
+        mock_client.get_bucket_detail.return_value = {
+            "id": "in.c-test-bucket",
+            "displayName": "test-bucket",
+            "stage": "in",
+            "description": "",
+            "backend": "bigquery",
+            "backendPath": ["in_c_test_bucket"],
+            "databaseName": "",
+            "metadata": [],
+            "tables": [
+                {
+                    "id": "in.c-test-bucket.test-bigquery-table",
+                    "name": "test-bigquery-table",
+                    "displayName": "test-bigquery-table",
+                    "isAlias": False,
+                }
+            ],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.get_bucket_detail(alias="prod", bucket_id="in.c-test-bucket")
+
+        assert result["sql_dialect"] == "bigquery"
+        assert result["bigquery_dataset"] == "in_c_test_bucket"
+        assert result["bigquery_project"] == ""
+        # Snowflake-only keys must NOT leak onto BigQuery results -- they are
+        # syntactically wrong and historically misled callers.
+        assert "snowflake_database" not in result
+        assert "snowflake_schema" not in result
+
+        table = result["tables"][0]
+        # No GCP project from API -> dataset-qualified path only.
+        expected_bq = "`in_c_test_bucket`.`test-bigquery-table`"
+        assert table["bigquery_path"] == expected_bq
+        assert table["sql_path"] == expected_bq
+        assert "snowflake_path" not in table
+
+    def test_bigquery_with_database_name_emits_full_fqn(self, tmp_path: Path) -> None:
+        """When the API surfaces ``databaseName`` (GCP project), BigQuery paths
+        include all three components: ``project.dataset.table``."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.verify_token.return_value = _token_info(project_id=9621)
+        mock_client.get_bucket_detail.return_value = {
+            "id": "in.c-foo",
+            "displayName": "foo",
+            "stage": "in",
+            "description": "",
+            "backend": "bigquery",
+            "backendPath": ["dataset_foo"],
+            "databaseName": "kbc-bq-9621",
+            "metadata": [],
+            "tables": [
+                {
+                    "id": "in.c-foo.bar",
+                    "name": "bar",
+                    "displayName": "bar",
+                    "isAlias": False,
+                }
+            ],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.get_bucket_detail(alias="prod", bucket_id="in.c-foo")
+
+        assert result["bigquery_project"] == "kbc-bq-9621"
+        assert result["bigquery_dataset"] == "dataset_foo"
+        expected = "`kbc-bq-9621`.`dataset_foo`.`bar`"
+        assert result["tables"][0]["bigquery_path"] == expected
+        assert result["tables"][0]["sql_path"] == expected
+
+    def test_snowflake_linked_bucket_uses_source_backend_path_when_present(
+        self, tmp_path: Path
+    ) -> None:
+        """Linked Snowflake bucket: backendPath from the response wins over the
+        sourceBucket fallback (matches pre-0.25.3 behaviour)."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.verify_token.return_value = _token_info()
+        mock_client.get_bucket_detail.return_value = {
+            "id": "in.c-linked",
+            "displayName": "linked",
+            "stage": "in",
+            "description": "",
+            "backend": "snowflake",
+            "backendPath": ["SAPI_999", "in.c-source"],
+            "sourceBucket": {
+                "id": "in.c-source",
+                "project": {"id": 999, "name": "Source Project"},
+            },
+            "metadata": [],
+            "tables": [{"id": "in.c-source.t", "name": "t", "displayName": "t", "isAlias": True}],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.get_bucket_detail(alias="prod", bucket_id="in.c-linked")
+
+        assert result["is_linked"] is True
+        assert result["snowflake_database"] == "SAPI_999"
+        assert result["snowflake_schema"] == "in.c-source"
+        assert result["tables"][0]["snowflake_path"] == '"SAPI_999"."in.c-source"."t"'
+        assert result["tables"][0]["sql_path"] == '"SAPI_999"."in.c-source"."t"'
+
+
 class TestGetTableDetailDescriptionExtraction:
     """Verify get_table_detail extracts table + per-column descriptions from metadata."""
 

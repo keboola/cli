@@ -338,7 +338,19 @@ class StorageService(BaseService):
     ) -> dict[str, Any]:
         """Get detailed bucket info including tables and sharing metadata.
 
-        For linked buckets, includes the Snowflake direct access path.
+        For linked buckets, includes the backend-native direct access path.
+
+        The output adapts to the bucket's backend:
+        - Snowflake -> ``snowflake_database``/``snowflake_schema``/per-table
+          ``snowflake_path`` quoted with ``"..."``.
+        - BigQuery  -> ``bigquery_dataset``/per-table ``bigquery_path`` quoted
+          with backticks. ``bigquery_project`` is included only when the API
+          surfaces it (``databaseName`` field) -- BigQuery's GCP project ID
+          is not always discoverable from Storage API alone.
+
+        Backend-agnostic keys ``sql_dialect`` and per-table ``sql_path`` are
+        always present, so callers can use the right path without branching
+        on backend themselves.
 
         Args:
             alias: Project alias.
@@ -346,7 +358,7 @@ class StorageService(BaseService):
             branch_id: If set, target a specific dev branch.
 
         Returns:
-            Dict with bucket detail, tables, and resolved Snowflake paths.
+            Dict with bucket detail, tables, and resolved direct-access paths.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -372,6 +384,7 @@ class StorageService(BaseService):
                 break
         description = metadata_description or bucket.get("description", "")
 
+        backend = (bucket.get("backend") or "").lower()
         result: dict[str, Any] = {
             "project_alias": alias,
             "project_id": project_id,
@@ -384,12 +397,14 @@ class StorageService(BaseService):
             "metadata": raw_metadata,
         }
 
-        # Resolve Snowflake paths using backendPath from API (preserves correct case).
-        # backendPath is an array like ["SAPI_4254", "out.c-account-movements"].
-        # We must NOT construct the DB name ourselves (f"sapi_{id}") because
-        # Snowflake databases may be uppercase or lowercase depending on how
-        # they were created, and double-quoted identifiers are case-sensitive.
-        backend_path = bucket.get("backendPath", [])
+        # backendPath shape is backend-specific:
+        # - Snowflake: ["SAPI_<project_id>", "<bucket_id>"]   (database, schema)
+        # - BigQuery:  ["<dataset_name>"]                      (dataset only;
+        #              GCP project ID is NOT included)
+        # We must NOT reconstruct identifiers ourselves (e.g. f"sapi_{id}")
+        # because the actual case and naming differ across stacks; quoted
+        # identifiers are case-sensitive on both Snowflake and BigQuery.
+        backend_path = bucket.get("backendPath", []) or []
 
         if source:
             src_project = source.get("project", {})
@@ -399,35 +414,82 @@ class StorageService(BaseService):
             result["source_project_name"] = src_project.get("name", "")
             result["source_bucket_id"] = src_bucket_id
         else:
+            src_project_id = None
+            src_bucket_id = ""
             result["source_project_id"] = None
             result["source_project_name"] = ""
             result["source_bucket_id"] = ""
 
-        if len(backend_path) >= 2:
-            result["snowflake_database"] = backend_path[0]
-            result["snowflake_schema"] = backend_path[1]
-        elif source:
-            result["snowflake_database"] = f"sapi_{src_project_id}"
-            result["snowflake_schema"] = src_bucket_id
-        else:
-            result["snowflake_database"] = f"sapi_{project_id}"
-            result["snowflake_schema"] = bucket.get("id", "")
+        result["sql_dialect"] = backend or "snowflake"
 
-        # Build table list with Snowflake paths
+        if backend == "bigquery":
+            # BigQuery: dataset comes from backendPath[0]; GCP project may be
+            # surfaced via databaseName but is often empty on Storage API.
+            # When project is unknown we emit dataset-qualified paths only --
+            # callers that need fully-qualified paths must supply the project
+            # themselves (it's typically the workspace project for BYODB or
+            # the Keboola-managed project name).
+            dataset = backend_path[0] if backend_path else (bucket.get("path") or "")
+            bq_project = bucket.get("databaseName") or ""
+            result["bigquery_project"] = bq_project
+            result["bigquery_dataset"] = dataset
+            sql_db = bq_project
+            sql_schema = dataset
+            quote_open = "`"
+            quote_close = "`"
+        else:
+            # Snowflake (and unknown backends, treated as Snowflake-style for
+            # backwards compatibility with the original 0.1.x behaviour).
+            if len(backend_path) >= 2:
+                sf_db = backend_path[0]
+                sf_schema = backend_path[1]
+            elif source:
+                sf_db = f"sapi_{src_project_id}"
+                sf_schema = src_bucket_id
+            else:
+                sf_db = f"sapi_{project_id}"
+                sf_schema = bucket.get("id", "")
+            result["snowflake_database"] = sf_db
+            result["snowflake_schema"] = sf_schema
+            sql_db = sf_db
+            sql_schema = sf_schema
+            quote_open = '"'
+            quote_close = '"'
+
         tables: list[dict[str, Any]] = []
         for table in bucket.get("tables", []):
             table_name = table.get("name", "")
-            sf_db = result["snowflake_database"]
-            sf_schema = result["snowflake_schema"]
-            tables.append(
-                {
-                    "id": table.get("id", ""),
-                    "name": table_name,
-                    "display_name": table.get("displayName", table_name),
-                    "is_alias": table.get("isAlias", False),
-                    "snowflake_path": f'"{sf_db}"."{sf_schema}"."{table_name}"',
-                }
-            )
+            entry: dict[str, Any] = {
+                "id": table.get("id", ""),
+                "name": table_name,
+                "display_name": table.get("displayName", table_name),
+                "is_alias": table.get("isAlias", False),
+            }
+            if backend == "bigquery":
+                if sql_db and sql_schema:
+                    bq_path = (
+                        f"{quote_open}{sql_db}{quote_close}."
+                        f"{quote_open}{sql_schema}{quote_close}."
+                        f"{quote_open}{table_name}{quote_close}"
+                    )
+                elif sql_schema:
+                    bq_path = (
+                        f"{quote_open}{sql_schema}{quote_close}."
+                        f"{quote_open}{table_name}{quote_close}"
+                    )
+                else:
+                    bq_path = ""
+                entry["bigquery_path"] = bq_path
+                entry["sql_path"] = bq_path
+            else:
+                sf_path = (
+                    f"{quote_open}{sql_db}{quote_close}."
+                    f"{quote_open}{sql_schema}{quote_close}."
+                    f"{quote_open}{table_name}{quote_close}"
+                )
+                entry["snowflake_path"] = sf_path
+                entry["sql_path"] = sf_path
+            tables.append(entry)
 
         result["tables"] = tables
         result["table_count"] = len(tables)
