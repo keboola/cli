@@ -205,32 +205,50 @@ All three inherit from `BaseHttpClient` (`http_base.py`) which provides shared r
 
 16. **E2E test coverage**: Every new CLI command MUST have a corresponding E2E test in `tests/test_e2e.py`. Run `make test-e2e` to verify. E2E tests require `E2E_API_TOKEN` and `E2E_URL` env vars and exercise the full CLI against a real Keboola project.
 
+17. **Plugin & agent sync are mandatory, NOT CI-enforced.** When adding/removing/renaming any command -- and at every version bump -- follow `CONTRIBUTING.md` sections "Documentation changes (mandatory!)", "Plugin synchronization map", and "Releasing a new version". CI catches drift only in `SKILL.md` (decision table), `plugin.json` (version), and `changelog.py` (release entries). The following files are **silent-drift risks** that ship broken if you forget them:
+    - `src/keboola_agent_cli/commands/context.py` (`AGENT_CONTEXT`)
+    - `CLAUDE.md` `## All CLI Commands` section (this file)
+    - `plugins/kbagent/agents/keboola-expert.md` -- **highest risk** (Rule 6 VERSION GATE, tool selection matrix, inline gotchas)
+    - `plugins/kbagent/skills/kbagent/SKILL.md` -- description triggers and workflow links (the auto-generated table is CI-checked, the rest is not)
+    - `plugins/kbagent/skills/kbagent/references/commands-reference.md`
+    - `plugins/kbagent/skills/kbagent/references/gotchas.md` (every new gotcha **MUST** be tagged with `(since vX.Y.Z)`)
+    - `plugins/kbagent/skills/kbagent/references/<topic>-workflow.md`
+
+    Forgetting any of these does not fail tests or lint -- it ships an AI agent that quietly recommends commands that do not exist on the user's installed kbagent version, or refuses commands that do. Treat the change as **not done** until every applicable file has been updated.
+
 ## Claude Code Plugin (Marketplace)
 
-This repo doubles as a Claude Code plugin marketplace. The plugin lives in `plugins/kbagent/` and contains a skill that teaches Claude how to use kbagent.
+This repo doubles as a Claude Code plugin marketplace. The plugin lives in `plugins/kbagent/` and exposes four AI surfaces: a CLI (`kbagent`), a skill (`kbagent`), a slash command (`/keboola`), and a specialist subagent (`keboola-expert`). All are namespaced under `kbagent:`.
 
-**When to update the plugin:**
-- Adding/removing/renaming CLI commands → update `plugins/kbagent/skills/kbagent/SKILL.md` (decision table, workflows)
-- Changing response format or adding gotchas → update `plugins/kbagent/skills/kbagent/references/gotchas.md`
-- Changing workspace or branch behavior → update the respective `references/*.md` file
-- Bumping CLI version → also bump `plugins/kbagent/.claude-plugin/plugin.json` version
+**Update rules** -- see `CONTRIBUTING.md` > "Documentation changes (mandatory!)", "Plugin synchronization map", and "Releasing a new version" for the binding checklists. Coding convention #17 above is the short version. Do **not** maintain a parallel update list here -- it always drifts.
 
 **Structure:**
 ```
 .claude-plugin/marketplace.json                        # Repo-level marketplace definition
 plugins/kbagent/
-  .claude-plugin/plugin.json                           # Plugin manifest (keep version in sync!)
+  .claude-plugin/
+    plugin.json                                        # Plugin manifest (auto-synced from pyproject.toml)
+    CLAUDE.md                                          # Operational guidance for Claude Code main agents
+  agents/
+    keboola-expert.md                                  # Specialist subagent system prompt (HIGHEST silent-drift risk)
+  commands/
+    keboola.md                                         # /keboola slash command
   skills/kbagent/
-    SKILL.md                                           # Lean: trigger rules + decision table
+    SKILL.md                                           # Trigger rules + auto-generated decision table
     references/
-      workspace-workflow.md                            # SQL debugging step-by-step
-      branch-workflow.md                               # Dev branch lifecycle
-      gotchas.md                                       # Response parsing, common pitfalls
+      commands-reference.md                            # Per-command notes (hand-maintained)
+      gotchas.md                                       # Response parsing + (since vX.Y.Z) behavior log
+      <topic>-workflow.md                              # One file per workflow (workspace, branch, sync, ...)
 ```
 
-Note: `SKILL.md` instructs Claude to run `kbagent context` as its first step, which dynamically loads the full CLI documentation. This means command details stay in sync automatically. The plugin files only need updating when workflows, gotchas, or the skill's triggering description change.
+`SKILL.md` instructs Claude to run `kbagent context` as its first step, which dynamically loads the full CLI documentation. That keeps command *signatures* in sync automatically -- but it does **not** save the agent's tool-selection matrix, the gotchas log, or the version-gate examples in `keboola-expert.md`. Those are static and must be updated by hand whenever the CLI changes.
 
 ## All CLI Commands
+
+> **Hand-maintained, no CI freshness check.** When you add/remove/rename a
+> command, you must edit this section AND the other silent-drift surfaces
+> listed in convention #17 above. See `CONTRIBUTING.md` >
+> "Plugin synchronization map" for the full list.
 
 ```
 # Global options: --json, --verbose, --no-color, --config-dir, --hint client|service, --deny-writes, --deny-destructive

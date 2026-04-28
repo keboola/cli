@@ -197,14 +197,41 @@ When adding a new command (e.g., `kbagent storage create-foo`), you must update 
 
 ### Documentation changes (mandatory!)
 
-- [ ] **`kbagent context`** -- update `AGENT_CONTEXT` string in `commands/context.py` (this is the primary reference for AI agents; if it's missing there, AI agents won't know the command exists)
-- [ ] **SKILL.md** -- run `make skill-gen` to regenerate the decision table (CI has a freshness check that will fail if the generated output doesn't match). **Do not edit SKILL.md by hand** -- the table is auto-generated from CLI command metadata
-- [ ] **CLAUDE.md** -- add command signature to the `## All CLI Commands` section
-- [ ] **Plugin references** -- update `plugins/kbagent/skills/kbagent/references/`:
-  - [ ] **`commands-reference.md`** -- add the new command to the appropriate section (this is a hand-maintained file, NOT auto-generated)
-  - [ ] **New reference file** -- if the command introduces a new workflow or topic area (e.g. a new subcommand group), create a dedicated `<topic>-workflow.md` in the references directory. Existing examples: `workspace-workflow.md`, `branch-workflow.md`, `sync-workflow.md`, `storage-files-workflow.md`
-  - [ ] **`gotchas.md`** -- if the command has non-obvious behavior, response format quirks, or common mistakes, document them here
-- [ ] **`--help` text** -- Typer docstring and option help strings should be clear and complete
+CI catches drift in `SKILL.md` (decision table), `plugin.json` (version), and
+`changelog.py` (release entries) -- but **NOT** in any of the hand-maintained
+files below. Forgetting a hand-maintained file is a silent failure: tests pass,
+lint passes, then three weeks later an AI agent quietly recommends a command
+that does not exist (or refuses one that does). Treat the change as **not
+done** until every box below is ticked.
+
+#### CLI surface (kbagent itself)
+
+- [ ] **`kbagent context`** -- update `AGENT_CONTEXT` string in `src/keboola_agent_cli/commands/context.py`. This is the primary reference loaded by AI agents at session start; if a command is missing here, agents will not know it exists.
+- [ ] **`CLAUDE.md` `## All CLI Commands`** -- add the new command signature. Hand-maintained; must match `kbagent --help`.
+- [ ] **`--help` text** -- Typer docstring and option help strings must read like a man-page entry. They are the ultimate fallback when documentation drifts.
+
+#### Auto-generated (CI-checked, but you must run the generator)
+
+- [ ] **`SKILL.md` decision table** -- run `make skill-gen` and commit the diff. **Do NOT edit the table by hand** -- the markers will be overwritten on the next `make skill-gen`. The pre-commit hook auto-regenerates and stages this file.
+- [ ] **`plugin.json` version** -- bumped via `make version-sync` from `pyproject.toml`. The pre-commit hook auto-stages this file; you should never edit it by hand.
+
+#### Plugin (`plugins/kbagent/`) -- HAND-MAINTAINED, NO CI CHECK
+
+These files are how the Claude Code plugin teaches AI agents to use kbagent.
+**None of them have a freshness check.** A failure here ships silently and
+manifests as a drifted, unhelpful AI agent. Cross every one of them off
+before the PR is mergeable.
+
+- [ ] **`plugins/kbagent/agents/keboola-expert.md`** -- the subagent system prompt. **Highest silent-drift risk in the repo.** Update at minimum:
+  - [ ] **§1 Rule 6 VERSION GATE** examples (e.g. `flow update needs 0.22.0+`) when adding a command that introduces or relaxes a minimum-version requirement, or when an example version reference is now stale enough to mislead.
+  - [ ] **§2 Tool Selection Matrix** when adding any new write or destructive command -- give it a row with `First choice / Fallback / NEVER`. A missing row means the subagent will fall back to MCP `tool call` or refuse the task.
+  - [ ] **§3 Inline Gotchas** when behavior changed in a way the agent will get wrong by default (e.g. dev-branch auto-materialization, native column-type whitelisting).
+- [ ] **`plugins/kbagent/skills/kbagent/SKILL.md`** non-table portions -- update the `description:` trigger keywords when introducing a new topic area (so description-matching auto-triggers the skill); add a workflow row to the bottom table if you created a new `references/<topic>-workflow.md`.
+- [ ] **`plugins/kbagent/skills/kbagent/references/commands-reference.md`** -- add the new command bullet under the appropriate section. Hand-maintained, NOT auto-generated. (Yes, this partly duplicates the auto-generated SKILL.md table -- the reference carries denser per-command notes, the table is the at-a-glance picker.)
+- [ ] **`plugins/kbagent/skills/kbagent/references/gotchas.md`** -- if the command's behavior is non-obvious, add an entry tagged with `(since vX.Y.Z)`. The version tag is **non-optional**; gotchas without versions are how AI agents end up recommending behavior that does not exist on older kbagent installs.
+- [ ] **`plugins/kbagent/skills/kbagent/references/<topic>-workflow.md`** -- create a new file if the command introduces a new workflow or topic area (existing examples: `workspace-workflow.md`, `branch-workflow.md`, `sync-workflow.md`, `storage-files-workflow.md`, `storage-types-workflow.md`). Single-command additions go into an existing workflow file.
+- [ ] **`plugins/kbagent/.claude-plugin/CLAUDE.md`** -- only update when the high-level delegation strategy changes (e.g. new "when NOT to delegate" cases). Most command additions do not touch this.
+- [ ] **`plugins/kbagent/commands/keboola.md`** -- only update if the `/keboola` slash-command UX changes. Most command additions do not touch this.
 
 ### Tests (mandatory!)
 
@@ -220,6 +247,33 @@ When adding a new command (e.g., `kbagent storage create-foo`), you must update 
 - [ ] Error messages are actionable ("Bucket not found" not just "404")
 - [ ] Destructive operations have `--dry-run` and `--yes` flags
 - [ ] Write operations log what they did (created X, uploaded Y rows)
+
+## Plugin synchronization map
+
+Single-glance reference for "I changed the CLI -- what else must follow?".
+Use this table to cross-check the per-command checklist above and the
+release checklist below.
+
+| File | When to update | CI catches drift? |
+|------|----------------|-------------------|
+| `pyproject.toml` (`version`) | Every release | -- (single source of truth) |
+| `src/keboola_agent_cli/changelog.py` | Every release | YES (`make changelog-check`) |
+| `src/keboola_agent_cli/commands/context.py` (`AGENT_CONTEXT`) | Adding/removing/renaming commands; significant flag changes | NO |
+| `CLAUDE.md` (`## All CLI Commands`) | Adding/removing/renaming commands | NO |
+| `plugins/kbagent/.claude-plugin/plugin.json` | Every release (auto-synced) | YES (`make version-check`; pre-commit auto-stages) |
+| `plugins/kbagent/.claude-plugin/CLAUDE.md` | Changing delegation strategy / when-to-delegate rules | NO |
+| `plugins/kbagent/agents/keboola-expert.md` | New write/destructive command (matrix); new minimum-version requirement (Rule 6 VERSION GATE); behavior change (gotchas) | NO -- **highest silent-drift risk** |
+| `plugins/kbagent/commands/keboola.md` | `/keboola` slash-command UX change (rare) | NO |
+| `plugins/kbagent/skills/kbagent/SKILL.md` -- table | Auto-generated by `make skill-gen` | YES (`make skill-check`; pre-commit auto-stages) |
+| `plugins/kbagent/skills/kbagent/SKILL.md` -- description / rules / workflow links | New topic area in `description` triggers; new workflow file added to bottom table | NO |
+| `plugins/kbagent/skills/kbagent/references/commands-reference.md` | Adding/removing/renaming commands; flag changes | NO |
+| `plugins/kbagent/skills/kbagent/references/gotchas.md` | New non-obvious behavior -- always tag with `(since vX.Y.Z)` | NO |
+| `plugins/kbagent/skills/kbagent/references/<topic>-workflow.md` | New workflow / topic area introduced | NO |
+
+Anything tagged "NO" in the right column is a **silent failure mode**: lint
+passes, tests pass, the AI agent goes off the rails three weeks later. The
+per-command checklist (above) and the per-release checklist (below) exist
+to catch this before the change ships.
 
 ## Commit & PR Conventions
 
@@ -243,6 +297,34 @@ For reference on commit style: https://github.com/padak/claude-code-kit/blob/mai
 - Verify `client.close()` is called (via `mock_client.close.assert_called_once()`)
 - Test edge cases: missing project alias, API errors, invalid input
 - Match test file naming: `test_{feature}.py` or `test_{feature}_cli.py`
+
+## Releasing a new version
+
+A "release" is whenever you bump `pyproject.toml`'s version. Tag a feature
+branch, walk this checklist end-to-end, then merge to `main`. The point of
+steps 5-8 is that **CI will not catch you** if you skip them; they are the
+manual safety net for the silent-drift risks summarized in the
+[Plugin synchronization map](#plugin-synchronization-map) above.
+
+1. **Edit `pyproject.toml`** -- bump `version = "X.Y.Z"`. Single source of truth; everything else derives from it.
+2. **Add a changelog entry** to `src/keboola_agent_cli/changelog.py` -- one entry per release, no exceptions. CI fails (`make changelog-check`) if this is missing.
+3. **Run `make version-sync`** -- propagates the new version to `plugins/kbagent/.claude-plugin/plugin.json`. The pre-commit hook does this automatically on `git commit`, but running it explicitly lets you eyeball the diff.
+4. **Run `make skill-gen`** -- regenerates the decision table in `SKILL.md`. Idempotent if no commands changed since the previous release.
+5. **Manually review `plugins/kbagent/agents/keboola-expert.md`**:
+   - **§1 Rule 6 VERSION GATE examples** -- if any feature this release shipped (or any feature shipped in a previous release that you missed) was previously missing-and-now-present, document it with the right minimum version. Remove stale "since X.Y.Z" mentions that no longer matter to live users.
+   - **§2 Tool Selection Matrix** -- did you add new write/destructive commands since last release? Are they present with `First choice / Fallback / NEVER`? A missing row means the subagent will silently fall back to MCP `tool call` or refuse the task.
+   - **§3 Inline Gotchas** -- new behavior the agent would get wrong by default? Add it.
+6. **Manually review `plugins/kbagent/skills/kbagent/references/gotchas.md`** -- every behavior introduced or changed this release that an AI agent would not infer from `--help` should have its own `(since vX.Y.Z)` entry. The version tag is non-optional.
+7. **Manually review `CLAUDE.md` `## All CLI Commands`** -- diff against `kbagent --help` output (and against `kbagent context`). Hand-maintained; CI does not catch drift here.
+8. **Manually review `plugins/kbagent/skills/kbagent/references/commands-reference.md`** -- same drill. Hand-maintained, no CI coverage.
+9. **Run `make check`** -- lint + format + skill freshness + version sync + changelog completeness + error-code enum + full test suite.
+10. **Run `make test-e2e`** if you changed any command -- requires `E2E_API_TOKEN` and `E2E_URL`.
+11. **Open a PR** -- list every plugin file you touched in the description so reviewers can spot what was missed. Plugin files do not auto-show up in CI failures the way Python files do; reviewers are the second line of defence.
+12. **Merge via `gh pr merge`** -- never push directly to `main` (the branch is protected; this would fail anyway).
+
+If any of steps 5-8 reveal "I should have done this in the PR that introduced
+the command, not at release time", **also patch the per-command checklist**
+above so the next contributor catches the gap earlier.
 
 ## Running CI Locally
 
