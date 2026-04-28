@@ -284,8 +284,82 @@ to catch this before the change ships.
 - **Pre-commit hook must pass** -- `ruff check` + `ruff format --check`. Install via `make hooks`
 - **Never skip hooks** (`--no-verify`) -- fix the lint issue instead
 - **Protected main branch** -- always work on a feature branch, create PR, merge via GitHub
+- **Self-review with `/kbagent:review` before tagging a human** -- see
+  [Self-review before tagging a human reviewer](#self-review-before-tagging-a-human-reviewer)
+  for what it does and how to run it. CI does not catch the silent-drift
+  surfaces (Plugin synchronization map); the self-review does.
 
 For reference on commit style: https://github.com/padak/claude-code-kit/blob/main/CLAUDE.md
+
+## Self-review before tagging a human reviewer
+
+Before you ping a maintainer, **run the `/kbagent:review` slash command
+against your open PR**. It is a read-only specialist subagent
+(`kbagent-pr-reviewer`, shipped with the kbagent Claude Code plugin) that
+walks the same playbook a careful human reviewer would: 3-layer compliance,
+[Plugin synchronization map](#plugin-synchronization-map) silent-drift hunt,
+test coverage, behavior verification, backward compatibility, security and
+token discipline. It posts ONE structured comment review on the PR with
+findings rated BLOCKING / NON-BLOCKING / NIT, each carrying a `file:line`
+citation.
+
+### How to run it
+
+1. Push your branch and open the PR (`gh pr create ...`).
+2. Stay checked out on the PR's branch with a clean working tree.
+3. Confirm `gh auth status` is authenticated to the same fork as the PR.
+4. In a Claude Code session in the repo root, type:
+
+   ```
+   /kbagent:review
+   ```
+
+   The slash command auto-detects the PR for the current branch. To target a
+   different PR explicitly:
+
+   ```
+   /kbagent:review 234
+   /kbagent:review https://github.com/padak/keboola_agent_cli/pull/234
+   /kbagent:review 234 focus on the new cache semantics
+   ```
+
+5. The reviewer reads `CONTRIBUTING.md`, walks the diff, runs `make check`,
+   attempts to reproduce the PR's claimed behavior, and posts a single
+   `gh pr review --comment` to the PR. It NEVER approves, requests changes,
+   merges, or pushes -- the verdict in the comment body is advice; you and
+   the human reviewer retain every veto.
+
+### What to do with the findings
+
+- **BLOCKING** -- address before tagging a human, OR push back in a PR
+  comment explaining why you disagree. Some BLOCKING findings are
+  calibration mistakes; the reviewer defaults conservative, and a
+  ~30-second human disposition is faster than a re-run.
+- **NON-BLOCKING** -- address if quick; otherwise mention them in the PR
+  description so the human reviewer knows they are not regressions hiding
+  in the diff.
+- **NIT** -- optional. Address if you agree.
+
+### This is a courtesy, not a CI gate
+
+The reviewer is intentionally NOT wired into CI. It depends on Claude Code
+with the kbagent plugin installed and an authenticated `gh`, which is not
+portable across all contributor setups. Running it remains a per-author
+courtesy that:
+
+- catches the silent-drift gaps (`OPERATION_REGISTRY`, `gotchas.md`
+  version tags, `keboola-expert.md` matrix, `commands/context.py`
+  `AGENT_CONTEXT`, `commands-reference.md`, `--hint` definitions) that
+  CI does not check;
+- demonstrates to the human reviewer that you have walked the
+  [Plugin synchronization map](#plugin-synchronization-map);
+- saves a review round-trip when the reviewer would otherwise catch the
+  same issues.
+
+If you genuinely cannot run it (offline, no `gh` auth, plugin not
+installed), say so explicitly in the PR description (`self-review
+skipped: <reason>`) -- the human reviewer may run it on your behalf, or
+ask you to address it before merge.
 
 ## Testing Guidelines
 
