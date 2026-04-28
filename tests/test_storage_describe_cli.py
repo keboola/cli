@@ -755,3 +755,192 @@ class TestStorageDescribeBatch:
         assert output["status"] == "ok"
         assert len(output["data"]["applied"]) == 1
         assert len(output["data"]["errors"]) == 1
+
+
+class TestStorageBucketDetailHumanRender:
+    """Tests for `kbagent storage bucket-detail` human-mode rendering.
+
+    Pins the dialect-aware render branches added in 0.25.3:
+    - Snowflake -> "Snowflake DB" / "Snowflake schema" labels and the
+      legacy double-quoted path in the table column.
+    - BigQuery  -> "BigQuery project" / "BigQuery dataset" labels and the
+      backtick-quoted path in the table column.
+
+    JSON-mode shape is covered by ``test_storage_describe_service.py
+    ::TestGetBucketDetailBackendPaths``; this suite exercises the
+    ``commands/storage.py`` render branch that runs only when ``--json`` is
+    not passed.
+    """
+
+    def _run(self, tmp_path: Path, mock_storage_payload: dict) -> tuple[int, str, MagicMock]:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_storage = MagicMock()
+        mock_storage.get_bucket_detail.return_value = mock_storage_payload
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.StorageService") as MockStorageService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockStorageService.return_value = mock_storage
+
+            result = runner.invoke(
+                app,
+                [
+                    "storage",
+                    "bucket-detail",
+                    "--project",
+                    "prod",
+                    "--bucket-id",
+                    mock_storage_payload["bucket_id"],
+                ],
+            )
+
+        return result.exit_code, result.output, mock_storage
+
+    def test_snowflake_human_render_uses_legacy_labels_and_double_quotes(
+        self, tmp_path: Path
+    ) -> None:
+        """Snowflake render branch surfaces the BC `Snowflake DB`/`Snowflake schema`
+        labels and the double-quoted path in the table column."""
+        exit_code, output, _ = self._run(
+            tmp_path,
+            {
+                "project_alias": "prod",
+                "project_id": 901,
+                "bucket_id": "in.c-sales",
+                "display_name": "sales",
+                "stage": "in",
+                "description": "",
+                "backend": "snowflake",
+                "is_linked": False,
+                "metadata": [],
+                "source_project_id": None,
+                "source_project_name": "",
+                "source_bucket_id": "",
+                "sql_dialect": "snowflake",
+                "snowflake_database": "SAPI_901",
+                "snowflake_schema": "in.c-sales",
+                "tables": [
+                    {
+                        "id": "in.c-sales.orders",
+                        "name": "orders",
+                        "display_name": "orders",
+                        "is_alias": False,
+                        "snowflake_path": '"SAPI_901"."in.c-sales"."orders"',
+                        "sql_path": '"SAPI_901"."in.c-sales"."orders"',
+                    }
+                ],
+                "table_count": 1,
+            },
+        )
+
+        assert exit_code == 0, output
+        assert "Snowflake DB: SAPI_901" in output
+        assert "Snowflake schema: in.c-sales" in output
+        # Path table contains the double-quoted Snowflake path. Rich may wrap
+        # long lines, so anchor on the unique table.column suffix.
+        assert '"in.c-sales"."orders"' in output
+        # BigQuery-only labels must NOT show up on a Snowflake bucket.
+        assert "BigQuery project" not in output
+        assert "BigQuery dataset" not in output
+
+    def test_bigquery_human_render_uses_backticks_and_dataset_labels(self, tmp_path: Path) -> None:
+        """BigQuery render branch surfaces `BigQuery dataset` and the backtick
+        path; with empty `bigquery_project` the helper hint is shown."""
+        exit_code, output, _ = self._run(
+            tmp_path,
+            {
+                "project_alias": "prod",
+                "project_id": 9621,
+                "bucket_id": "in.c-test-bucket",
+                "display_name": "test-bucket",
+                "stage": "in",
+                "description": "",
+                "backend": "bigquery",
+                "is_linked": False,
+                "metadata": [],
+                "source_project_id": None,
+                "source_project_name": "",
+                "source_bucket_id": "",
+                "sql_dialect": "bigquery",
+                "bigquery_project": "",
+                "bigquery_dataset": "in_c_test_bucket",
+                "tables": [
+                    {
+                        "id": "in.c-test-bucket.test-bigquery-table",
+                        "name": "test-bigquery-table",
+                        "display_name": "test-bigquery-table",
+                        "is_alias": False,
+                        "bigquery_path": "`in_c_test_bucket`.`test-bigquery-table`",
+                        "sql_path": "`in_c_test_bucket`.`test-bigquery-table`",
+                    }
+                ],
+                "table_count": 1,
+            },
+        )
+
+        assert exit_code == 0, output
+        # Empty bigquery_project triggers the helper line. Rich wraps long
+        # lines so the marker text may be split across lines -- anchor on a
+        # short unique fragment.
+        assert "BigQuery project" in output
+        assert "not exposed by Storage API" in output
+        assert "BigQuery dataset: in_c_test_bucket" in output
+        # Snowflake-only labels must NOT leak onto a BigQuery render.
+        assert "Snowflake DB" not in output
+        assert "Snowflake schema" not in output
+        # Backtick-quoted path appears in the table column. Rich's box-drawing
+        # may insert wrapping spaces; anchor on the unique trailing segment.
+        assert "`test-bigquery-table`" in output
+
+    def test_bigquery_human_render_with_project_omits_helper_hint(self, tmp_path: Path) -> None:
+        """When `bigquery_project` is populated (BYODB), the render shows it
+        directly and skips the 'not exposed by Storage API' helper line."""
+        exit_code, output, _ = self._run(
+            tmp_path,
+            {
+                "project_alias": "prod",
+                "project_id": 9621,
+                "bucket_id": "in.c-foo",
+                "display_name": "foo",
+                "stage": "in",
+                "description": "",
+                "backend": "bigquery",
+                "is_linked": False,
+                "metadata": [],
+                "source_project_id": None,
+                "source_project_name": "",
+                "source_bucket_id": "",
+                "sql_dialect": "bigquery",
+                "bigquery_project": "kbc-bq-9621",
+                "bigquery_dataset": "dataset_foo",
+                "tables": [
+                    {
+                        "id": "in.c-foo.bar",
+                        "name": "bar",
+                        "display_name": "bar",
+                        "is_alias": False,
+                        "bigquery_path": "`kbc-bq-9621`.`dataset_foo`.`bar`",
+                        "sql_path": "`kbc-bq-9621`.`dataset_foo`.`bar`",
+                    }
+                ],
+                "table_count": 1,
+            },
+        )
+
+        assert exit_code == 0, output
+        assert "BigQuery project: kbc-bq-9621" in output
+        assert "BigQuery dataset: dataset_foo" in output
+        # Helper hint is for the empty-project case only -- must not appear
+        # when project IS populated.
+        assert "not exposed by Storage API" not in output

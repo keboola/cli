@@ -191,6 +191,23 @@ success, not a failure.
   destination, or component-by-component via `config detail` +
   `config new`. Don't pretend the composite exists.
 
+- **`storage bucket-detail` is dialect-aware** (0.25.3+): the response
+  shape depends on the bucket's backend. Snowflake buckets carry
+  `snowflake_database` / `snowflake_schema` and per-table
+  `snowflake_path` quoted with `"..."`. BigQuery buckets carry
+  `bigquery_dataset` and per-table `bigquery_path` quoted with
+  backticks (`` `dataset`.`table` `` or `` `project`.`dataset`.`table` ``
+  when `databaseName` is surfaced). The misleading `snowflake_*`
+  keys are NOT included on BigQuery results -- pre-0.25.3 they were
+  emitted unconditionally and contained syntactically invalid SQL for
+  BQ. Always read `sql_dialect` ("snowflake" / "bigquery") and per-table
+  `sql_path` instead of branching on backend yourself; both are present
+  for any backend. When you write SQL for the user, use `sql_path`
+  verbatim -- it is already correctly quoted for the bucket's backend.
+  BigQuery `databaseName` is empty on Keboola-managed BQ projects, so
+  `bigquery_path` will be dataset-qualified only -- if the user needs a
+  fully-qualified GCP path, ask them for the project name explicitly.
+
 ---
 
 ## 4. WORKFLOWS (reference playbooks)

@@ -692,6 +692,33 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   endpoint, so the metadata entry is the authoritative source. `KBC.description`
   entries whose provider is not `user` (e.g. `system`) are ignored during
   read-back and the native field is used as fallback.
+- **`storage bucket-detail` is dialect-aware** *(since v0.25.3)*. Output adapts
+  to the bucket's backend:
+  - **Snowflake**: `snowflake_database` / `snowflake_schema` and per-table
+    `snowflake_path` quoted with `"DB"."schema"."table"`.
+  - **BigQuery**: `bigquery_dataset` (and `bigquery_project` when surfaced via
+    API `databaseName`) and per-table `bigquery_path` quoted with backticks
+    (`` `dataset`.`table` `` or `` `project`.`dataset`.`table` ``).
+  Backend-agnostic keys `sql_dialect` (`"snowflake"` / `"bigquery"`) and
+  per-table `sql_path` are always present -- prefer them in agent code instead
+  of branching on backend yourself. The misleading `snowflake_database` /
+  `snowflake_schema` / `snowflake_path` keys are **NOT** emitted on BigQuery
+  results in 0.25.3+. *Pre-0.25.3 behaviour:* the function unconditionally
+  emitted Snowflake-style keys with double quotes regardless of backend; on a
+  BigQuery bucket this produced syntactically invalid SQL (BQ requires
+  backticks) AND a fabricated `f"sapi_{project_id}"` database name (BQ has no
+  such naming convention). If you see a 0.25.2-or-older bucket-detail JSON
+  saved offline against a BQ project, treat the `snowflake_*` fields as
+  garbage. The `f"sapi_{project_id}"` Snowflake fallback (when `backendPath`
+  is missing) still fires for Snowflake buckets but no longer for BigQuery.
+- **BigQuery `databaseName` is usually empty** *(since v0.25.3)*. On Keboola-
+  managed BQ projects the Storage API returns `databaseName: ""`, so
+  `bucket-detail` cannot construct a fully-qualified `project.dataset.table`
+  path -- the resulting `bigquery_path` is dataset-qualified only
+  (`` `dataset`.`table` ``) and `bigquery_project` is the empty string. If the
+  user needs a full FQN (e.g. for a query against the GCP console or for an
+  external tool), ask them for the GCP project name explicitly. On BYODB BQ
+  projects `databaseName` is populated and the full FQN is emitted.
 
 ## `job terminate` quirks
 

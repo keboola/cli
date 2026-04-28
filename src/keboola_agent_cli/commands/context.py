@@ -220,7 +220,14 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Uses production by default; pass --branch to query a dev branch explicitly.
 
   kbagent storage bucket-detail --project NAME --bucket-id BUCKET_ID [--branch ID]
-    Bucket detail with Snowflake direct access paths. Resolves linked bucket source DB.
+    Bucket detail with backend-native direct-access paths. Resolves linked bucket source DB/dataset.
+    Output adapts to the bucket's backend:
+      - Snowflake -> snowflake_database / snowflake_schema / per-table snowflake_path quoted with "..."
+      - BigQuery  -> bigquery_dataset (and bigquery_project when surfaced via API databaseName) /
+                     per-table bigquery_path quoted with backticks `dataset`.`table` (or
+                     `project`.`dataset`.`table` when project is known).
+    Always-present backend-agnostic keys: sql_dialect ("snowflake" | "bigquery") and per-table sql_path.
+    Prefer sql_path/sql_dialect in agent code instead of branching on backend yourself.
     Uses production by default; pass --branch to query a dev branch explicitly.
 
   kbagent storage tables [--project NAME ...] [--bucket-id BUCKET_ID] [--branch ID]

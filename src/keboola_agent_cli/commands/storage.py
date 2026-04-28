@@ -168,11 +168,18 @@ def storage_bucket_detail(
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
 ) -> None:
-    """Show detailed bucket info including Snowflake direct access paths.
+    """Show detailed bucket info including backend-native direct access paths.
 
-    For linked/shared buckets, resolves the correct Snowflake database
-    and schema from the source project. Each table includes a ready-to-use
-    fully-qualified Snowflake path with proper quoting.
+    For linked/shared buckets, resolves the correct database/dataset and
+    schema from the source project. Each table includes a ready-to-use
+    fully-qualified path with dialect-correct quoting:
+
+    - Snowflake -> ``"DATABASE"."schema"."table"`` (double quotes)
+    - BigQuery  -> ``\\`project\\`.\\`dataset\\`.\\`table\\``` (backticks);
+      ``project`` is omitted when the API does not expose it.
+
+    Backend-agnostic ``sql_dialect`` and per-table ``sql_path`` keys are
+    always present in JSON output.
     """
     if should_hint(ctx):
         emit_hint(ctx, "storage.bucket-detail", project=project, bucket_id=bucket_id, branch=branch)
@@ -212,23 +219,36 @@ def storage_bucket_detail(
             )
             formatter.console.print(f"  Source bucket: {result['source_bucket_id']}")
 
-        formatter.console.print(f"  Snowflake DB: {result['snowflake_database']}")
-        formatter.console.print(f"  Snowflake schema: {result['snowflake_schema']}")
+        dialect = result.get("sql_dialect", "snowflake")
+        if dialect == "bigquery":
+            bq_project = result.get("bigquery_project", "")
+            if bq_project:
+                formatter.console.print(f"  BigQuery project: {bq_project}")
+            else:
+                formatter.console.print(
+                    "  BigQuery project: [dim](not exposed by Storage API "
+                    "-- supply your GCP project for full FQN)[/dim]"
+                )
+            formatter.console.print(f"  BigQuery dataset: {result.get('bigquery_dataset', '')}")
+        else:
+            formatter.console.print(f"  Snowflake DB: {result['snowflake_database']}")
+            formatter.console.print(f"  Snowflake schema: {result['snowflake_schema']}")
         formatter.console.print(f"  Tables: {result['table_count']}")
 
         if result["tables"]:
             formatter.console.print()
             from rich.table import Table
 
-            table = Table(title="Tables with Snowflake paths")
+            path_col = "BigQuery Path" if dialect == "bigquery" else "Snowflake Path"
+            table = Table(title=f"Tables with {dialect} paths")
             table.add_column("Table", style="bold")
-            table.add_column("Snowflake Path", style="green")
+            table.add_column(path_col, style="green")
             table.add_column("Alias", style="dim")
 
             for t in result["tables"][:50]:  # limit display
                 table.add_row(
                     t["name"],
-                    t["snowflake_path"],
+                    t.get("sql_path", ""),
                     "yes" if t["is_alias"] else "",
                 )
 
