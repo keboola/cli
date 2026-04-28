@@ -154,6 +154,21 @@ success, not a failure.
   verification payload but do not treat it as a failure signal.
   Production writes never materialize anything.
 
+- **`legacy_branch_storage: true` on `--branch` writes** (0.25.2+):
+  Projects without the `storage-branches` feature flag (legacy fake-branch
+  projects) accept `--branch X` writes at the API level, but the
+  transformation runner ignores those buckets at job time and creates its
+  own `out.c-<branch_id>-*` bucket in the default branch. Both `kbagent
+  storage create-bucket --branch X` and `storage create-table --branch X`
+  surface this via `legacy_branch_storage: true` in the JSON response
+  (and a `[yellow]Warning:[/yellow]` line in human mode). When you see
+  this flag, **do NOT** plan downstream "look in `out.c-foo` for the
+  result" steps after a transformation runs -- the result lives in
+  `out.c-<branch_id>-foo` in the default branch. The kbagent-materialized
+  bucket is reachable from the branch view but is otherwise an orphan.
+  Project 10539 (`padak-2-0`) is the canonical fake-branch test target;
+  10546 (`kbagent-e2e`) and 901 (`padak`) have `storage-branches` ON.
+
 - **Native column types vs. base types** (0.25.0+): `--column pk:VARCHAR(40)`
   and `--column amount:NUMBER(18,2)` now pass through to the Storage API
   (no CLI whitelist). `BOOLEAN` defaults must be **lowercase**

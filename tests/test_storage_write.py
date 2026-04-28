@@ -111,6 +111,59 @@ class TestCreateBucketService:
 
         mock_client.close.assert_called_once()
 
+    def test_legacy_branch_storage_flagged_when_feature_missing(self, tmp_path: Path) -> None:
+        """create-bucket --branch X on a fake-branch project surfaces the warning flag."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_bucket.return_value = {
+            "id": "out.c-recon",
+            "stage": "out",
+            "backend": "snowflake",
+            "description": "",
+        }
+        # Simulate fake-branch project: storage-branches feature is OFF.
+        mock_client.has_feature.return_value = False
+        service = _make_service(store, mock_client)
+
+        result = service.create_bucket(alias="test", stage="out", name="recon", branch_id=12345)
+
+        assert result["legacy_branch_storage"] is True
+        mock_client.has_feature.assert_called_once_with("storage-branches")
+
+    def test_legacy_branch_storage_false_on_modern_project(self, tmp_path: Path) -> None:
+        """create-bucket --branch X on storage-branches=ON project flags False."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_bucket.return_value = {
+            "id": "out.c-recon",
+            "stage": "out",
+            "backend": "snowflake",
+            "description": "",
+        }
+        mock_client.has_feature.return_value = True
+        service = _make_service(store, mock_client)
+
+        result = service.create_bucket(alias="test", stage="out", name="recon", branch_id=12345)
+
+        assert result["legacy_branch_storage"] is False
+
+    def test_no_feature_check_on_production_writes(self, tmp_path: Path) -> None:
+        """Without --branch we never consult features (no extra verify_token cost)."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_bucket.return_value = {
+            "id": "in.c-prod",
+            "stage": "in",
+            "backend": "snowflake",
+            "description": "",
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.create_bucket(alias="test", stage="in", name="prod")
+
+        assert result["legacy_branch_storage"] is False
+        mock_client.has_feature.assert_not_called()
+
     def test_invalid_stage_raises(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service = _make_service(store, MagicMock())
@@ -462,6 +515,72 @@ class TestCreateTableService:
         # already have whatever metadata they need).
         mock_client.set_bucket_metadata.assert_not_called()
         assert result["auto_created_bucket"] is False
+
+    def test_create_table_branch_legacy_storage_flagged(self, tmp_path: Path) -> None:
+        """create-table --branch X on a fake-branch project: both auto-materialize
+        AND legacy_branch_storage=True surface in the response. The metadata
+        stamp still runs (best-effort) since storage-branches=OFF projects also
+        accept it; the runner just won't read it.
+        """
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_bucket_detail.side_effect = KeboolaApiError(
+            "Bucket not found", status_code=404, error_code="NOT_FOUND"
+        )
+        mock_client.create_bucket.return_value = {"id": "out.c-recon"}
+        mock_client.set_bucket_metadata.return_value = []
+        mock_client.create_table.return_value = {"id": "out.c-recon.probe"}
+        mock_client.has_feature.return_value = False  # fake-branch
+        service = _make_service(store, mock_client)
+
+        result = service.create_table(
+            alias="test",
+            bucket_id="out.c-recon",
+            name="probe",
+            columns=["id:INTEGER"],
+            branch_id=12345,
+        )
+
+        assert result["auto_created_bucket"] is True
+        assert result["legacy_branch_storage"] is True
+        mock_client.has_feature.assert_called_once_with("storage-branches")
+
+    def test_create_table_branch_modern_storage_no_warning(self, tmp_path: Path) -> None:
+        """create-table --branch X on storage-branches=ON: legacy flag stays False."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_bucket_detail.return_value = {"id": "out.c-recon"}
+        mock_client.create_table.return_value = {"id": "out.c-recon.probe"}
+        mock_client.has_feature.return_value = True
+        service = _make_service(store, mock_client)
+
+        result = service.create_table(
+            alias="test",
+            bucket_id="out.c-recon",
+            name="probe",
+            columns=["id:INTEGER"],
+            branch_id=12345,
+        )
+
+        assert result["auto_created_bucket"] is False
+        assert result["legacy_branch_storage"] is False
+
+    def test_create_table_no_branch_no_feature_check(self, tmp_path: Path) -> None:
+        """Without --branch, create_table skips the feature lookup entirely."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.return_value = {"id": "in.c-prod.t"}
+        service = _make_service(store, mock_client)
+
+        result = service.create_table(
+            alias="test",
+            bucket_id="in.c-prod",
+            name="t",
+            columns=["id:INTEGER"],
+        )
+
+        assert result["legacy_branch_storage"] is False
+        mock_client.has_feature.assert_not_called()
 
     def test_production_never_materializes(self, tmp_path: Path) -> None:
         """Without --branch, we never peek at bucket existence (production path)."""

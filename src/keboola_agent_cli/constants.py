@@ -151,6 +151,18 @@ VERSION_CACHE_FILENAME: str = "version_cache.json"
 # --- AI Service ---
 AI_SERVICE_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 
+# --- Project Feature Flags ---
+# `storage-branches` enables the modern dev-branch storage isolation:
+# transformation runner / output-mapping consult bucket metadata
+# (KBC.createdBy.branch.id) and use the /v2/storage/branch/<id>/* endpoints.
+# Projects WITHOUT this feature still accept POST /v2/storage/branch/<id>/buckets,
+# but the runner ignores those buckets and creates parallel `out.c-<branch_id>-*`
+# buckets in the default branch (legacy "fake-branch" path). kbagent's
+# branch-aware writes surface a `legacy_branch_storage: true` flag on such
+# projects so callers know the materialized bucket will be unused by the runner.
+# See plugins/kbagent/skills/kbagent/references/storage-types-workflow.md.
+STORAGE_BRANCHES_FEATURE: str = "storage-branches"
+
 # --- Kai (Keboola AI Assistant) ---
 KAI_FEATURE_FLAG: str = "agent-chat"
 KAI_REQUEST_TIMEOUT: float = 300.0  # 5 min for non-streaming requests

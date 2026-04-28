@@ -94,6 +94,12 @@ class KeboolaClient(BaseHttpClient):
         self._queue_client: httpx.Client | None = None
         self._query_client: httpx.Client | None = None
         self._encrypt_client: httpx.Client | None = None
+        # Cache of project feature flags. Populated lazily on first
+        # has_feature() / get_project_features() call so we don't pay an
+        # extra verify_token round-trip on every kbagent invocation, and
+        # only when business logic actually needs to branch on a feature
+        # (e.g. legacy fake-branch storage detection).
+        self._features_cache: frozenset[str] | None = None
 
     @property
     def _queue_base_url(self) -> str:
@@ -213,7 +219,7 @@ class KeboolaClient(BaseHttpClient):
         data = response.json()
 
         owner = data.get("owner", {})
-        return TokenVerifyResponse(
+        response = TokenVerifyResponse(
             token_id=str(data.get("id", "")),
             token_description=data.get("description", ""),
             project_id=owner.get("id"),
@@ -222,6 +228,33 @@ class KeboolaClient(BaseHttpClient):
             default_backend=owner.get("defaultBackend", "snowflake"),
             features=owner.get("features", []),
         )
+        # Refresh the features cache on every successful verify so explicit
+        # callers stay consistent with the cached view used by has_feature().
+        self._features_cache = frozenset(response.features)
+        return response
+
+    def get_project_features(self) -> frozenset[str]:
+        """Return the project's feature flags, fetching once per client lifetime.
+
+        Calls ``verify_token()`` lazily on first request and caches the result.
+        Subsequent calls do not trigger HTTP. The cache lives for the life of
+        the ``KeboolaClient`` instance, which is one CLI invocation -- short
+        enough that staleness across feature toggles is not a practical risk.
+        """
+        if self._features_cache is None:
+            self.verify_token()
+        # _features_cache is non-None here: verify_token() always sets it (or
+        # raises on auth/network failure, which propagates to the caller).
+        assert self._features_cache is not None
+        return self._features_cache
+
+    def has_feature(self, feature: str) -> bool:
+        """True if the project owner has ``feature`` enabled.
+
+        Convenience wrapper over ``get_project_features()`` for code paths
+        that branch on a single flag (e.g. ``"storage-branches"``).
+        """
+        return feature in self.get_project_features()
 
     def list_components(
         self,

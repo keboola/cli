@@ -21,6 +21,16 @@ VERIFY_TOKEN_RESPONSE = {
     },
 }
 
+VERIFY_TOKEN_RESPONSE_WITH_FEATURES = {
+    "id": "12345",
+    "description": "tok",
+    "owner": {
+        "id": 1234,
+        "name": "Test Project",
+        "features": ["storage-branches", "queuev2", "agent-chat"],
+    },
+}
+
 
 class TestVerifyToken:
     """Tests for verify_token() success and failure paths."""
@@ -85,6 +95,71 @@ class TestVerifyToken:
         assert exc_info.value.error_code == "ACCESS_DENIED"
         assert exc_info.value.status_code == 403
         client.close()
+
+
+class TestProjectFeatures:
+    """Tests for get_project_features() / has_feature() lazy cache."""
+
+    def test_get_project_features_caches_after_first_call(self, httpx_mock) -> None:
+        """Second has_feature() call must not trigger a second verify_token HTTP."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json=VERIFY_TOKEN_RESPONSE_WITH_FEATURES,
+            status_code=200,
+        )
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        )
+        try:
+            features = client.get_project_features()
+            assert "storage-branches" in features
+            # Second call hits the cache; if it issued HTTP, pytest_httpx
+            # would fail "unexpected request" because we registered exactly
+            # one response.
+            assert client.has_feature("storage-branches") is True
+            assert client.has_feature("agent-chat") is True
+            assert client.has_feature("nonexistent-feature") is False
+        finally:
+            client.close()
+
+    def test_verify_token_populates_feature_cache(self, httpx_mock) -> None:
+        """An explicit verify_token() warms the cache for subsequent has_feature()."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json=VERIFY_TOKEN_RESPONSE_WITH_FEATURES,
+            status_code=200,
+        )
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        )
+        try:
+            client.verify_token()
+            # No further HTTP registered -- cache must answer.
+            assert client.has_feature("queuev2") is True
+        finally:
+            client.close()
+
+    def test_has_feature_false_when_owner_has_no_features(self, httpx_mock) -> None:
+        """Empty / missing features list returns False for any flag."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json={"id": "1", "description": "", "owner": {"id": 7, "name": "P"}},
+            status_code=200,
+        )
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        )
+        try:
+            assert client.has_feature("storage-branches") is False
+            assert client.get_project_features() == frozenset()
+        finally:
+            client.close()
 
 
 class TestRetryBehavior:
