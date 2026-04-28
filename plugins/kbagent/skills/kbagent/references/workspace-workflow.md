@@ -94,32 +94,50 @@ kbagent --json workspace query \
   --file query.sql
 ```
 
-## Shared/linked buckets -- different Snowflake database
+## Shared/linked buckets -- different database/dataset
 
-Linked buckets (shared from another project) live in a **different Snowflake database**
-than the current project's own tables. A workspace only mounts the current project's DB
-by default, so querying linked bucket tables requires a fully-qualified 3-part name:
+Linked buckets (shared from another project) live in a **different database
+(Snowflake) or dataset (BigQuery)** than the current project's own tables. A
+workspace only mounts the current project's DB/dataset by default, so querying
+linked-bucket tables requires a fully-qualified path:
 
 ```sql
--- WRONG: linked bucket table not found in workspace DB
+-- Snowflake -- WRONG: linked bucket table not found in workspace DB
 SELECT * FROM "in.c-shared-data"."my-table";
-
--- RIGHT: use the source project's database
+-- Snowflake -- RIGHT: use the source project's database
 SELECT * FROM "sapi_1507"."in.c-shared-data"."my-table";
+
+-- BigQuery -- WRONG: dataset alone is not enough across projects
+SELECT * FROM `in_c_shared_data`.`my_table`;
+-- BigQuery -- RIGHT: include the source GCP project
+SELECT * FROM `kbc-bq-1507`.`in_c_shared_data`.`my_table`;
 ```
 
-To find the correct database for a linked bucket:
+To find the correct path for a linked bucket, always use `bucket-detail` -- it
+adapts to the bucket's backend and emits a ready-to-use, dialect-correct path:
 
 ```bash
 kbagent --json storage bucket-detail --project ALIAS --bucket-id in.c-shared-data
-# Response includes snowflake_path with correct database for each table
+# Response includes:
+#   sql_dialect    -- "snowflake" or "bigquery"
+#   tables[].sql_path  -- backend-correct quoting (always present)
+# Plus backend-specific keys:
+#   Snowflake -> snowflake_database / snowflake_schema / snowflake_path ("...")
+#   BigQuery  -> bigquery_dataset (+ bigquery_project when available) /
+#                bigquery_path (`...`)
 ```
 
-The `bucket-detail` response resolves the source project and provides ready-to-use
-fully-qualified Snowflake paths (e.g. `"sapi_1507"."in.c-shared-data"."my-table"`).
+Prefer `sql_path` in agent code -- it is correctly quoted for the bucket's
+backend without you having to branch on dialect yourself. (since v0.25.3)
 
-**Rule of thumb**: if `storage buckets` shows "Linked From" for a bucket, always use
-`bucket-detail` to get the correct Snowflake path before querying in a workspace.
+**BigQuery FQN caveat**: on Keboola-managed BQ projects the Storage API
+returns `databaseName: ""`, so `bigquery_path` ends up dataset-qualified only
+(`` `dataset`.`table` ``). To query a linked BQ bucket cross-project, ask the
+user for the source GCP project name explicitly and prepend it.
+
+**Rule of thumb**: if `storage buckets` shows "Linked From" for a bucket,
+always run `bucket-detail` and use its `sql_path` before querying in a
+workspace.
 
 ## Key details
 
@@ -127,7 +145,10 @@ fully-qualified Snowflake paths (e.g. `"sapi_1507"."in.c-shared-data"."my-table"
 - **Workspace names**: `workspace list` shows user-given names (from `--name`), not internal IDs.
 - **Password**: only returned on creation (headless) or after `workspace password` (reset)
 - **Expiration**: workspaces expire server-side automatically
-- **Quoting**: Snowflake converts unquoted identifiers to UPPERCASE. Always double-quote database, schema, and table names -- Keboola names are typically lowercase (e.g. `"sapi_901"."in.c-main"."users"`)
+- **Quoting** (dialect-specific):
+    - **Snowflake**: converts unquoted identifiers to UPPERCASE. Always double-quote database, schema, and table names -- Keboola names are typically lowercase (e.g. `"sapi_901"."in.c-main"."users"`).
+    - **BigQuery**: requires backticks (`` ` ``), not double quotes; the dataset name is normalized to underscores (e.g. `` `in_c_main`.`users` ``).
+    - Easiest path: read `tables[].sql_path` from `bucket-detail` -- it is already correctly quoted for the bucket's backend (since v0.25.3).
 - **Query Service**: uses Storage API token for auth -- no Snowflake credentials needed in the query command
 - **Transactional mode**: add `--transactional` to wrap SQL in a transaction
 
