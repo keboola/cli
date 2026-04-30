@@ -731,6 +731,149 @@ def config_update(
         )
 
 
+@config_app.command("set-default-bucket")
+def config_set_default_bucket(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    component_id: str = typer.Option(
+        ...,
+        "--component-id",
+        help="Component ID (e.g. keboola.ex-db-snowflake)",
+    ),
+    config_id: str = typer.Option(
+        ...,
+        "--config-id",
+        help="Configuration ID",
+    ),
+    bucket: str | None = typer.Option(
+        None,
+        "--bucket",
+        help="Bucket ID to set as default output (e.g. in.c-preferred-name)",
+    ),
+    clear: bool = typer.Option(
+        False,
+        "--clear",
+        help="Remove the default_bucket key. Mutually exclusive with --bucket.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would change without applying",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Apply in a specific dev branch ID (defaults to active branch)",
+    ),
+) -> None:
+    """Set or clear ``storage.output.default_bucket`` on a configuration.
+
+    \b
+    The Keboola Storage API honors ``configuration.storage.output.default_bucket``
+    to override the auto-derived bucket name (``in.<component>-<config-id>``)
+    for any output table that does not pin its own ``destination``.
+
+    \b
+    Examples:
+      # Set
+      kbagent config set-default-bucket --project P --component-id keboola.ex-db-snowflake \\
+        --config-id 12345 --bucket in.c-preferred-name
+
+      # Clear
+      kbagent config set-default-bucket --project P --component-id keboola.ex-db-snowflake \\
+        --config-id 12345 --clear
+
+      # Preview
+      kbagent config set-default-bucket --project P --component-id keboola.ex-db-snowflake \\
+        --config-id 12345 --bucket in.c-preferred-name --dry-run
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.set-default-bucket",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            bucket=bucket,
+            clear=clear,
+            dry_run=dry_run,
+            branch=branch,
+        )
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "config_service")
+
+    if bucket is not None and clear:
+        formatter.error(
+            message="Pass exactly one of --bucket or --clear, not both.",
+            error_code=ErrorCode.VALIDATION_ERROR,
+        )
+        raise typer.Exit(code=2) from None
+    if bucket is None and not clear:
+        formatter.error(
+            message="Pass --bucket BUCKET_ID or --clear.",
+            error_code=ErrorCode.VALIDATION_ERROR,
+        )
+        raise typer.Exit(code=2) from None
+
+    try:
+        result = service.set_default_bucket(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            bucket=bucket,
+            clear=clear,
+            dry_run=dry_run,
+            branch_id=branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if result.get("dry_run"):
+        changes = result.get("changes", [])
+        if formatter.json_mode:
+            formatter.output(result)
+        else:
+            if not changes:
+                formatter.success("No changes detected.")
+            else:
+                formatter.console.print(f"\n[bold]Dry-run: {len(changes)} change(s)[/bold]\n")
+                for change in changes:
+                    formatter.console.print(f"  {change}")
+                formatter.console.print()
+        return
+
+    if formatter.json_mode:
+        formatter.output(result)
+        return
+
+    target = f"{component_id}/{config_id}"
+    if result.get("changed") is False:
+        existing = result.get("default_bucket")
+        if clear:
+            formatter.success(f"No change: default_bucket was already absent on {target}.")
+        else:
+            formatter.success(f"No change: default_bucket on {target} was already '{existing}'.")
+        return
+
+    if clear:
+        formatter.success(f"Cleared default_bucket on {target}.")
+    else:
+        formatter.success(f"Set default_bucket on {target} to '{bucket}'.")
+
+
 @config_app.command("rename")
 def config_rename(
     ctx: typer.Context,

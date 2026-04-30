@@ -23,6 +23,8 @@ description: >
   keboola encryption API, #password, #api_token, KBC::ProjectSecure,
   safe config write, dry-run preview, fresh fetch before edit,
   stale local config file, config version overwrite,
+  default bucket, output bucket, default_bucket, storage.output,
+  raw mode bucket override, custom output bucket name,
   local workspace, project directory, kbagent init.
 ---
 
@@ -92,6 +94,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show detailed information about one or many configurations | `kbagent config detail --component-id COMPONENT-ID` |
 | Search through configuration bodies for a string or pattern | `kbagent config search --query QUERY` |
 | Update a configuration's metadata and/or content | `kbagent config update --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Set or clear ``storage.output.default_bucket`` on a configuration | `kbagent config set-default-bucket --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Rename a configuration (update name via API + rename local sync directory) | `kbagent config rename --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Delete a configuration from a project | `kbagent config delete --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Generate boilerplate configuration files for a Keboola component | `kbagent config new --component-id COMPONENT-ID` |

@@ -1,5 +1,28 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## `default_bucket` is per-config and only an output prefix (since 0.26.0)
+
+- `kbagent config set-default-bucket` writes
+  `configuration.storage.output.default_bucket`. The Storage API uses this
+  value as the bucket for any output table whose `destination` is unset.
+  Tables that pin `destination: in.c-...` ignore it.
+- The setting lives on the configuration, not the project; configs that
+  share a destination bucket each need their own value.
+- "Clear" leaves an empty `storage.output: {}` if no other keys live there
+  -- intentional, mirrors how `set` creates intermediate parents. Storage
+  API treats both `output: {}` and a missing `output` as "use the default
+  derived bucket name".
+- This is the same setting the support article describes as "raw mode":
+  https://keboola.atlassian.net/wiki/spaces/SUP/pages/3770155030/.
+- UI exposure is tracked under epic
+  [KBCP-108](https://keboola.atlassian.net/browse/KBCP-108).
+- Validated against three component types (`kds-team.ex-google-cloud-storage`,
+  `keboola.ex-cnb-exchange-rates`, `ex-generic-v2`) -- the runner honors the
+  setting at job time regardless of whether the component is row-based or
+  what `parameters.config.outputBucket` (Generic Extractor's component-internal
+  bucket key) says. The Storage `default_bucket` always wins for tables that
+  don't pin their own `destination`.
+
 ## `config detail` has a bulk mode (since 0.23.0)
 
 - **Omit `--config-id`** to get every configuration under `--component-id`

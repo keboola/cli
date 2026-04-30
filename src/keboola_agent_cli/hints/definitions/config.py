@@ -540,3 +540,49 @@ HintRegistry.register(
         ],
     )
 )
+
+# ── config set-default-bucket ──────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.set-default-bucket",
+        description="Set or clear configuration.storage.output.default_bucket on a config",
+        steps=[
+            HintStep(
+                comment="Fetch current config so we can read-modify-write the storage.output branch",
+                client=ClientCall(
+                    method="get_config_detail",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="current",
+                    result_hint="dict",
+                ),
+                service=ServiceCall(
+                    service_class="ConfigService",
+                    service_module="config_service",
+                    method="set_default_bucket",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "bucket": "{bucket}",
+                        "clear": "{clear}",
+                        "dry_run": "{dry_run}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "--bucket and --clear are mutually exclusive; exactly one is required.",
+            "Setting to the current value (or clearing when already absent) is a no-op: "
+            "service returns {'changed': False} without writing.",
+            "Clear leaves an empty 'storage.output' dict if all sibling keys were already absent -- "
+            "this is intentional and matches the inverse of set_nested_value's parent-creation behavior.",
+            "Bucket IDs are validated server-side; expect a Storage API error for malformed values.",
+        ],
+    )
+)
