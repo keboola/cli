@@ -5864,3 +5864,143 @@ class TestE2EStorageNativeTypesAndBranchMaterialize:
         assert second.get("auto_created_bucket") is False, (
             "Second create against an already-materialized bucket should not re-create it."
         )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Project invite E2E (since v0.26.1)
+#
+# Opt-in via `make test-e2e-invite`. Default-skipped in `make test-e2e` because
+# (a) it sends a real invitation email and (b) it depends on a separate manage
+# token / project ID that the regular E2E credentials don't carry.
+# ──────────────────────────────────────────────────────────────────────
+
+
+ENV_MANAGE_TOKEN = "E2E_MANAGE_TOKEN"
+ENV_INVITE_PROJECT_ID = "E2E_INVITE_PROJECT_ID"
+ENV_INVITE_EMAIL = "E2E_INVITE_EMAIL"
+DEFAULT_INVITE_EMAIL = "ottomansky.max@gmail.com"
+
+skip_without_invite_credentials = pytest.mark.skipif(
+    not (
+        os.environ.get(ENV_MANAGE_TOKEN)
+        and os.environ.get(ENV_INVITE_PROJECT_ID)
+        and os.environ.get(ENV_URL)
+    ),
+    reason=(
+        f"Requires {ENV_MANAGE_TOKEN}, {ENV_INVITE_PROJECT_ID}, and {ENV_URL}. "
+        "Run via `make test-e2e-invite`."
+    ),
+)
+
+
+@pytest.mark.e2e_invite
+@skip_without_invite_credentials
+def test_project_invite_e2e(tmp_path: Path) -> None:
+    """Real invite to the master cuesta project: send -> list -> cancel -> verify gone.
+
+    Uses role=guest (lowest blast radius). The cancel step in the same run
+    invalidates the invitation link before the inbox sees it, so this is a
+    "the system can send + clean up" check, not a "join my project" check.
+    """
+    from keboola_agent_cli.config_store import ConfigStore as _Store
+    from keboola_agent_cli.models import ProjectConfig as _Project
+
+    invite_email = os.environ.get(ENV_INVITE_EMAIL, DEFAULT_INVITE_EMAIL)
+    project_id = int(os.environ[ENV_INVITE_PROJECT_ID])
+    stack_url = (
+        os.environ[ENV_URL]
+        if os.environ[ENV_URL].startswith("https://")
+        else f"https://{os.environ[ENV_URL]}"
+    )
+    alias = f"e2e-invite-target-{project_id}"
+
+    # Bypass `kbagent project add` (which would verify a Storage API token).
+    # MemberService only needs (stack_url, project_id) -- the storage token
+    # field is unused. Write a minimal config.json with a placeholder token.
+    config_dir = tmp_path / "kbagent-config"
+    config_dir.mkdir()
+    store = _Store(config_dir=config_dir)
+    store.add_project(
+        alias,
+        _Project(
+            stack_url=stack_url,
+            token="901-e2e-placeholder-not-used-by-member-commands-xxxxxxxxxx",
+            project_id=project_id,
+            project_name="E2E invite target",
+        ),
+    )
+
+    env = {
+        **os.environ,
+        "KBC_MANAGE_API_TOKEN": os.environ[ENV_MANAGE_TOKEN],
+    }
+
+    def _run(*args: str) -> dict:
+        result = runner.invoke(
+            app,
+            ["--config-dir", str(config_dir), "--json", *args],
+            env=env,
+        )
+        assert result.exit_code == 0, (
+            f"{' '.join(args)} failed (exit {result.exit_code}):\n{result.output}"
+        )
+        return json.loads(result.output)
+
+    # 1. Defensive cleanup: if a stale invitation exists from a prior aborted
+    # run, cancel it first so we start from a known state.
+    initial = _run("project", "invitation-list", "--project", alias)["data"]["invitations"]
+    for inv in initial:
+        if inv.get("user", {}).get("email", "").casefold() == invite_email.casefold():
+            _run(
+                "project",
+                "invitation-cancel",
+                "--project",
+                alias,
+                "--email",
+                invite_email,
+                "--yes",
+            )
+
+    # 2. Send the invitation.
+    sent = _run(
+        "project",
+        "invite",
+        "--project",
+        alias,
+        "--email",
+        invite_email,
+        "--role",
+        "guest",
+        "--reason",
+        "kbagent v0.26.1 e2e",
+    )["data"]
+    assert sent["status"] == "ok"
+    assert sent["invitation_id"] is not None
+    invitation_id = sent["invitation_id"]
+
+    try:
+        # 3. Confirm it shows up in invitation-list.
+        listed = _run("project", "invitation-list", "--project", alias)["data"]["invitations"]
+        emails = {row["user"]["email"].casefold() for row in listed}
+        assert invite_email.casefold() in emails, f"{invite_email} did not appear in {emails}"
+    finally:
+        # 4. Cancel (always, even if the assertion above fails -- never leave
+        # a real-email invitation around for a flaky test).
+        _run(
+            "project",
+            "invitation-cancel",
+            "--project",
+            alias,
+            "--email",
+            invite_email,
+            "--invitation-id",
+            str(invitation_id),
+            "--yes",
+        )
+
+    # 5. Verify the invitation is gone.
+    final = _run("project", "invitation-list", "--project", alias)["data"]["invitations"]
+    final_emails = {row["user"]["email"].casefold() for row in final}
+    assert invite_email.casefold() not in final_emails, (
+        f"{invite_email} still pending after cancel: {final_emails}"
+    )

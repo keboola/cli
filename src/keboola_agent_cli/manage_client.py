@@ -133,3 +133,80 @@ class ManageClient(BaseHttpClient):
             payload["expiresIn"] = expires_in
         response = self._do_request("POST", f"/manage/projects/{project_id}/tokens", json=payload)
         return response.json()
+
+    # ------------------------------------------------------------------
+    # Project members & invitations (verified 2026-05-01 against the
+    # us-east4.gcp.keboola.com Manage API; see plan-of-record §"Verifications").
+    # ------------------------------------------------------------------
+
+    def create_project_invitation(
+        self,
+        project_id: int,
+        email: str,
+        role: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Send an invitation email to add ``email`` as a project member.
+
+        Returns the invitation object on success (HTTP 201). On HTTP 400 with
+        the error message ``"This user has already been invited..."`` or
+        ``"...is already a member..."`` the caller should treat the call as a
+        no-op rather than an error -- the higher layer encodes that policy.
+
+        Args:
+            project_id: Numeric project ID.
+            email: Email of the user to invite.
+            role: One of ``admin``, ``guest``, ``readOnly``, ``share``.
+            reason: Optional human-readable note attached to the invitation.
+
+        Returns:
+            Invitation dict: ``{id, created, expires, reason, role, user, creator}``.
+        """
+        payload: dict[str, Any] = {"email": email, "role": role}
+        if reason:
+            payload["reason"] = reason
+        response = self._do_request(
+            "POST", f"/manage/projects/{project_id}/invitations", json=payload
+        )
+        return response.json()
+
+    def list_project_invitations(self, project_id: int) -> list[dict[str, Any]]:
+        """List pending (not-yet-accepted) invitations for a project.
+
+        Returns a plain list. Each item has shape
+        ``{id, created, expires, reason, role, user: {id, name, email}, creator: {...}}``.
+        """
+        response = self._do_request("GET", f"/manage/projects/{project_id}/invitations")
+        return response.json()
+
+    def cancel_project_invitation(self, project_id: int, invitation_id: int) -> None:
+        """Cancel a pending invitation by ID. Returns 204 No Content on success."""
+        self._do_request("DELETE", f"/manage/projects/{project_id}/invitations/{invitation_id}")
+
+    def list_project_members(self, project_id: int) -> list[dict[str, Any]]:
+        """List active project members.
+
+        Returns a plain list. Each user dict carries the project role at the
+        top level (``role`` field) -- not nested under a ``user`` key.
+        """
+        response = self._do_request("GET", f"/manage/projects/{project_id}/users")
+        return response.json()
+
+    def remove_project_member(self, project_id: int, user_id: int) -> None:
+        """Remove a member from a project. Returns 204 No Content on success."""
+        self._do_request("DELETE", f"/manage/projects/{project_id}/users/{user_id}")
+
+    def update_project_member_role(
+        self, project_id: int, user_id: int, role: str
+    ) -> dict[str, Any]:
+        """Change an existing member's role.
+
+        The Manage API uses **PATCH** here -- ``PUT`` returns 404 even on real
+        members. Returns the updated user dict on success (HTTP 200).
+        """
+        response = self._do_request(
+            "PATCH",
+            f"/manage/projects/{project_id}/users/{user_id}",
+            json={"role": role},
+        )
+        return response.json()

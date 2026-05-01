@@ -9,6 +9,7 @@ from . import (
     job,  # noqa: F401
     kai,  # noqa: F401
     lineage,  # noqa: F401
+    member,  # noqa: F401
     org,  # noqa: F401
     project,  # noqa: F401
     schedule,  # noqa: F401

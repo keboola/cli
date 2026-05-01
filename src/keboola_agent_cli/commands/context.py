@@ -94,6 +94,37 @@ Use `kbagent <command> --help` for full flag details and examples.
     Print the effective default project and its source (env / pin / none).
     Resolution order for single-project operations: --project > KBAGENT_PROJECT > pin.
 
+### Project Members & Invitations (since v0.26.1)
+
+  Requires KBC_MANAGE_API_TOKEN (Manage API auth). Allowed roles: admin, guest, readOnly, share.
+
+  kbagent project invite --project ALIAS --email EMAIL --role ROLE [--reason TEXT] [--dry-run]
+    Send an invitation email. Re-inviting an existing invitee or member is a no-op
+    (HTTP 400 from the Manage API; the service returns status="noop" with note
+    "already_invited" / "already_member").
+
+  kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
+    Bulk invite. CSV must have a header row with columns: email, project (alias or
+    numeric ID), role (optional if --default-role is given), reason (optional).
+    Parallelised with ThreadPoolExecutor (default 8 workers). Per-row results in
+    `rows[]` with status=ok|noop|failed; `failed_rows` ordering is not deterministic.
+
+  kbagent project member-list --project ALIAS [--include-pending]
+    List active project members. --include-pending also fetches pending invitations.
+
+  kbagent project invitation-list --project ALIAS
+    List pending (unaccepted) invitations only.
+
+  kbagent project invitation-cancel --project ALIAS --email EMAIL [--invitation-id ID] [--yes]
+    Cancel a pending invitation. Without --invitation-id, the service resolves the
+    ID by listing pending invitations and matching --email (case-insensitive).
+
+  kbagent project member-remove --project ALIAS --email EMAIL [--yes]
+    Remove an active member (destructive). Service resolves --email to user_id.
+
+  kbagent project member-set-role --project ALIAS --email EMAIL --role ROLE
+    Change an existing member's role via PATCH /manage/projects/{{id}}/users/{{userId}}.
+
 ### Component Discovery
 
   kbagent component list [--project NAME] [--type TYPE] [--query "search"]

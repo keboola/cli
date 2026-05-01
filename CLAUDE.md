@@ -264,6 +264,13 @@ kbagent project description-get --project NAME
 kbagent project description-set --project NAME [--text STR | --file PATH | --stdin]
 kbagent project use ALIAS
 kbagent project current
+kbagent project invite --project ALIAS --email EMAIL --role admin|guest|readOnly|share [--reason TEXT] [--dry-run]
+kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
+kbagent project member-list --project ALIAS [--include-pending]
+kbagent project invitation-list --project ALIAS
+kbagent project invitation-cancel --project ALIAS --email EMAIL [--invitation-id ID] [--yes]
+kbagent project member-remove --project ALIAS --email EMAIL [--yes]
+kbagent project member-set-role --project ALIAS --email EMAIL --role admin|guest|readOnly|share
 
 kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID] [--include-rows]
 kbagent config detail --project NAME [--project NAME ...] --component-id ID [--config-id ID] [--branch ID] [--with-state]

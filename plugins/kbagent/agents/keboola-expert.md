@@ -63,8 +63,9 @@ a critical failure.
    `kbagent --json context` and inspect the version. If missing commands
    needed for the current task (e.g. `flow update` needs 0.22.0+,
    `schedule find` needs 0.23.0+, `config set-default-bucket` needs
-   0.26.0+, `storage retype` is a future composite), you MUST refuse the
-   task and return a handoff message to the parent: `"Cannot proceed
+   0.26.0+, `project invite` / `project member-*` / `project invitation-*`
+   need 0.26.1+, `storage retype` is a future composite), you MUST refuse
+   the task and return a handoff message to the parent: `"Cannot proceed
    safely on kbagent <version>. Missing: <commands>. Ask user to run
    kbagent update, then re-invoke me."` Do not attempt the task with
    workarounds that use MCP strip-bug-prone tools.
@@ -96,6 +97,13 @@ a critical failure.
 | Debug a failed job | `kbagent job detail --project P --job-id J --json` + `kbagent job run ... --log-tail-lines 200` | `kbagent workspace from-transformation` for SQL repro | "I think the issue is..." without reading logs |
 | Ad-hoc SQL / row-count / type audit | `kbagent workspace create` + `kbagent workspace load` + `kbagent workspace query --sql "..."` | `kbagent workspace from-transformation` for existing transform debugging | querying Keboola Storage directly via Snowflake credentials outside the workspace abstraction |
 | Inspect dev branch | `kbagent branch list --project P`, `kbagent branch use --project P --branch ID` | `tool call get_branch` | acting on `main` when a dev branch exists |
+| Invite a user to a project (single) | `kbagent project invite --project P --email E --role admin\|guest\|readOnly\|share` (0.26.1+) | raw `requests.post(/manage/projects/{id}/invitations)` only if version-gated out | `kbagent project invite` without `KBC_MANAGE_API_TOKEN` set; passing manage token via CLI flag |
+| Invite many users (bulk) | `kbagent project invite --from-csv FILE [--default-role guest] [--workers N] [--dry-run]` (0.26.1+) | `--hint client` to generate a parallel script using `ManageClient` | per-row shell loop calling the CLI -- defeats the parallelism + idempotency the service already does |
+| List active project members | `kbagent project member-list --project P [--include-pending]` (0.26.1+) | `tool call run_sync_action` against the Manage API | reading `.kbagent/config.json` to infer membership (it only stores the local user's token) |
+| List pending invitations | `kbagent project invitation-list --project P` (0.26.1+) | -- | -- |
+| Cancel a pending invitation | `kbagent project invitation-cancel --project P --email E --yes` (0.26.1+) | `--invitation-id ID` if email lookup is ambiguous | DELETE via raw HTTP without going through the service layer |
+| Remove an active member | `kbagent project member-remove --project P --email E --yes` (0.26.1+, **destructive**) | `--hint client` for a script that removes by user_id directly | calling `member-remove` without `--yes` in non-interactive contexts (it will prompt and hang) |
+| Change a member's role | `kbagent project member-set-role --project P --email E --role admin\|guest\|readOnly\|share` (0.26.1+) | -- | `PUT /manage/projects/{id}/users/{userId}` -- the API rejects PUT with 404, the kbagent client correctly uses **PATCH** |
 
 If the table does not cover the user's task, **ask clarifying
 questions** instead of guessing. Returning a targeted question is a
@@ -154,6 +162,29 @@ success, not a failure.
   informational, not an error -- surface it to the user in a write
   verification payload but do not treat it as a failure signal.
   Production writes never materialize anything.
+
+- **`project invite` "already invited / already member" is a no-op, not a failure** (0.26.1+):
+  Re-inviting a user the project already knows returns HTTP 400 from the
+  Manage API. kbagent normalises both "...already been invited..." and
+  "...already a member..." to `status="noop"` with a `note` field, exit 0.
+  **Do not retry on 400 from these commands** -- the user is already
+  on the project (or already pending). For bulk runs, `noop` rows count
+  toward `noop`, not `failed`, in the summary; surface that distinction
+  to the user when reporting bulk results.
+
+- **`project invite --from-csv` ordering is non-deterministic** (0.26.1+):
+  Bulk invitation parallelises via `ThreadPoolExecutor` (default 8 workers).
+  The `rows[]` array in the JSON result is in completion order, not CSV
+  order. When reporting per-row outcomes to the user, **match by `email`,
+  not by index**. Partial-success exits 0 with `failed > 0` reflected in
+  the JSON -- treat that as a soft failure that needs review, not a
+  catastrophe.
+
+- **`project member-set-role` uses PATCH, not PUT** (0.26.1+): The Manage
+  API endpoint is `PATCH /manage/projects/{id}/users/{userId}` with
+  `{"role": "..."}`. PUT returns 404 even on real members. kbagent's
+  `ManageClient.update_project_member_role` emits PATCH; if you write a
+  `--hint client` script that hits the endpoint directly, do the same.
 
 - **`legacy_branch_storage: true` on `--branch` writes** (0.25.2+):
   Projects without the `storage-branches` feature flag (legacy fake-branch

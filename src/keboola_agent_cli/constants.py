@@ -35,6 +35,18 @@ DEFAULT_STACK_URL: str = "https://connection.keboola.com"
 # --- Token Description ---
 DEFAULT_TOKEN_DESCRIPTION: str = "kbagent-cli"
 
+# --- Project Member Roles ---
+# Allowed values for project membership / invitation `role` field. Lifted from
+# the Manage API's own validation error: `Role "X" is not valid. Allowed roles
+# are: admin, guest, readOnly, share`. Verified empirically 2026-05-01 against
+# connection.us-east4.gcp.keboola.com. If the API ever extends the list, the
+# fix is to extend this tuple -- the engine already returns the new options in
+# its validation error message.
+PROJECT_ROLES: tuple[str, ...] = ("admin", "guest", "readOnly", "share")
+
+# --- Bulk Invite Defaults ---
+DEFAULT_INVITE_WORKERS: int = 8
+
 # --- Job Limits ---
 DEFAULT_JOB_LIMIT: int = 50
 DEFAULT_JOBS_PER_CONFIG: int = 5
