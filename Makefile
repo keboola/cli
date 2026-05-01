@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-mcp sync test test-unit test-integration test-e2e test-file lint lint-fix format format-check skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes check clean hooks
+.PHONY: help install install-mcp sync test test-unit test-integration test-e2e test-e2e-invite test-file lint lint-fix format format-check skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes check clean hooks
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -25,6 +25,9 @@ test-integration: ## Run integration tests only
 
 test-e2e: ## Run E2E tests (E2E_API_TOKEN and E2E_URL required)
 	uv run pytest tests/test_e2e.py -v -s --tb=long
+
+test-e2e-invite: ## Run project invite E2E (E2E_MANAGE_TOKEN + E2E_INVITE_PROJECT_ID required)
+	uv run pytest tests/test_e2e.py -v -s --tb=long -m e2e_invite
 
 test-file: ## Run a specific test file (FILE=tests/test_cli.py)
 	uv run pytest $(FILE) -v

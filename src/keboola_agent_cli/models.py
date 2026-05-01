@@ -168,3 +168,73 @@ class SuccessResponse(BaseModel):
 
     status: str = Field(default="ok", description="Always 'ok' for success responses")
     data: Any = Field(default=None, description="Response payload")
+
+
+class ProjectMember(BaseModel):
+    """Active project member as returned by GET /manage/projects/{id}/users.
+
+    The Manage API returns audit-relevant fields beyond what kbagent renames
+    explicitly: ``created``, ``expires``, ``invitor``, ``approver``, ``features``,
+    ``canAccessLogs``, ``isSuperAdmin``, ``canApproveMergeRequests``. We allow
+    extras through unmodified so admins inspecting `--json` output get the full
+    audit trail (who invited whom, when, status flags), not a narrow whitelist.
+    """
+
+    id: int = Field(description="Numeric Keboola user ID")
+    email: str = Field(description="Member email address")
+    name: str = Field(default="", description="Display name (may be empty for stub accounts)")
+    role: str = Field(description="Project role: admin | guest | readOnly | share")
+    status: str = Field(default="active", description="Membership status")
+    mfa_enabled: bool = Field(default=False, alias="mfaEnabled")
+
+    model_config = {"populate_by_name": True, "extra": "allow"}
+
+
+class InvitationUser(BaseModel):
+    """Invited user inside an Invitation object."""
+
+    id: int | None = Field(default=None)
+    email: str
+    name: str = Field(default="")
+
+
+class ProjectInvitation(BaseModel):
+    """Pending project invitation as returned by GET /manage/projects/{id}/invitations.
+
+    Extras (``created``, ``expires``, ``creator``) pass through unmodified so
+    callers can audit when invitations were created and by whom.
+    """
+
+    id: int = Field(description="Invitation ID -- pass to DELETE to cancel")
+    role: str = Field(description="Role offered to the invitee")
+    reason: str = Field(default="")
+    user: InvitationUser = Field(description="The invited user (email + resolved id)")
+
+    model_config = {"populate_by_name": True, "extra": "allow"}
+
+
+class MemberInviteRow(BaseModel):
+    """Per-row outcome of a bulk-invite operation.
+
+    `status` = 'ok' (created), 'noop' (already invited or already a member),
+    'failed' (any other error). `note` carries the human-readable explanation.
+    """
+
+    email: str
+    project: str = Field(description="Alias or numeric ID as it appeared in the source CSV row")
+    project_id: int | None = Field(default=None, description="Resolved numeric project ID")
+    role: str = Field(default="")
+    status: str = Field(description="ok | noop | failed")
+    note: str = Field(default="")
+    invitation_id: int | None = Field(default=None)
+
+
+class BulkInviteResult(BaseModel):
+    """Aggregate result of `kbagent project invite --from-csv`."""
+
+    total: int
+    succeeded: int
+    noop: int
+    failed: int
+    rows: list[MemberInviteRow] = Field(default_factory=list)
+    dry_run: bool = Field(default=False)

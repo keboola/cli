@@ -24,6 +24,12 @@ OPERATION_REGISTRY: dict[str, str] = {
     "project.description-set": "write",
     "project.use": "write",
     "project.current": "read",
+    "project.invite": "admin",
+    "project.member-list": "read",
+    "project.invitation-list": "read",
+    "project.invitation-cancel": "admin",
+    "project.member-remove": "destructive",
+    "project.member-set-role": "admin",
     # Config browsing & management
     "config.list": "read",
     "config.detail": "read",

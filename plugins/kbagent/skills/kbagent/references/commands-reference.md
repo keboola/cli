@@ -21,6 +21,18 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `project use ALIAS` -- pin `ALIAS` as the persistent default project. Stored as `default_project` in config.json. Overridden at runtime by `KBAGENT_PROJECT=ALIAS` (env, beats pin) and by `--project ALIAS` (CLI flag, beats both)
 - `project current` -- print the effective default project and its source (`env` / `pin` / `none`). Reports both the env override AND the persisted pin so misconfigurations are visible. Returns `{"alias": null, "source": "none"}` when neither is set
 
+## Project Members & Invitations (since v0.26.1)
+
+All seven commands authenticate via `KBC_MANAGE_API_TOKEN` (Manage API), not the project's Storage token. Allowed roles are exactly `admin`, `guest`, `readOnly`, `share` -- the API self-reports this list in its 400 validation error and `constants.PROJECT_ROLES` mirrors it.
+
+- `project invite --project ALIAS --email EMAIL --role admin|guest|readOnly|share [--reason TEXT] [--dry-run]` -- single-shot invitation. Returns `{"status": "ok", "invitation_id": ..., ...}`. Re-inviting an already-invited or already-member email returns `{"status": "noop", "note": "already_invited" | "already_member"}` (HTTP 400 from the Manage API, normalised to a no-op).
+- `project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]` -- bulk invitation. CSV header required; columns: `email`, `project` (alias) or `project_id` (numeric), `role` (optional with `--default-role`), `reason` (optional). Parallelised via `ThreadPoolExecutor` (default 8 workers). Single-stack-URL invariant per file: rows referencing different stacks raise `ConfigError` upfront. Result is `{"total","succeeded","noop","failed","rows":[...]}`; `rows[]` order is *not deterministic*. Exit 0 even with `failed > 0` -- inspect the JSON.
+- `project member-list --project ALIAS [--include-pending]` -- list active members. Each member dict carries `id`, `email`, `name`, `role`, `status`, `mfa_enabled`. With `--include-pending`, the response also includes `pending_invitations: [...]`.
+- `project invitation-list --project ALIAS` -- list pending (unaccepted) invitations only.
+- `project invitation-cancel --project ALIAS --email EMAIL [--invitation-id ID] [--yes]` -- cancel a pending invitation. Without `--invitation-id`, the service resolves it by listing pending invitations and matching `--email` (case-insensitive). 204 No Content on success; `KeboolaApiError(NOT_FOUND)` if the email has no pending invitation.
+- `project member-remove --project ALIAS --email EMAIL [--yes]` -- destructive: remove an active member. The service resolves `--email` to the numeric `user_id` (case-insensitive) and DELETEs `/manage/projects/{id}/users/{userId}`. Re-add the user via `project invite`.
+- `project member-set-role --project ALIAS --email EMAIL --role admin|guest|readOnly|share` -- change an existing member's role. Uses **PATCH** `/manage/projects/{id}/users/{userId}` with `{"role": "..."}`. PUT does *not* work on this endpoint -- pre-v0.26.1 implementations that tried PUT got a misleading 404.
+
 ## Permission flags (top-level, session-only)
 - `--deny-writes` -- block all write/destructive/admin operations for this single invocation. Merges with any persisted permission policy; never written to config.json. Exit code 6 (PERMISSION_DENIED) on blocked operations
 - `--deny-destructive` -- block only destructive operations (delete-table, delete-bucket, terminate-job, etc.) for this invocation. Pure-write ops like create-table stay allowed. Use this when you want to keep build-up capabilities but lock out tear-downs

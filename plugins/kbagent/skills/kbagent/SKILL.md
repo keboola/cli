@@ -31,6 +31,10 @@ description: >
   app proxy, simpleAuth, app auto-suspend, configVersion, redeploy contract,
   Data Science API, /apps endpoint, app password, KBC::Project ciphertext,
   local workspace, project directory, kbagent init.
+  local workspace, project directory, kbagent init,
+  invite user, invite member, project invitation, manage members,
+  list members, remove member, change role, project role,
+  bulk invite, invite from CSV, project access, member management.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -92,6 +96,12 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show the effective default project | `kbagent project current` |
 | Get the Keboola dashboard project description | `kbagent project description-get --project PROJECT` |
 | Set the Keboola dashboard project description (markdown) | `kbagent project description-set --project PROJECT` |
+| Invite a user (or many users via CSV) to one or more projects | `kbagent project invite` |
+| List active members of a project (and optionally pending invitations) | `kbagent project member-list --project PROJECT` |
+| List pending project invitations | `kbagent project invitation-list --project PROJECT` |
+| Cancel a pending invitation | `kbagent project invitation-cancel --project PROJECT --email EMAIL` |
+| Remove an active member from a project (destructive) | `kbagent project member-remove --project PROJECT --email EMAIL` |
+| Change an existing member's role (PATCH) | `kbagent project member-set-role --project PROJECT --email EMAIL --role ROLE` |
 | Set up projects and register them in the kbagent config | `kbagent org setup --url URL` |
 | List available components from connected projects | `kbagent component list` |
 | Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
@@ -247,6 +257,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Storage column types** (native types, NOT NULL, DEFAULT, branch materialize) | [storage-types-workflow](references/storage-types-workflow.md) |
 | **Typify a typeless table** (profile -> CTAS -> swap-tables -> validate -> handoff) | [typify-table-workflow](references/typify-table-workflow.md) |
 | Bucket sharing & linking | [sharing-workflow](references/sharing-workflow.md) |
+| **Project members & invitations** (single + bulk via CSV, role change, remove) | [member-workflow](references/member-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
 | Encrypting secrets for MCP tools | [encrypt-workflow](references/encrypt-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
