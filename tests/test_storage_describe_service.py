@@ -721,3 +721,29 @@ class TestGetTableDetailDescriptionExtraction:
         assert "description" not in col_map["total"]
         # Table-level description absent when no KBC.description entry
         assert result["description"] == ""
+
+    def test_null_numeric_fields_coerced_to_zero(self, tmp_path: Path) -> None:
+        """Companion to issue #233: API may return null for rowsCount /
+        dataSizeBytes on empty tables. get_table_detail must surface 0,
+        not null, to keep the JSON output well-typed.
+        """
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {
+            "id": "in.c-empty.t",
+            "name": "t",
+            "displayName": "t",
+            "bucket": {"id": "in.c-empty"},
+            "columns": ["a"],
+            "primaryKey": [],
+            "rowsCount": None,
+            "dataSizeBytes": None,
+            "columnMetadata": {},
+            "metadata": [],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-empty.t")
+
+        assert result["rows_count"] == 0
+        assert result["data_size_bytes"] == 0

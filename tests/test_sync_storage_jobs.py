@@ -532,6 +532,59 @@ class TestWriteStorageMetadata:
         assert buckets_file.exists()
         assert json.loads(buckets_file.read_text(encoding="utf-8")) == []
 
+    def test_null_numeric_fields_coerced_to_zero(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """API may return null for tablesCount / dataSizeBytes / rowsCount on empty
+        objects. The on-disk JSON must surface 0 (not null) to keep the schema
+        well-typed for downstream consumers (LLM agents reading .keboola/...).
+        Companion to issue #233 -- same root cause, no crash but inconsistent
+        data shape.
+        """
+        svc = self._make_svc(tmp_config_dir)
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        buckets = [
+            {
+                "id": "in.c-empty",
+                "name": "c-empty",
+                "stage": "in",
+                "description": "",
+                "tablesCount": None,
+                "dataSizeBytes": None,
+                "metadata": [],
+            }
+        ]
+        tables = [
+            {
+                "id": "in.c-empty.t",
+                "name": "t",
+                "bucket": {"id": "in.c-empty"},
+                "primaryKey": [],
+                "columns": ["a"],
+                "rowsCount": None,
+                "dataSizeBytes": None,
+                "lastImportDate": None,
+                "lastChangeDate": None,
+                "description": "",
+                "metadata": [],
+                "columnMetadata": {},
+            }
+        ]
+
+        svc._write_storage_metadata(project_root, buckets, tables, {})
+
+        buckets_file = project_root / STORAGE_DIR_NAME / STORAGE_BUCKETS_FILENAME
+        bucket_summaries = json.loads(buckets_file.read_text(encoding="utf-8"))
+        assert bucket_summaries[0]["tables_count"] == 0
+        assert bucket_summaries[0]["data_size_bytes"] == 0
+
+        table_file = project_root / STORAGE_DIR_NAME / "tables" / "in-c-empty" / "t.json"
+        table_meta = json.loads(table_file.read_text(encoding="utf-8"))
+        assert table_meta["rows_count"] == 0
+        assert table_meta["data_size_bytes"] == 0
+
     def test_samples_written_to_correct_path(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """Samples are written to storage/samples/{bucket}/{table}/sample.csv."""
         svc = self._make_svc(tmp_config_dir)

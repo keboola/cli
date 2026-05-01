@@ -2148,14 +2148,17 @@ class SyncService(BaseService):
         storage_dir.mkdir(parents=True, exist_ok=True)
 
         # Write buckets index
+        # API may return null for tablesCount / dataSizeBytes on empty
+        # buckets; coerce to 0 (dict.get default only fires when key is
+        # missing, not when the value is explicitly null).
         bucket_summaries = [
             {
                 "id": b.get("id", ""),
                 "name": b.get("name", ""),
                 "stage": b.get("stage", ""),
                 "description": b.get("description", ""),
-                "tables_count": b.get("tablesCount", 0),
-                "data_size_bytes": b.get("dataSizeBytes", 0),
+                "tables_count": b.get("tablesCount") or 0,
+                "data_size_bytes": b.get("dataSizeBytes") or 0,
                 "metadata": b.get("metadata", []),
             }
             for b in buckets
@@ -2193,8 +2196,11 @@ class SyncService(BaseService):
                     "name": table_name,
                     "primary_key": t.get("primaryKey", []),
                     "columns": t.get("columns", []),
-                    "rows_count": t.get("rowsCount", 0),
-                    "data_size_bytes": t.get("dataSizeBytes", 0),
+                    # API may return null for rowsCount / dataSizeBytes on
+                    # newly-created or empty tables; coerce to 0 explicitly
+                    # (dict.get default only fires when the key is missing).
+                    "rows_count": t.get("rowsCount") or 0,
+                    "data_size_bytes": t.get("dataSizeBytes") or 0,
                     "last_import_date": t.get("lastImportDate", ""),
                     "last_change_date": t.get("lastChangeDate", ""),
                     "description": t.get("description", ""),
