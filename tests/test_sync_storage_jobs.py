@@ -876,6 +876,50 @@ class TestFetchSamples:
 
         mock_client.get_table_data_preview.assert_called_once_with("t1", limit=42, columns=None)
 
+    def test_tables_with_none_rows_count_skipped(self, tmp_config_dir: Path) -> None:
+        """Tables with rowsCount=None (Storage API can return null) are treated as empty.
+
+        Regression for issue #233: dict.get("rowsCount", 0) returns None when the key
+        is present with a null value, which crashes the > 0 comparison on Python 3.
+        """
+        svc = self._make_svc(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.get_table_data_preview.return_value = '"col"\n"val"\n'
+
+        tables = [
+            {"id": "has-data", "rowsCount": 500},
+            {"id": "rows-is-none", "rowsCount": None},
+            {"id": "rows-missing"},
+        ]
+
+        result = svc._fetch_samples(mock_client, tables, sample_limit=100, max_samples=10)
+
+        assert len(result) == 1
+        assert "has-data" in result
+        assert "rows-is-none" not in result
+        assert "rows-missing" not in result
+
+    def test_mixed_none_and_numeric_rows_count_sorts_correctly(self, tmp_config_dir: Path) -> None:
+        """Sorting must not crash when some tables have rowsCount=None.
+
+        Regression for issue #233: even after filtering, the sort key can break
+        if any None slips through. Verify the sort key tolerates None entries.
+        """
+        svc = self._make_svc(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.get_table_data_preview.return_value = '"col"\n"v"\n'
+
+        tables = [
+            {"id": "a", "rowsCount": None},
+            {"id": "b", "rowsCount": 200},
+            {"id": "c", "rowsCount": 100},
+            {"id": "d", "rowsCount": None},
+        ]
+
+        result = svc._fetch_samples(mock_client, tables, sample_limit=10, max_samples=5)
+
+        assert set(result.keys()) == {"b", "c"}
+
 
 # ===================================================================
 # 7. Integration: pull() with new params

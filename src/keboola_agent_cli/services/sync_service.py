@@ -2363,10 +2363,16 @@ class SyncService(BaseService):
         Returns:
             Dict mapping table_id -> CSV string.
         """
+
+        # Storage API may return rowsCount=None for empty/newly-created tables
+        # on some backends; dict.get() does not coerce None to the default value.
+        def _rows(t: dict[str, Any]) -> int:
+            return t.get("rowsCount") or 0
+
         # Sort by rows count desc, pick top N
         sorted_tables = sorted(
-            [t for t in tables if t.get("rowsCount", 0) > 0],
-            key=lambda t: t.get("rowsCount", 0),
+            [t for t in tables if _rows(t) > 0],
+            key=_rows,
             reverse=True,
         )[:max_samples]
 
