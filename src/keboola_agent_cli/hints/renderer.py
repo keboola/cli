@@ -133,7 +133,9 @@ class ClientRenderer:
         for step in hint.steps:
             client_types.add(step.client.client_type)
 
-        needs_os = "storage" in client_types or "manage" in client_types
+        needs_os = (
+            "storage" in client_types or "manage" in client_types or "data_science" in client_types
+        )
         if needs_os:
             lines.append("import os")
         if needs_time:
@@ -144,6 +146,8 @@ class ClientRenderer:
 
         if "storage" in client_types:
             lines.append("from keboola_agent_cli.client import KeboolaClient")
+        if "data_science" in client_types:
+            lines.append("from keboola_agent_cli.data_science_client import DataScienceClient")
         if "manage" in client_types:
             lines.append("from keboola_agent_cli.manage_client import ManageClient")
         if "mcp" in client_types:
@@ -167,6 +171,12 @@ class ClientRenderer:
             lines.append('    token=os.environ["KBC_STORAGE_TOKEN"],')
             lines.append(")")
 
+        if "data_science" in client_types:
+            lines.append("ds_client = DataScienceClient(")
+            lines.append(f'    stack_url="{url}",')
+            lines.append('    token=os.environ["KBC_STORAGE_TOKEN"],')
+            lines.append(")")
+
         if "manage" in client_types:
             lines.append("manage_client = ManageClient(")
             lines.append(f'    base_url="{url}",')
@@ -184,6 +194,8 @@ class ClientRenderer:
         close_vars = []
         if "storage" in client_types:
             close_vars.append("client")
+        if "data_science" in client_types:
+            close_vars.append("ds_client")
         if "manage" in client_types:
             close_vars.append("manage_client")
 
@@ -208,6 +220,7 @@ class ClientRenderer:
 
             client_var_map = {
                 "storage": "client",
+                "data_science": "ds_client",
                 "manage": "manage_client",
                 "mcp": "mcp_service",
             }
@@ -292,7 +305,29 @@ class ServiceRenderer:
             if step.service:
                 service_imports[step.service.service_module] = step.service.service_class
 
+        # If any resolved arg references ``os.environ`` or ``os.path``
+        # (e.g. the data-app create hint pipes the PAT through
+        # ``os.environ[VAR]``), the rendered snippet must ``import os`` --
+        # otherwise running it raises NameError. The match list is
+        # restricted to known stdlib accessors so an unrelated arg with
+        # the substring ``os.`` (e.g. a hypothetical ``infos.path``)
+        # cannot trigger a spurious unused import.
+        _os_token_indicators = ("os.environ", "os.path", "os.getenv")
+        needs_os = False
+        for step in hint.steps:
+            if step.service is None:
+                continue
+            resolved = _substitute_params(step.service.args, params)
+            for value in resolved.values():
+                if isinstance(value, str) and any(tok in value for tok in _os_token_indicators):
+                    needs_os = True
+                    break
+            if needs_os:
+                break
+
         # Imports
+        if needs_os:
+            lines.append("import os")
         lines.append("from pathlib import Path")
         lines.append("")
         lines.append("from keboola_agent_cli.config_store import ConfigStore")

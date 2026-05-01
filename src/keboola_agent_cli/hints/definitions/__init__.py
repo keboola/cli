@@ -4,6 +4,7 @@ from . import (
     branch,  # noqa: F401
     component,  # noqa: F401
     config,  # noqa: F401
+    data_app,  # noqa: F401
     encrypt,  # noqa: F401
     flow,  # noqa: F401
     job,  # noqa: F401

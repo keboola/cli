@@ -63,8 +63,9 @@ a critical failure.
    `kbagent --json context` and inspect the version. If missing commands
    needed for the current task (e.g. `flow update` needs 0.22.0+,
    `schedule find` needs 0.23.0+, `config set-default-bucket` needs
-   0.26.0+, `storage retype` is a future composite), you MUST refuse the
-   task and return a handoff message to the parent: `"Cannot proceed
+   0.26.0+, `data-app create / deploy / start / stop / delete / password`
+   need 0.27.0+, `storage retype` is a future composite), you MUST refuse
+   the task and return a handoff message to the parent: `"Cannot proceed
    safely on kbagent <version>. Missing: <commands>. Ask user to run
    kbagent update, then re-invoke me."` Do not attempt the task with
    workarounds that use MCP strip-bug-prone tools.
@@ -96,6 +97,13 @@ a critical failure.
 | Debug a failed job | `kbagent job detail --project P --job-id J --json` + `kbagent job run ... --log-tail-lines 200` | `kbagent workspace from-transformation` for SQL repro | "I think the issue is..." without reading logs |
 | Ad-hoc SQL / row-count / type audit | `kbagent workspace create` + `kbagent workspace load` + `kbagent workspace query --sql "..."` | `kbagent workspace from-transformation` for existing transform debugging | querying Keboola Storage directly via Snowflake credentials outside the workspace abstraction |
 | Inspect dev branch | `kbagent branch list --project P`, `kbagent branch use --project P --branch ID` | `tool call get_branch` | acting on `main` when a dev branch exists |
+| Inventory data apps | `kbagent data-app list --project P` (0.27.0+) | `tool call get_configs --component_id keboola.data-apps` (Storage view only -- no state, no URL, no configVersion) | iterating `tool call` per project to reconstruct the join with the Data Science index |
+| Bring a new data app online from a git repo | `kbagent data-app create --project P --name N --slug S --git-repo URL [--git-pat-env VAR \| --git-public]` (0.27.0+) | broken into `tool call create_config keboola.data-apps` + manual `kbagent encrypt values` + raw `POST /apps` -- ONLY if you need a custom shape kbagent doesn't support | raw `POST data-science/apps` followed by `PATCH desiredState=running` without `configVersion + restartIfRunning` (the §9 footgun -- pins to v2 empty shell, runner errors `dataApp.git.repository is required in /data/config.json`) |
+| Roll out a new code or config version on a data app | `kbagent data-app deploy --project P --app-id N --wait` (0.27.0+) -- always sends the §9 trio | `kbagent --hint client data-app deploy ...` to inspect the generated `patch_app(desired_state=, config_version=, restart_if_running=True)` call | `tool call update_config` then `tool call run_component` (data apps are not jobs -- the queue runner does not deploy them) |
+| Wake an auto-suspended data app | `kbagent data-app start --project P --app-id N` (0.27.0+) -- does NOT bump configVersion | hitting the app's URL (auto-restart triggers a 30-60s cold boot) | `kbagent data-app deploy` (overkill -- bumps the deployed configVersion unnecessarily) |
+| Pause a running data app | `kbagent data-app stop --project P --app-id N` (0.27.0+) | -- | `kbagent data-app delete` (irreversible; cascades to Storage config) |
+| Read the simpleAuth password for a password-gated app | `kbagent data-app password --project P --app-id N` (0.27.0+) -- requires `KBC_MANAGE_API_TOKEN` | -- | trying to "rotate" the password (not supported by the API; delete + recreate to mint a new one) |
+| Tear down a data app | `kbagent data-app delete --project P --app-id N` (0.27.0+) -- cascades to Storage config; URL retired | -- | manually `tool call delete_config keboola.data-apps` while leaving the deployment record orphaned |
 
 If the table does not cover the user's task, **ask clarifying
 questions** instead of guessing. Returning a targeted question is a
@@ -208,6 +216,25 @@ success, not a failure.
   Branch behavior is determined by the project's `storage-branches`
   feature flag, not by this setting -- see the `legacy_branch_storage`
   gotcha above for what the runner actually does on `--branch` writes.
+
+- **Data apps need `data-app deploy` after `config update`** (0.27.0+):
+  the deployment record's `configVersion` is a pinned pointer that does
+  NOT auto-advance when Storage advances. Editing the `keboola.data-apps`
+  config via `kbagent config update` bumps the Storage version, but the
+  running container keeps using the OLD version until a `kbagent data-app
+  deploy --project P --app-id N` PATCHes the deployment with the
+  §9 trio `{desiredState=running, configVersion, restartIfRunning=true}`.
+  Sending bare `desiredState=running` (or just `configVersion`) silently
+  pins to v2 (the empty shell from `POST /apps`) and the runner errors
+  `dataApp.git.repository is required in /data/config.json` with no
+  top-level error surfaced -- only visible in the UI's Terminal Logs.
+  `kbagent data-app start` is the cheap restart for an auto-suspended
+  app; it does NOT bump the configVersion. Use `data-app deploy` for new
+  code/config rollouts, `data-app start` for waking a parked container.
+  PAT encryption is per-project KMS -- ciphertext does NOT cross
+  projects, so `kbagent data-app create` always re-encrypts plaintext via
+  the target project's Encryption API and refuses to write plaintext if
+  the round-trip does not return a `KBC::Project*` ciphertext.
 
 - **`storage bucket-detail` is dialect-aware** (0.25.3+): the response
   shape depends on the bucket's backend. Snowflake buckets carry

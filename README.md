@@ -84,6 +84,7 @@ kbagent workspace query --project prod --workspace-id WS_ID \
 | **MCP tools** | Call `keboola-mcp-server` tools with auto-expand, multi-project fan-out, branch propagation, schema validation. |
 | **Workspaces** | Create Snowflake/BQ workspace, load tables, run SQL. Create from transformation config for instant debugging. Orphan detection + garbage collection. |
 | **Sharing** | Cross-project bucket sharing with org/project/user access control. Share, link, unlink. |
+| **Data apps** | First-class lifecycle for Streamlit / Flask / Node deployments (`keboola.data-apps`). Create, deploy, start, stop, password, delete. Hides the redeploy contract and per-project KMS encryption of git PATs. |
 | **Lineage** | Column-level dependency analysis across projects. SQL/Python parsing, AI-enhanced detection, interactive web browser, Mermaid/HTML/ER export. |
 | **Kai (AI Assistant)** | Ask Keboola's built-in AI questions about your project. One-shot or chat sessions with full MCP context. |
 | **Encryption** | Encrypt secrets (`#password`, `#api_token`) via Keboola Encryption API. Works with sync push and MCP. |
@@ -135,6 +136,7 @@ kbagent storage     buckets | bucket-detail | create-bucket | delete-bucket
                     files | file-detail | file-upload | file-download | file-tag | file-delete
                     load-file | unload-table
 kbagent sharing     list | share | unshare | link | unlink | edges
+kbagent data-app    list | detail | create | deploy | start | stop | delete | password
 kbagent lineage     build | show | info | server
 kbagent branch      list | create | use | reset | delete | merge
                     metadata-list | metadata-get | metadata-set | metadata-delete

@@ -93,6 +93,11 @@ class ErrorCode(StrEnum):
     INVALID_FLOW_DAG = "INVALID_FLOW_DAG"
     SCHEDULE_DELETE_FAILED = "SCHEDULE_DELETE_FAILED"
 
+    # Data apps (new in 0.27.0)
+    DATA_APP_BUILD_FAILED = "DATA_APP_BUILD_FAILED"
+    DATA_APP_DEPLOY_TIMEOUT = "DATA_APP_DEPLOY_TIMEOUT"
+    DATA_APP_INVALID_GIT = "DATA_APP_INVALID_GIT"
+
 
 def mask_token(token: str) -> str:
     """Mask a Keboola Storage API token for safe display.

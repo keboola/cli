@@ -5864,3 +5864,221 @@ class TestE2EStorageNativeTypesAndBranchMaterialize:
         assert second.get("auto_created_bucket") is False, (
             "Second create against an already-materialized bucket should not re-create it."
         )
+
+
+# ---------------------------------------------------------------------------
+# TestE2EDataAppLifecycle -- data-app create / detail / deploy / start / stop / delete
+# ---------------------------------------------------------------------------
+
+
+ENV_DATA_APP_GIT_REPO_PUBLIC = "E2E_DATA_APP_GIT_REPO_PUBLIC"
+ENV_DATA_APP_GIT_REPO_PRIVATE = "E2E_DATA_APP_GIT_REPO_PRIVATE"
+ENV_DATA_APP_GIT_USER = "E2E_DATA_APP_GIT_USER"
+ENV_DATA_APP_GIT_PAT = "E2E_DATA_APP_GIT_PAT"
+ENV_MANAGE_TOKEN = "E2E_MANAGE_TOKEN"
+
+skip_without_data_app_public = pytest.mark.skipif(
+    not (HAS_CREDENTIALS and os.environ.get(ENV_DATA_APP_GIT_REPO_PUBLIC)),
+    reason=f"requires {ENV_TOKEN} + {ENV_DATA_APP_GIT_REPO_PUBLIC}",
+)
+skip_without_data_app_private = pytest.mark.skipif(
+    not (
+        HAS_CREDENTIALS
+        and os.environ.get(ENV_DATA_APP_GIT_REPO_PRIVATE)
+        and os.environ.get(ENV_DATA_APP_GIT_USER)
+        and os.environ.get(ENV_DATA_APP_GIT_PAT)
+    ),
+    reason=(
+        f"requires {ENV_TOKEN} + {ENV_DATA_APP_GIT_REPO_PRIVATE} + "
+        f"{ENV_DATA_APP_GIT_USER} + {ENV_DATA_APP_GIT_PAT}"
+    ),
+)
+
+
+@pytest.mark.e2e
+class TestE2EDataAppLifecycle:
+    """Live validation of the data-app command group against a real stack.
+
+    Three scenarios:
+
+    1. Public-repo + ``--auth public`` -- minimum recipe (no encryption).
+    2. Private-repo + simpleAuth -- full recipe including KMS encryption.
+    3. Lifecycle: stop / start / deploy on the just-created private app.
+
+    Each test cleans up its own apps. Cleanup is best-effort (delete is
+    idempotent on the platform side -- a 404 on cleanup is not a failure).
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        if not HAS_CREDENTIALS:
+            pytest.skip("E2E_API_TOKEN not set")
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-da-proj"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        # Register the project so `kbagent --project ALIAS ...` works.
+        _invoke(
+            self.config_dir,
+            [
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        self._created_app_ids: list[str] = []
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self) -> Any:
+        yield
+        print("\n--- DATA-APP CLEANUP ---")
+        for app_id in self._created_app_ids:
+            try:
+                _invoke(
+                    self.config_dir,
+                    [
+                        "--json",
+                        "data-app",
+                        "delete",
+                        "--project",
+                        self.alias,
+                        "--app-id",
+                        app_id,
+                        "--yes",
+                    ],
+                )
+                print(f"  Deleted data app {app_id}")
+            except Exception as exc:
+                print(f"  WARN: failed to delete data app {app_id}: {exc}")
+
+    @skip_without_data_app_public
+    def test_data_app_lifecycle_public(self) -> None:
+        _step(1, "Create public-repo data app", "no auth gate, no encryption")
+        repo = os.environ[ENV_DATA_APP_GIT_REPO_PUBLIC]
+        slug = f"e2e-pub-{RUN_ID}"[:60]
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "data-app",
+                "create",
+                "--project",
+                self.alias,
+                "--name",
+                f"E2E Public {RUN_ID}",
+                "--slug",
+                slug,
+                "--git-repo",
+                repo,
+                "--git-public",
+                "--auth",
+                "public",
+                "--no-deploy",  # avoid waiting on a real container build in CI
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        body = _json_ok(result)
+        app_id = body["data"]["id"]
+        assert app_id, "expected a numeric app id from POST /apps"
+        self._created_app_ids.append(app_id)
+
+        _step(2, "Detail merges Data Science + Storage")
+        detail = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "detail",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                ],
+            )
+        )["data"]
+        assert detail["id"] == app_id
+        assert detail["slug"] == slug
+        assert detail["config_version_storage"], (
+            "Storage config version should be populated after PUT"
+        )
+
+    @skip_without_data_app_private
+    def test_data_app_lifecycle_private_and_redeploy(self) -> None:
+        _step(1, "Create private-repo simpleAuth data app", "encryption + git PAT")
+        repo = os.environ[ENV_DATA_APP_GIT_REPO_PRIVATE]
+        username = os.environ[ENV_DATA_APP_GIT_USER]
+        # Pass the PAT via env var so plaintext never appears in argv.
+        pat_var = "E2E_DATA_APP_GIT_PAT"
+        slug = f"e2e-priv-{RUN_ID}"[:60]
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "data-app",
+                "create",
+                "--project",
+                self.alias,
+                "--name",
+                f"E2E Private {RUN_ID}",
+                "--slug",
+                slug,
+                "--git-repo",
+                repo,
+                "--git-username",
+                username,
+                "--git-pat-env",
+                pat_var,
+                "--auth",
+                "password",
+                "--no-deploy",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        body = _json_ok(result)
+        app_id = body["data"]["id"]
+        self._created_app_ids.append(app_id)
+        # The encrypted PAT must NEVER appear in the JSON output.
+        plaintext_pat = os.environ[ENV_DATA_APP_GIT_PAT]
+        assert plaintext_pat not in result.output, "Plaintext PAT must never reach the CLI output"
+
+        _step(2, "Stop (idempotent on a non-running app)")
+        stop = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "data-app",
+                "stop",
+                "--project",
+                self.alias,
+                "--app-id",
+                app_id,
+            ],
+        )
+        # `stop` on a never-deployed app may return a 4xx; we don't fail the
+        # test on that -- the next deploy step is the real assertion.
+        _ = stop
+
+        _step(3, "Deploy via the §9 redeploy contract")
+        deploy = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "deploy",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                ],
+            )
+        )["data"]
+        assert deploy["config_version"], "deploy must pin a configVersion"

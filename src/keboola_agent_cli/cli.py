@@ -11,6 +11,7 @@ from .commands.changelog import changelog_command
 from .commands.component import component_app
 from .commands.config import config_app
 from .commands.context import context_command
+from .commands.data_app import data_app_app
 from .commands.doctor import doctor_command
 from .commands.encrypt import encrypt_app
 from .commands.flow import flow_app
@@ -38,6 +39,7 @@ from .permissions import PermissionEngine
 from .services.branch_service import BranchService
 from .services.component_service import ComponentService
 from .services.config_service import ConfigService
+from .services.data_app_service import DataAppService
 from .services.deep_lineage_service import DeepLineageService
 from .services.doctor_service import DoctorService
 from .services.encrypt_service import EncryptService
@@ -82,6 +84,7 @@ app.add_typer(org_app, name="org", rich_help_panel=_PROJ)
 _BROWSE = "Browse & Inspect"
 app.add_typer(component_app, name="component", rich_help_panel=_BROWSE)
 app.add_typer(config_app, name="config", rich_help_panel=_BROWSE)
+app.add_typer(data_app_app, name="data-app", rich_help_panel=_BROWSE)
 app.add_typer(job_app, name="job", rich_help_panel=_BROWSE)
 app.add_typer(storage_app, name="storage", rich_help_panel=_BROWSE)
 app.add_typer(sharing_app, name="sharing", rich_help_panel=_BROWSE)
@@ -301,6 +304,7 @@ def main(
     flow_service = FlowService(config_store=config_store)
     schedule_service = ScheduleService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
+    data_app_service = DataAppService(config_store=config_store)
     kai_service = KaiService(config_store=config_store)
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
     version_service = VersionService()
@@ -353,6 +357,7 @@ def main(
     ctx.obj["flow_service"] = flow_service
     ctx.obj["schedule_service"] = schedule_service
     ctx.obj["workspace_service"] = workspace_service
+    ctx.obj["data_app_service"] = data_app_service
     ctx.obj["kai_service"] = kai_service
     ctx.obj["doctor_service"] = doctor_service
     ctx.obj["version_service"] = version_service
