@@ -4,6 +4,7 @@ Orchestrates multi-project configuration retrieval in parallel, filtering,
 aggregation, and full-text search without knowing about CLI or HTTP details.
 """
 
+import copy
 import json
 import logging
 import re
@@ -658,6 +659,143 @@ class ConfigService(BaseService):
 
         # Full replace (no merge, no set_paths)
         return configuration if configuration is not None else current_cfg
+
+    def set_default_bucket(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        bucket: str | None,
+        clear: bool = False,
+        dry_run: bool = False,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Set or clear ``configuration.storage.output.default_bucket``.
+
+        Read-modify-write: fetches the current configuration, edits the single
+        nested key, and PUTs the full body back. Sibling keys under
+        ``storage.output`` (and the rest of the configuration) are preserved.
+
+        Args:
+            alias: Project alias.
+            component_id: Component ID.
+            config_id: Configuration ID.
+            bucket: Bucket ID to set (e.g. ``"in.c-preferred-name"``).
+                Required when *clear* is False.
+            clear: If True, remove the ``default_bucket`` key. Mutually
+                exclusive with *bucket*.
+            dry_run: If True, return a diff without writing.
+            branch_id: Dev branch override; falls back to the project's
+                active branch when None.
+
+        Returns:
+            On a real write: the API response with ``project_alias`` and
+            ``branch_id`` annotations attached.
+            On a no-op (set with same value, clear when key absent):
+            ``{"changed": False, ...}`` -- no API write.
+            On dry_run: ``{"dry_run": True, "changes": [...], ...}``
+            mirroring :py:meth:`update_config`'s dry-run shape.
+
+        Raises:
+            KeboolaApiError: For validation failures (both/neither flag,
+                empty bucket) and underlying API errors.
+            ConfigError: When the alias is unknown.
+        """
+        if clear and bucket is not None:
+            raise KeboolaApiError(
+                status_code=400,
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message="Pass exactly one of --bucket or --clear, not both.",
+            )
+        if not clear and not bucket:
+            raise KeboolaApiError(
+                status_code=400,
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message="Pass --bucket BUCKET_ID or --clear.",
+            )
+        if bucket is not None:
+            bucket = bucket.strip()
+            if not bucket:
+                raise KeboolaApiError(
+                    status_code=400,
+                    error_code=ErrorCode.VALIDATION_ERROR,
+                    message="--bucket cannot be empty.",
+                )
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch_id = branch_id or project.active_branch_id
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            current_detail = client.get_config_detail(
+                component_id, config_id, branch_id=effective_branch_id
+            )
+            current_cfg: dict[str, Any] = current_detail.get("configuration", {}) or {}
+            if isinstance(current_cfg, str):
+                current_cfg = json.loads(current_cfg)
+
+            storage = current_cfg.get("storage")
+            output = storage.get("output") if isinstance(storage, dict) else None
+            existing = output.get("default_bucket") if isinstance(output, dict) else None
+
+            # Semantic no-op: short-circuit before doing any tree mutation.
+            # Catches: clear-when-already-absent, set-to-same-value.
+            target = None if clear else bucket
+            if existing == target:
+                return {
+                    "changed": False,
+                    "project_alias": alias,
+                    "component_id": component_id,
+                    "config_id": config_id,
+                    "branch_id": effective_branch_id,
+                    "default_bucket": existing,
+                }
+
+            # Tolerate storage=None or storage.output=None (raw-mode JSON edits can
+            # serialize nulls where the API would omit the key entirely).
+            new_cfg = copy.deepcopy(current_cfg)
+            if not isinstance(new_cfg.get("storage"), dict):
+                new_cfg["storage"] = {}
+            if not isinstance(new_cfg["storage"].get("output"), dict):
+                new_cfg["storage"]["output"] = {}
+
+            if clear:
+                new_cfg["storage"]["output"].pop("default_bucket", None)
+            else:
+                new_cfg["storage"]["output"]["default_bucket"] = bucket
+
+            if dry_run:
+                return {
+                    "dry_run": True,
+                    "project_alias": alias,
+                    "component_id": component_id,
+                    "config_id": config_id,
+                    "branch_id": effective_branch_id,
+                    "changes": compute_diff(current_cfg, new_cfg),
+                    "old_configuration": current_cfg,
+                    "new_configuration": new_cfg,
+                }
+
+            change_desc = (
+                "Cleared storage.output.default_bucket via kbagent config set-default-bucket"
+                if clear
+                else f"Set storage.output.default_bucket={bucket} via kbagent config set-default-bucket"
+            )
+            result = client.update_config(
+                component_id=component_id,
+                config_id=config_id,
+                configuration=new_cfg,
+                change_description=change_desc,
+                branch_id=effective_branch_id,
+            )
+        finally:
+            client.close()
+
+        result["project_alias"] = alias
+        result["branch_id"] = effective_branch_id
+        result["default_bucket"] = target
+        return result
 
     def delete_config(
         self,

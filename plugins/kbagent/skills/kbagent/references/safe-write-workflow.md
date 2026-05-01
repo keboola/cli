@@ -163,6 +163,10 @@ kbagent config update ... --set "parameters.query=SELECT 1"
 
 # GOOD: partial JSON merged into existing
 kbagent config update ... --configuration '{"parameters":{"query":"SELECT 1"}}' --merge
+
+# GOOD: dedicated command for storage.output.default_bucket (preserves all siblings)
+kbagent config set-default-bucket ... --bucket in.c-preferred-name
+kbagent config set-default-bucket ... --clear
 ```
 
 ### Pushing then immediately running

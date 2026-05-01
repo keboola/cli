@@ -70,6 +70,8 @@ Resources are prefixed with `e2e-{timestamp}` and cleaned up via yield fixture e
 | 16 | `config list`, `config detail`, `config search`, `config search --ignore-case` | Config found by name, detail has correct parameters, search matches by pattern |
 | 17 | `config update --set`, `--dry-run`, `--name/--description`, `--configuration` | Nested key set preserves siblings, dry-run shows diff, full replace removes old keys |
 | 18 | `config update --merge` | Partial JSON deep-merged, existing keys preserved alongside new ones |
+| 18b | `config rename` | Configuration renamed via API, sync directory follows |
+| 18c | `config set-default-bucket --bucket / --clear / --dry-run` | `storage.output.default_bucket` set, no-op short-circuit on same value, key removed on `--clear` (sibling keys under `storage.output` preserved) |
 | 19 | `config new --component-id keboola.ex-http` | Scaffold generated with `_config.yml` file |
 
 ### Phase 5: Component discovery

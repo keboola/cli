@@ -124,7 +124,7 @@ Full command reference with flags: [SKILL.md](plugins/kbagent/skills/kbagent/SKI
 kbagent project     add | list | remove | edit | status | refresh | use | current
 kbagent org         setup
 kbagent component   list | detail
-kbagent config      list | detail | search | update | rename | delete | new
+kbagent config      list | detail | search | update | set-default-bucket | rename | delete | new
                     metadata-list | get-metadata | set-metadata | delete-metadata | set-folder
                     variables-set | variables-get | variables-clear
 kbagent job         list | detail | run | terminate

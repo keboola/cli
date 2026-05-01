@@ -29,6 +29,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "config.detail": "read",
     "config.search": "read",
     "config.update": "write",
+    "config.set-default-bucket": "write",
     "config.rename": "write",
     "config.delete": "destructive",
     "config.new": "write",

@@ -125,6 +125,12 @@ Use `kbagent <command> --help` for full flag details and examples.
     existing config (preserves sibling keys). --dry-run previews changes.
     Paths are always relative to the configuration root.
 
+  kbagent config set-default-bucket --project NAME --component-id ID --config-id ID (--bucket BUCKET_ID | --clear) [--dry-run] [--branch ID]
+    Set or clear configuration.storage.output.default_bucket on a config without
+    raw-mode JSON edits. --bucket/--clear are mutually exclusive. Read-modify-write
+    that preserves sibling keys under storage.output and the rest of the config.
+    No-op (with changed=false) when the value is already what you'd be setting.
+
   kbagent config rename --project NAME --component-id ID --config-id ID --name "New Name" [--branch ID] [--directory DIR]
     Rename a configuration. Updates name via API. If a local sync directory
     exists (.keboola/manifest.json), renames the directory and updates the
