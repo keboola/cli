@@ -274,8 +274,9 @@ class SharingService(BaseService):
                     "description": b.get("description", ""),
                     "sharing": b.get("sharing", ""),
                     "backend": b.get("backend", ""),
-                    "rows_count": b.get("rowsCount", 0),
-                    "data_size_bytes": b.get("dataSizeBytes", 0),
+                    # API may return null on empty buckets; coerce to 0.
+                    "rows_count": b.get("rowsCount") or 0,
+                    "data_size_bytes": b.get("dataSizeBytes") or 0,
                     "tables": [
                         {
                             "id": t.get("id", ""),

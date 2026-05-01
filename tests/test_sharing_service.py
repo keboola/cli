@@ -131,6 +131,39 @@ class TestListShared:
         result = service.list_shared()
         assert len(result["shared_buckets"]) == 1
 
+    def test_list_shared_coerces_null_numeric_fields_to_zero(self, tmp_config_dir: Path) -> None:
+        """Companion to issue #233: API may return null for rowsCount /
+        dataSizeBytes on empty shared buckets. list_shared must surface
+        0, not null, to keep JSON output well-typed.
+        """
+        store = setup_single_project(tmp_config_dir)
+
+        mock_client = MagicMock()
+        mock_client.list_shared_buckets.return_value = [
+            {
+                "id": "out.c-empty",
+                "displayName": "empty",
+                "description": "",
+                "sharing": "organization",
+                "backend": "snowflake",
+                "rowsCount": None,
+                "dataSizeBytes": None,
+                "tables": [],
+                "project": {"id": 123, "name": "Source"},
+            }
+        ]
+
+        service = SharingService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.list_shared(aliases=["prod"])
+        assert len(result["shared_buckets"]) == 1
+        b = result["shared_buckets"][0]
+        assert b["rows_count"] == 0
+        assert b["data_size_bytes"] == 0
+
 
 class TestShare:
     """Tests for sharing a bucket."""

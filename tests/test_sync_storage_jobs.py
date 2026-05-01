@@ -532,6 +532,59 @@ class TestWriteStorageMetadata:
         assert buckets_file.exists()
         assert json.loads(buckets_file.read_text(encoding="utf-8")) == []
 
+    def test_null_numeric_fields_coerced_to_zero(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """API may return null for tablesCount / dataSizeBytes / rowsCount on empty
+        objects. The on-disk JSON must surface 0 (not null) to keep the schema
+        well-typed for downstream consumers (LLM agents reading .keboola/...).
+        Companion to issue #233 -- same root cause, no crash but inconsistent
+        data shape.
+        """
+        svc = self._make_svc(tmp_config_dir)
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        buckets = [
+            {
+                "id": "in.c-empty",
+                "name": "c-empty",
+                "stage": "in",
+                "description": "",
+                "tablesCount": None,
+                "dataSizeBytes": None,
+                "metadata": [],
+            }
+        ]
+        tables = [
+            {
+                "id": "in.c-empty.t",
+                "name": "t",
+                "bucket": {"id": "in.c-empty"},
+                "primaryKey": [],
+                "columns": ["a"],
+                "rowsCount": None,
+                "dataSizeBytes": None,
+                "lastImportDate": None,
+                "lastChangeDate": None,
+                "description": "",
+                "metadata": [],
+                "columnMetadata": {},
+            }
+        ]
+
+        svc._write_storage_metadata(project_root, buckets, tables, {})
+
+        buckets_file = project_root / STORAGE_DIR_NAME / STORAGE_BUCKETS_FILENAME
+        bucket_summaries = json.loads(buckets_file.read_text(encoding="utf-8"))
+        assert bucket_summaries[0]["tables_count"] == 0
+        assert bucket_summaries[0]["data_size_bytes"] == 0
+
+        table_file = project_root / STORAGE_DIR_NAME / "tables" / "in-c-empty" / "t.json"
+        table_meta = json.loads(table_file.read_text(encoding="utf-8"))
+        assert table_meta["rows_count"] == 0
+        assert table_meta["data_size_bytes"] == 0
+
     def test_samples_written_to_correct_path(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """Samples are written to storage/samples/{bucket}/{table}/sample.csv."""
         svc = self._make_svc(tmp_config_dir)
@@ -875,6 +928,50 @@ class TestFetchSamples:
         svc._fetch_samples(mock_client, tables, sample_limit=42, max_samples=10)
 
         mock_client.get_table_data_preview.assert_called_once_with("t1", limit=42, columns=None)
+
+    def test_tables_with_none_rows_count_skipped(self, tmp_config_dir: Path) -> None:
+        """Tables with rowsCount=None (Storage API can return null) are treated as empty.
+
+        Regression for issue #233: dict.get("rowsCount", 0) returns None when the key
+        is present with a null value, which crashes the > 0 comparison on Python 3.
+        """
+        svc = self._make_svc(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.get_table_data_preview.return_value = '"col"\n"val"\n'
+
+        tables = [
+            {"id": "has-data", "rowsCount": 500},
+            {"id": "rows-is-none", "rowsCount": None},
+            {"id": "rows-missing"},
+        ]
+
+        result = svc._fetch_samples(mock_client, tables, sample_limit=100, max_samples=10)
+
+        assert len(result) == 1
+        assert "has-data" in result
+        assert "rows-is-none" not in result
+        assert "rows-missing" not in result
+
+    def test_mixed_none_and_numeric_rows_count_sorts_correctly(self, tmp_config_dir: Path) -> None:
+        """Sorting must not crash when some tables have rowsCount=None.
+
+        Regression for issue #233: even after filtering, the sort key can break
+        if any None slips through. Verify the sort key tolerates None entries.
+        """
+        svc = self._make_svc(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.get_table_data_preview.return_value = '"col"\n"v"\n'
+
+        tables = [
+            {"id": "a", "rowsCount": None},
+            {"id": "b", "rowsCount": 200},
+            {"id": "c", "rowsCount": 100},
+            {"id": "d", "rowsCount": None},
+        ]
+
+        result = svc._fetch_samples(mock_client, tables, sample_limit=10, max_samples=5)
+
+        assert set(result.keys()) == {"b", "c"}
 
 
 # ===================================================================

@@ -200,6 +200,69 @@ class TestListTablesMultiProject:
             service.list_tables(aliases=["does-not-exist"])
 
 
+class TestStorageNullNumericCoercion:
+    """Companion to issue #233: API may return null for rowsCount /
+    dataSizeBytes on empty tables and buckets. Service layer must surface
+    0, not null, so downstream JSON consumers see well-typed numbers.
+    """
+
+    def test_list_tables_coerces_null_numeric_fields_to_zero(self, tmp_path: Path) -> None:
+        store = _make_single_store(tmp_path)
+
+        mock_client = MagicMock()
+        mock_client.list_tables.return_value = [
+            {
+                "id": "in.c-empty.t",
+                "name": "t",
+                "displayName": "t",
+                "bucket": {"id": "in.c-empty"},
+                "rowsCount": None,
+                "dataSizeBytes": None,
+                "isAlias": False,
+                "lastImportDate": None,
+            }
+        ]
+        service = StorageService(
+            config_store=store,
+            client_factory=lambda _u, _t: mock_client,
+        )
+
+        result = service.list_tables(aliases=["test"])
+
+        assert len(result["tables"]) == 1
+        t = result["tables"][0]
+        assert t["rows_count"] == 0
+        assert t["data_size_bytes"] == 0
+
+    def test_list_buckets_coerces_null_numeric_fields_to_zero(self, tmp_path: Path) -> None:
+        store = _make_single_store(tmp_path)
+
+        mock_client = MagicMock()
+        mock_client.list_buckets.return_value = [
+            {
+                "id": "in.c-empty",
+                "displayName": "empty",
+                "name": "c-empty",
+                "stage": "in",
+                "backend": "snowflake",
+                "rowsCount": None,
+                "dataSizeBytes": None,
+                "description": "",
+            }
+        ]
+        service = StorageService(
+            config_store=store,
+            client_factory=lambda _u, _t: mock_client,
+        )
+
+        result = service.list_buckets(aliases=["test"])
+
+        assert len(result["buckets"]) == 1
+        b = result["buckets"][0]
+        assert b["rows_count"] == 0
+        assert b["data_size_bytes"] == 0
+
+
 # ------------------------------------------------------------------
 # CLI-layer tests
 # ------------------------------------------------------------------

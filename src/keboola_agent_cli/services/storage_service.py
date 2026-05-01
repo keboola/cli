@@ -308,8 +308,10 @@ class StorageService(BaseService):
                     "display_name": bucket.get("displayName", bucket.get("name", "")),
                     "stage": bucket.get("stage", ""),
                     "backend": bucket.get("backend", ""),
-                    "rows_count": bucket.get("rowsCount", 0),
-                    "data_size_bytes": bucket.get("dataSizeBytes", 0),
+                    # API may return null for these on empty buckets; coerce
+                    # to 0 (dict.get default only fires when key is missing).
+                    "rows_count": bucket.get("rowsCount") or 0,
+                    "data_size_bytes": bucket.get("dataSizeBytes") or 0,
                     "description": bucket.get("description", ""),
                     "is_linked": False,
                     "source_project_id": None,
@@ -570,8 +572,9 @@ class StorageService(BaseService):
             "columns": columns,
             "column_details": column_details,
             "primary_key": table.get("primaryKey", []),
-            "rows_count": table.get("rowsCount", 0),
-            "data_size_bytes": table.get("dataSizeBytes", 0),
+            # API may return null on empty tables; coerce to 0.
+            "rows_count": table.get("rowsCount") or 0,
+            "data_size_bytes": table.get("dataSizeBytes") or 0,
             "is_alias": table.get("isAlias", False),
             "last_import_date": table.get("lastImportDate", ""),
             "last_change_date": table.get("lastChangeDate", ""),
@@ -626,8 +629,9 @@ class StorageService(BaseService):
                         "bucket_id": t.get("bucket", {}).get("id", "")
                         if isinstance(t.get("bucket"), dict)
                         else "",
-                        "rows_count": t.get("rowsCount", 0),
-                        "data_size_bytes": t.get("dataSizeBytes", 0),
+                        # API may return null on empty tables; coerce to 0.
+                        "rows_count": t.get("rowsCount") or 0,
+                        "data_size_bytes": t.get("dataSizeBytes") or 0,
                         "is_alias": t.get("isAlias", False),
                         "last_import_date": t.get("lastImportDate", ""),
                     }
