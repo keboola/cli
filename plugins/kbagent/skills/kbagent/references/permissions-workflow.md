@@ -192,10 +192,61 @@ kbagent permissions reset               # type confirmation code
 # optionally remove .claude/settings.json deny rules
 ```
 
+## Manage tokens and the firewall (since v0.27.1)
+
+The firewall guards `OPERATION_REGISTRY` calls -- it does NOT
+intercept env-var reads or raw HTTP. So a sandboxed agent with
+`KBC_MANAGE_API_TOKEN` (or `KBC_MANAGE_TOKEN_<SUFFIX>`) in its env
+can `curl -H "X-KBC-ManageApiToken: $KBC_MANAGE_API_TOKEN"
+https://connection.keboola.com/manage/projects` and the firewall
+stays blind. Manage tokens are org-scoped (broader blast radius
+than per-project Storage tokens), so this leak matters.
+
+`kbagent` ships three layers of opt-out:
+
+```bash
+# 1. Session-only flag (one invocation):
+kbagent --no-env-manage-token data-app password --project foo --app-id 42
+# resolve_manage_token refuses both env-var forms and falls through
+# to TTY prompt (or exit 2 in non-interactive mode).
+
+# 2. Persisted policy (survives across invocations):
+kbagent permissions deny-manage-env       # type random confirmation code
+# AppConfig.allow_env_manage_token = False
+# Reverse with:
+kbagent permissions allow-manage-env
+
+# 3. Auto-set for AI sandboxes:
+kbagent init --from-global --read-only
+# In addition to the firewall, this sets
+# allow_env_manage_token=False for the new workspace.
+```
+
+When the persisted policy denies env, the resolver behaves the same
+as if `--no-env-manage-token` were passed on every invocation: env
+vars are ignored; TTY prompt is the only path; non-interactive exits
+2 with a message naming both env-var forms. The same random-code
+confirmation prompt that gates `permissions set` and `reset` gates
+`permissions {deny,allow}-manage-env` -- an AI agent cannot flip
+the policy programmatically.
+
+**Stack-aware resolver**: `resolve_manage_token()` also gained per-
+stack env-var lookup in v0.27.1. The hostname-derived form
+`KBC_MANAGE_TOKEN_<HOSTNAME_SUFFIX>` (e.g.
+`KBC_MANAGE_TOKEN_EU_CENTRAL_1` for `connection.eu-central-1.keboola.com`)
+is preferred when the caller can supply a `stack_url`. The legacy
+single-var `KBC_MANAGE_API_TOKEN` is the fallback for callers that
+cannot. Multi-stack `kbagent project refresh --all` resolves once
+per distinct stack with internal caching, so prompts fire at most
+once per stack. See `gotchas.md` ("Manage tokens are stack-scoped +
+sit OUTSIDE the firewall") for the full table of stack-to-suffix
+mappings.
+
 ## Key details
 
 - **Exit code 6** = operation blocked by permission policy
 - **`permissions` commands always work** -- you can never lock yourself out of checking/listing
 - **Changing or removing the policy requires interactive confirmation** (random code typed by human)
 - **New commands not in the registry** are treated as write operations (fail-closed)
-- Policy is stored in `config.json` alongside project configs
+- Policy is stored in `config.json` alongside project configs (mode 0600)
+- **`permissions reset` does NOT touch `allow_env_manage_token`** -- the manage-env policy is intentionally a separate axis. Use `permissions allow-manage-env` to revert it

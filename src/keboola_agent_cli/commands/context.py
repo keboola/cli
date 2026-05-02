@@ -50,6 +50,7 @@ observability -- all API requests will include the X-Conversation-ID header.
   --hint MODE       Generate Python code instead of executing (MODE: client or service)
   --deny-writes     Session-only firewall: block the WIDE NET -- every write, destructive, AND admin op (project add/remove/edit, org setup, all storage mutations)
   --deny-destructive  Session-only firewall: NARROW -- block only data-destructive ops in Keboola (delete-table/bucket/column, terminate-job, branch delete). Admin ops (project remove, org setup) stay allowed -- use --deny-writes for those
+  --no-env-manage-token  Session-only: refuse manage tokens from env vars (KBC_MANAGE_TOKEN_<SUFFIX> and KBC_MANAGE_API_TOKEN). TTY prompt only. AI-exfil mitigation. (since v0.27.1)
 
 ## All Commands
 
@@ -682,6 +683,13 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   kbagent permissions reset
     Remove all restrictions.
+
+  kbagent permissions deny-manage-env
+    Persisted: refuse env-var manage tokens (KBC_MANAGE_TOKEN_<SUFFIX>, KBC_MANAGE_API_TOKEN). TTY prompt only.
+    Closes the AI-exfiltration window inside `kbagent init --read-only` workspaces (since v0.27.1).
+
+  kbagent permissions allow-manage-env
+    Re-allow env-var manage tokens (default). Reverts `permissions deny-manage-env` (since v0.27.1).
 
   kbagent permissions check OPERATION
     Check if operation is allowed. Exit 0=allowed, 6=denied.

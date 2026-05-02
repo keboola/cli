@@ -30,6 +30,13 @@ description: >
   data-app create, data-app deploy, data-app password, data-app start,
   app proxy, simpleAuth, app auto-suspend, configVersion, redeploy contract,
   Data Science API, /apps endpoint, app password, KBC::Project ciphertext,
+  manage token, manage api token, KBC_MANAGE_API_TOKEN,
+  KBC_MANAGE_TOKEN_, per-stack manage token, multi-stack manage token,
+  multi-stack token resolution, manage token across stacks,
+  no-env-manage-token, --no-env-manage-token,
+  permissions deny-manage-env, permissions allow-manage-env,
+  AI exfiltration, exfiltrate manage token, env-var manage token,
+  read-only workspace, kbagent init --read-only, sandboxed agent token,
   local workspace, project directory, kbagent init.
 ---
 
@@ -81,6 +88,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show the current active permission policy | `kbagent permissions show` |
 | Set the permission policy (firewall rules) | `kbagent permissions set --mode MODE` |
 | Remove all permission restrictions | `kbagent permissions reset` |
+| Refuse to read manage tokens from environment variables | `kbagent permissions deny-manage-env` |
+| Re-allow reading manage tokens from environment variables (default) | `kbagent permissions allow-manage-env` |
 | Check if a specific operation is allowed | `kbagent permissions check <OPERATION>` |
 | Add a new Keboola project connection | `kbagent project add --project ALIAS` |
 | List all connected Keboola projects | `kbagent project list` |

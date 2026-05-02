@@ -161,21 +161,33 @@ def permissions_show(
 
     deny_writes = bool(ctx.obj.get("deny_writes")) if ctx.obj else False
     deny_destructive = bool(ctx.obj.get("deny_destructive")) if ctx.obj else False
+    # Session-only AI-exfil flag. The persisted equivalent lives on
+    # AppConfig.allow_env_manage_token and is reported separately below.
+    # The session flag is meaningful only when the persisted policy still
+    # allows env-var reads — otherwise the persisted denial is what's
+    # active and the session flag adds nothing.
+    no_env_manage_token = (
+        ctx.obj.get("allow_manage_env") is False if ctx.obj else False
+    ) and config.allow_env_manage_token
     session_flags: list[str] = []
     if deny_writes:
         session_flags.append("--deny-writes")
     if deny_destructive:
         session_flags.append("--deny-destructive")
+    if no_env_manage_token:
+        session_flags.append("--no-env-manage-token")
 
     persisted = config.permissions
+    persisted_manage_env_denied = not config.allow_env_manage_token
 
-    if persisted is None and not session_flags:
+    if persisted is None and not session_flags and not persisted_manage_env_denied:
         if formatter.json_mode:
             formatter.output(
                 {
                     "active": False,
                     "message": "No permission policy configured",
                     "session_flags": [],
+                    "allow_env_manage_token": config.allow_env_manage_token,
                 }
             )
         else:
@@ -183,7 +195,7 @@ def permissions_show(
         return
 
     policy_data: dict[str, Any] = {
-        "active": persisted is not None or bool(session_flags),
+        "active": (persisted is not None or bool(session_flags) or persisted_manage_env_denied),
         "persisted": (
             None
             if persisted is None
@@ -194,6 +206,7 @@ def permissions_show(
             }
         ),
         "session_flags": session_flags,
+        "allow_env_manage_token": config.allow_env_manage_token,
     }
 
     # Keep legacy top-level keys when a persisted policy exists so existing
@@ -227,6 +240,13 @@ def permissions_show(
         formatter.console.print(
             f"[bold yellow]Session firewall:[/bold yellow] {' '.join(session_flags)} "
             "[dim](active for this invocation only; not persisted)[/dim]"
+        )
+
+    if persisted_manage_env_denied:
+        formatter.console.print(
+            "[bold red]Env-var manage tokens DENIED[/bold red] "
+            "[dim](resolve_manage_token refuses KBC_MANAGE_API_TOKEN and "
+            "KBC_MANAGE_TOKEN_<SUFFIX>; TTY prompt only)[/dim]"
         )
 
 
@@ -339,6 +359,9 @@ def permissions_reset(
     config = config_store.load()
 
     config.permissions = None
+    # `reset` clears the firewall but preserves the manage-env policy --
+    # users who set --deny-manage-env should not have it silently undone
+    # by `reset`. Use `permissions allow-manage-env` to explicitly re-enable.
     config_store.save(config)
 
     if formatter.json_mode:
@@ -346,6 +369,96 @@ def permissions_reset(
     else:
         formatter.console.print(
             "[green]Permission policy removed. All operations are allowed.[/green]"
+        )
+
+
+@permissions_app.command("deny-manage-env")
+def permissions_deny_manage_env(
+    ctx: typer.Context,
+) -> None:
+    """Refuse to read manage tokens from environment variables.
+
+    Persists ``allow_env_manage_token=False`` in config.json. Once set,
+    every kbagent invocation refuses ``KBC_MANAGE_API_TOKEN`` and
+    ``KBC_MANAGE_TOKEN_<SUFFIX>`` -- a TTY prompt is the only path. Use
+    inside ``kbagent init --read-only`` workspaces (where the AI agent
+    cannot ``chmod`` the config back) to close the env-var exfiltration
+    window: env vars sit outside kbagent's permission firewall, so any
+    subprocess can ``curl`` the Manage API directly while ``--deny-
+    writes`` etc. silently let it through.
+
+    Requires interactive confirmation (random code) to prevent AI agents
+    from re-enabling env-var reads programmatically.
+    """
+    formatter = get_formatter(ctx)
+
+    if not _require_interactive_confirmation("deny env-var manage tokens"):
+        formatter.error(
+            message="Confirmation failed. Manage-env policy not changed.",
+            error_code=ErrorCode.PERMISSION_DENIED,
+        )
+        raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
+
+    config_store: ConfigStore = get_service(ctx, "config_store")
+    config = config_store.load()
+    config.allow_env_manage_token = False
+    config_store.save(config)
+
+    if formatter.json_mode:
+        formatter.output(
+            {
+                "status": "ok",
+                "allow_env_manage_token": False,
+                "message": "Env-var manage tokens are now denied. TTY prompt only.",
+            }
+        )
+    else:
+        formatter.console.print(
+            "[bold red]Env-var manage tokens DENIED.[/bold red] "
+            "Future kbagent invocations refuse KBC_MANAGE_API_TOKEN and "
+            "KBC_MANAGE_TOKEN_<SUFFIX>; TTY prompt only."
+        )
+
+
+@permissions_app.command("allow-manage-env")
+def permissions_allow_manage_env(
+    ctx: typer.Context,
+) -> None:
+    """Re-allow reading manage tokens from environment variables (default).
+
+    Reverts ``allow_env_manage_token`` to True. Use to undo
+    ``kbagent permissions deny-manage-env`` when leaving an AI-sandbox
+    workspace or moving the install to a CI runner.
+
+    Requires interactive confirmation (random code).
+    """
+    formatter = get_formatter(ctx)
+
+    if not _require_interactive_confirmation("allow env-var manage tokens"):
+        formatter.error(
+            message="Confirmation failed. Manage-env policy not changed.",
+            error_code=ErrorCode.PERMISSION_DENIED,
+        )
+        raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
+
+    config_store: ConfigStore = get_service(ctx, "config_store")
+    config = config_store.load()
+    config.allow_env_manage_token = True
+    config_store.save(config)
+
+    if formatter.json_mode:
+        formatter.output(
+            {
+                "status": "ok",
+                "allow_env_manage_token": True,
+                "message": "Env-var manage tokens are now allowed.",
+            }
+        )
+    else:
+        formatter.console.print(
+            "[green]Env-var manage tokens ALLOWED.[/green] "
+            "KBC_MANAGE_API_TOKEN and KBC_MANAGE_TOKEN_<SUFFIX> may be used "
+            "(unless overridden by the session flag --no-env-manage-token)."
         )
 
 

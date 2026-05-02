@@ -72,6 +72,22 @@ class TestAppConfig:
         assert config.version == 1
         assert config.default_project == ""
         assert config.projects == {}
+        # Backwards-compat default: env-var manage tokens are allowed unless
+        # the user opts out (per `permissions deny-manage-env` or
+        # `kbagent init --read-only`).
+        assert config.allow_env_manage_token is True
+
+    def test_allow_env_manage_token_round_trip(self) -> None:
+        """allow_env_manage_token survives JSON round-trip."""
+        original = AppConfig(allow_env_manage_token=False)
+        restored = AppConfig.model_validate_json(original.model_dump_json())
+        assert restored.allow_env_manage_token is False
+
+    def test_legacy_config_without_field_loads(self) -> None:
+        """Configs persisted before this field landed still load (default applies)."""
+        legacy = '{"version": 1, "default_project": "", "projects": {}}'
+        config = AppConfig.model_validate_json(legacy)
+        assert config.allow_env_manage_token is True
 
     def test_config_with_projects(self) -> None:
         """AppConfig can hold multiple project connections."""

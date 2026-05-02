@@ -45,6 +45,7 @@ from typer.testing import CliRunner
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.models import AppConfig
 
 # ---------------------------------------------------------------------------
 # Environment & skip logic
@@ -6082,3 +6083,88 @@ class TestE2EDataAppLifecycle:
             )
         )["data"]
         assert deploy["config_version"], "deploy must pin a configVersion"
+
+
+@pytest.mark.e2e
+@skip_without_credentials
+class TestE2EPermissionsManageEnv:
+    """E2E coverage for `kbagent permissions deny-manage-env` /
+    `allow-manage-env` (added in v0.27.1).
+
+    These do NOT call any external API (the policy lives in config.json
+    only) but are exercised under the e2e marker per CLAUDE.md
+    convention #16: "Every new CLI command MUST have a corresponding E2E
+    test." Validates the full CliRunner path -- argv parsing, ConfigStore
+    save side-effect, JSON envelope, and the random-code confirmation
+    gate -- against a real on-disk config dir.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _per_test_workspace(self, tmp_path: Path) -> Any:
+        """Each test gets its own scratch config dir so tests don't share
+        the persisted manage-env policy."""
+        self.config_dir = tmp_path / ".kbagent"
+        self.config_dir.mkdir()
+        store = ConfigStore(config_dir=self.config_dir, source="local")
+        store.save(AppConfig())  # default: allow_env_manage_token=True
+        yield
+
+    def test_deny_then_allow_round_trip(self) -> None:
+        with patch(
+            "keboola_agent_cli.commands.permissions._require_interactive_confirmation",
+            return_value=True,
+        ):
+            r = _invoke(self.config_dir, ["--json", "permissions", "deny-manage-env"])
+            body = _json_ok(r)
+            assert body["data"]["allow_env_manage_token"] is False
+
+            cfg = ConfigStore(config_dir=self.config_dir).load()
+            assert cfg.allow_env_manage_token is False
+
+            r = _invoke(self.config_dir, ["--json", "permissions", "allow-manage-env"])
+            body = _json_ok(r)
+            assert body["data"]["allow_env_manage_token"] is True
+
+            cfg = ConfigStore(config_dir=self.config_dir).load()
+            assert cfg.allow_env_manage_token is True
+
+    def test_show_reports_persisted_denial(self) -> None:
+        with patch(
+            "keboola_agent_cli.commands.permissions._require_interactive_confirmation",
+            return_value=True,
+        ):
+            _invoke(self.config_dir, ["--json", "permissions", "deny-manage-env"])
+
+        r = _invoke(self.config_dir, ["--json", "permissions", "show"])
+        body = _json_ok(r)
+        assert body["data"]["allow_env_manage_token"] is False
+        assert body["data"]["active"] is True
+
+    def test_persisted_denial_survives_permissions_reset(self) -> None:
+        """`reset` clears the firewall policy but MUST NOT silently re-
+        enable env-var manage tokens for sandboxed installs."""
+        with patch(
+            "keboola_agent_cli.commands.permissions._require_interactive_confirmation",
+            return_value=True,
+        ):
+            # Set a firewall policy AND deny manage-env, then reset.
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "permissions",
+                    "set",
+                    "--mode",
+                    "allow",
+                    "--deny",
+                    "cli:write",
+                ],
+            )
+            _invoke(self.config_dir, ["--json", "permissions", "deny-manage-env"])
+            _invoke(self.config_dir, ["--json", "permissions", "reset"])
+
+        cfg = ConfigStore(config_dir=self.config_dir).load()
+        assert cfg.permissions is None, "firewall policy was reset"
+        assert cfg.allow_env_manage_token is False, (
+            "manage-env denial MUST survive `permissions reset`"
+        )

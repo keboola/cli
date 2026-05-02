@@ -202,8 +202,11 @@ def org_setup(
     Creates Storage API tokens and registers projects. Safe to re-run --
     already registered projects are skipped.
 
-    The token is read from KBC_MANAGE_API_TOKEN env var or prompted
-    interactively (never passed as a CLI argument for security).
+    The token is read from `KBC_MANAGE_TOKEN_<HOSTNAME_SUFFIX>` (per-stack,
+    since v0.27.1) or `KBC_MANAGE_API_TOKEN` (legacy single-stack
+    fallback) env var, or prompted interactively (never passed as a CLI
+    argument for security). See `kbagent context` or the plugin
+    `commands-reference.md` for the per-stack suffix table.
     """
     if should_hint(ctx):
         emit_hint(ctx, "org.setup", org_id=org_id, url=url, dry_run=dry_run)
@@ -220,7 +223,7 @@ def org_setup(
         )
         raise typer.Exit(code=2)
 
-    manage_token = resolve_manage_token()
+    manage_token = resolve_manage_token(stack_url=url, allow_env=ctx.obj["allow_manage_env"])
 
     # Build kwargs shared by preview and real call
     setup_kwargs: dict = {

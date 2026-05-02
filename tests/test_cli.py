@@ -7829,6 +7829,199 @@ class TestInit:
         config_path = tmp_path / ".kbagent" / "config.json"
         assert config_path.is_file()
 
+    def test_init_read_only_denies_env_manage_token_by_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """init --read-only sets allow_env_manage_token=False so a sandboxed
+        agent cannot exfiltrate KBC_MANAGE_API_TOKEN via raw HTTP."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+
+        # --read-only requires existing projects, so seed via --from-global.
+        global_dir = tmp_path / "global-config"
+        global_dir.mkdir()
+
+        from keboola_agent_cli.config_store import ConfigStore
+        from keboola_agent_cli.models import ProjectConfig
+
+        with patch("keboola_agent_cli.cli.resolve_config_dir") as mock_resolve:
+            mock_resolve.return_value = (global_dir, "global")
+            global_store = ConfigStore(config_dir=global_dir, source="global")
+            global_store.add_project(
+                "prod",
+                ProjectConfig(
+                    stack_url="https://connection.keboola.com",
+                    token="901-xxx-testtoken1234",
+                    project_name="Production",
+                    project_id=1234,
+                ),
+            )
+            result = runner.invoke(app, ["--json", "init", "--read-only", "--from-global"])
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+
+        # Read directly to bypass any local-store source caching.
+        config_path = tmp_path / ".kbagent" / "config.json"
+        parsed = json.loads(config_path.read_text(encoding="utf-8"))
+        assert parsed["allow_env_manage_token"] is False
+        # The existing read-only firewall is still applied.
+        assert parsed["permissions"]["mode"] == "allow"
+        assert "cli:write" in parsed["permissions"]["deny"]
+
+    def test_init_without_read_only_keeps_env_manage_token_default_true(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Plain `kbagent init` (no --read-only) leaves allow_env_manage_token=True."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+
+        result = runner.invoke(app, ["--json", "init"])
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+
+        config_path = tmp_path / ".kbagent" / "config.json"
+        parsed = json.loads(config_path.read_text(encoding="utf-8"))
+        # Either the field is True (preferred) OR omitted (legacy serializer
+        # might drop the default). Both load identically via AppConfig.
+        assert parsed.get("allow_env_manage_token", True) is True
+
+    def test_hint_mode_with_no_env_manage_token_documented_limitation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`kbagent --hint client --no-env-manage-token data-app password ...`
+        should emit hint code WITHOUT executing the command.
+
+        Important documented limitation: the hint renderer emits a template
+        Python snippet that reads `os.environ["KBC_MANAGE_API_TOKEN"]` --
+        because hint mode is for users who need a starting code template,
+        and the env-var read is the most common pattern in CI scripts.
+        The `--no-env-manage-token` flag affects ONLY the kbagent process's
+        own resolver path; it does NOT rewrite the rendered template.
+
+        Users running with `--no-env-manage-token` who also use hint mode
+        are expected to adapt the rendered snippet to their preferred
+        token-source pattern (TTY prompt, secrets manager, etc.). This
+        test pins that contract.
+        """
+        from keboola_agent_cli.config_store import ConfigStore
+        from keboola_agent_cli.models import AppConfig, ProjectConfig
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+
+        local_dir = tmp_path / ".kbagent"
+        local_dir.mkdir()
+        store = ConfigStore(config_dir=local_dir, source="local")
+        store.save(
+            AppConfig(
+                projects={
+                    "prod": ProjectConfig(
+                        stack_url="https://connection.us-east4.gcp.keboola.com",
+                        token="901-prod-storageTokenValue1234567",
+                        project_name="P",
+                        project_id=5726,
+                    ),
+                },
+            )
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "--hint",
+                "client",
+                "--no-env-manage-token",
+                "data-app",
+                "password",
+                "--project",
+                "prod",
+                "--app-id",
+                "999",
+            ],
+        )
+
+        # Hint mode exits 0 even with --no-env-manage-token because it
+        # never invokes the runtime resolver -- it emits a template.
+        assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output!r}"
+        # The rendered template DOES contain the env-var read pattern --
+        # documenting the current behavior.
+        assert "KBC_MANAGE_API_TOKEN" in result.output
+        # And the resolver was NOT invoked (no exit-2 message; no token
+        # exfiltration attempt either).
+        assert "Env-var manage tokens are disabled" not in result.output
+
+    def test_persisted_deny_manage_env_blocks_env_resolver_end_to_end(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End-to-end: when AppConfig.allow_env_manage_token=False is
+        persisted in config.json, a fresh kbagent invocation refuses
+        KBC_MANAGE_API_TOKEN -- proving the persisted policy threads
+        through cli.py -> ctx.obj['allow_manage_env'] -> resolve_manage_token
+        -> exit 2 in non-interactive mode. This closes the AI-exfil
+        window the session-flag test cannot fully exercise (the session
+        flag is by definition for one invocation only)."""
+        from keboola_agent_cli.config_store import ConfigStore
+        from keboola_agent_cli.models import AppConfig, ProjectConfig
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+        monkeypatch.delenv("KBC_MANAGE_TOKEN_US_EAST4_GCP", raising=False)
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "would-have-been-exfiltrated")
+
+        # Seed a sandboxed-style local workspace: a project alias so the
+        # resolver has a stack_url to derive a per-stack name from, and
+        # the persisted denial bit set.
+        local_dir = tmp_path / ".kbagent"
+        local_dir.mkdir()
+        store = ConfigStore(config_dir=local_dir, source="local")
+        cfg = AppConfig(
+            allow_env_manage_token=False,
+            projects={
+                "prod": ProjectConfig(
+                    stack_url="https://connection.us-east4.gcp.keboola.com",
+                    token="901-prod-storageTokenValue1234567",
+                    project_name="Production",
+                    project_id=5726,
+                ),
+            },
+        )
+        store.save(cfg)
+
+        # Patch DataScienceClient at the module path the data-app command
+        # imports — if the resolver wrongly let the env token through, the
+        # service would instantiate this client and the patch would record
+        # the call. Asserting it was NEVER called is the empirical proof
+        # that the token did not reach the wire.
+        with patch(
+            "keboola_agent_cli.services.data_app_service.DataScienceClient"
+        ) as mock_ds_client:
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "data-app",
+                    "password",
+                    "--project",
+                    "prod",
+                    "--app-id",
+                    "999",
+                ],
+                input="",  # no TTY -> resolver should exit 2
+            )
+
+        # Resolver MUST exit with code 2 (the documented "no manage token
+        # available" code), not just any non-zero. A different code would
+        # mean the resolver let the env token through and the failure
+        # came from a downstream layer (which is the bug we're guarding
+        # against).
+        assert result.exit_code == 2, (
+            f"Expected exit 2 from resolver; got {result.exit_code}. Output: {result.output!r}"
+        )
+        # Token must NEVER appear in any output channel.
+        assert "would-have-been-exfiltrated" not in result.output
+        # DataScienceClient must NEVER have been instantiated -- the
+        # resolver exited before any HTTP-client construction.
+        mock_ds_client.assert_not_called()
+
     def test_init_idempotent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """init does not overwrite existing .kbagent/config.json."""
         monkeypatch.chdir(tmp_path)
@@ -8283,6 +8476,18 @@ class TestProjectRefresh:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         store = ConfigStore(config_dir=config_dir)
+        # Single-project refresh now resolves the alias's stack_url up
+        # front so resolve_manage_token can pick the per-stack env var
+        # (since v0.27.1). The alias must therefore exist in the config.
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-prod-existingTokenValue123456",
+                project_name="Production",
+                project_id=258,
+            ),
+        )
 
         single_result = {
             "projects_refreshed": [
@@ -8305,7 +8510,7 @@ class TestProjectRefresh:
             patch(
                 "keboola_agent_cli.commands.project.resolve_manage_token",
                 return_value="manage-token-123456789012345678",
-            ),
+            ) as mock_resolver,
         ):
             MockStore.return_value = store
 
@@ -8331,10 +8536,19 @@ class TestProjectRefresh:
         assert len(output["data"]["projects_refreshed"]) == 1
         assert output["data"]["projects_refreshed"][0]["alias"] == "prod"
 
-        # Verify service was called with aliases=["prod"]
+        # Verify service was called with aliases=["prod"] AND with a single
+        # manage_token (NOT a resolver — single-project mode uses the
+        # legacy path).
         mock_service.refresh_tokens.assert_called_once()
         call_kwargs = mock_service.refresh_tokens.call_args[1]
         assert call_kwargs["aliases"] == ["prod"]
+        assert call_kwargs["manage_token"] == "manage-token-123456789012345678"
+        assert "manage_token_resolver" not in call_kwargs
+        # Resolver invoked with the alias's stack_url so the per-stack
+        # env-var lookup wins for multi-stack users.
+        mock_resolver.assert_called_once_with(
+            stack_url="https://connection.keboola.com", allow_env=True
+        )
 
     def test_project_refresh_api_error(self, tmp_path: Path) -> None:
         """project refresh with API error returns appropriate exit code."""

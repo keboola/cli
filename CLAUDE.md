@@ -251,7 +251,7 @@ plugins/kbagent/
 > "Plugin synchronization map" for the full list.
 
 ```
-# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service, --deny-writes, --deny-destructive
+# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service, --deny-writes, --deny-destructive, --no-env-manage-token
 
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list
@@ -383,9 +383,17 @@ kbagent schedule detail --project NAME --schedule-id ID [--branch ID]
 kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--project NAME ...] [--branch ID]
 
 kbagent context
-kbagent init [--from-global]
+kbagent init [--from-global] [--read-only]
 kbagent doctor [--fix]
 kbagent version
 kbagent update
 kbagent changelog [--limit N]
+
+kbagent permissions list [--category read|write|destructive|admin]
+kbagent permissions show
+kbagent permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]
+kbagent permissions reset
+kbagent permissions deny-manage-env
+kbagent permissions allow-manage-env
+kbagent permissions check OPERATION
 ```

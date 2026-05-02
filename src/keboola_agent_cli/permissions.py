@@ -166,6 +166,8 @@ OPERATION_REGISTRY: dict[str, str] = {
     "permissions.show": "read",
     "permissions.set": "admin",
     "permissions.reset": "admin",
+    "permissions.deny-manage-env": "admin",
+    "permissions.allow-manage-env": "admin",
     "permissions.check": "read",
 }
 

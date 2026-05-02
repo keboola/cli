@@ -24,7 +24,17 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 ## Permission flags (top-level, session-only)
 - `--deny-writes` -- block all write/destructive/admin operations for this single invocation. Merges with any persisted permission policy; never written to config.json. Exit code 6 (PERMISSION_DENIED) on blocked operations
 - `--deny-destructive` -- block only destructive operations (delete-table, delete-bucket, terminate-job, etc.) for this invocation. Pure-write ops like create-table stay allowed. Use this when you want to keep build-up capabilities but lock out tear-downs
-- Both flags compose: `kbagent --deny-writes --deny-destructive ...` is the safest read-only run
+- `--no-env-manage-token` (since v0.27.1) -- refuse to read manage tokens from env vars (`KBC_MANAGE_TOKEN_<SUFFIX>` and `KBC_MANAGE_API_TOKEN`) for this invocation. TTY prompt only. Use inside AI-agent sandboxes -- env vars sit OUTSIDE the firewall, so a subprocess can `curl /manage/...` even when `--deny-writes` is set
+- All three flags compose: `kbagent --deny-writes --deny-destructive --no-env-manage-token ...` is the strictest one-shot run
+
+## Permission persistence (config.json)
+- `permissions list [--category read|write|destructive|admin]` -- list every operation the firewall knows about + current allow/deny status under the active policy
+- `permissions show` -- print the currently active permission policy (persisted + session flags)
+- `permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]` -- replace the persisted firewall policy. Patterns: exact (`branch.delete`), glob (`tool:create_*`), category (`cli:write`, `tool:read`). Gated by random-code interactive confirmation
+- `permissions reset` -- remove the persisted firewall policy (does NOT touch the manage-env policy below). Gated by random-code interactive confirmation
+- `permissions deny-manage-env` (since v0.27.1) -- persist `allow_env_manage_token=False` so future invocations refuse env-var manage tokens regardless of session flags. Gated by random-code interactive confirmation. Ideal inside `kbagent init --read-only` workspaces
+- `permissions allow-manage-env` (since v0.27.1) -- revert to default-allow for env-var manage tokens. Gated by random-code interactive confirmation
+- `permissions check OPERATION` -- exit 0 if the operation is allowed under the active policy, exit 6 otherwise
 
 ## Organization
 - `org setup --org-id ID --url URL [--dry-run] [--yes]` -- bulk-onboard all projects from an org (org admin, needs `KBC_MANAGE_API_TOKEN`)
@@ -167,7 +177,7 @@ Lifecycle for `keboola.data-apps`. Combines Storage API (config body, git block,
 - `encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]` -- encrypt #-prefixed secrets via Keboola Encryption API (one-way, no decrypt). Scope: ComponentSecure (project + component). Use for MCP tool call workflows.
 
 ## Utility
-- `init [--from-global]` -- create local `.kbagent/` workspace (per-directory isolation)
+- `init [--from-global] [--read-only]` -- create local `.kbagent/` workspace (per-directory isolation). `--read-only` (since v0.25.x) sets a deny-writes firewall AND defaults `allow_env_manage_token=False` (since v0.27.1) for AI-agent sandboxes
 - `doctor [--fix]` -- health checks; `--fix` auto-installs MCP server binary
 - `version` -- show version and check for MCP server updates
 - `context` -- full usage instructions for AI agents
@@ -180,13 +190,17 @@ Lifecycle for `keboola.data-apps`. Combines Storage API (config body, git block,
 | `--no-color` | Disable colors |
 | `--config-dir` | Override config directory |
 | `--hint client\|service` | Generate Python code instead of executing (see [programming-with-cli.md](programming-with-cli.md)) |
+| `--deny-writes` | Session firewall: block writes/destructive/admin |
+| `--deny-destructive` | Session firewall: block destructive only |
+| `--no-env-manage-token` (since v0.27.1) | Refuse env-var manage tokens for this invocation; TTY prompt only |
 
 ## Environment Variables
 | Variable | Purpose |
 |----------|---------|
 | `KBC_TOKEN` | Fallback for `--token` |
 | `KBC_STORAGE_API_URL` | Default stack URL |
-| `KBC_MANAGE_API_TOKEN` | Manage API token (org setup) |
+| `KBC_MANAGE_API_TOKEN` | Manage API token (org setup, project refresh, data-app password) -- legacy single-stack form; works for any stack pre-0.27.1 and as a fallback after |
+| `KBC_MANAGE_TOKEN_<SUFFIX>` (since v0.27.1) | Per-stack Manage API token. Suffix is the hostname segment between `connection.` and `.keboola.com`, uppercased, non-alnum -> `_`. Examples: `KBC_MANAGE_TOKEN_EU_CENTRAL_1`, `KBC_MANAGE_TOKEN_US_EAST4_GCP`, `KBC_MANAGE_TOKEN_NORTH_EUROPE_AZURE`. The legacy stack `connection.keboola.com` has no per-stack form -- use `KBC_MANAGE_API_TOKEN` |
 | `KBAGENT_CONFIG_DIR` | Override config directory |
 
 ## Exit Codes

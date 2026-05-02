@@ -9,6 +9,9 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+import click
+import typer
+
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
 from ..constants import DEFAULT_TOKEN_DESCRIPTION
@@ -17,6 +20,18 @@ from ..manage_client import ManageClient
 from ..models import ProjectConfig
 
 logger = logging.getLogger(__name__)
+
+# typer.Exit/Abort (and the underlying click.exceptions.Exit/Abort) are
+# control-flow signals for CLI early termination, NOT errors. They inherit
+# Exception, so any naive `except Exception` swallows them and would
+# convert a clean exit-2 from resolve_manage_token into a confusing
+# per-project failure. Re-raise these explicitly before the catch-all.
+_CONTROL_FLOW_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    typer.Exit,
+    typer.Abort,
+    click.exceptions.Exit,
+    click.exceptions.Abort,
+)
 
 ManageClientFactory = Callable[[str, str], ManageClient]
 StorageClientFactory = Callable[[str, str], KeboolaClient]
@@ -227,12 +242,14 @@ class OrgService:
 
     def refresh_tokens(
         self,
-        manage_token: str,
+        manage_token: str | None = None,
         aliases: list[str] | None = None,
         token_description: str = DEFAULT_TOKEN_DESCRIPTION,
         dry_run: bool = False,
         token_expires_in: int | None = None,
         force: bool = False,
+        *,
+        manage_token_resolver: Callable[[str], str] | None = None,
     ) -> dict[str, Any]:
         """Refresh storage API tokens for registered projects.
 
@@ -240,19 +257,67 @@ class OrgService:
         projects with expired or invalid tokens. Already-valid tokens are
         skipped unless ``force=True``.
 
+        Multi-stack callers should pass ``manage_token_resolver`` so a
+        distinct manage token is used per stack — Manage tokens are
+        stack-scoped, and reusing a single token across stacks results in
+        401s on every project that doesn't match the issuing stack. The
+        resolver is invoked **lazily, at most once per distinct
+        ``stack_url``** in the refresh set, with the result cached for the
+        duration of the call.
+
         Args:
-            manage_token: Manage API token (for creating new storage tokens).
+            manage_token: Single manage token used for every project (legacy
+                single-stack convenience). Mutually exclusive with
+                ``manage_token_resolver``.
             aliases: Optional list of project aliases to refresh. If None, all
                 projects are checked.
             token_description: Description prefix for newly created tokens.
             dry_run: If True, only preview what would happen without making changes.
             token_expires_in: Token lifetime in seconds. None means no expiration.
             force: If True, refresh all tokens even if they are still valid.
+            manage_token_resolver: Callable invoked with each distinct
+                ``stack_url`` in the refresh set, returning the manage token
+                to use for projects on that stack. Use this for any flow
+                that may span multiple stacks (the typical
+                ``project refresh --all`` case). Mutually exclusive with
+                ``manage_token``.
 
         Returns:
             Dict with refresh results including refreshed, valid, skipped,
             and failed projects.
+
+        Raises:
+            ValueError: If neither or both of ``manage_token`` and
+                ``manage_token_resolver`` are provided.
         """
+        if manage_token is None and manage_token_resolver is None:
+            raise ValueError("refresh_tokens requires either manage_token or manage_token_resolver")
+        if manage_token is not None and manage_token_resolver is not None:
+            raise ValueError(
+                "refresh_tokens accepts manage_token OR manage_token_resolver, not both"
+            )
+
+        # Per-stack token cache. The resolver is invoked at most once per
+        # distinct stack_url across the entire refresh; failures inside the
+        # resolver propagate to the caller (typer.Exit from
+        # resolve_manage_token, etc.) rather than being swallowed here.
+        _token_by_stack: dict[str, str] = {}
+
+        def _token_for(stack_url: str) -> str:
+            cached = _token_by_stack.get(stack_url)
+            if cached is not None:
+                return cached
+            if manage_token is not None:
+                # Legacy single-token path: same token for every stack. Only
+                # correct when projects share one stack — the multi-stack
+                # path requires manage_token_resolver.
+                resolved = manage_token
+            else:
+                assert manage_token_resolver is not None
+                resolved = manage_token_resolver(stack_url)
+            _token_by_stack[stack_url] = resolved
+            return resolved
+
         config = self._config_store.load()
 
         # Determine which projects to check
@@ -285,20 +350,39 @@ class OrgService:
                 "token_expires_in": token_expires_in,
             }
 
-        # Resolve manage token owner identity for unique token naming
-        owner_name = ""
-        manage_client = self._manage_client_factory(
-            projects_to_check[0][1].stack_url,
-            manage_token,
-        )
-        try:
-            token_info = manage_client.verify_token()
-            user_info = token_info.get("user", {})
-            owner_name = user_info.get("email") or user_info.get("name", "")
-        except Exception:
-            logger.debug("Could not resolve manage token owner identity")
-        finally:
-            manage_client.close()
+        # Resolve manage-token owner identity (for unique token naming) per
+        # stack, since Manage tokens are stack-scoped: the owner email under
+        # one stack is meaningless under another. Owner name per stack is
+        # cached alongside the token.
+        _owner_by_stack: dict[str, str] = {}
+
+        def _owner_for(stack_url: str) -> str:
+            cached = _owner_by_stack.get(stack_url)
+            if cached is not None:
+                return cached
+            owner = ""
+            try:
+                manage_client = self._manage_client_factory(stack_url, _token_for(stack_url))
+                try:
+                    token_info = manage_client.verify_token()
+                    user_info = token_info.get("user", {})
+                    owner = user_info.get("email") or user_info.get("name", "")
+                finally:
+                    manage_client.close()
+            except _CONTROL_FLOW_EXCEPTIONS:
+                # Resolver raised typer.Exit (no env + no TTY) or typer.Abort
+                # (Ctrl-C during TTY prompt). These are CLI control flow,
+                # not "owner-name lookup failed" -- bubble up so the caller
+                # exits cleanly instead of treating every project on this
+                # stack as a per-project failure.
+                raise
+            except Exception:
+                logger.debug(
+                    "Could not resolve manage token owner identity for %s",
+                    stack_url,
+                )
+            _owner_by_stack[stack_url] = owner
+            return owner
 
         projects_refreshed: list[dict[str, Any]] = []
         projects_valid: list[dict[str, Any]] = []
@@ -368,11 +452,11 @@ class OrgService:
 
             try:
                 new_token = self._refresh_single_project(
-                    manage_token=manage_token,
+                    manage_token=_token_for(project.stack_url),
                     alias=alias,
                     project=project,
                     token_description=token_description,
-                    owner_name=owner_name,
+                    owner_name=_owner_for(project.stack_url),
                     token_expires_in=token_expires_in,
                 )
                 projects_refreshed.append(
@@ -384,6 +468,12 @@ class OrgService:
                         "action": "refreshed",
                     }
                 )
+            except _CONTROL_FLOW_EXCEPTIONS:
+                # The lazy resolver raised typer.Exit (no env + no TTY for
+                # this stack) or the user pressed Ctrl-C during the TTY
+                # prompt. Don't bury the signal as a per-project failure --
+                # bubble up so the CLI exits cleanly with code 2.
+                raise
             except Exception as exc:
                 failed.append(
                     {

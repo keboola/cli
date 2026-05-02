@@ -394,7 +394,11 @@ def project_refresh(
     """Refresh expired or invalid Storage API tokens.
 
     Creates new tokens via the Manage API and updates the local config.
-    Requires a Manage API token (via KBC_MANAGE_API_TOKEN env var or interactive prompt).
+    Requires a Manage API token (via per-stack
+    `KBC_MANAGE_TOKEN_<SUFFIX>` env var since v0.27.1, with
+    `KBC_MANAGE_API_TOKEN` as the legacy single-stack fallback, or
+    interactive prompt). With `--all` across multiple stacks, the
+    resolver fires once per distinct stack with caching.
 
     \b
     Examples:
@@ -420,18 +424,46 @@ def project_refresh(
         )
         raise typer.Exit(code=2)
 
-    manage_token = resolve_manage_token()
-
     aliases = [project] if project else None
 
-    # Build kwargs shared by preview and real call
+    # Build kwargs shared by preview and real call. Manage tokens are
+    # stack-scoped: in single-project mode we resolve once for the alias's
+    # stack; in --all mode we pass a per-stack resolver so refresh_tokens
+    # can lazily fetch a distinct token for each stack present in the
+    # refresh set.
+    config_store = ctx.obj["config_store"]
+    allow_manage_env = ctx.obj["allow_manage_env"]
+
     refresh_kwargs: dict = {
-        "manage_token": manage_token,
         "aliases": aliases,
         "token_description": token_description,
         "token_expires_in": token_expires_in,
         "force": force,
     }
+
+    if project:
+        # Single project: resolve eagerly so any TTY prompt happens before
+        # the preview rather than mid-render.
+        cfg = config_store.load()
+        target = cfg.projects.get(project)
+        if target is None:
+            formatter.error(
+                message=f"Project '{project}' not found in config",
+                error_code=ErrorCode.CONFIG_ERROR,
+            )
+            raise typer.Exit(code=5)
+        refresh_kwargs["manage_token"] = resolve_manage_token(
+            stack_url=target.stack_url, allow_env=allow_manage_env
+        )
+    else:
+        # --all: resolve lazily per distinct stack inside the service. The
+        # resolver caches its results in resolve_manage_token's caller
+        # context (the service holds the cache; this lambda is just the
+        # bridge). Multi-stack configs prompt at most once per stack.
+        def _resolve_for_stack(stack_url: str) -> str:
+            return resolve_manage_token(stack_url=stack_url, allow_env=allow_manage_env)
+
+        refresh_kwargs["manage_token_resolver"] = _resolve_for_stack
 
     # Interactive safety: show preview first, then confirm
     interactive = not formatter.json_mode and not yes and not dry_run

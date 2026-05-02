@@ -82,6 +82,18 @@ class AppConfig(BaseModel):
         default=None,
         description="Firewall-style permission policy (None = no restrictions)",
     )
+    allow_env_manage_token: bool = Field(
+        default=True,
+        description=(
+            "Whether resolve_manage_token() may read the token from environment "
+            "variables (KBC_MANAGE_TOKEN_<SUFFIX> or KBC_MANAGE_API_TOKEN). "
+            "Set to False via `kbagent permissions deny-manage-env` (or "
+            "automatically by `kbagent init --read-only`) to refuse env-var "
+            "manage tokens — useful inside AI-agent sandboxes where env is "
+            "outside the kbagent permission firewall and any subprocess can "
+            "exfiltrate the token via raw HTTP."
+        ),
+    )
     projects: dict[str, ProjectConfig] = Field(
         default_factory=dict,
         description="Map of alias -> ProjectConfig",

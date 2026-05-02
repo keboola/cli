@@ -583,15 +583,35 @@ def data_app_password(
 ) -> None:
     """Retrieve the simpleAuth password for a password-gated data app.
 
-    Requires KBC_MANAGE_API_TOKEN in addition to the project's Storage
-    token. Token is read from env or interactive prompt; never persisted.
+    Requires a Manage API token in addition to the project's Storage
+    token. The Manage token is read from `KBC_MANAGE_TOKEN_<SUFFIX>`
+    (per-stack, since v0.27.1; the suffix is derived from the project's
+    stack hostname) or `KBC_MANAGE_API_TOKEN` (legacy single-stack
+    fallback), or via interactive hidden prompt; never persisted.
     """
     if should_hint(ctx):
         emit_hint(ctx, "data-app.password", project=project, app_id=app_id)
         return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
-    manage_token = resolve_manage_token()
+
+    # Resolve the project's stack URL up front so resolve_manage_token can
+    # pick the per-stack env var (KBC_MANAGE_TOKEN_<SUFFIX>) and the TTY
+    # prompt names the right stack. If the alias is missing we'd hit the
+    # service's own error path; resolving early gives a cleaner exit.
+    config_store = ctx.obj["config_store"]
+    cfg = config_store.load()
+    target = cfg.projects.get(project)
+    if target is None:
+        formatter.error(
+            message=f"Project '{project}' not found in config",
+            error_code=ErrorCode.CONFIG_ERROR,
+        )
+        raise typer.Exit(code=5)
+
+    manage_token = resolve_manage_token(
+        stack_url=target.stack_url, allow_env=ctx.obj["allow_manage_env"]
+    )
 
     try:
         result = service.get_data_app_password(

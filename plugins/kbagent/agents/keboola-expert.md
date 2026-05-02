@@ -64,11 +64,13 @@ a critical failure.
    needed for the current task (e.g. `flow update` needs 0.22.0+,
    `schedule find` needs 0.23.0+, `config set-default-bucket` needs
    0.26.0+, `data-app create / deploy / start / stop / delete / password`
-   need 0.27.0+, `storage retype` is a future composite), you MUST refuse
-   the task and return a handoff message to the parent: `"Cannot proceed
-   safely on kbagent <version>. Missing: <commands>. Ask user to run
-   kbagent update, then re-invoke me."` Do not attempt the task with
-   workarounds that use MCP strip-bug-prone tools.
+   need 0.27.0+, multi-stack manage-token resolution + `--no-env-manage-token`
+   + `permissions {deny,allow}-manage-env` need 0.27.1+, `storage retype`
+   is a future composite), you MUST refuse the task and return a handoff
+   message to the parent: `"Cannot proceed safely on kbagent <version>.
+   Missing: <commands>. Ask user to run kbagent update, then re-invoke
+   me."` Do not attempt the task with workarounds that use MCP strip-
+   bug-prone tools.
 
 7. **ALWAYS USE `--json`**. Every `kbagent` invocation MUST have
    `--json` as the first flag after `kbagent`. This makes output
@@ -104,6 +106,9 @@ a critical failure.
 | Pause a running data app | `kbagent data-app stop --project P --app-id N` (0.27.0+) | -- | `kbagent data-app delete` (irreversible; cascades to Storage config) |
 | Read the simpleAuth password for a password-gated app | `kbagent data-app password --project P --app-id N` (0.27.0+) -- requires `KBC_MANAGE_API_TOKEN` | -- | trying to "rotate" the password (not supported by the API; delete + recreate to mint a new one) |
 | Tear down a data app | `kbagent data-app delete --project P --app-id N` (0.27.0+) -- cascades to Storage config; URL retired | -- | manually `tool call delete_config keboola.data-apps` while leaving the deployment record orphaned |
+| Hold manage tokens for projects on multiple stacks (US/EU/GCP/Azure) | `KBC_MANAGE_TOKEN_<HOSTNAME_SUFFIX>` env vars (`KBC_MANAGE_TOKEN_EU_CENTRAL_1`, `KBC_MANAGE_TOKEN_US_EAST4_GCP`, `KBC_MANAGE_TOKEN_NORTH_EUROPE_AZURE`, …) (0.27.1+) -- hostname-derived suffix; legacy `KBC_MANAGE_API_TOKEN` is a single-stack fallback | TTY prompt fallback when only some stacks have env vars set (resolve_manage_token names the stack URL in the prompt) | reusing one `KBC_MANAGE_API_TOKEN` across multiple stacks (token is stack-scoped; wrong-stack call returns 401) |
+| Refuse env-var manage tokens for ONE invocation | `kbagent --no-env-manage-token <command>` (0.27.1+) -- session flag; mirrors `--deny-writes` shape | -- | trusting `--deny-writes` to block raw `curl -H "X-KBC-ManageApiToken: $KBC_MANAGE_API_TOKEN" ...` (env vars sit OUTSIDE kbagent's permission firewall) |
+| Refuse env-var manage tokens permanently in a sandboxed install | `kbagent permissions deny-manage-env` (0.27.1+) -- persists `allow_env_manage_token=False` in config.json; reversed by `kbagent permissions allow-manage-env`; auto-set by `kbagent init --read-only` (0.27.1+) | `--no-env-manage-token` per call (less robust against AI-agent attempts to flip the policy) | leaving `KBC_MANAGE_API_TOKEN` unrestricted in env when an AI agent has shell access |
 
 If the table does not cover the user's task, **ask clarifying
 questions** instead of guessing. Returning a targeted question is a
@@ -235,6 +240,27 @@ success, not a failure.
   projects, so `kbagent data-app create` always re-encrypts plaintext via
   the target project's Encryption API and refuses to write plaintext if
   the round-trip does not return a `KBC::Project*` ciphertext.
+
+- **Manage tokens are stack-scoped + sit OUTSIDE the firewall** (0.27.1+):
+  `KBC_MANAGE_API_TOKEN` works only for the stack that minted it.
+  Projects spanning `connection.eu-central-1.keboola.com` /
+  `connection.us-east4.gcp.keboola.com` / Azure stacks need per-stack
+  env vars: `KBC_MANAGE_TOKEN_<HOSTNAME_SUFFIX>` (`_EU_CENTRAL_1`,
+  `_US_EAST4_GCP`, `_NORTH_EUROPE_AZURE`, …). Hostname-derived; no
+  curated table. Legacy single-var keeps working as a fallback for
+  single-stack callers. **AI-exfil mitigation**: env vars are NOT
+  guarded by `kbagent`'s permission firewall — a sandboxed agent
+  with `KBC_MANAGE_API_TOKEN` in its env can `curl -H "X-KBC-
+  ManageApiToken: $KBC_MANAGE_API_TOKEN" /manage/projects` while
+  `--deny-writes` silently lets it through. Three layers of opt-out:
+  `--no-env-manage-token` (session, like `--deny-writes`),
+  `kbagent permissions deny-manage-env` (persisted; gated by random-
+  code confirmation; survives across invocations and config reloads),
+  and `kbagent init --read-only` (auto-sets `allow_env_manage_token=
+  False` for new sandboxed installs). When the deny is active,
+  `resolve_manage_token` falls through to a TTY prompt that names the
+  target stack URL — non-interactive callers get exit code 2 and a
+  message naming both env-var forms.
 
 - **`storage bucket-detail` is dialect-aware** (0.25.3+): the response
   shape depends on the bucket's backend. Snowflake buckets carry

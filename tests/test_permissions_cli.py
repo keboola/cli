@@ -322,6 +322,118 @@ class TestPermissionsReset:
         assert config.permissions is not None
 
 
+class TestPermissionsManageEnv:
+    """Tests for `kbagent permissions deny-manage-env` / `allow-manage-env`."""
+
+    def test_deny_manage_env_persists_false(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch(
+                "keboola_agent_cli.commands.permissions._require_interactive_confirmation",
+                return_value=True,
+            ),
+        ):
+            MockStore.return_value = store
+            result = runner.invoke(app, ["--json", "permissions", "deny-manage-env"])
+        assert result.exit_code == 0, result.output
+        cfg = store.load()
+        assert cfg.allow_env_manage_token is False
+        # JSON envelope reports the new state.
+        body = json.loads(result.output)
+        assert body["status"] == "ok"
+        assert body["data"]["allow_env_manage_token"] is False
+
+    def test_deny_manage_env_rejected_without_confirmation(self, tmp_path: Path) -> None:
+        """Without TTY confirmation, the policy MUST stay True (the fail-
+        closed protection that prevents an AI agent from flipping the
+        policy programmatically)."""
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch(
+                "keboola_agent_cli.commands.permissions._require_interactive_confirmation",
+                return_value=False,
+            ),
+        ):
+            MockStore.return_value = store
+            result = runner.invoke(app, ["--json", "permissions", "deny-manage-env"])
+        assert result.exit_code == EXIT_PERMISSION_DENIED
+        cfg = store.load()
+        assert cfg.allow_env_manage_token is True, (
+            "policy must NOT have been flipped without confirmation"
+        )
+
+    def test_allow_manage_env_reverts_to_true(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        # Pre-set the persisted denial.
+        cfg = store.load()
+        cfg.allow_env_manage_token = False
+        store.save(cfg)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch(
+                "keboola_agent_cli.commands.permissions._require_interactive_confirmation",
+                return_value=True,
+            ),
+        ):
+            MockStore.return_value = store
+            result = runner.invoke(app, ["--json", "permissions", "allow-manage-env"])
+        assert result.exit_code == 0, result.output
+        cfg = store.load()
+        assert cfg.allow_env_manage_token is True
+        body = json.loads(result.output)
+        assert body["data"]["allow_env_manage_token"] is True
+
+    def test_allow_manage_env_rejected_without_confirmation(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        cfg = store.load()
+        cfg.allow_env_manage_token = False
+        store.save(cfg)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch(
+                "keboola_agent_cli.commands.permissions._require_interactive_confirmation",
+                return_value=False,
+            ),
+        ):
+            MockStore.return_value = store
+            result = runner.invoke(app, ["--json", "permissions", "allow-manage-env"])
+        assert result.exit_code == EXIT_PERMISSION_DENIED
+        cfg = store.load()
+        assert cfg.allow_env_manage_token is False, (
+            "denial MUST persist when allow-manage-env is rejected by confirmation"
+        )
+
+    def test_reset_does_not_touch_manage_env_policy(self, tmp_path: Path) -> None:
+        """`permissions reset` clears the firewall policy but DELIBERATELY
+        leaves allow_env_manage_token alone -- the manage-env axis is
+        separate. Use `permissions allow-manage-env` to revert it."""
+        policy = PermissionPolicy(mode="allow", deny=["cli:write"])
+        store = _make_store(tmp_path, policy)
+        cfg = store.load()
+        cfg.allow_env_manage_token = False
+        store.save(cfg)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch(
+                "keboola_agent_cli.commands.permissions._require_interactive_confirmation",
+                return_value=True,
+            ),
+        ):
+            MockStore.return_value = store
+            result = runner.invoke(app, ["--json", "permissions", "reset"])
+        assert result.exit_code == 0
+        cfg = store.load()
+        assert cfg.permissions is None, "firewall policy should be cleared"
+        assert cfg.allow_env_manage_token is False, (
+            "manage-env policy MUST survive `permissions reset`"
+        )
+
+
 class TestPermissionsCheck:
     """Tests for `kbagent permissions check`."""
 

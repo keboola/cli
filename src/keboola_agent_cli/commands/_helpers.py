@@ -9,48 +9,144 @@ Provides common patterns used by all CLI commands:
 """
 
 import os
+import re
 import sys
 from typing import Any
+from urllib.parse import urlparse
 
 import typer
 
 from ..config_store import ConfigStore
 from ..constants import (
     ENV_KBC_MANAGE_API_TOKEN,
+    ENV_KBC_MANAGE_TOKEN_PREFIX,
     EXIT_JOB_TIMEOUT_TERMINATED,
     EXIT_PERMISSION_DENIED,
 )
 from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError
 from ..output import OutputFormatter
 
+_LEGACY_HOSTNAME = "connection.keboola.com"
+_NON_ALNUM = re.compile(r"[^A-Za-z0-9]+")
 
-def resolve_manage_token() -> str:
-    """Resolve the manage token from env var or interactive prompt.
 
-    Token resolution order:
-    1. KBC_MANAGE_API_TOKEN env var (for CI/CD)
-    2. Interactive prompt with hidden input (if TTY)
-    3. Error if neither available
+def _stack_suffix_for_env_var(stack_url: str | None) -> str | None:
+    """Derive the per-stack env-var suffix from a Keboola stack URL.
+
+    Strategy: hostname-derived, deterministic, no curated table. The
+    hostname between ``connection.`` and the trailing ``.keboola.com``
+    becomes the suffix, uppercased with non-alphanumerics replaced by
+    underscores. Future stacks slot in automatically.
+
+    Returns ``None`` for the legacy single-stack case
+    (``connection.keboola.com``) and for empty / malformed input — those
+    callers fall back to the legacy ``KBC_MANAGE_API_TOKEN`` env var.
+
+    Examples:
+        https://connection.keboola.com                  -> None
+        https://connection.eu-central-1.keboola.com     -> "EU_CENTRAL_1"
+        https://connection.us-east4.gcp.keboola.com     -> "US_EAST4_GCP"
+        https://connection.north-europe.azure.keboola.com -> "NORTH_EUROPE_AZURE"
+    """
+    if not stack_url:
+        return None
+    try:
+        host = urlparse(stack_url).hostname or ""
+    except ValueError:
+        return None
+    host = host.lower()
+    if not host or host == _LEGACY_HOSTNAME:
+        return None
+    if not host.startswith("connection.") or not host.endswith(".keboola.com"):
+        return None
+    middle = host[len("connection.") : -len(".keboola.com")]
+    if not middle:
+        return None
+    suffix = _NON_ALNUM.sub("_", middle).strip("_").upper()
+    return suffix or None
+
+
+def resolve_manage_token(
+    stack_url: str | None = None,
+    *,
+    allow_env: bool = True,
+) -> str:
+    """Resolve the manage token for the target stack.
+
+    Resolution order:
+        1. ``KBC_MANAGE_TOKEN_<SUFFIX>`` env var, when ``stack_url`` is
+           given AND ``allow_env`` is True. The suffix is derived from
+           the stack hostname (see :func:`_stack_suffix_for_env_var`).
+        2. ``KBC_MANAGE_API_TOKEN`` env var, when ``allow_env`` is True
+           — legacy single-stack fallback so existing CI keeps working.
+        3. Interactive TTY prompt (hidden input). The prompt names the
+           stack URL so the operator knows which stack to type for.
+        4. Exit code 2 with an error naming both env-var forms.
+
+    Manage tokens are stack-scoped (`connection.eu-central-1.keboola.com`
+    !=  `connection.us-east4.gcp.keboola.com`); the per-stack form lets a
+    single shell hold tokens for projects on multiple stacks without
+    swapping vars. ``allow_env=False`` is the AI-exfiltration kill
+    switch — set by the top-level ``--no-env-manage-token`` flag or by
+    the persisted ``AppConfig.allow_env_manage_token=False`` policy
+    (typically active inside ``kbagent init --read-only`` workspaces).
+
+    Args:
+        stack_url: Target stack URL. When provided, enables per-stack
+            env-var lookup. ``None`` (legacy callers) falls straight to
+            the single-stack env var or TTY.
+        allow_env: When False, both env-var paths are skipped — the
+            resolver behaves as if no env var were set, forcing TTY
+            prompt or exit 2. The token never reaches a Manage API call
+            from env in this mode.
 
     Returns:
-        The manage API token.
+        The manage API token, never logged or echoed.
 
     Raises:
         typer.Exit: If no token can be resolved.
     """
-    env_token = os.environ.get(ENV_KBC_MANAGE_API_TOKEN)
-    if env_token:
-        return env_token
+    if allow_env:
+        suffix = _stack_suffix_for_env_var(stack_url)
+        if suffix:
+            per_stack_env = f"{ENV_KBC_MANAGE_TOKEN_PREFIX}{suffix}"
+            env_token = os.environ.get(per_stack_env)
+            if env_token:
+                return env_token
+
+        env_token = os.environ.get(ENV_KBC_MANAGE_API_TOKEN)
+        if env_token:
+            return env_token
 
     is_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
     if is_tty:
-        return typer.prompt("Manage API token", hide_input=True)
+        prompt_label = f"Manage API token for {stack_url}" if stack_url else "Manage API token"
+        return typer.prompt(prompt_label, hide_input=True)
 
-    typer.echo(
-        f"Error: No manage token available. Set {ENV_KBC_MANAGE_API_TOKEN} env var "
-        "or run interactively.",
-        err=True,
-    )
+    suffix = _stack_suffix_for_env_var(stack_url)
+    expected_var = f"{ENV_KBC_MANAGE_TOKEN_PREFIX}{suffix}" if suffix else ENV_KBC_MANAGE_API_TOKEN
+    if allow_env:
+        # Avoid printing the legacy fallback name twice when no per-stack
+        # form is derivable from the URL — that just reads as a typo to
+        # the operator.
+        if expected_var == ENV_KBC_MANAGE_API_TOKEN:
+            hint = f"Set {expected_var}"
+        else:
+            hint = f"Set {expected_var} (or {ENV_KBC_MANAGE_API_TOKEN} as a fallback)"
+        msg = f"Error: No manage token available. {hint} or run interactively."
+    else:
+        # Env reads are disabled; only TTY would have unblocked this call.
+        # Name BOTH levers so the operator knows which to flip if they
+        # actually intended env-var resolution to work.
+        msg = (
+            "Error: No manage token available. Env-var manage tokens are "
+            "disabled in this session (--no-env-manage-token, or persisted "
+            "via `kbagent permissions deny-manage-env` / `kbagent init "
+            "--read-only`); run interactively to provide one, or run "
+            "`kbagent permissions allow-manage-env` to re-enable env-var "
+            "resolution."
+        )
+    typer.echo(msg, err=True)
     raise typer.Exit(code=2)
 
 

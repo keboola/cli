@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
@@ -1197,3 +1199,289 @@ class TestRefreshTokens:
         assert result["projects_checked"] == 0
         assert len(result["projects_refreshed"]) == 0
         assert len(result["projects_valid"]) == 0
+
+
+class TestRefreshTokensMultiStack:
+    """Tests for the per-stack token resolver path in refresh_tokens.
+
+    These exercise the multi-stack `--all` flow where each project may
+    live on a different stack and a single shared manage token is wrong
+    by construction. The resolver is invoked at most once per distinct
+    stack_url, with the result cached for the duration of the call.
+    """
+
+    @staticmethod
+    def _setup_store(tmp_path: Path, projects: dict[str, dict]) -> ConfigStore:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+        for alias, kwargs in projects.items():
+            store.add_project(alias, ProjectConfig(**kwargs))
+        return store
+
+    @staticmethod
+    def _make_manage_mock() -> MagicMock:
+        mock = MagicMock()
+        mock.create_project_token.return_value = {
+            "id": "tok-new",
+            "token": "901-99999-multiStackTokenValue1234",
+            "description": "kbagent-cli",
+        }
+        mock.verify_token.return_value = {
+            "user": {"email": "admin@test.com", "name": "Admin"},
+        }
+        return mock
+
+    def test_resolver_called_once_per_distinct_stack(self, tmp_path: Path) -> None:
+        """Two projects on the same stack, two on a different stack ->
+        the resolver is called exactly twice (once per distinct stack)."""
+        store = self._setup_store(
+            tmp_path,
+            {
+                "us-a": {
+                    "stack_url": "https://connection.keboola.com",
+                    "token": "901-old-expiredA1234567890123456",
+                    "project_name": "US-A",
+                    "project_id": 1001,
+                },
+                "us-b": {
+                    "stack_url": "https://connection.keboola.com",
+                    "token": "901-old-expiredB1234567890123456",
+                    "project_name": "US-B",
+                    "project_id": 1002,
+                },
+                "eu-a": {
+                    "stack_url": "https://connection.eu-central-1.keboola.com",
+                    "token": "901-old-expiredEU1234567890123456",
+                    "project_name": "EU-A",
+                    "project_id": 2001,
+                },
+                "eu-b": {
+                    "stack_url": "https://connection.eu-central-1.keboola.com",
+                    "token": "901-old-expiredEU2345678901234567",
+                    "project_name": "EU-B",
+                    "project_id": 2002,
+                },
+            },
+        )
+
+        # Storage factory routes to one of two shared mocks depending on
+        # the token: the OLD/expired tokens (every existing project_token)
+        # raise INVALID_TOKEN; the NEWLY minted token (returned by
+        # create_project_token below) verifies cleanly.
+        old_token_mock = MagicMock()
+        old_token_mock.verify_token.side_effect = KeboolaApiError(
+            message="Invalid token",
+            status_code=401,
+            error_code="INVALID_TOKEN",
+        )
+        new_token_mock = MagicMock()
+        new_token_mock.verify_token.return_value = TokenVerifyResponse(
+            token_id="new",
+            token_description="kbagent-cli",
+            project_id=1,
+            project_name="P",
+            owner_name="O",
+        )
+
+        new_token_value = "901-99999-multiStackTokenValue1234"
+
+        def storage_factory(url: str, token: str) -> MagicMock:
+            return new_token_mock if token == new_token_value else old_token_mock
+
+        # Per-stack ManageClient mocks so we can assert that the
+        # owner-name introspection (verify_token) AND token-creation
+        # workload landed on the right stack -- and exactly once each
+        # for verify_token (the per-stack `_owner_for` cache).
+        manage_mocks: dict[str, MagicMock] = {
+            "https://connection.keboola.com": self._make_manage_mock(),
+            "https://connection.eu-central-1.keboola.com": self._make_manage_mock(),
+        }
+
+        def manage_factory(url: str, token: str) -> MagicMock:
+            return manage_mocks[url]
+
+        service = OrgService(
+            config_store=store,
+            manage_client_factory=manage_factory,
+            storage_client_factory=storage_factory,
+        )
+
+        # Track resolver calls
+        resolver_calls: list[str] = []
+
+        def resolver(stack_url: str) -> str:
+            resolver_calls.append(stack_url)
+            return f"manage-token-for-{stack_url}-padded-padded-padded"
+
+        result = service.refresh_tokens(manage_token_resolver=resolver)
+
+        # Resolver invoked exactly twice -- once per distinct stack.
+        assert len(resolver_calls) == 2
+        assert set(resolver_calls) == {
+            "https://connection.keboola.com",
+            "https://connection.eu-central-1.keboola.com",
+        }
+        # `verify_token` (owner-name introspection) MUST be called exactly
+        # once per distinct stack, NOT once per project. This pins the
+        # per-stack `_owner_for` cache invariant -- without it, a 4-project
+        # x 2-stack refresh would issue 4 verify_token calls instead of 2.
+        for stack_url, mock in manage_mocks.items():
+            assert mock.verify_token.call_count == 1, (
+                f"verify_token on {stack_url} called "
+                f"{mock.verify_token.call_count} times; expected exactly 1 "
+                "(once per distinct stack, not once per project)"
+            )
+        # `create_project_token` IS called once per project (4 total),
+        # split 2-and-2 across the two stacks.
+        assert sum(m.create_project_token.call_count for m in manage_mocks.values()) == 4
+        # All four projects refreshed.
+        assert result["projects_checked"] == 4
+        assert len(result["projects_refreshed"]) == 4
+
+    def test_legacy_single_token_path_still_works(self, tmp_path: Path) -> None:
+        """Backwards compat: passing manage_token (no resolver) keeps the
+        legacy behavior where the same token is reused for every project."""
+        store = self._setup_store(
+            tmp_path,
+            {
+                "prod": {
+                    "stack_url": "https://connection.keboola.com",
+                    "token": "901-old-expiredTokenValue123456789",
+                    "project_name": "Prod",
+                    "project_id": 100,
+                },
+            },
+        )
+
+        mock_storage = MagicMock()
+        mock_storage.verify_token.side_effect = [
+            KeboolaApiError(
+                message="Invalid token",
+                status_code=401,
+                error_code="INVALID_TOKEN",
+            ),
+            TokenVerifyResponse(
+                token_id="new",
+                token_description="kbagent-cli",
+                project_id=100,
+                project_name="Prod",
+                owner_name="Owner",
+            ),
+        ]
+
+        def storage_factory(url: str, token: str) -> MagicMock:
+            return mock_storage
+
+        manage_mock = MagicMock()
+        manage_mock.create_project_token.return_value = {
+            "id": "tok-new",
+            "token": "901-99999-legacyPathToken1234567890",
+            "description": "kbagent-cli",
+        }
+        manage_mock.verify_token.return_value = {
+            "user": {"email": "admin@test.com"},
+        }
+
+        def manage_factory(url: str, token: str) -> MagicMock:
+            return manage_mock
+
+        service = OrgService(
+            config_store=store,
+            manage_client_factory=manage_factory,
+            storage_client_factory=storage_factory,
+        )
+
+        result = service.refresh_tokens(manage_token="legacy-token-padded-1234567890")
+        assert len(result["projects_refreshed"]) == 1
+
+    def test_neither_token_nor_resolver_raises(self, tmp_path: Path) -> None:
+        store = self._setup_store(
+            tmp_path,
+            {
+                "prod": {
+                    "stack_url": "https://connection.keboola.com",
+                    "token": "901-old-expiredTokenValue123456789",
+                    "project_name": "Prod",
+                    "project_id": 100,
+                },
+            },
+        )
+        service = OrgService(
+            config_store=store,
+            manage_client_factory=lambda u, t: MagicMock(),
+            storage_client_factory=lambda u, t: MagicMock(),
+        )
+        with pytest.raises(ValueError, match="manage_token or manage_token_resolver"):
+            service.refresh_tokens()
+
+    def test_both_token_and_resolver_raises(self, tmp_path: Path) -> None:
+        store = self._setup_store(
+            tmp_path,
+            {
+                "prod": {
+                    "stack_url": "https://connection.keboola.com",
+                    "token": "901-old-expiredTokenValue123456789",
+                    "project_name": "Prod",
+                    "project_id": 100,
+                },
+            },
+        )
+        service = OrgService(
+            config_store=store,
+            manage_client_factory=lambda u, t: MagicMock(),
+            storage_client_factory=lambda u, t: MagicMock(),
+        )
+        with pytest.raises(ValueError, match="not both"):
+            service.refresh_tokens(
+                manage_token="legacy-token-padded-1234567890",
+                manage_token_resolver=lambda _u: "resolver-token",
+            )
+
+    def test_resolver_typer_exit_propagates_not_swallowed(self, tmp_path: Path) -> None:
+        """If the lazy resolver raises typer.Exit (no env + no TTY), the
+        for-loop's `except Exception` MUST NOT swallow it as a per-project
+        failure. Exit-2 is CLI control flow and the user expects a clean
+        non-zero exit, not a "failed: SystemExit" entry in projects_failed."""
+        import typer
+
+        store = self._setup_store(
+            tmp_path,
+            {
+                "prod": {
+                    "stack_url": "https://connection.eu-central-1.keboola.com",
+                    "token": "901-old-expiredEU1234567890123456",
+                    "project_name": "EU",
+                    "project_id": 2001,
+                },
+            },
+        )
+
+        # Storage check returns INVALID_TOKEN so we enter the refresh path
+        # where _token_for is invoked.
+        old_token_mock = MagicMock()
+        old_token_mock.verify_token.side_effect = KeboolaApiError(
+            message="Invalid token",
+            status_code=401,
+            error_code="INVALID_TOKEN",
+        )
+
+        def storage_factory(url: str, token: str) -> MagicMock:
+            return old_token_mock
+
+        # The resolver simulates `resolve_manage_token` raising typer.Exit
+        # in non-interactive mode with no env var set.
+        def resolver(stack_url: str) -> str:
+            raise typer.Exit(code=2)
+
+        service = OrgService(
+            config_store=store,
+            manage_client_factory=lambda u, t: MagicMock(),
+            storage_client_factory=storage_factory,
+        )
+
+        # Must propagate the typer.Exit, NOT return a result with the
+        # exit recorded as a per-project failure.
+        with pytest.raises(typer.Exit) as exc:
+            service.refresh_tokens(manage_token_resolver=resolver)
+        assert exc.value.exit_code == 2

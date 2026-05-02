@@ -101,6 +101,16 @@ def init_command(
             mode="allow",
             deny=["cli:write", "tool:write"],
         )
+        # Read-only workspaces are typically AI-agent sandboxes. Env vars
+        # sit OUTSIDE the kbagent permission firewall, so a sandboxed
+        # agent with KBC_MANAGE_API_TOKEN in its env can `curl` the
+        # Manage API directly while --deny-writes silently lets it
+        # through. Default to refusing env-var manage tokens to close
+        # that exfiltration window; the operator can re-enable later
+        # via `kbagent permissions allow-manage-env` if they need to
+        # (likewise, `kbagent permissions deny-manage-env` is the same
+        # lever for an existing non-read-only workspace).
+        config.allow_env_manage_token = False
 
     local_store = ConfigStore(config_dir=local_dir, source="local")
     local_store.save(config)
@@ -172,6 +182,15 @@ def _create_claude_settings(project_dir: Path, kbagent_dir: Path) -> None:
         "Bash(kbagent permissions reset*)",
         "Bash(*permissions set*)",
         "Bash(*permissions reset*)",
+        # Defense-in-depth parity for the manage-env policy commands
+        # (since v0.27.1). The random-code TTY confirmation is the
+        # primary gate; these deny rules add a second layer at the
+        # Claude Code permission boundary so the agent never even
+        # attempts to invoke them programmatically.
+        "Bash(kbagent permissions deny-manage-env*)",
+        "Bash(kbagent permissions allow-manage-env*)",
+        "Bash(*permissions deny-manage-env*)",
+        "Bash(*permissions allow-manage-env*)",
         "Bash(*--config-dir*)",
         "Bash(*KBAGENT_CONFIG_DIR*)",
     ]

@@ -220,6 +220,17 @@ def main(
         "branch delete, etc.). Admin ops like 'project remove' and 'org setup' "
         "are NOT blocked -- use --deny-writes for the wide net.",
     ),
+    no_env_manage_token: bool = typer.Option(
+        False,
+        "--no-env-manage-token",
+        help="Session-only: refuse to read manage tokens from environment "
+        "variables (KBC_MANAGE_TOKEN_<SUFFIX> and KBC_MANAGE_API_TOKEN). "
+        "TTY prompt only. Use inside AI-agent sandboxes where env is "
+        "outside the kbagent permission firewall and any subprocess can "
+        "exfiltrate the token via raw HTTP. The persisted equivalent is "
+        "`kbagent permissions deny-manage-env` (also auto-set by "
+        "`kbagent init --read-only`).",
+    ),
 ) -> None:
     """Global options applied to all commands."""
     from .auto_update import maybe_auto_update, show_post_update_changelog
@@ -312,9 +323,19 @@ def main(
     try:
         config = config_store.load()
         persisted_policy = config.permissions
+        persisted_allow_env_manage_token = config.allow_env_manage_token
     except Exception:
-        # Config may be invalid (e.g. corrupted JSON) -- skip persisted policy
+        # Config may be invalid (e.g. corrupted JSON) -- skip persisted policy.
         persisted_policy = None
+        # Fail closed for the manage-env policy when a config file exists
+        # but cannot be loaded: a sandboxed install might have persisted
+        # `allow_env_manage_token=False` and a corruption must NOT silently
+        # re-enable env-var manage-token reads. When no config file exists
+        # at all (truly fresh install), the safe default is True so existing
+        # CI workflows keep working.
+        config_path = (resolved_dir / "config.json") if resolved_dir else None
+        config_exists_but_unreadable = bool(config_path and config_path.exists())
+        persisted_allow_env_manage_token = not config_exists_but_unreadable
 
     session_policy = apply_firewall_flags(
         persisted_policy,
@@ -322,6 +343,11 @@ def main(
         deny_destructive=deny_destructive,
     )
     permission_engine = PermissionEngine(session_policy)
+
+    # AI-exfiltration mitigation: env-var manage tokens are allowed only when
+    # BOTH the persisted policy permits it AND the session flag is not set.
+    # Either gate flips the resolver into TTY-only mode for this invocation.
+    allow_manage_env = persisted_allow_env_manage_token and not no_env_manage_token
 
     # Resolve hint mode
     hint_mode = None
@@ -339,6 +365,7 @@ def main(
     ctx.obj["no_color"] = effective_no_color
     ctx.obj["deny_writes"] = deny_writes
     ctx.obj["deny_destructive"] = deny_destructive
+    ctx.obj["allow_manage_env"] = allow_manage_env
     ctx.obj["config_store"] = config_store
     ctx.obj["project_service"] = project_service
     ctx.obj["component_service"] = component_service

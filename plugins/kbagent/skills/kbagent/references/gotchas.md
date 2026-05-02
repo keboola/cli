@@ -911,3 +911,62 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
 - To inspect or remove schedules: `kbagent flow schedule-remove` deletes all
   scheduler configs that target the flow. Pair it with `--dry-run` to see the
   affected configs (cron + timezone) without calling `delete_config`.
+
+## Manage tokens are stack-scoped + sit OUTSIDE the firewall (since v0.27.1)
+
+`KBC_MANAGE_API_TOKEN` works only for the stack that minted it.
+A `kbagent` install that holds projects on multiple stacks (US, EU,
+GCP, Azure) cannot use a single env var; the wrong stack returns 401
+silently. Two related fixes shipped in 0.27.1:
+
+**Per-stack env vars.** `resolve_manage_token()` derives the
+expected env-var name from the target stack URL and looks it up
+first:
+
+| Stack URL | Expected env var |
+|---|---|
+| `connection.keboola.com` (legacy AWS US) | `KBC_MANAGE_API_TOKEN` (no per-stack form) |
+| `connection.eu-central-1.keboola.com` | `KBC_MANAGE_TOKEN_EU_CENTRAL_1` |
+| `connection.us-east4.gcp.keboola.com` | `KBC_MANAGE_TOKEN_US_EAST4_GCP` |
+| `connection.eu-west1.gcp.keboola.com` | `KBC_MANAGE_TOKEN_EU_WEST1_GCP` |
+| `connection.north-europe.azure.keboola.com` | `KBC_MANAGE_TOKEN_NORTH_EUROPE_AZURE` |
+
+The suffix is the hostname between `connection.` and `.keboola.com`,
+uppercased with non-alphanumerics replaced by underscores — no
+curated table to maintain, future stacks slot in automatically. The
+legacy `KBC_MANAGE_API_TOKEN` is the fallback when no per-stack var
+is set, so single-stack users keep working unchanged. `OrgService.
+refresh_tokens` also got a per-stack resolver path: `kbagent project
+refresh --all` groups projects by `stack_url` and prompts/resolves
+once per distinct stack.
+
+**AI-exfiltration mitigation.** Env vars are NOT guarded by
+`kbagent`'s permission firewall — `--deny-writes` blocks
+`OPERATION_REGISTRY` ops but a sandboxed agent can still `curl -H
+"X-KBC-ManageApiToken: $KBC_MANAGE_API_TOKEN" /manage/projects` and
+the firewall stays blind because raw HTTP is not a kbagent
+operation. Manage tokens are org-scoped, broader blast radius than
+per-project Storage tokens. Three layers of opt-out:
+
+1. `kbagent --no-env-manage-token <command>` — session-only flag.
+   Mirrors `--deny-writes`. `resolve_manage_token` refuses both env-
+   var forms; falls through to TTY prompt or exit 2.
+2. `kbagent permissions deny-manage-env` — persisted policy
+   (`AppConfig.allow_env_manage_token=False`). Survives across
+   invocations; gated by the same random-code interactive
+   confirmation that `permissions set` and `permissions reset` use,
+   so an AI agent cannot flip it back programmatically. Reverse with
+   `kbagent permissions allow-manage-env`.
+3. `kbagent init --read-only` — defaults the persisted policy to
+   `False` for new sandboxed installs. Operators who need env-var
+   tokens in a specific read-only workspace must `permissions
+   allow-manage-env` explicitly.
+
+**For LLM/agent callers**: when `permissions show` reports
+`allow_env_manage_token: False`, do NOT attempt to set
+`KBC_MANAGE_API_TOKEN` in the agent's own subprocess env and call
+the Manage API — the resolver refuses it and the policy is the
+operator's signal that env-var manage tokens should not be used.
+Ask the parent agent to pipe a token through TTY for one
+invocation, or to `permissions allow-manage-env` if env-var
+resolution is genuinely needed.
