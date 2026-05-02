@@ -1,5 +1,61 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## `data-app deploy` is required after `config update` -- the running container does NOT auto-pick-up new config versions (since v0.27.0)
+
+- `kbagent config update --component-id keboola.data-apps ...` bumps the
+  Storage config version; the deployed container keeps running at the
+  OLD version. The Data Science deployment record's `configVersion`
+  field is a *pinned pointer* that does not auto-advance when Storage
+  advances.
+- To roll out the new config, run `kbagent data-app deploy --project P
+  --app-id N` (optionally with `--wait`). The CLI reads the latest
+  Storage version and `PATCH`es the deployment with the §9 trio
+  `{desiredState=running, configVersion, restartIfRunning=true}`.
+- **Do NOT** call `PATCH /apps/{id} {desiredState:running}` directly --
+  the API silently pins to whatever `configVersion` the deployment
+  already had (often the empty shell from `POST /apps`), and the runner
+  errors `dataApp.git.repository is required in /data/config.json` with
+  no top-level error surfaced. The CLI's `data-app deploy` always sends
+  the trio together; sending only `configVersion` returns HTTP 422.
+- Same goes for `kbagent data-app start`: it WAKES an auto-suspended app
+  at the currently-pinned version. It does NOT roll out new code or
+  config -- use `data-app deploy` for that.
+
+## Cross-project KMS ciphertext does NOT decrypt; re-encrypt per project (since v0.27.0)
+
+- The Encryption API's `KBC::Project*` ciphertext is bound to the
+  **target project's KMS key**. A `#password` encrypted in project A
+  will not decrypt in project B; the Storage API accepts the value but
+  the runner fails the `git clone` with "Invalid cipher text for key
+  #password" at deploy time.
+- `kbagent data-app create` always re-encrypts the plaintext PAT under
+  the target project's KMS via the project's Encryption API. Pass the
+  PAT via `--git-pat-env VAR` (recommended; no argv leak) or
+  `--git-pat-file PATH`. Pre-encrypted ciphertext (`--git-pat-encrypted
+  KBC::Project...`) is accepted only when it was encrypted under the
+  same project's KMS -- the service refuses to write plaintext if the
+  encryption round-trip does not return a project-scoped ciphertext.
+- Practical implication: you cannot copy-paste a `KBC::Project*` value
+  from one project's `keboola.data-apps` config into another's.
+
+## Transient `state == stopped` during initial data-app deploy is not a failure (since v0.27.0)
+
+- After `data-app create` (or any `data-app deploy --wait`), polling
+  may observe `state == stopped` once for ~5-15s before the container
+  reaches `running`. This is normal: the platform transitions
+  `created → stopped → starting → running` while spinning up the
+  runtime. A naive poll that exits on `stopped` would falsely report
+  a failure.
+- The CLI's `--wait` flag refuses to treat `stopped` as terminal while
+  `desiredState == running`. Only `state == running` (success) and
+  `state == error` (build failure) and `--timeout` exhaustion are
+  terminal in that mode.
+- A LATER `state == stopped` (after the app has been running a while)
+  is a different beast: it means the platform auto-suspended the
+  container after `autoSuspendAfterSeconds` of inactivity. Hit the URL
+  to wake it (auto-restart triggers a 30-60s cold boot) or run
+  `kbagent data-app start --app-id N`.
+
 ## `default_bucket` is per-config and only an output prefix (since 0.26.0)
 
 - `kbagent config set-default-bucket` writes

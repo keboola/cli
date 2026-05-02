@@ -116,6 +116,17 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `workspace gc [--project NAME ...] [--dry-run] [--yes]` -- garbage-collect orphaned workspaces (and any lingering `keboola.sandboxes` configs). `--dry-run` previews without deleting; `--project` repeatable, omit to GC across all connected projects
 - `workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]` -- workspace from existing transform
 
+## Data Apps (Streamlit / Flask / Node deployments)
+Lifecycle for `keboola.data-apps`. Combines Storage API (config body, git block, encrypted secrets, runtime size) with Data Science API (`/apps` -- deployment record, state, URL, configVersion). The CLI encapsulates the §9 redeploy contract so callers cannot pin to the empty-shell v2; see `data-app-workflow.md` for the gotcha inventory and recipes.
+- `data-app list [--project NAME ...] [--branch ID]` -- list apps across projects (Data Science index merged with Storage names)
+- `data-app detail --project NAME --app-id ID [--branch ID]` -- merged view (state, desired, url, configVersion, slug, git block with PAT redacted)
+- `data-app create --project ALIAS --name NAME --slug SLUG --git-repo URL [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]` -- POST shell + encrypt PAT + PUT Storage config (with auto-injected `parameters.id`) + PATCH deploy with the §9 trio. Cleanup-in-finally on failure unless `--keep-on-failure`. Default `--auth password` mints a 20-char hex simpleAuth password (retrievable via `data-app password`).
+- `data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID]` -- the §9 redeploy contract. Default reads latest Storage version; `--config-version` pins an older version (rollback).
+- `data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]` -- wake an auto-suspended app at the currently-pinned version. Distinct from deploy: does NOT bump configVersion.
+- `data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]` -- stop a running app (URL and Storage config preserved).
+- `data-app delete --project NAME --app-id ID [--yes]` -- destructive, cascades to Storage config; URL retired permanently.
+- `data-app password --project NAME --app-id ID` -- read the simpleAuth password. Requires `KBC_MANAGE_API_TOKEN`. Auto-generated, not rotatable -- delete + recreate to mint a new one.
+
 ## MCP Tools
 - `tool list [--project NAME] [--branch ID]` -- list available MCP tools (multi_project annotation)
 - `tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]` -- call MCP tool (read = all projects, write = single). `--input` accepts inline JSON, `@file.json`, or `-` (stdin)

@@ -349,6 +349,15 @@ kbagent workspace query --project ALIAS --workspace-id ID --file query.sql
 kbagent workspace gc [--project NAME ...] [--dry-run] [--yes]
 kbagent workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]
 
+kbagent data-app list [--project NAME ...] [--branch ID]
+kbagent data-app detail --project NAME --app-id ID [--branch ID]
+kbagent data-app create --project ALIAS --name NAME --slug SLUG --git-repo URL [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
+kbagent data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID]
+kbagent data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]
+kbagent data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]
+kbagent data-app delete --project NAME --app-id ID [--yes]
+kbagent data-app password --project NAME --app-id ID
+
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
 kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR]

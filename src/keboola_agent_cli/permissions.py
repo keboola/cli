@@ -92,6 +92,15 @@ OPERATION_REGISTRY: dict[str, str] = {
     # Component discovery
     "component.list": "read",
     "component.detail": "read",
+    # Data apps (Data Science API + keboola.data-apps Storage component)
+    "data-app.list": "read",
+    "data-app.detail": "read",
+    "data-app.password": "read",
+    "data-app.create": "write",
+    "data-app.deploy": "write",
+    "data-app.start": "write",
+    "data-app.stop": "write",
+    "data-app.delete": "destructive",
     # Storage browsing
     "storage.buckets": "read",
     "storage.bucket-detail": "read",

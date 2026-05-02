@@ -528,6 +528,61 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent workspace gc [--project NAME] [--dry-run] [--yes]
     Garbage-collect orphaned workspaces (keboola.sandboxes config missing). Use --dry-run to preview.
 
+### Data Apps (Streamlit / Flask / Node deployments)
+
+Lifecycle for `keboola.data-apps`. Combines the Storage API (config body --
+git block, slug, runtime size, encrypted secrets) with the Data Science API
+(/apps -- deployment record, state, URL, configVersion). Encapsulates the
+§9 redeploy contract so callers cannot pin to the empty-shell v2.
+
+  kbagent data-app list [--project NAME ...] [--branch ID]
+    List data apps across one or many projects. Merges Data Science /apps
+    index with Storage config names. Multi-project parallel.
+
+  kbagent data-app detail --project NAME --app-id ID [--branch ID]
+    Full merged view: state, desiredState, url, deployed configVersion, slug,
+    runtime size, git settings (PAT redacted as <encrypted>).
+
+  kbagent data-app create --project ALIAS --name NAME --slug SLUG --git-repo URL
+    [--description STR | --description-file PATH] [--git-branch main]
+    [--git-public/--no-git-public] [--git-username USER]
+    [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...]
+    [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS]
+    [--type python-js|python|streamlit|r|...] [--branch ID]
+    [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
+    Create + configure + deploy in one call. Default `--auth password` mints
+    a 20-char hex simpleAuth password (retrievable via `data-app password`).
+    PAT input (private repo): env var (recommended) > file > pre-encrypted.
+    Pre-encrypted PATs MUST start with KBC::Project (project-scoped KMS).
+    Cleanup-in-finally if PUT or initial deploy fails (orphan shell deleted
+    by default; --keep-on-failure preserves it for forensics).
+
+  kbagent data-app deploy --project NAME --app-id ID [--config-version N]
+    [--wait] [--timeout SECONDS] [--branch ID]
+    The §9 redeploy contract. Default reads the latest Storage config version
+    and pins to it; --config-version pins an older version (rollback).
+    Always sends {{desiredState=running, configVersion, restartIfRunning=true}}
+    together -- HTTP 422 otherwise.
+
+  kbagent data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]
+    Wake an auto-suspended data app at its currently-pinned configVersion.
+    Distinct from deploy: does NOT bump the version.
+
+  kbagent data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]
+    Stop a running data app. Preserves URL and Storage config; container is
+    torn down.
+
+  kbagent data-app delete --project NAME --app-id ID [--yes]
+    Delete the deployment AND the Storage config (cascade, irreversible).
+    URL is permanently retired. Confirmation prompt unless --yes.
+
+  kbagent data-app password --project NAME --app-id ID
+    Retrieve the simpleAuth password. Requires KBC_MANAGE_API_TOKEN in
+    addition to the project's Storage token. Token is read from env or
+    interactive hidden prompt; never persisted, never logged. Password is
+    auto-generated at create time and CANNOT be rotated -- delete and
+    recreate the app to mint a new one.
+
 ### Project Sync
 
   kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
