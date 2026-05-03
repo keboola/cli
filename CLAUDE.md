@@ -195,7 +195,7 @@ All three inherit from `BaseHttpClient` (`http_base.py`) which provides shared r
 
 11. **Error accumulation**: multi-project operations collect per-project errors without stopping. One project failing doesn't block others (see `lineage_service.py`, `org_service.py`).
 
-12. **Manage token security**: never persisted, never passed as CLI argument, never logged. Only via `KBC_MANAGE_API_TOKEN` env var or interactive hidden prompt.
+12. **Manage token security**: never persisted, never passed as CLI argument, never logged. Default-deny since 0.28.0: only via interactive hidden prompt; the `KBC_MANAGE_API_TOKEN` env var is **ignored** unless the top-level `--allow-env-manage-token` flag is passed. Default-deny closes the AI-exfiltration risk where any subprocess (including the AI agent itself) inherits the manage token via env. CI/CD callers must opt in explicitly.
 
 13. **Idempotency**: `org setup` skips already-registered projects by matching `project_id`. Safe to re-run.
 
@@ -251,7 +251,7 @@ plugins/kbagent/
 > "Plugin synchronization map" for the full list.
 
 ```
-# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service, --deny-writes, --deny-destructive
+# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service, --deny-writes, --deny-destructive, --allow-env-manage-token
 
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list

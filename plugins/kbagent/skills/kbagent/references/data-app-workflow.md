@@ -58,7 +58,9 @@ with:
 
 ```bash
 kbagent data-app password --project prod --app-id <ID>
-# Requires KBC_MANAGE_API_TOKEN in addition to the project's Storage token.
+# Manage token: interactive prompt by default (since v0.28.0); for CI add
+# --allow-env-manage-token alongside KBC_MANAGE_API_TOKEN. Storage token
+# is read from .kbagent/config.json as usual.
 ```
 
 The simpleAuth password CANNOT be rotated (writeup §11.2). To change it,

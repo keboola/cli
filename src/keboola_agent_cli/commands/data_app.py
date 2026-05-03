@@ -583,15 +583,17 @@ def data_app_password(
 ) -> None:
     """Retrieve the simpleAuth password for a password-gated data app.
 
-    Requires KBC_MANAGE_API_TOKEN in addition to the project's Storage
-    token. Token is read from env or interactive prompt; never persisted.
+    Requires the Manage API token in addition to the project's Storage
+    token. Default-deny since 0.28.0: read from an interactive hidden
+    prompt; pass top-level --allow-env-manage-token to read
+    KBC_MANAGE_API_TOKEN from env (CI/CD). Never persisted, never logged.
     """
     if should_hint(ctx):
         emit_hint(ctx, "data-app.password", project=project, app_id=app_id)
         return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
-    manage_token = resolve_manage_token()
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
 
     try:
         result = service.get_data_app_password(
