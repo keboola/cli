@@ -35,7 +35,7 @@ observability -- all API requests will include the X-Conversation-ID header.
   kbagent --json project add --project my-project --url https://connection.keboola.com --token YOUR_TOKEN
 
   # Or bulk-onboard all projects from an organization
-  KBC_MANAGE_API_TOKEN=xxx kbagent --json org setup --org-id 123 --url https://connection.keboola.com --yes
+  KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --org-id 123 --url https://connection.keboola.com --yes
 
   # Explore
   kbagent --json project list
@@ -403,7 +403,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent org setup --project-ids 901,9621,10539 --url URL [--dry-run] [--yes] [--refresh]
     Non-admin mode: onboard specific projects by ID. Works with Personal Access Token (PAT).
     Use --org-id OR --project-ids (at least one required).
-    Token via KBC_MANAGE_API_TOKEN env var or interactive prompt.
+    Token via interactive hidden prompt by default; pass top-level
+    --allow-env-manage-token to read KBC_MANAGE_API_TOKEN from env (CI/CD).
+    Default-deny since 0.28.0 -- closes the AI-exfiltration risk where
+    subprocesses inherit the manage token via env.
 
 ### Flows (Orchestrator + Conditional)
 
@@ -577,11 +580,12 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     URL is permanently retired. Confirmation prompt unless --yes.
 
   kbagent data-app password --project NAME --app-id ID
-    Retrieve the simpleAuth password. Requires KBC_MANAGE_API_TOKEN in
-    addition to the project's Storage token. Token is read from env or
-    interactive hidden prompt; never persisted, never logged. Password is
-    auto-generated at create time and CANNOT be rotated -- delete and
-    recreate the app to mint a new one.
+    Retrieve the simpleAuth password. Requires the Manage API token in
+    addition to the project's Storage token. Token is read from interactive
+    hidden prompt by default; pass top-level --allow-env-manage-token to
+    use KBC_MANAGE_API_TOKEN from env (default-deny since 0.28.0). Never
+    persisted, never logged. Password is auto-generated at create time
+    and CANNOT be rotated -- delete and recreate the app to mint a new one.
 
 ### Project Sync
 
@@ -716,7 +720,10 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
      KBAGENT_CONVERSATION_ID  Conversation/session ID (REQUIRED -- sent as X-Conversation-ID header)
      KBC_TOKEN                Storage API token (fallback for --token)
      KBC_STORAGE_API_URL      Default stack URL (fallback for --url)
-     KBC_MANAGE_API_TOKEN     Manage API token (for org setup)
+     KBC_MANAGE_API_TOKEN     Manage API token (org setup, project refresh, data-app password).
+                              Default-DENY since 0.28.0: pass --allow-env-manage-token
+                              to opt in, otherwise this var is ignored and a TTY prompt
+                              is required. Closes AI-exfiltration via subprocess env.
      KBC_MASTER_TOKEN         Master token for sharing ops (global fallback)
      KBC_MASTER_TOKEN_*       Per-project master token (e.g. KBC_MASTER_TOKEN_PROD)
      KBAGENT_CONFIG_DIR       Override config directory

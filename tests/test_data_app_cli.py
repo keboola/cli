@@ -335,6 +335,7 @@ class TestDataAppPassword:
         monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "manage-token")
         result = _invoke(
             [
+                "--allow-env-manage-token",
                 "--json",
                 "data-app",
                 "password",

@@ -518,3 +518,131 @@ class TestApplyFirewallFlags:
         before = list(persisted.deny)
         apply_firewall_flags(persisted, deny_writes=True, deny_destructive=True)
         assert persisted.deny == before, "persisted.deny was mutated in place"
+
+
+class TestResolveManageToken:
+    """Tests for resolve_manage_token default-deny + opt-in behaviour (since 0.28.0).
+
+    The contract: KBC_MANAGE_API_TOKEN is ignored unless the caller passes
+    allow_env=True (plumbed from --allow-env-manage-token at the CLI). When
+    ignored, a one-shot stderr warning is emitted and the resolver falls
+    through to the TTY-prompt path. With no env and no TTY, it exits 2 with
+    an error naming the opt-in flag.
+    """
+
+    _SENTINEL = "kbagent-test-sentinel-token-9c4f"
+
+    def test_returns_env_when_allow_env_true(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from keboola_agent_cli.commands._helpers import resolve_manage_token
+
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", self._SENTINEL)
+        result = resolve_manage_token(allow_env=True)
+        assert result == self._SENTINEL
+        captured = capsys.readouterr()
+        assert "found in environment but ignored" not in captured.err
+        assert self._SENTINEL not in captured.out
+        assert self._SENTINEL not in captured.err
+
+    def test_default_deny_warns_and_falls_through_to_tty(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from keboola_agent_cli.commands import _helpers
+        from keboola_agent_cli.commands._helpers import resolve_manage_token
+
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", self._SENTINEL)
+        # Force the TTY branch.
+        monkeypatch.setattr(_helpers.sys.stdin, "isatty", lambda: True, raising=False)
+        # typer.prompt would block on real stdin in tests; replace it.
+        monkeypatch.setattr(_helpers.typer, "prompt", lambda *a, **k: "from-prompt")
+        result = resolve_manage_token()  # allow_env defaults False
+        assert result == "from-prompt"
+        err = capsys.readouterr().err
+        assert "KBC_MANAGE_API_TOKEN found in environment" in err
+        assert "--allow-env-manage-token" in err
+
+    def test_default_deny_no_tty_no_env_exits_2(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import typer
+
+        from keboola_agent_cli.commands import _helpers
+        from keboola_agent_cli.commands._helpers import resolve_manage_token
+
+        monkeypatch.delenv("KBC_MANAGE_API_TOKEN", raising=False)
+        monkeypatch.setattr(_helpers.sys.stdin, "isatty", lambda: False, raising=False)
+        with pytest.raises(typer.Exit) as exc_info:
+            resolve_manage_token()
+        assert exc_info.value.exit_code == 2
+        err = capsys.readouterr().err
+        assert "--allow-env-manage-token" in err
+        assert "Run interactively" in err
+
+    def test_default_deny_with_env_no_tty_warns_then_exits_2(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import typer
+
+        from keboola_agent_cli.commands import _helpers
+        from keboola_agent_cli.commands._helpers import resolve_manage_token
+
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", self._SENTINEL)
+        monkeypatch.setattr(_helpers.sys.stdin, "isatty", lambda: False, raising=False)
+        with pytest.raises(typer.Exit) as exc_info:
+            resolve_manage_token()
+        assert exc_info.value.exit_code == 2
+        err = capsys.readouterr().err
+        # Both messages on stderr in this branch.
+        assert "found in environment but ignored" in err
+        assert "Run interactively" in err
+        # And the sentinel is never echoed.
+        assert self._SENTINEL not in err
+
+    def test_no_env_tty_prompts_normally(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from keboola_agent_cli.commands import _helpers
+        from keboola_agent_cli.commands._helpers import resolve_manage_token
+
+        monkeypatch.delenv("KBC_MANAGE_API_TOKEN", raising=False)
+        monkeypatch.setattr(_helpers.sys.stdin, "isatty", lambda: True, raising=False)
+        monkeypatch.setattr(_helpers.typer, "prompt", lambda *a, **k: "tty-token")
+        result = resolve_manage_token()
+        assert result == "tty-token"
+        err = capsys.readouterr().err
+        assert "found in environment but ignored" not in err
+
+    def test_token_value_never_appears_in_captured_output(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Regression pin: the sentinel must never leak to stdout/stderr."""
+        from keboola_agent_cli.commands._helpers import resolve_manage_token
+
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", self._SENTINEL)
+        result = resolve_manage_token(allow_env=True)
+        captured = capsys.readouterr()
+        assert result == self._SENTINEL  # returned, but not printed
+        assert self._SENTINEL not in captured.out
+        assert self._SENTINEL not in captured.err
+
+    def test_allow_env_with_unset_env_and_no_tty_exits_2(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The flag is permission, not promise: with the flag set but no env
+        AND no TTY, we still exit 2. Pins the no-source-available failure
+        mode for cron/CI diagnostics."""
+        import typer
+
+        from keboola_agent_cli.commands import _helpers
+        from keboola_agent_cli.commands._helpers import resolve_manage_token
+
+        monkeypatch.delenv("KBC_MANAGE_API_TOKEN", raising=False)
+        monkeypatch.setattr(_helpers.sys.stdin, "isatty", lambda: False, raising=False)
+        with pytest.raises(typer.Exit) as exc_info:
+            resolve_manage_token(allow_env=True)
+        assert exc_info.value.exit_code == 2
+        err = capsys.readouterr().err
+        assert "Run interactively" in err
+        # No phantom warning when env was actually empty.
+        assert "found in environment but ignored" not in err

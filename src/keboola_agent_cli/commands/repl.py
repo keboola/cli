@@ -74,13 +74,17 @@ def _run_repl(
     config_dir: str | None,
     deny_writes: bool = False,
     deny_destructive: bool = False,
+    allow_env_manage_token: bool = False,
 ) -> None:
     """Main REPL loop.
 
     Global flags from the outer invocation are re-applied on every command
     executed inside the REPL. This includes the session-only firewall flags
     ``--deny-writes`` / ``--deny-destructive`` -- dropping them here would
-    silently elevate the REPL above the policy the user started it with.
+    silently elevate the REPL above the policy the user started it with --
+    and ``--allow-env-manage-token``, which would otherwise force re-prompts
+    on every nested ``org setup`` / ``project refresh`` / ``data-app
+    password`` even after the user opted in at the outer invocation.
     """
     from ..cli import app as typer_app
 
@@ -169,6 +173,8 @@ def _run_repl(
             full_argv.append("--deny-writes")
         if deny_destructive and "--deny-destructive" not in argv:
             full_argv.append("--deny-destructive")
+        if allow_env_manage_token and "--allow-env-manage-token" not in argv:
+            full_argv.append("--allow-env-manage-token")
         full_argv.extend(argv)
 
         # Prevent recursive REPL
@@ -206,4 +212,5 @@ def repl_command(ctx: typer.Context) -> None:
         config_dir=None,  # Already resolved in ctx
         deny_writes=ctx.obj.get("deny_writes", False),
         deny_destructive=ctx.obj.get("deny_destructive", False),
+        allow_env_manage_token=ctx.obj.get("allow_env_manage_token", False),
     )

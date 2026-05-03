@@ -1,5 +1,36 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## Manage token: env var is ignored without `--allow-env-manage-token` (since v0.28.0)
+
+- `KBC_MANAGE_API_TOKEN` is no longer auto-resolved on the three
+  surfaces that consume it (`kbagent org setup`,
+  `kbagent project refresh`, `kbagent data-app password`). Default
+  behaviour on 0.28.0+ is **default-deny**: the env var is ignored, a
+  TTY hidden-input prompt is shown instead. With no TTY (CI / cron /
+  systemd / `< /dev/null`) the resolver exits **2** with the message
+  `Error: No manage token available. Run interactively, or pass
+  --allow-env-manage-token to read KBC_MANAGE_API_TOKEN from env.`
+- To opt in for CI/CD, pass the top-level flag:
+  `kbagent --allow-env-manage-token --json org setup ...`. The flag
+  belongs in front of the subcommand (it is a top-level option, mirroring
+  `--deny-writes`). The flag is session-only -- not persisted, no
+  env-var equivalent (intentional; an env-var equivalent would re-create
+  the AI-exfiltration hole this default-deny is closing).
+- When the env var IS set but the flag IS NOT, you will see a one-shot
+  stderr warning `Warning: KBC_MANAGE_API_TOKEN found in environment
+  but ignored. Pass --allow-env-manage-token to opt in.`. This is
+  informational; the resolver still falls through to the TTY prompt
+  (or exits 2 if no TTY). Do NOT suppress this warning by piping stderr
+  away -- it tells CI maintainers exactly what to fix.
+- The default-deny exists to close the AI-exfiltration risk: any
+  subprocess running as the same user (including the AI agent itself)
+  inherits env vars, so a manage token in env is reachable by anyone
+  who can read `os.environ` or shell out raw `curl`. Default-deny means
+  human admin work uses TTY (no env exposure) and CI must explicitly
+  say "yes I trust this env" via the flag.
+- Storage tokens are unaffected: `KBC_TOKEN` (storage API) keeps
+  resolving from env as before.
+
 ## `data-app deploy` is required after `config update` -- the running container does NOT auto-pick-up new config versions (since v0.27.0)
 
 - `kbagent config update --component-id keboola.data-apps ...` bumps the
@@ -372,7 +403,7 @@ type inventory and examples.
 
 - Tokens are always masked in output (e.g. `901-...pt0k`) -- this is normal
 - Token can be passed via `--token`, `KBC_TOKEN` env var, or interactive prompt
-- Manage API token: only via `KBC_MANAGE_API_TOKEN` env var or interactive prompt (never as CLI argument)
+- Manage API token (since v0.28.0): default-deny on env -- via interactive hidden prompt; pass top-level `--allow-env-manage-token` to opt in to `KBC_MANAGE_API_TOKEN`. Never as CLI argument. See the `(since v0.28.0)` entry at the top of this file.
 - Master token for sharing: `KBC_MASTER_TOKEN_{ALIAS}` (e.g. `KBC_MASTER_TOKEN_PROD`) or `KBC_MASTER_TOKEN` as global fallback. Alias is uppercased, hyphens become underscores. Required for `sharing share` and `sharing unshare`; `sharing list/link/unlink` use regular project tokens.
 
 ## MCP tool call gotchas
@@ -721,7 +752,7 @@ See [docs/hint-mode.md](../../../../../docs/hint-mode.md) for full documentation
 
 - **Forgetting `--json`**: without it, output is human-formatted Rich text, not parseable
 - **Assuming `data.projects`**: `project list` returns data as a flat list
-- **Passing manage token as argument**: use env var `KBC_MANAGE_API_TOKEN` instead
+- **Passing manage token as argument**: use the interactive prompt (default since v0.28.0), or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` env var for CI
 - **Polling after branch create**: kbagent already waits for async completion
 - **Not saving workspace password**: only returned once on creation
 - **Putting SQL in _config.yml**: SQL transformations must use `transform.sql` with block markers (see above)

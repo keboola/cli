@@ -220,6 +220,14 @@ def main(
         "branch delete, etc.). Admin ops like 'project remove' and 'org setup' "
         "are NOT blocked -- use --deny-writes for the wide net.",
     ),
+    allow_env_manage_token: bool = typer.Option(
+        False,
+        "--allow-env-manage-token",
+        help="Read KBC_MANAGE_API_TOKEN from the environment. Without this "
+        "flag the env var is ignored (with a warning) and an interactive "
+        "TTY prompt is required. Default-deny since 0.28.0; closes the "
+        "AI-exfiltration risk where subprocesses inherit the manage token.",
+    ),
 ) -> None:
     """Global options applied to all commands."""
     from .auto_update import maybe_auto_update, show_post_update_changelog
@@ -339,6 +347,7 @@ def main(
     ctx.obj["no_color"] = effective_no_color
     ctx.obj["deny_writes"] = deny_writes
     ctx.obj["deny_destructive"] = deny_destructive
+    ctx.obj["allow_env_manage_token"] = allow_env_manage_token
     ctx.obj["config_store"] = config_store
     ctx.obj["project_service"] = project_service
     ctx.obj["component_service"] = component_service

@@ -102,14 +102,22 @@ kbagent project add --project prod --url https://connection.keboola.com --token 
 
 **Many projects by ID** — you have a Manage API or Personal Access Token + the project IDs:
 ```bash
+# Interactive: kbagent will prompt for the Manage API token (default since v0.28.0).
+kbagent org setup --project-ids 901,9621,10539 --url https://connection.keboola.com --yes
+
+# CI / non-interactive: opt in to env-var resolution with --allow-env-manage-token.
 KBC_MANAGE_API_TOKEN=your-manage-or-personal-token \
-  kbagent org setup --project-ids 901,9621,10539 --url https://connection.keboola.com --yes
+  kbagent --allow-env-manage-token org setup --project-ids 901,9621,10539 --url https://connection.keboola.com --yes
 ```
 
 **Whole organization** — you are org admin:
 ```bash
+# Interactive (default since v0.28.0): kbagent prompts for the Manage API token.
+kbagent org setup --org-id 123 --url https://connection.keboola.com --yes
+
+# CI / non-interactive:
 KBC_MANAGE_API_TOKEN=your-org-admin-manage-token \
-  kbagent org setup --org-id 123 --url https://connection.keboola.com --yes
+  kbagent --allow-env-manage-token org setup --org-id 123 --url https://connection.keboola.com --yes
 ```
 
 Run `kbagent doctor` to verify setup (token validity, CLI version, MCP server, Claude Code plugin install).
