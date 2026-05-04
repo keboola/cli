@@ -365,6 +365,11 @@ kbagent data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app delete --project NAME --app-id ID [--yes]
 kbagent data-app password --project NAME --app-id ID
+kbagent data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE' [--secret ...] [--secrets-file PATH] [--branch ID] [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]
+kbagent data-app secrets-list --project ALIAS --app-id ID [--branch ID] [--show-fingerprint]
+kbagent data-app secrets-get --project ALIAS --app-id ID --key '#KEY' [--branch ID]
+kbagent data-app secrets-remove --project ALIAS --app-id ID --key '#KEY' [--key ...] [--branch ID] [--yes] [--dry-run]
+kbagent data-app validate-repo --git-repo URL [--git-branch BRANCH] [--git-public/--no-git-public] [--git-pat-env VAR | --git-pat-file PATH] [--type python-js] [--strict]
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]

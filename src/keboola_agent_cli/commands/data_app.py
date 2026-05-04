@@ -10,6 +10,7 @@ exit-code mapping.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -27,6 +28,11 @@ from ._helpers import (
     resolve_manage_token,
     should_hint,
 )
+
+# Canonical Keboola help-doc references appended to each --help epilog so
+# operators have a one-click path to the rule a flag enforces.
+_REF_PYTHON_JS = "https://help.keboola.com/data-apps/python-js/"
+_REF_STORAGE_ACCESS = "https://help.keboola.com/data-apps/storage-access/"
 
 data_app_app = typer.Typer(help="Keboola data-app lifecycle (create, deploy, manage)")
 
@@ -104,7 +110,12 @@ def data_app_list(
     try:
         result = service.list_data_apps(aliases=project, branch_id=branch)
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -142,7 +153,12 @@ def data_app_detail(
     try:
         result = service.get_data_app(alias=project, app_id=app_id, branch_id=branch)
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -368,7 +384,12 @@ def data_app_create(
             dry_run=dry_run,
         )
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -418,7 +439,12 @@ def _run_lifecycle(
     try:
         result = method(**kwargs)
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -558,7 +584,12 @@ def data_app_delete(
     try:
         result = service.delete_data_app(alias=project, app_id=app_id)
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -600,7 +631,12 @@ def data_app_password(
             alias=project, app_id=app_id, manage_token=manage_token
         )
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -613,3 +649,590 @@ def data_app_password(
             c.print(f"\n[bold yellow]Password:[/bold yellow] {d['password']}"),
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# data-app secrets-{set|list|get|remove} -- flat commands matching the
+# existing branch.metadata-* / config.variables-* pattern. Subgroups under
+# Typer subgroups conflict with the flat permission/hint registry.
+# ---------------------------------------------------------------------------
+
+
+def _parse_secret_arg(arg: str) -> tuple[str, str]:
+    """Split ``#KEY=VALUE`` into ``(key, value)``.
+
+    The value may contain ``=``; only the FIRST ``=`` is the separator.
+    """
+    if "=" not in arg:
+        raise typer.BadParameter(
+            f"Expected '#KEY=VALUE'; got {arg!r} (no '=' separator).",
+            param_hint="--secret",
+        )
+    key, _, value = arg.partition("=")
+    if not key:
+        raise typer.BadParameter(
+            f"Empty secret key in {arg!r}; expected '#KEY=VALUE'.",
+            param_hint="--secret",
+        )
+    return key, value
+
+
+def _read_secrets_file(path: Path) -> dict[str, str]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise typer.BadParameter(
+            f"Cannot read secrets file {path}: {exc}",
+            param_hint="--secrets-file",
+        ) from exc
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(
+            f"Secrets file {path} is not valid JSON: {exc}",
+            param_hint="--secrets-file",
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise typer.BadParameter(
+            f"Secrets file {path} must be a JSON object mapping #KEY -> value.",
+            param_hint="--secrets-file",
+        )
+    out: dict[str, str] = {}
+    for key, value in parsed.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise typer.BadParameter(
+                f"Secrets file {path} contains non-string entry for {key!r}.",
+                param_hint="--secrets-file",
+            )
+        out[key] = value
+    if not out:
+        raise typer.BadParameter(
+            f"Secrets file {path} is empty.",
+            param_hint="--secrets-file",
+        )
+    return out
+
+
+@data_app_app.command("secrets-set")
+def data_app_secrets_set(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
+    secret: list[str] | None = typer.Option(
+        None,
+        "--secret",
+        help=(
+            "One or more '#KEY=VALUE' plaintext entries. Repeatable. "
+            "Mutually exclusive with --secrets-file."
+        ),
+    ),
+    secrets_file: Path | None = typer.Option(
+        None,
+        "--secrets-file",
+        help="Path to a JSON file mapping '#KEY' -> 'plaintext value'.",
+        exists=True,
+        readable=True,
+        dir_okay=False,
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Storage branch ID for the linked config (defaults to production).",
+    ),
+    allow_plaintext_on_encrypt_failure: bool = typer.Option(
+        False,
+        "--allow-plaintext-on-encrypt-failure",
+        help=(
+            "Bootstrap/debug only: write the value as-is if the Encryption API "
+            "did not return a project-scoped ciphertext. NEVER use in production."
+        ),
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show the encryption request and Storage PUT body without making either call.",
+    ),
+    no_hint_next: bool = typer.Option(
+        False,
+        "--no-hint-next",
+        help="Suppress the 'now run kbagent data-app deploy' hint in the output.",
+    ),
+) -> None:
+    """Encrypt and write app-runtime secrets to the linked Storage config.
+
+    The '#'-prefix is required on every key (Keboola encryption convention).
+    The runtime exposes each secret as an env var with '#' stripped, '-'
+    replaced with '_', and uppercased ('#my-api-key' -> 'MY_API_KEY').
+
+    The command never auto-deploys; the running container keeps the old
+    config until the next 'kbagent data-app deploy' call.
+
+    Reference: https://help.keboola.com/data-apps/python-js/
+    """
+
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "data-app.secrets-set",
+            project=project,
+            app_id=app_id,
+            secret=secret,
+            branch=branch,
+        )
+        return
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "data_app_service")
+
+    if secret and secrets_file:
+        formatter.error(
+            message=("--secret and --secrets-file are mutually exclusive; pick one input mode."),
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2) from None
+
+    if not secret and not secrets_file:
+        formatter.error(
+            message=("Provide at least one --secret '#KEY=VALUE' or --secrets-file PATH."),
+            error_code=ErrorCode.MISSING_PARAMETER,
+        )
+        raise typer.Exit(code=2) from None
+
+    secrets_map: dict[str, str] = {}
+    if secret:
+        for entry in secret:
+            try:
+                key, value = _parse_secret_arg(entry)
+            except typer.BadParameter as exc:
+                formatter.error(
+                    message=str(exc),
+                    error_code=ErrorCode.DATA_APP_INVALID_SECRET,
+                )
+                raise typer.Exit(code=2) from None
+            secrets_map[key] = value
+    if secrets_file:
+        try:
+            secrets_map.update(_read_secrets_file(secrets_file))
+        except typer.BadParameter as exc:
+            formatter.error(
+                message=str(exc),
+                error_code=ErrorCode.DATA_APP_INVALID_SECRET,
+            )
+            raise typer.Exit(code=2) from None
+
+    try:
+        result = service.set_data_app_secrets(
+            alias=project,
+            app_id=app_id,
+            secrets=secrets_map,
+            branch_id=branch,
+            allow_plaintext_on_encrypt_failure=allow_plaintext_on_encrypt_failure,
+            dry_run=dry_run,
+        )
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+
+    # Reserved-name shadowing -- emit stderr WARN per collision so a
+    # script piping stdout to a JSON parser is unaffected.
+    shadowed = result.get("shadowed_by_runtime", [])
+    if shadowed and not formatter.json_mode:
+        for env_var in shadowed:
+            formatter.err_console.print(
+                f"[yellow]Warning:[/yellow] {env_var} is auto-injected by the data-app "
+                f"runtime; the platform value silently shadows yours. See {_REF_STORAGE_ACCESS}.",
+                style="yellow",
+            )
+
+    if no_hint_next and isinstance(result, dict):
+        result.pop("next_step", None)
+
+    formatter.output(
+        result,
+        lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}"),
+    )
+    if not no_hint_next and not formatter.json_mode and result.get("next_step"):
+        formatter.console.print(f"[dim]Next: {result['next_step']}[/dim]")
+
+
+@data_app_app.command("secrets-list")
+def data_app_secrets_list(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Storage branch ID for the linked config (defaults to production).",
+    ),
+    show_fingerprint: bool = typer.Option(
+        False,
+        "--show-fingerprint",
+        help="Include a short ciphertext fingerprint per key. Default omits to keep --json safe to paste into tickets.",
+    ),
+) -> None:
+    """List the keys in parameters.dataApp.secrets, with derived runtime env-var names.
+
+    Never echoes the encrypted ciphertext in full and never decrypts.
+
+    Reference: https://help.keboola.com/data-apps/python-js/
+    """
+
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "data-app.secrets-list",
+            project=project,
+            app_id=app_id,
+            branch=branch,
+        )
+        return
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "data_app_service")
+    try:
+        result = service.list_data_app_secrets(
+            alias=project,
+            app_id=app_id,
+            branch_id=branch,
+            show_fingerprint=show_fingerprint,
+        )
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+        return
+
+    if not result["secrets"]:
+        formatter.console.print("[dim]No secrets set on this data app.[/dim]")
+        return
+    formatter.console.print(
+        f"\n[bold]{result['count']} secret(s)[/bold] on data app "
+        f"[cyan]{result['id']}[/cyan] in [magenta]{result['project_alias']}[/magenta]:"
+    )
+    for entry in result["secrets"]:
+        marker = (
+            " [yellow](shadowed by runtime)[/yellow]" if entry.get("shadowed_by_runtime") else ""
+        )
+        line = f"  [bold]{entry['key']}[/bold] -> env [cyan]{entry['env_var']}[/cyan]{marker}"
+        if "fingerprint" in entry:
+            line += f"  [dim]fingerprint={entry['fingerprint']}  prefix={entry.get('encryption_prefix', '')}[/dim]"
+        formatter.console.print(line)
+
+
+@data_app_app.command("secrets-get")
+def data_app_secrets_get(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
+    key: str = typer.Option(..., "--key", help="Secret key, including '#' prefix."),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Storage branch ID for the linked config (defaults to production).",
+    ),
+) -> None:
+    """Show metadata for ONE secret key. NEVER echoes the decrypted value.
+
+    The Encryption API has no decrypt endpoint; the CLI cannot decrypt
+    even if asked. This command confirms presence + ciphertext metadata.
+
+    Reference: https://help.keboola.com/data-apps/python-js/
+    """
+
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "data-app.secrets-get",
+            project=project,
+            app_id=app_id,
+            key=key,
+            branch=branch,
+        )
+        return
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "data_app_service")
+    try:
+        result = service.get_data_app_secret(
+            alias=project,
+            app_id=app_id,
+            key=key,
+            branch_id=branch,
+        )
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+        return
+    formatter.console.print(
+        f"\n[bold]{result['key']}[/bold] -> env [cyan]{result['env_var']}[/cyan]"
+    )
+    formatter.console.print(
+        f"  [dim]fingerprint={result['fingerprint']}  prefix={result['encryption_prefix']}[/dim]"
+    )
+    if result.get("shadowed_by_runtime"):
+        # Same stdout/stderr-separation rationale as secrets-set: keep
+        # warnings off stdout so a script piping the metadata to a parser
+        # is unaffected.
+        formatter.err_console.print(
+            f"  [yellow]Warning:[/yellow] {result['env_var']} is auto-injected by "
+            f"the data-app runtime; the platform value silently shadows yours. "
+            f"See {_REF_STORAGE_ACCESS}."
+        )
+
+
+@data_app_app.command("secrets-remove")
+def data_app_secrets_remove(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
+    key: list[str] = typer.Option(
+        ..., "--key", help="Secret key to remove (with '#' prefix). Repeatable."
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Storage branch ID for the linked config (defaults to production).",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview the Storage PUT body without making the call."
+    ),
+) -> None:
+    """Remove one or more app-runtime secrets. Idempotent (missing keys are exit 0).
+
+    A removal can break the running app at the next deploy if it relied on
+    the secret; the command flags this in the response and never auto-deploys.
+
+    Reference: https://help.keboola.com/data-apps/python-js/
+    """
+
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "data-app.secrets-remove",
+            project=project,
+            app_id=app_id,
+            key=key,
+            branch=branch,
+        )
+        return
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "data_app_service")
+
+    if (
+        not yes
+        and not formatter.json_mode
+        and not dry_run
+        and not typer.confirm(
+            f"Remove {len(key)} secret(s) from data app {app_id} in '{project}'? "
+            "This may break the app at next deploy if it depends on these values."
+        )
+    ):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+
+    try:
+        result = service.remove_data_app_secrets(
+            alias=project,
+            app_id=app_id,
+            keys=key,
+            branch_id=branch,
+            dry_run=dry_run,
+        )
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+
+    formatter.output(
+        result,
+        lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# data-app validate-repo
+# ---------------------------------------------------------------------------
+
+
+@data_app_app.command("validate-repo")
+def data_app_validate_repo(
+    ctx: typer.Context,
+    git_repo: str = typer.Option(
+        ..., "--git-repo", help="GitHub repo URL (https://github.com/owner/repo)."
+    ),
+    git_branch: str = typer.Option(
+        "main", "--git-branch", help="Git ref to validate (default: main)."
+    ),
+    git_public: bool = typer.Option(
+        True,
+        "--git-public/--no-git-public",
+        help="Public repo (no PAT). Use --no-git-public for private repos and pass --git-pat-env / --git-pat-file.",
+    ),
+    git_pat_env: str | None = typer.Option(
+        None,
+        "--git-pat-env",
+        help="Read GitHub PAT from this env var (recommended; no argv leak).",
+    ),
+    git_pat_file: Path | None = typer.Option(
+        None,
+        "--git-pat-file",
+        help="Read GitHub PAT from this file.",
+        exists=True,
+        readable=True,
+        dir_okay=False,
+    ),
+    type_: str = typer.Option(
+        "python-js",
+        "--type",
+        help="Repo layout to validate against. Currently only 'python-js' is supported; other types tracked as follow-up.",
+    ),
+    strict: bool = typer.Option(
+        False, "--strict", help="Treat WARN findings as failures (exit 1)."
+    ),
+) -> None:
+    """Pre-flight check that a git repo follows the Keboola data-app Golden Rule.
+
+    Walks the repo via GitHub Contents + Trees API and validates the
+    documented structure (keboola-config/ tree, pyproject.toml, no
+    'pip install' in setup.sh, requires-python at-or-below the runtime
+    pin, etc.). Each check emits BLOCKING / WARN / OK with a citation
+    to the help-doc anchor that defines the rule.
+
+    Reference: https://help.keboola.com/data-apps/python-js/
+    """
+
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "data-app.validate-repo",
+            git_repo=git_repo,
+            git_branch=git_branch,
+            type_=type_,
+        )
+        return
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "repo_validate_service")
+
+    if git_pat_env and git_pat_file:
+        formatter.error(
+            message="--git-pat-env and --git-pat-file are mutually exclusive.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2) from None
+
+    pat_supplied = git_pat_env is not None or git_pat_file is not None
+    if pat_supplied and git_public:
+        # The default --git-public means "anonymous fetch"; sending a PAT
+        # with it is a contradiction (the resulting 404 would lead to a
+        # 'private repo -- pass --git-pat-env' message recommending the
+        # flag the user already passed). Fail loud instead.
+        formatter.error(
+            message=(
+                "--git-pat-env / --git-pat-file requires --no-git-public; the "
+                "default --git-public flag opts into an anonymous fetch and "
+                "would silently drop the PAT."
+            ),
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2) from None
+
+    pat: str | None = None
+    if git_pat_env is not None:
+        pat = _read_pat_from_env(git_pat_env)
+    elif git_pat_file is not None:
+        pat = _read_pat_from_file(git_pat_file)
+
+    try:
+        result = service.validate_repo(
+            git_repo=git_repo,
+            git_branch=git_branch,
+            git_public=git_public,
+            git_pat=pat,
+            type_=type_,
+            strict=strict,
+        )
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        verdict_colour = (
+            "red"
+            if result["verdict"] == "BLOCKING"
+            else "yellow"
+            if result["verdict"] == "WARN"
+            else "green"
+        )
+        formatter.console.print(
+            f"\n[bold {verdict_colour}]{result['verdict']}[/bold {verdict_colour}] "
+            f"-- {result['blocking_count']} BLOCKING, "
+            f"{result['warn_count']} WARN, {result['ok_count']} OK"
+        )
+        for check in result["checks"]:
+            sev = check["severity"]
+            colour = "red" if sev == "BLOCKING" else "yellow" if sev == "WARN" else "green"
+            line = f"  [{colour}]{sev:<8}[/{colour}] {check['name']}"
+            if check.get("message"):
+                line += f" -- {check['message']}"
+            formatter.console.print(line)
+        formatter.console.print(f"\n[dim]{result['message']}[/dim]")
+
+    if result.get("is_failure"):
+        # validate-repo's own exit code: BLOCKING (or strict-WARN) -> 1.
+        # We bypass the structured-error formatter because validate-repo
+        # output is itself the structured error envelope.
+        if formatter.json_mode:
+            # JSON envelope is already printed; just exit non-zero.
+            raise typer.Exit(code=1)
+        # Human mode: the verdict line above conveyed the failure.
+        raise typer.Exit(code=1)

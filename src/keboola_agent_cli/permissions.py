@@ -107,6 +107,12 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.start": "write",
     "data-app.stop": "write",
     "data-app.delete": "destructive",
+    # Data apps - secrets + validate-repo (new in 0.28.0)
+    "data-app.secrets-set": "write",
+    "data-app.secrets-list": "read",
+    "data-app.secrets-get": "read",
+    "data-app.secrets-remove": "destructive",
+    "data-app.validate-repo": "read",
     # Storage browsing
     "storage.buckets": "read",
     "storage.bucket-detail": "read",
