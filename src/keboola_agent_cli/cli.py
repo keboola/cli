@@ -50,6 +50,7 @@ from .services.lineage_service import LineageService
 from .services.mcp_service import McpService
 from .services.org_service import OrgService
 from .services.project_service import ProjectService
+from .services.repo_validate_service import RepoValidateService
 from .services.schedule_service import ScheduleService
 from .services.sharing_service import SharingService
 from .services.storage_service import StorageService
@@ -305,6 +306,7 @@ def main(
     schedule_service = ScheduleService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
     data_app_service = DataAppService(config_store=config_store)
+    repo_validate_service = RepoValidateService(config_store=config_store)
     kai_service = KaiService(config_store=config_store)
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
     version_service = VersionService()
@@ -358,6 +360,7 @@ def main(
     ctx.obj["schedule_service"] = schedule_service
     ctx.obj["workspace_service"] = workspace_service
     ctx.obj["data_app_service"] = data_app_service
+    ctx.obj["repo_validate_service"] = repo_validate_service
     ctx.obj["kai_service"] = kai_service
     ctx.obj["doctor_service"] = doctor_service
     ctx.obj["version_service"] = version_service

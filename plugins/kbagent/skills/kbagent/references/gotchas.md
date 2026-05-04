@@ -1,5 +1,125 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## `data-app create --auth public` writes the canonical noneProxyAuthorization shape (since v0.28.0; fixes v0.27.0 silent HTTP 503)
+
+- **What changed.** v0.27.0's `--auth public` wrote NO `authorization`
+  key into the Storage config at all. The Keboola app-proxy refused to
+  route to the resulting URL (HTTP 503 / "Service Unavailable") and the
+  UI's "Authentication Type" selector showed blank. Operators got a
+  silently broken app. v0.28.0 fixes this: `--auth public` now writes
+  the canonical `noneProxyAuthorization` shape that the kbc-ui exports
+  for the "None" UI option.
+- **Exact shape written by 0.28.0:**
+  ```json
+  {
+    "app_proxy": {
+      "auth_providers": [],
+      "auth_rules": [
+        {"type": "pathPrefix", "value": "/", "auth_required": false}
+      ]
+    }
+  }
+  ```
+- **Authoritative source (public):** keboola/job-queue-job-configuration
+  `src/JobDefinition/Configuration/Authorization/AppProxyDefinition.php`
+  -- when `auth_required=false`, the `auth` field MUST NOT be set. The
+  validator rejects shapes that include `auth` alongside
+  `auth_required: false`.
+- **Corroborating source (private; Keboola org members only):**
+  keboola/ui `apps/kbc-ui/src/scripts/modules/data-apps/constants.ts`
+  exports this exact shape as the `noneProxyAuthorization` constant for
+  the "None" UI option.
+- **Live-validated** end-to-end (HTTP 200 on the resulting URL, no
+  auth challenge; UI Authentication tab shows "None" pre-selected).
+- **Repairing existing v0.27.0 apps stuck at 503**: re-run
+  `kbagent data-app create --auth public ...` to mint a new app, OR
+  patch the existing config in-place via
+  `kbagent config update --component-id keboola.data-apps --config-id ID --set 'authorization=...'`
+  with the shape above. The previous URL stays retired in either case
+  (the proxy URL is bound to the deployment record, not the config).
+- **`--auth password` behaviour unchanged.** Mints a 20-char hex
+  simpleAuth password retrievable via `kbagent data-app password`
+  (Manage token required) or visible in the UI's Authentication tab.
+- **Other auth providers (OIDC / GitHub OAuth / GitLab OAuth /
+  JumpCloud / Auth0)** are NOT yet supported by the CLI's `--auth`
+  flag. Use the Keboola UI to configure them after `data-app create`.
+  Tracked as a follow-up issue.
+
+## `data-app secrets-*` -- per-project KMS, idempotent remove, never decryptable (since v0.28.0)
+
+- **Encryption is per-project KMS.** `kbagent data-app secrets-set` calls
+  the project's Encryption API to wrap each plaintext value before
+  writing it to Storage. The resulting `KBC::Project*` ciphertext is
+  bound to the project's KMS key; the same ciphertext does NOT decrypt
+  in another project. Same fail-closed semantic as `data-app create`'s
+  `--git-pat-encrypted`: if the Encryption API does not return a
+  project-scoped ciphertext, the command aborts with `ENCRYPTION_FAILED`
+  and never writes plaintext to Storage. `--allow-plaintext-on-encrypt-failure`
+  is bootstrap/debug only; never use in production.
+- **Read-modify-write at the service layer, NOT Storage `merge=True`.**
+  The Storage API's `merge=True` flag is shallow at the top level only;
+  relying on it would clobber sibling keys nested inside
+  `parameters.dataApp.secrets`. The CLI GETs the full config, modifies
+  the secrets sub-dict in place, and PUTs the unchanged remainder. Every
+  untouched sibling key (under `parameters.dataApp.secrets`,
+  `parameters.dataApp` -- slug, git block, id back-pointer, `parameters`
+  itself, and the top-level `runtime`/`authorization`/`storage`) is
+  preserved bit-identical.
+- **`secrets-remove` is idempotent.** Removing a key that isn't set is
+  exit 0 with `removed: 0`, `not_found: [<derived env-var name>]`. The
+  Storage version is not bumped on a no-op. Do NOT script around this
+  with a precondition lookup -- the idempotent path is the contract.
+- **`secrets-get` NEVER echoes the decrypted plaintext.** The Encryption
+  API has no decrypt endpoint; the CLI cannot decrypt under any branch.
+  The command returns metadata only -- key name, derived env-var name,
+  ciphertext fingerprint, encryption prefix, presence flag. NOT_FOUND on
+  an absent key never enumerates sibling keys.
+- **Runtime env-var translation rule:** strip `#`, replace `-` with `_`,
+  uppercase. Documented at https://help.keboola.com/data-apps/python-js/.
+  Examples: `#KBC_TOKEN` -> `KBC_TOKEN`, `#my-api-key` -> `MY_API_KEY`,
+  `#anthropic-token` -> `ANTHROPIC_TOKEN`.
+- **Setting a reserved-name secret is silently shadowed.** The data-app
+  runtime auto-injects a documented set of env vars (canon-confirmed
+  floor: `KBC_TOKEN`, `KBC_URL`; runtime almost certainly injects more
+  -- TODO follow-up to enumerate exhaustively against a running app).
+  Setting `--secret '#KBC_TOKEN=foo'` succeeds (exit 0) but the platform
+  value silently shadows yours at runtime; the command emits a stderr
+  WARN naming each shadowed key and lists them in
+  `shadowed_by_runtime[]` of the JSON envelope.
+- **Adding/removing a secret bumps the Storage version, but the running
+  container keeps the OLD config until `data-app deploy` runs.** Same
+  contract as any other `keboola.data-apps` config edit (see the
+  `(since v0.27.0)` entry below). The response includes a `next_step`
+  field with the exact redeploy command to run; suppress it with
+  `--no-hint-next` for scripted callers.
+
+## `data-app validate-repo` -- pre-flight against the Golden Rule, GitHub-only (since v0.28.0)
+
+- `kbagent data-app validate-repo --git-repo URL` walks the repo via the
+  GitHub Contents + Trees API and verifies the documented "Golden Rule"
+  layout from https://help.keboola.com/data-apps/python-js/ before
+  `data-app create`. Each check emits BLOCKING / WARN / OK with a
+  citation back to the help anchor that defines the rule. Runs in ≤5
+  GitHub API calls regardless of repo size (one trees-recursive + up
+  to four contents fetches), so the 60/hour unauthenticated GitHub
+  rate limit is no longer the common-case failure mode.
+- **`--type` is restricted to `python-js` in 0.28.0.** Streamlit /
+  pure-Python / R / Node-only repos have different layouts (Streamlit
+  does not require the `keboola-config/` tree, for instance) and need
+  per-type canon citations. Tracked as a follow-up.
+- **GitHub-only.** GitLab / Bitbucket support is a follow-up. Calling
+  with a non-GitHub URL exits 2 / `INVALID_ARGUMENT`.
+- Exit 0 on all checks <= WARN; exit 1 on any BLOCKING. `--strict`
+  treats WARNs as failures (exit 1) for CI gating.
+- **Reading the build / runtime log is still NOT available via the
+  CLI.** The Data Science API does not expose Terminal Logs as JSON
+  (per https://help.keboola.com/data-apps/terminal-log-tab/); on
+  `DATA_APP_BUILD_FAILED` / `DATA_APP_DEPLOY_TIMEOUT` the next step is
+  still to open the UI's Terminal Log tab. A `data-app logs` command
+  + auto-log-dump on deploy failure are tracked as
+  [issue #240](https://github.com/padak/keboola_agent_cli/issues/240)
+  (needs platform-side API exposure first).
+
 ## `data-app deploy` is required after `config update` -- the running container does NOT auto-pick-up new config versions (since v0.27.0)
 
 - `kbagent config update --component-id keboola.data-apps ...` bumps the
