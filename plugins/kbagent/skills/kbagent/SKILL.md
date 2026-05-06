@@ -245,6 +245,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Data apps** (create / deploy / start / stop / password / delete; the §9 redeploy contract) | [data-app-workflow](references/data-app-workflow.md) |
 | Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
 | **Storage column types** (native types, NOT NULL, DEFAULT, branch materialize) | [storage-types-workflow](references/storage-types-workflow.md) |
+| **Typify a typeless table** (profile -> CTAS -> swap-tables -> validate -> handoff) | [typify-table-workflow](references/typify-table-workflow.md) |
 | Bucket sharing & linking | [sharing-workflow](references/sharing-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
 | Encrypting secrets for MCP tools | [encrypt-workflow](references/encrypt-workflow.md) |
