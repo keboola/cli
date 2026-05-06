@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import STORAGE_BRANCHES_FEATURE
-from ..errors import ErrorCode, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -1173,6 +1173,86 @@ class StorageService(BaseService):
             "dry_run": False,
             "project_alias": alias,
             "table_id": table_id,
+        }
+
+    def swap_tables(
+        self,
+        alias: str,
+        table_id: str,
+        target_table_id: str,
+        branch_id: int | None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Swap two storage tables (dev branch only).
+
+        After the swap, the two tables exchange physical positions. Aliases
+        are NOT transferred -- they keep pointing at the same physical
+        position and therefore expose the OTHER table's data after the swap.
+        This is the documented behavior of the Storage API; the service
+        layer does not try to rewrite alias targets.
+
+        The Storage API rejects this operation on production -- a dev branch
+        ID is mandatory. The service raises ConfigError before any HTTP call
+        when ``branch_id`` is None.
+
+        Args:
+            alias: Project alias.
+            table_id: Full ID of the first table.
+            target_table_id: Full ID of the second table.
+            branch_id: Dev branch ID (must not be None).
+            dry_run: If True, only report what would be swapped.
+
+        Returns:
+            Dict with 'project_alias', 'branch_id', 'table_id',
+            'target_table_id', 'dry_run', and (when not dry-run) 'response'.
+
+        Raises:
+            ConfigError: If branch_id is None.
+            KeboolaApiError: If the API call fails.
+        """
+        if branch_id is None:
+            raise ConfigError(
+                "swap-tables requires a dev branch. Set one with "
+                "'kbagent branch use --project <P> --branch <ID>' or pass "
+                "--branch <ID> directly. The Storage API rejects this on "
+                "production."
+            )
+
+        if table_id == target_table_id:
+            raise ConfigError(
+                "swap-tables requires two different tables; "
+                f"--table-id and --target-table-id are both '{table_id}'."
+            )
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        if dry_run:
+            return {
+                "project_alias": alias,
+                "branch_id": branch_id,
+                "table_id": table_id,
+                "target_table_id": target_table_id,
+                "dry_run": True,
+            }
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            response = client.swap_tables(
+                table_id=table_id,
+                target_table_id=target_table_id,
+                branch_id=branch_id,
+            )
+        finally:
+            client.close()
+
+        return {
+            "project_alias": alias,
+            "branch_id": branch_id,
+            "table_id": table_id,
+            "target_table_id": target_table_id,
+            "dry_run": False,
+            "response": response,
         }
 
     def delete_buckets(

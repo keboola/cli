@@ -5867,6 +5867,253 @@ class TestE2EStorageNativeTypesAndBranchMaterialize:
 
 
 # ---------------------------------------------------------------------------
+# TestE2EStorageSwapTables -- storage swap-tables in a dev branch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.e2e
+class TestE2EStorageSwapTables:
+    """End-to-end coverage for ``kbagent storage swap-tables``.
+
+    Verifies:
+    - swap exchanges schemas between two tables in a dev branch
+      (table IDs stay stable, ``definition.columns`` are swapped),
+    - production calls (no branch + no active branch) are rejected
+      before any HTTP traffic.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-swap"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+
+        self._created_branch_ids: list[int] = []
+        self._created_buckets: list[str] = []
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        yield
+
+        # Teardown: branches first (cascades to their buckets/tables),
+        # then any production buckets we created outside of a branch.
+        for branch_id in self._created_branch_ids:
+            with contextlib.suppress(Exception):
+                self.client.delete_dev_branch(branch_id)
+        for bucket_id in self._created_buckets:
+            with contextlib.suppress(Exception):
+                self.client.delete_bucket(bucket_id, force=True)
+        self.client.close()
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(_invoke(self.config_dir, ["--json", *args]))
+
+    def test_swap_in_dev_branch_exchanges_schemas(self) -> None:
+        """Live swap: two tables with different VARCHAR lengths swap definitions."""
+
+        _step(1, "branch create", "isolate the swap test in a dev branch")
+        branch = self._run_ok(
+            "branch", "create", "--project", self.alias, "--name", f"{RUN_ID}-swap-branch"
+        )["data"]
+        branch_id = int(branch["branch_id"])
+        self._created_branch_ids.append(branch_id)
+
+        bucket_id = f"in.c-{RUN_ID.replace('-', '_')}_swap"
+        original_id = f"{bucket_id}.original"
+        typed_id = f"{bucket_id}.typed_copy"
+
+        _step(
+            2,
+            "create two typed tables with distinguishable column lengths",
+            "VARCHAR(20) vs VARCHAR(80) on the 'value' column",
+        )
+        self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            "original",
+            "--branch",
+            str(branch_id),
+            "--column",
+            "id:VARCHAR(40)",
+            "--column",
+            "value:VARCHAR(20)",
+            "--primary-key",
+            "id",
+        )
+        self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            "typed_copy",
+            "--branch",
+            str(branch_id),
+            "--column",
+            "id:VARCHAR(40)",
+            "--column",
+            "value:VARCHAR(80)",
+            "--primary-key",
+            "id",
+        )
+
+        def _value_len(table_detail: dict[str, Any]) -> str:
+            cols = {c["name"]: c for c in table_detail["definition"]["columns"]}
+            return cols["value"]["definition"]["length"]
+
+        before_original = self.client.get_table_detail(original_id, branch_id=branch_id)
+        before_typed = self.client.get_table_detail(typed_id, branch_id=branch_id)
+        assert _value_len(before_original) == "20"
+        assert _value_len(before_typed) == "80"
+
+        _step(3, "storage swap-tables", "POST /tables/.../swap with targetTableId")
+        result = self._run_ok(
+            "storage",
+            "swap-tables",
+            "--project",
+            self.alias,
+            "--table-id",
+            original_id,
+            "--target-table-id",
+            typed_id,
+            "--branch",
+            str(branch_id),
+            "--yes",
+        )["data"]
+        assert result["table_id"] == original_id
+        assert result["target_table_id"] == typed_id
+        assert result["branch_id"] == branch_id
+        assert result["dry_run"] is False
+
+        _step(4, "table-detail", "verify VARCHAR lengths exchanged")
+        after_original = self.client.get_table_detail(original_id, branch_id=branch_id)
+        after_typed = self.client.get_table_detail(typed_id, branch_id=branch_id)
+        assert _value_len(after_original) == "80", (
+            f"After swap, '{original_id}' should adopt the schema of '{typed_id}' "
+            f"(VARCHAR(80)); got VARCHAR({_value_len(after_original)})."
+        )
+        assert _value_len(after_typed) == "20", (
+            f"After swap, '{typed_id}' should adopt the schema of '{original_id}' "
+            f"(VARCHAR(20)); got VARCHAR({_value_len(after_typed)})."
+        )
+
+    def test_swap_dry_run_does_not_call_api(self) -> None:
+        """Dry-run skips the HTTP call: no schema change, exit 0."""
+        _step(1, "branch create", "dry-run still requires a branch context")
+        branch = self._run_ok(
+            "branch", "create", "--project", self.alias, "--name", f"{RUN_ID}-swap-dry"
+        )["data"]
+        branch_id = int(branch["branch_id"])
+        self._created_branch_ids.append(branch_id)
+
+        bucket_id = f"in.c-{RUN_ID.replace('-', '_')}_swap_dry"
+        a_id = f"{bucket_id}.a"
+        b_id = f"{bucket_id}.b"
+        self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            "a",
+            "--branch",
+            str(branch_id),
+            "--column",
+            "id:VARCHAR(40)",
+            "--primary-key",
+            "id",
+        )
+        self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            "b",
+            "--branch",
+            str(branch_id),
+            "--column",
+            "id:VARCHAR(40)",
+            "--primary-key",
+            "id",
+        )
+
+        before = self.client.get_table_detail(a_id, branch_id=branch_id)
+
+        result = self._run_ok(
+            "storage",
+            "swap-tables",
+            "--project",
+            self.alias,
+            "--table-id",
+            a_id,
+            "--target-table-id",
+            b_id,
+            "--branch",
+            str(branch_id),
+            "--dry-run",
+        )["data"]
+        assert result["dry_run"] is True
+        assert "response" not in result
+
+        after = self.client.get_table_detail(a_id, branch_id=branch_id)
+        assert before["lastChangeDate"] == after["lastChangeDate"], (
+            "Dry-run must not modify the table"
+        )
+
+    def test_swap_without_branch_is_rejected(self) -> None:
+        """Without active branch and without --branch, exit 5 / ConfigError before any HTTP."""
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "storage",
+                "swap-tables",
+                "--project",
+                self.alias,
+                "--table-id",
+                "in.c-foo.bar",
+                "--target-table-id",
+                "in.c-foo.baz",
+                "--yes",
+            ],
+        )
+        assert result.exit_code == 5, result.output
+        payload = json.loads(result.output)
+        assert payload["status"] == "error"
+        assert "dev branch" in payload["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
 # TestE2EDataAppLifecycle -- data-app create / detail / deploy / start / stop / delete
 # ---------------------------------------------------------------------------
 

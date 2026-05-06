@@ -1139,6 +1139,143 @@ def storage_delete_column(
         raise typer.Exit(code=1)
 
 
+@storage_app.command("swap-tables", rich_help_panel=_TABLES)
+def storage_swap_tables(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    table_id: str = typer.Option(
+        ...,
+        "--table-id",
+        help="First table ID (e.g. 'in.c-bucket.table')",
+    ),
+    target_table_id: str = typer.Option(
+        ...,
+        "--target-table-id",
+        help="Second table ID to swap with the first",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help=(
+            "Dev branch ID. Required by the Storage API; defaults to the "
+            "active branch set via 'kbagent branch use'. Production swaps "
+            "are rejected by the API."
+        ),
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be swapped without executing",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompt",
+    ),
+) -> None:
+    """Swap two storage tables in a development branch.
+
+    Both tables exchange physical positions. Aliases are NOT transferred --
+    they keep pointing at the same physical position and therefore expose
+    the OTHER table's data after the swap. Use this to promote a typed
+    rebuild ("data_change_log" with proper column types) into the original
+    name ("data") without touching downstream config references.
+
+    \b
+    The Storage API restricts this to dev branches. The command resolves
+    the active branch from 'kbagent branch use' if --branch is omitted;
+    if no branch is set in either place, the call is rejected before any
+    HTTP call.
+
+    \b
+    Example:
+      kbagent branch use --project P --branch 1234
+      kbagent storage swap-tables --project P \\
+        --table-id in.c-foo.data --target-table-id in.c-foo.data_change_log
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.swap-tables",
+            project=project,
+            table_id=table_id,
+            target_table_id=target_table_id,
+            branch=branch,
+            dry_run=dry_run,
+        )
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    if dry_run:
+        try:
+            result = service.swap_tables(
+                alias=project,
+                table_id=table_id,
+                target_table_id=target_table_id,
+                branch_id=effective_branch,
+                dry_run=True,
+            )
+        except ConfigError as exc:
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+            raise typer.Exit(code=5) from None
+
+        if formatter.json_mode:
+            formatter.output(result)
+        else:
+            formatter.console.print(
+                f"[bold blue]Would swap (branch {result['branch_id']}):[/bold blue] "
+                f"{result['table_id']} <-> {result['target_table_id']}"
+            )
+        return
+
+    confirm_msg = (
+        f"Swap '{table_id}' <-> '{target_table_id}' in project '{project}' "
+        f"on branch {effective_branch}? Aliases will continue to point at the "
+        "same physical position (i.e. they will expose the OTHER table's data "
+        "after the swap)."
+    )
+    if not yes and not formatter.json_mode and not typer.confirm(confirm_msg):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+
+    try:
+        result = service.swap_tables(
+            alias=project,
+            table_id=table_id,
+            target_table_id=target_table_id,
+            branch_id=effective_branch,
+            dry_run=False,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            project=project,
+            retryable=exc.retryable,
+        )
+        raise typer.Exit(code=exit_code) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        formatter.console.print(
+            f"[bold green]Swapped:[/bold green] {result['table_id']} <-> "
+            f"{result['target_table_id']} (branch {result['branch_id']})"
+        )
+
+
 @storage_app.command("delete-bucket", rich_help_panel=_BUCKETS)
 def storage_delete_bucket(
     ctx: typer.Context,
