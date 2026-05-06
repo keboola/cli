@@ -36,12 +36,19 @@ def _lines_to_script(lines: list[str], *, is_sql: bool = False) -> list[str]:
     return [content]
 
 
-# Component patterns that contain SQL transformations
+# Component patterns that contain SQL transformations.
+# Used for exact-match dispatch in pull/push code-file extraction.
+# For runtime-shape detection (i.e. "does this component's script[]
+# need to be split on statement boundaries?") prefer
+# :func:`is_sql_transformation_component` -- it adds fragment-based
+# fallback so newer/variant SQL backends are covered without code edits.
 SQL_TRANSFORMATION_COMPONENTS: set[str] = {
     "keboola.snowflake-transformation",
     "keboola.synapse-transformation",
     "keboola.oracle-transformation",
     "keboola.redshift-sql-transformation",
+    "keboola.google-bigquery-transformation",
+    "keboola.duckdb-transformation",
 }
 
 # Component patterns that contain Python transformations
@@ -54,11 +61,139 @@ PYTHON_APP_COMPONENTS: set[str] = {
     "kds-team.app-custom-python",
 }
 
+# Fragment-based detection for SQL transformations. Keeps
+# is_sql_transformation_component robust against newer/variant
+# component IDs (e.g. ``keboola.snowflake-transformation-v2``,
+# self-hosted ``keboola.exasol-transformation``) without requiring
+# an edit to SQL_TRANSFORMATION_COMPONENTS for every new backend.
+_SQL_TRANSFORMATION_FRAGMENTS: tuple[str, ...] = (
+    "snowflake-transformation",
+    "synapse-transformation",
+    "oracle-transformation",
+    "redshift-sql-transformation",
+    "redshift-transformation",
+    "google-bigquery-transformation",
+    "bigquery-transformation",
+    "duckdb-transformation",
+    "exasol-transformation",
+    "teradata-transformation",
+)
+
 SQL_BLOCK_MARKER = "/* ===== BLOCK: {name} ===== */"
 SQL_CODE_MARKER = "/* ===== CODE: {name} ===== */"
 PYTHON_BLOCK_MARKER = "# ===== BLOCK: {name} ====="
 PYTHON_CODE_MARKER = "# ===== CODE: {name} ====="
 DESCRIPTION_FILENAME = "_description.md"
+
+
+def is_sql_transformation_component(component_id: str) -> bool:
+    """Return True if the component's script[] elements are SQL statements.
+
+    The Keboola runtime treats each ``parameters.blocks[].codes[].script``
+    element of a SQL transformation as ONE logical statement. Pushing a
+    string instead of an array passes the Storage API (lax validator) but
+    crashes at job runtime ("Expected array, got string").
+
+    Combines exact-match (``SQL_TRANSFORMATION_COMPONENTS``) with a
+    fragment fallback so newer/variant SQL backends -- including ones
+    not yet enumerated in the exact set -- still get correct treatment.
+    """
+    if component_id in SQL_TRANSFORMATION_COMPONENTS:
+        return True
+    return any(fragment in component_id for fragment in _SQL_TRANSFORMATION_FRAGMENTS)
+
+
+def normalize_blocks_codes_script(
+    component_id: str,
+    config: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Normalize ``parameters.blocks[].codes[].script`` string -> array.
+
+    The Keboola runtime schema validator requires ``script`` to be an
+    array. The Storage API silently accepts a string and the runtime
+    crashes at job execution with::
+
+        Invalid type for path "root.parameters.blocks.0.codes.X.script".
+        Expected "array", but got "string"
+
+    This helper closes the gap on the kbagent write side. For SQL
+    transformations the string is split on statement boundaries via
+    :func:`split_statements` (state machine respecting comments and
+    string literals); for Python / R / custom-Python apps and other
+    components with the same shape, the string is wrapped as a
+    single-element array. Components that already have ``script`` as a
+    list are passed through unchanged.
+
+    Args:
+        component_id: The configuration's component ID. Used to choose
+            split-vs-wrap and to passthrough components that don't have
+            this schema at all.
+        config: The configuration dict to normalize. Mutated in place.
+
+    Returns:
+        ``(config, normalizations)``. ``normalizations`` is a list of
+        per-element change records of shape::
+
+            {
+                "path": "parameters.blocks[0].codes[1].script",
+                "action": "sql_split" | "wrap_array",
+                "before_type": "str",
+                "after_type": "list",
+                "after_length": 3,
+            }
+
+        Empty when nothing was normalized (already-valid input).
+
+    The caller is responsible for surfacing the normalization records to
+    the user (stderr in human mode, JSON envelope in JSON mode) so the
+    silent fix is observable.
+    """
+    normalizations: list[dict[str, Any]] = []
+    if not isinstance(config, dict):
+        return config, normalizations
+    parameters = config.get("parameters")
+    if not isinstance(parameters, dict):
+        return config, normalizations
+    blocks = parameters.get("blocks")
+    if not isinstance(blocks, list):
+        return config, normalizations
+
+    is_sql = is_sql_transformation_component(component_id)
+
+    for block_idx, block in enumerate(blocks):
+        if not isinstance(block, dict):
+            continue
+        codes = block.get("codes")
+        if not isinstance(codes, list):
+            continue
+        for code_idx, code in enumerate(codes):
+            if not isinstance(code, dict):
+                continue
+            script = code.get("script")
+            if not isinstance(script, str):
+                continue
+            if is_sql:
+                new_script = split_statements(script)
+                action = "sql_split"
+            else:
+                # Single-element wrap for Python / R / custom-Python apps
+                # and any unknown component sharing the schema. Empty
+                # strings collapse to ``[]`` -- the runtime treats both
+                # as no-op.
+                new_script = [script] if script.strip() else []
+                action = "wrap_array"
+            code["script"] = new_script
+            normalizations.append(
+                {
+                    "path": f"parameters.blocks[{block_idx}].codes[{code_idx}].script",
+                    "action": action,
+                    "before_type": "str",
+                    "after_type": "list",
+                    "after_length": len(new_script),
+                }
+            )
+
+    return config, normalizations
 
 
 def _extract_description(config_data: dict[str, Any], config_dir: Path) -> None:

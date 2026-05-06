@@ -124,6 +124,15 @@ Use `kbagent <command> --help` for full flag details and examples.
     nested key (e.g. parameters.db.host=new-host). --merge deep-merges into
     existing config (preserves sibling keys). --dry-run previews changes.
     Paths are always relative to the configuration root.
+    Auto-normalize (0.28.0+; #245): parameters.blocks[].codes[].script
+    strings are silently rewritten to arrays before pushing to Storage --
+    SQL transformations split on statement boundaries (state machine
+    respects 'string' / "ident" / $$..$$ / -- / # / // / /* */); Python /
+    R / kds-team.app-custom-python wrap as [script]. The result envelope
+    gains a normalizations: [{{path, action, before_type, after_type,
+    after_length}}] field listing every change (empty when input was
+    already valid). Closes the runtime "Expected array, got string" trap
+    that the lax Storage API silently lets through.
 
   kbagent config set-default-bucket --project NAME --component-id ID --config-id ID (--bucket BUCKET_ID | --clear) [--dry-run] [--branch ID]
     Set or clear configuration.storage.output.default_bucket on a config without

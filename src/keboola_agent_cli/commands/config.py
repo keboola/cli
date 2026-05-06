@@ -703,6 +703,8 @@ def config_update(
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     # --- Output ---------------------------------------------------------------
+    normalizations = result.get("normalizations") or []
+
     if result.get("dry_run"):
         changes = result.get("changes", [])
         if formatter.json_mode:
@@ -715,6 +717,7 @@ def config_update(
                 for change in changes:
                     formatter.console.print(f"  {change}")
                 formatter.console.print()
+            _emit_normalizations_warning(formatter, normalizations)
         return
 
     if formatter.json_mode:
@@ -728,6 +731,29 @@ def config_update(
             f"Updated config '{updated_name}' "
             f"({result.get('component_id', component_id)}/{config_id})"
             f"{branch_info}"
+        )
+        _emit_normalizations_warning(formatter, normalizations)
+
+
+def _emit_normalizations_warning(formatter: Any, normalizations: list[dict[str, Any]]) -> None:
+    """Surface ``parameters.blocks[].codes[].script`` normalizations in human mode.
+
+    Storage API silently accepts a string for ``script``; the runtime
+    validator rejects it later. When kbagent auto-fixes the shape, the
+    operator must see what was changed -- otherwise the fix is invisible
+    and a downstream consumer might rely on the original (broken) input
+    shape having been written verbatim. JSON mode already exposes the
+    same data via the ``normalizations`` field on the envelope.
+    """
+    if not normalizations:
+        return
+    formatter.console.print(
+        f"[yellow]Auto-normalized {len(normalizations)} script field(s) "
+        f"to array (string -> list). See --json for details.[/yellow]"
+    )
+    for entry in normalizations:
+        formatter.console.print(
+            f"  [dim]{entry['path']}: {entry['action']} -> {entry['after_length']} element(s)[/dim]"
         )
 
 
