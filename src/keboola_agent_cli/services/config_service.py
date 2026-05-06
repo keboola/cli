@@ -1637,6 +1637,29 @@ class ConfigService(BaseService):
         project = projects[alias]
         client = self._client_factory(project.stack_url, project.token)
         try:
+            # Pre-flight: minting a short-lived component-scoped child token
+            # via POST /v2/storage/tokens requires `canManageTokens`, which only
+            # master tokens carry by default. Without this guard the Storage
+            # API returns a vague 500 "Application error" that misleads
+            # operators into thinking the OAuth wizard is broken.
+            info = client.get_project_info()
+            if not info.get("isMasterToken", False):
+                raise KeboolaApiError(
+                    status_code=403,
+                    error_code=ErrorCode.MISSING_MASTER_TOKEN,
+                    message=(
+                        f"`config oauth-url` requires a master Storage API token "
+                        f"on project '{alias}'. The current token "
+                        f"(id={info.get('id', '?')}, "
+                        f"description='{info.get('description', '?')}') is not a "
+                        f"master token, so it cannot mint the short-lived "
+                        f"component-scoped child token the OAuth wizard expects. "
+                        f"Either re-add the project with a master token "
+                        f"(`kbagent project edit --project {alias} --token <MASTER>`) "
+                        f"or open the OAuth flow via the Keboola UI."
+                    ),
+                )
+
             url = client.get_oauth_url(
                 component_id=component_id,
                 config_id=config_id,

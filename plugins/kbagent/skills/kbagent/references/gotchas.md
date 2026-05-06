@@ -1000,3 +1000,23 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
 ## `config row-create` / `config row-update` require `--row-id` for updates (since v0.29.0)
 
 `row-create` returns the new row object including `id`. Capture this ID for subsequent `row-update` calls. `row-update` preserves all unspecified fields — pass only the keys you want to change. `--is-disabled` and `--is-enabled` are mutually exclusive flags for toggling the row's active state.
+
+## `config oauth-url` requires a master Storage API token (since v0.29.0)
+
+The OAuth wizard URL embeds a short-lived **child** Storage API token scoped
+to the target component. Minting this child token via `POST /v2/storage/tokens`
+requires `canManageTokens` privilege, which only **master tokens** carry.
+
+- Pre-flight: `kbagent` calls `verify_token` first and refuses with
+  `MISSING_MASTER_TOKEN` (exit 3) before any HTTP write happens. Without this
+  guard the Storage API returns a vague 500 "Application error" that misleads
+  operators into thinking the OAuth wizard is broken.
+- Fix path: re-add the project with a master token
+  (`kbagent project edit --project <ALIAS> --token <MASTER_TOKEN>`) or open
+  the OAuth flow via the Keboola UI instead.
+- AI agents creating the project token via `kbagent project add` /
+  `kbagent project refresh` get a non-master token by default — they must
+  switch to a master token before calling `config oauth-url`. See
+  https://github.com/padak/keboola_agent_cli/issues/<TBD> for the upstream
+  request to make `project add` / `project refresh` mint a token with
+  `canManageTokens` so OAuth flows work out of the box.

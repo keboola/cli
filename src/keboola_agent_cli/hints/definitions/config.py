@@ -696,6 +696,9 @@ HintRegistry.register(
             "Call this AFTER creating the configuration, not before.",
             "redirect_url adds a returnUrl query param so the OAuth wizard returns to a "
             "custom URL after the flow completes.",
+            "Requires a MASTER Storage API token on the project (canManageTokens). "
+            "Non-master tokens fail with MISSING_MASTER_TOKEN (exit 3) on a fail-fast "
+            "pre-flight check before any HTTP write happens.",
         ],
     )
 )

@@ -16,6 +16,7 @@ class ErrorCode(StrEnum):
     INVALID_TOKEN = "INVALID_TOKEN"
     ACCESS_DENIED = "ACCESS_DENIED"
     PERMISSION_DENIED = "PERMISSION_DENIED"
+    MISSING_MASTER_TOKEN = "MISSING_MASTER_TOKEN"
 
     # Network / transport
     TIMEOUT = "TIMEOUT"
@@ -171,6 +172,7 @@ class PermissionDeniedError(Exception):
 
 _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.INVALID_TOKEN: "authentication",
+    ErrorCode.MISSING_MASTER_TOKEN: "authentication",
     ErrorCode.TIMEOUT: "network",
     ErrorCode.CONNECTION_ERROR: "network",
     ErrorCode.RETRY_EXHAUSTED: "network",

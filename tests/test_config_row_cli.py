@@ -454,10 +454,18 @@ class TestConfigRowUpdateCli:
 class TestConfigOauthUrlCli:
     """CLI-level tests for config oauth-url."""
 
-    def _make_oauth_service(self, tmp_config_dir: Path) -> ConfigService:
+    def _make_oauth_service(
+        self, tmp_config_dir: Path, is_master_token: bool = True
+    ) -> ConfigService:
         store = setup_single_project(tmp_config_dir)
         mock_client = MagicMock()
         mock_client.get_oauth_url.return_value = OAUTH_RESULT["url"]
+        mock_client.get_project_info.return_value = {
+            "id": "9001",
+            "description": "test-token",
+            "isMasterToken": is_master_token,
+            "owner": {"id": 1234, "name": "Test Project"},
+        }
         return ConfigService(
             config_store=store,
             client_factory=lambda url, token: mock_client,
@@ -499,6 +507,12 @@ class TestConfigOauthUrlCli:
         """API error from get_oauth_url gives non-zero exit code."""
         store = setup_single_project(tmp_config_dir)
         mock_client = MagicMock()
+        mock_client.get_project_info.return_value = {
+            "id": "9001",
+            "description": "test-token",
+            "isMasterToken": True,
+            "owner": {"id": 1234, "name": "Test"},
+        }
         mock_client.get_oauth_url.side_effect = KeboolaApiError(
             status_code=403, error_code="ACCESS_DENIED", message="Forbidden"
         )
@@ -549,6 +563,12 @@ class TestConfigOauthUrlCli:
         """--redirect-url is forwarded to the service and surfaced in JSON output."""
         store = setup_single_project(tmp_config_dir)
         mock_client = MagicMock()
+        mock_client.get_project_info.return_value = {
+            "id": "9001",
+            "description": "test-token",
+            "isMasterToken": True,
+            "owner": {"id": 1234, "name": "Test"},
+        }
         mock_client.get_oauth_url.return_value = (
             "https://external.keboola.com/oauth/index.html"
             "?token=abc&sapiUrl=https%3A%2F%2Fconnection.keboola.com"
@@ -678,3 +698,47 @@ class TestRowDisableFlagsCli:
             )
 
         assert result.exit_code == 0, result.output
+
+
+class TestOauthUrlMasterTokenGate:
+    """CLI-level tests for the master-token pre-flight on `config oauth-url`."""
+
+    def test_non_master_token_exits_3(self, tmp_config_dir: Path) -> None:
+        """Non-master token -> exit 3 (auth) with MISSING_MASTER_TOKEN code."""
+        store = setup_single_project(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.get_project_info.return_value = {
+            "id": "10851170",
+            "description": "kbagent-cli [petr@keboola.com]",
+            "isMasterToken": False,
+            "owner": {"id": 901, "name": "Padak"},
+        }
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.config.get_service",
+                lambda ctx, name: service,
+            )
+            result = _invoke(
+                tmp_config_dir,
+                "oauth-url",
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-google-drive",
+                    "--config-id",
+                    "cfg-001",
+                ],
+            )
+
+        assert result.exit_code == 3, result.output
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["error"]["code"] == "MISSING_MASTER_TOKEN"
+        # No URL should ever be minted on a non-master token.
+        mock_client.get_oauth_url.assert_not_called()

@@ -27,8 +27,15 @@ SAMPLE_ROW = {
 }
 
 
-def _make_service(tmp_config_dir: Path) -> tuple[ConfigService, MagicMock]:
-    """Create a ConfigService backed by a mock client."""
+def _make_service(
+    tmp_config_dir: Path, is_master_token: bool = True
+) -> tuple[ConfigService, MagicMock]:
+    """Create a ConfigService backed by a mock client.
+
+    By default the mock token is a master token so OAuth pre-flight passes.
+    Tests that need to exercise the non-master branch override via
+    ``is_master_token=False``.
+    """
     store = setup_single_project(tmp_config_dir)
     mock_client = MagicMock()
     mock_client.get_config_row.return_value = SAMPLE_ROW
@@ -39,6 +46,12 @@ def _make_service(tmp_config_dir: Path) -> tuple[ConfigService, MagicMock]:
         "?token=abc123&sapiUrl=https%3A%2F%2Fconnection.keboola.com"
         "#/keboola.ex-google-drive/cfg-001"
     )
+    mock_client.get_project_info.return_value = {
+        "id": "9001",
+        "description": "test-token",
+        "isMasterToken": is_master_token,
+        "owner": {"id": 1234, "name": "Test Project"},
+    }
     service = ConfigService(
         config_store=store,
         client_factory=lambda url, token: mock_client,
@@ -371,6 +384,40 @@ class TestGetOauthUrl:
         )
 
         assert "redirect_url" not in result
+
+    def test_non_master_token_fails_with_missing_master_token(self, tmp_config_dir: Path) -> None:
+        """Non-master token short-circuits before any HTTP write happens.
+
+        OAuth URL generation calls POST /v2/storage/tokens (via
+        create_short_lived_token) which requires canManageTokens privilege,
+        a master-token-only capability. Without this guard the Storage API
+        returns a vague 500 'Application error' that misleads operators.
+        """
+        service, client = _make_service(tmp_config_dir, is_master_token=False)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.get_oauth_url(
+                alias="prod",
+                component_id="keboola.ex-google-drive",
+                config_id="cfg-001",
+            )
+
+        assert excinfo.value.error_code == "MISSING_MASTER_TOKEN"
+        assert "master" in excinfo.value.message.lower()
+        # Most importantly: the actual mint endpoint MUST NOT have been called.
+        client.get_oauth_url.assert_not_called()
+
+    def test_master_token_proceeds_to_url_generation(self, tmp_config_dir: Path) -> None:
+        """Master token passes pre-flight and reaches the underlying client call."""
+        service, client = _make_service(tmp_config_dir, is_master_token=True)
+
+        service.get_oauth_url(
+            alias="prod",
+            component_id="keboola.ex-google-drive",
+            config_id="cfg-001",
+        )
+
+        client.get_oauth_url.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
