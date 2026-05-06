@@ -1170,3 +1170,37 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
 - To inspect or remove schedules: `kbagent flow schedule-remove` deletes all
   scheduler configs that target the flow. Pair it with `--dry-run` to see the
   affected configs (cron + timezone) without calling `delete_config`.
+
+## `search` is a top-level command, not `config search` (since v0.30.0)
+
+`kbagent search QUERY` searches across **all item types** (tables, buckets, configs, flows, data apps, transformations) via the Storage API global-search endpoint. It is distinct from `kbagent config search --query Q` which scans only configuration JSON bodies.
+- `search --search-type config-based` delegates to `config search` internally but exposes the unified results shape.
+- Options (`--type`, `--project`, `--limit`) must come AFTER the QUERY argument: `kbagent search "text" --type table --limit 10`.
+
+## `config row-create` / `row-update` / `row-delete` lifecycle (since v0.30.0)
+
+Full CRUD for configuration rows is exposed as a separate `Rows` command panel:
+- `row-create` returns the new row object including `id`. Capture this ID for subsequent `row-update` / `row-delete` calls.
+- `row-update` preserves all unspecified fields — pass only the keys you want to change. `--is-disabled` and `--is-enabled` are mutually exclusive flags for toggling the row's active state.
+- `row-delete` is **destructive** (gated behind `--allow-destructive` if the session firewall is on). 404 from the API on a non-existent row surfaces as `NOT_FOUND` exit 1 — deletion is **not** treated as idempotent success.
+- `--json` mode auto-skips the interactive confirmation prompt on `row-delete`; in human mode pass `--yes` to skip.
+
+## `config oauth-url` requires a master Storage API token (since v0.30.0)
+
+The OAuth wizard URL embeds a short-lived **child** Storage API token scoped
+to the target component. Minting this child token via `POST /v2/storage/tokens`
+requires `canManageTokens` privilege, which only **master tokens** carry.
+
+- Pre-flight: `kbagent` calls `verify_token` first and refuses with
+  `MISSING_MASTER_TOKEN` (exit 3) before any HTTP write happens. Without this
+  guard the Storage API returns a vague 500 "Application error" that misleads
+  operators into thinking the OAuth wizard is broken.
+- Fix path: re-add the project with a master token
+  (`kbagent project edit --project <ALIAS> --token <MASTER_TOKEN>`) or open
+  the OAuth flow via the Keboola UI instead.
+- AI agents creating the project token via `kbagent project add` /
+  `kbagent project refresh` get a non-master token by default — they must
+  switch to a master token before calling `config oauth-url`. See
+  https://github.com/padak/keboola_agent_cli/issues/<TBD> for the upstream
+  request to make `project add` / `project refresh` mint a token with
+  `canManageTokens` so OAuth flows work out of the box.

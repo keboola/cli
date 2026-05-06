@@ -24,6 +24,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "project.description-set": "write",
     "project.use": "write",
     "project.current": "read",
+    "project.info": "read",
     "project.invite": "admin",
     "project.member-list": "read",
     "project.invitation-list": "read",
@@ -47,6 +48,10 @@ OPERATION_REGISTRY: dict[str, str] = {
     "config.set-metadata": "write",
     "config.delete-metadata": "destructive",
     "config.set-folder": "write",
+    "config.row-create": "write",
+    "config.row-update": "write",
+    "config.row-delete": "destructive",
+    "config.oauth-url": "read",
     # Job history
     "job.list": "read",
     "job.detail": "read",
@@ -167,6 +172,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "schedule.detail": "read",
     "schedule.find": "read",
     # Top-level commands
+    "search": "read",
     "init": "admin",
     "doctor": "read",
     "version": "read",

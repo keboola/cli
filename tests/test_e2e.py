@@ -7004,3 +7004,351 @@ def test_project_invite_e2e(tmp_path: Path) -> None:
     assert invite_email.casefold() not in final_emails, (
         f"{invite_email} still pending after cancel: {final_emails}"
     )
+
+
+# ---------------------------------------------------------------------------
+# MCP-parity commands (since v0.30.0)
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EMcpParityCommands:
+    """E2E coverage for the 0.30.0 MCP-parity commands.
+
+    Lives apart from the giant TestFullE2E to keep cleanup tight and let
+    `pytest -k Mcp` exercise just these flows when iterating.
+
+    Covered:
+    - ``kbagent project info`` -- full project metadata
+    - ``kbagent config row-create`` / ``row-update`` / ``row-delete`` --
+      complete row CRUD against a throwaway ``ex-generic-v2`` config
+      created and torn down inside the test class
+    - ``kbagent search`` -- pre-flight feature gate path (asserts
+      either real results OR a clean ``FEATURE_NOT_ENABLED`` error,
+      never the raw 404 the API returns without the gate)
+    - ``kbagent config oauth-url`` -- master-token pre-flight path
+      (asserts either a real URL OR ``MISSING_MASTER_TOKEN`` exit 3)
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> Any:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-mcpparity"[:60]
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+        self._configs: list[tuple[str, str]] = []  # (component_id, config_id)
+
+        yield
+
+        # Cleanup: delete the throwaway configs we created for row CRUD tests
+        for comp_id, cfg_id in self._configs:
+            try:
+                self.client.delete_config(component_id=comp_id, config_id=cfg_id)
+            except Exception as exc:
+                print(f"  WARN: delete_config {comp_id}/{cfg_id}: {exc}")
+        self.client.close()
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def _create_throwaway_config(self) -> str:
+        """Create an ex-generic-v2 config we own and will delete in cleanup."""
+        cfg = self.client.create_config(
+            component_id="ex-generic-v2",
+            name=f"{RUN_ID}-mcpparity-rows",
+            description="E2E throwaway -- row CRUD test harness",
+            configuration={},
+        )
+        cfg_id = str(cfg["id"])
+        self._configs.append(("ex-generic-v2", cfg_id))
+        return cfg_id
+
+    # ------------------------------------------------------------------
+    # project info
+    # ------------------------------------------------------------------
+
+    def test_project_info_returns_full_metadata(self) -> None:
+        """`project info` returns alias, project_id, features, limits, metrics, token info."""
+        data = self._run_ok("project", "info", "--project", self.alias)["data"]
+
+        assert data["alias"] == self.alias
+        assert isinstance(data["project_id"], int)
+        assert data["project_id"] > 0
+        assert data["project_name"]
+        assert data["stack_url"] == self.url
+        assert isinstance(data["features"], list)
+        assert isinstance(data["limits"], dict)
+        assert isinstance(data["metrics"], dict)
+        assert "is_master_token" in data
+        assert "token_id" in data
+
+    # ------------------------------------------------------------------
+    # config row-create / row-update / row-delete
+    # ------------------------------------------------------------------
+
+    def test_config_row_lifecycle(self) -> None:
+        """row-create -> row-update (--set + --merge + --is-disabled/--is-enabled + --dry-run)
+        -> row-delete -> 404 on re-delete."""
+        cfg_id = self._create_throwaway_config()
+
+        # 1. row-create with inline JSON
+        create = self._run_ok(
+            "config",
+            "row-create",
+            "--project",
+            self.alias,
+            "--component-id",
+            "ex-generic-v2",
+            "--config-id",
+            cfg_id,
+            "--name",
+            f"{RUN_ID}-row",
+            "--description",
+            "E2E test row",
+            "--configuration",
+            '{"parameters": {"endpoint": "/users", "limit": 100}}',
+        )["data"]
+        row_id = create["id"]
+        assert create["name"] == f"{RUN_ID}-row"
+        assert create["configuration"]["parameters"]["endpoint"] == "/users"
+        assert create["isDisabled"] is False
+
+        # 2. row-update --set: preserves siblings, changes one key
+        upd_set = self._run_ok(
+            "config",
+            "row-update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "ex-generic-v2",
+            "--config-id",
+            cfg_id,
+            "--row-id",
+            row_id,
+            "--set",
+            "parameters.limit=999",
+        )["data"]
+        params = upd_set["configuration"]["parameters"]
+        assert params["endpoint"] == "/users", "sibling preserved"
+        assert params["limit"] == 999, "set applied"
+
+        # 3. row-update --merge: deep-merge, preserves all siblings
+        upd_merge = self._run_ok(
+            "config",
+            "row-update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "ex-generic-v2",
+            "--config-id",
+            cfg_id,
+            "--row-id",
+            row_id,
+            "--merge",
+            "--configuration",
+            '{"parameters": {"timeout": 30}}',
+        )["data"]
+        params = upd_merge["configuration"]["parameters"]
+        assert params["endpoint"] == "/users"
+        assert params["limit"] == 999
+        assert params["timeout"] == 30
+
+        # 4. row-update --dry-run: previews changes without writing
+        dry = self._run_ok(
+            "config",
+            "row-update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "ex-generic-v2",
+            "--config-id",
+            cfg_id,
+            "--row-id",
+            row_id,
+            "--set",
+            "parameters.endpoint=/preview",
+            "--dry-run",
+        )["data"]
+        assert dry["dry_run"] is True
+        assert dry["new_configuration"]["parameters"]["endpoint"] == "/preview"
+        # Assert dry-run did NOT persist
+        check = self._run_ok(
+            "config",
+            "row-update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "ex-generic-v2",
+            "--config-id",
+            cfg_id,
+            "--row-id",
+            row_id,
+            "--description",
+            "noop verify",
+        )["data"]
+        assert check["configuration"]["parameters"]["endpoint"] == "/users"
+
+        # 5. row-update --is-disabled toggles isDisabled flag
+        disabled = self._run_ok(
+            "config",
+            "row-update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "ex-generic-v2",
+            "--config-id",
+            cfg_id,
+            "--row-id",
+            row_id,
+            "--is-disabled",
+        )["data"]
+        assert disabled["isDisabled"] is True
+
+        enabled = self._run_ok(
+            "config",
+            "row-update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "ex-generic-v2",
+            "--config-id",
+            cfg_id,
+            "--row-id",
+            row_id,
+            "--is-enabled",
+        )["data"]
+        assert enabled["isDisabled"] is False
+
+        # 6. row-update with --is-disabled AND --is-enabled exits 2
+        result = self._run(
+            "config",
+            "row-update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "ex-generic-v2",
+            "--config-id",
+            cfg_id,
+            "--row-id",
+            row_id,
+            "--is-disabled",
+            "--is-enabled",
+        )
+        assert result.exit_code == 2
+
+        # 7. row-delete (with --yes to skip confirmation)
+        deleted = self._run_ok(
+            "config",
+            "row-delete",
+            "--project",
+            self.alias,
+            "--component-id",
+            "ex-generic-v2",
+            "--config-id",
+            cfg_id,
+            "--row-id",
+            row_id,
+            "--yes",
+        )["data"]
+        assert deleted["deleted"] is True
+        assert deleted["row_id"] == row_id
+
+        # 8. Re-delete the same row -> 404 NOT_FOUND (deletion is NOT idempotent)
+        result = self._run(
+            "config",
+            "row-delete",
+            "--project",
+            self.alias,
+            "--component-id",
+            "ex-generic-v2",
+            "--config-id",
+            cfg_id,
+            "--row-id",
+            row_id,
+            "--yes",
+        )
+        assert result.exit_code != 0
+        envelope = json.loads(result.output)
+        assert envelope["error"]["code"] == "NOT_FOUND"
+
+    # ------------------------------------------------------------------
+    # search (feature-gate aware)
+    # ------------------------------------------------------------------
+
+    def test_search_returns_results_or_feature_gate_error(self) -> None:
+        """Either the project has `global-search` and we get results, or we get
+        a clean FEATURE_NOT_ENABLED per-project error -- never a raw 404."""
+        result = self._run_ok("search", "data", "--project", self.alias, "--limit", "5")
+        data = result["data"]
+        assert "results" in data
+        assert "errors" in data
+        assert "stats" in data
+
+        if data["errors"]:
+            # Project does not have the feature -- the pre-flight check kicks in
+            err = data["errors"][0]
+            assert err["error_code"] == "FEATURE_NOT_ENABLED", err
+            assert "global-search" in err["message"]
+        # If feature is enabled, results may or may not be empty; both are valid.
+
+    # ------------------------------------------------------------------
+    # config oauth-url (master-token gate)
+    # ------------------------------------------------------------------
+
+    def test_config_oauth_url_master_token_gate(self) -> None:
+        """Either we have a master token and get a URL, or we exit 3 with
+        MISSING_MASTER_TOKEN -- never a raw 500 from the underlying API."""
+        # Need a real component_id + config_id to attempt OAuth on. We use a
+        # throwaway config (the OAuth URL builder doesn't actually validate the
+        # component supports OAuth -- it just embeds the IDs in the URL fragment).
+        cfg_id = self._create_throwaway_config()
+        result = self._run(
+            "config",
+            "oauth-url",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.ex-google-drive",
+            "--config-id",
+            cfg_id,
+        )
+
+        envelope = json.loads(result.output)
+        if envelope["status"] == "ok":
+            # Master token: must return a well-formed URL
+            assert result.exit_code == 0
+            url = envelope["data"]["url"]
+            assert url.startswith("https://external.keboola.com/oauth/index.html")
+            assert "token=" in url
+            assert "sapiUrl=" in url
+            assert f"/keboola.ex-google-drive/{cfg_id}" in url
+        else:
+            # Non-master token: must exit 3 with MISSING_MASTER_TOKEN
+            assert result.exit_code == 3
+            assert envelope["error"]["code"] == "MISSING_MASTER_TOKEN"
+            assert "master" in envelope["error"]["message"].lower()

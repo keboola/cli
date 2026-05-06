@@ -545,6 +545,211 @@ HintRegistry.register(
 
 HintRegistry.register(
     CommandHint(
+        cli_command="config.row-create",
+        description="Create a new configuration row under a parent configuration",
+        steps=[
+            HintStep(
+                comment="Create configuration row via Storage API POST",
+                client=ClientCall(
+                    method="create_config_row",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "name": "{name}",
+                        "configuration": "{configuration}",
+                        "description": "{description}",
+                        "is_disabled": "{is_disabled}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="row",
+                    result_hint="dict",
+                ),
+                service=ServiceCall(
+                    service_class="ConfigService",
+                    service_module="config_service",
+                    method="create_config_row",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "name": "{name}",
+                        "description": "{description}",
+                        "configuration": "{configuration}",
+                        "is_disabled": "{is_disabled}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "configuration defaults to {} if omitted.",
+            "The returned dict includes the new row 'id' assigned by the API.",
+            "Rows are sub-units of a configuration; one config may have many rows.",
+            "is_disabled=True creates the row in disabled state (excluded from job runs).",
+        ],
+    )
+)
+
+# ── config row-update ──────────────────────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.row-update",
+        description="Update an existing configuration row (metadata and/or content)",
+        steps=[
+            HintStep(
+                comment=(
+                    "Fetch current row config if --merge or --set is used, then write back. "
+                    "For --dry-run, compare and return diff without writing."
+                ),
+                client=ClientCall(
+                    method="update_config_row",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "row_id": "{row_id}",
+                        "name": "{name}",
+                        "description": "{description}",
+                        "configuration": "{configuration}",
+                        "is_disabled": "{is_disabled}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="row",
+                    result_hint="dict",
+                ),
+                service=ServiceCall(
+                    service_class="ConfigService",
+                    service_module="config_service",
+                    method="update_config_row",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "row_id": "{row_id}",
+                        "name": "{name}",
+                        "description": "{description}",
+                        "configuration": "{configuration}",
+                        "set_paths": "{set}",
+                        "merge": "{merge}",
+                        "dry_run": "{dry_run}",
+                        "is_disabled": "{is_disabled}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "--set PATH=VALUE is repeatable; implies --merge (fetches current row first).",
+            "--merge deep-merges the provided configuration into the existing row config.",
+            "--dry-run returns {'dry_run': True, 'changes': [...], 'old_configuration': {...}, "
+            "'new_configuration': {...}} without writing.",
+            "--is-disabled / --is-enabled toggle the row's enabled state (mutually exclusive).",
+            "At least one of --name, --description, --configuration, --set, --is-disabled, "
+            "or --is-enabled must be provided.",
+        ],
+    )
+)
+
+# ── config row-delete ──────────────────────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.row-delete",
+        description="Delete a configuration row by ID",
+        steps=[
+            HintStep(
+                comment="Delete configuration row via Storage API DELETE",
+                client=ClientCall(
+                    method="delete_config_row",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "row_id": "{row_id}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="_",
+                    result_hint="None",
+                ),
+                service=ServiceCall(
+                    service_class="ConfigService",
+                    service_module="config_service",
+                    method="delete_config_row",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "row_id": "{row_id}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Destructive: irreversible deletion of the row from the Storage API.",
+            "404 from API surfaces as KeboolaApiError(NOT_FOUND); deleting a "
+            "non-existent row is treated as an error, not idempotent success.",
+            "Branch-aware: pass branch_id to delete from a dev branch.",
+        ],
+    )
+)
+
+# ── config oauth-url ───────────────────────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.oauth-url",
+        description=(
+            "Generate a short-lived OAuth authorization URL for a component configuration. "
+            "The user opens this URL in a browser to grant access."
+        ),
+        steps=[
+            HintStep(
+                comment=(
+                    "Create a short-lived component-scoped Storage API token, "
+                    "then build https://external.keboola.com/oauth/index.html URL."
+                ),
+                client=ClientCall(
+                    method="get_oauth_url",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "redirect_url": "{redirect_url}",
+                    },
+                    result_var="url",
+                    result_hint="str",
+                ),
+                service=ServiceCall(
+                    service_class="ConfigService",
+                    service_module="config_service",
+                    method="get_oauth_url",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "redirect_url": "{redirect_url}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Response: {'url': str, 'component_id': str, 'config_id': str, 'project_alias': str}.",
+            "The short-lived token embedded in the URL expires in 1 hour.",
+            "Only applicable to OAuth-requiring components (e.g. keboola.ex-google-drive, "
+            "keboola.ex-google-analytics-v4, keboola.ex-gmail).",
+            "Call this AFTER creating the configuration, not before.",
+            "redirect_url adds a returnUrl query param so the OAuth wizard returns to a "
+            "custom URL after the flow completes.",
+            "Requires a MASTER Storage API token on the project (canManageTokens). "
+            "Non-master tokens fail with MISSING_MASTER_TOKEN (exit 3) on a fail-fast "
+            "pre-flight check before any HTTP write happens.",
+        ],
+    )
+)
+
+# ── config set-default-bucket ──────────────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
         cli_command="config.set-default-bucket",
         description="Set or clear configuration.storage.output.default_bucket on a config",
         steps=[

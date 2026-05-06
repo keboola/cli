@@ -1381,3 +1381,350 @@ class ConfigService(BaseService):
             )
         finally:
             client.close()
+
+    # ── config row-create ──────────────────────────────────────────────────────
+
+    def create_config_row(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        name: str,
+        description: str = "",
+        configuration: dict[str, Any] | None = None,
+        is_disabled: bool = False,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Create a new configuration row.
+
+        Args:
+            alias: Project alias.
+            component_id: The component ID.
+            config_id: The configuration ID the row belongs to.
+            name: Row name (required by Storage API).
+            description: Optional row description.
+            configuration: Row-level configuration dict. Defaults to empty dict.
+            is_disabled: Create the row in disabled state (excluded from job runs).
+            branch_id: If set, create in a specific dev branch. Falls back to
+                the project's active branch when None.
+
+        Returns:
+            The created row dict from the API (includes the new 'id').
+
+        Raises:
+            ConfigError: If the alias is not found.
+            KeboolaApiError: If the API call fails.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch_id = branch_id or project.active_branch_id
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            result = client.create_config_row(
+                component_id=component_id,
+                config_id=config_id,
+                name=name,
+                configuration=configuration if configuration is not None else {},
+                description=description,
+                is_disabled=is_disabled,
+                branch_id=effective_branch_id,
+            )
+        finally:
+            client.close()
+
+        result["project_alias"] = alias
+        result["branch_id"] = effective_branch_id
+        return result
+
+    # ── config row-update ──────────────────────────────────────────────────────
+
+    def update_config_row(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        row_id: str,
+        name: str | None = None,
+        description: str | None = None,
+        configuration: dict[str, Any] | None = None,
+        set_paths: list[tuple[str, Any]] | None = None,
+        merge: bool = False,
+        dry_run: bool = False,
+        is_disabled: bool | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing configuration row.
+
+        Args:
+            alias: Project alias.
+            component_id: The component ID.
+            config_id: The configuration ID.
+            row_id: The row ID to update.
+            name: New row name (if None, not changed).
+            description: New description (if None, not changed).
+            configuration: Full configuration dict to set/merge.
+            set_paths: List of (path, value) tuples for targeted updates.
+            merge: If True, deep-merge *configuration* into the existing row
+                   config instead of replacing.
+            dry_run: If True, compute and return the diff without applying.
+            is_disabled: When True, disable the row; when False, enable it;
+                   when None, leave the current state unchanged.
+            branch_id: If set, update in a specific dev branch. Falls back to
+                the project's active branch when None.
+
+        Returns:
+            Dict with the updated row from the API.
+            When *dry_run* is True the dict contains ``"dry_run": True``
+            and a ``"changes"`` list instead of the API response.
+
+        Raises:
+            ConfigError: If the alias is not found.
+            KeboolaApiError: If the API call fails or no changes are requested.
+        """
+        has_content = configuration is not None or bool(set_paths)
+        has_metadata = name is not None or description is not None or is_disabled is not None
+
+        if not has_content and not has_metadata:
+            raise KeboolaApiError(
+                status_code=400,
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=(
+                    "At least one of --name, --description, --configuration, --set, "
+                    "--is-disabled, or --is-enabled must be provided."
+                ),
+            )
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch_id = branch_id or project.active_branch_id
+        client = self._client_factory(project.stack_url, project.token)
+
+        try:
+            final_config: dict[str, Any] | None = None
+
+            if has_content:
+                final_config = self._resolve_row_configuration(
+                    client=client,
+                    component_id=component_id,
+                    config_id=config_id,
+                    row_id=row_id,
+                    configuration=configuration,
+                    set_paths=set_paths,
+                    merge=merge,
+                    branch_id=effective_branch_id,
+                )
+
+            if dry_run:
+                current_row = client.get_config_row(
+                    component_id, config_id, row_id, branch_id=effective_branch_id
+                )
+                old_cfg = current_row.get("configuration", {})
+                if isinstance(old_cfg, str):
+                    old_cfg = json.loads(old_cfg) if old_cfg else {}
+                new_cfg = final_config if final_config is not None else old_cfg
+                changes = compute_diff(old_cfg, new_cfg)
+                if is_disabled is not None:
+                    old_state = bool(current_row.get("isDisabled", False))
+                    if old_state != is_disabled:
+                        changes.append(f"isDisabled: {old_state} -> {is_disabled}")
+                return {
+                    "dry_run": True,
+                    "project_alias": alias,
+                    "component_id": component_id,
+                    "config_id": config_id,
+                    "row_id": row_id,
+                    "branch_id": effective_branch_id,
+                    "changes": changes,
+                    "old_configuration": old_cfg,
+                    "new_configuration": new_cfg,
+                }
+
+            change_parts = []
+            if has_metadata:
+                change_parts.append("metadata")
+            if has_content:
+                change_parts.append("configuration")
+            change_desc = f"Updated {' + '.join(change_parts)} via kbagent config row-update"
+
+            result = client.update_config_row(
+                component_id=component_id,
+                config_id=config_id,
+                row_id=row_id,
+                name=name,
+                description=description,
+                configuration=final_config,
+                is_disabled=is_disabled,
+                change_description=change_desc,
+                branch_id=effective_branch_id,
+            )
+        finally:
+            client.close()
+
+        result["project_alias"] = alias
+        result["branch_id"] = effective_branch_id
+        return result
+
+    def _resolve_row_configuration(
+        self,
+        client: Any,
+        component_id: str,
+        config_id: str,
+        row_id: str,
+        configuration: dict[str, Any] | None,
+        set_paths: list[tuple[str, Any]] | None,
+        merge: bool,
+        branch_id: int | None,
+    ) -> dict[str, Any]:
+        """Build the final row configuration dict by merging/setting paths.
+
+        Mirrors ``_resolve_configuration`` but operates on a row's config.
+        """
+        needs_current = merge or bool(set_paths)
+
+        if needs_current:
+            current_row = client.get_config_row(
+                component_id, config_id, row_id, branch_id=branch_id
+            )
+            current_cfg: dict[str, Any] = current_row.get("configuration", {})
+            if isinstance(current_cfg, str):
+                current_cfg = json.loads(current_cfg) if current_cfg else {}
+        else:
+            current_cfg = {}
+
+        if set_paths:
+            result = current_cfg
+            for path, value in set_paths:
+                result = set_nested_value(result, path, value)
+            if configuration:
+                result = deep_merge(result, configuration)
+            return result
+
+        if merge and configuration:
+            return deep_merge(current_cfg, configuration)
+
+        return configuration if configuration is not None else current_cfg
+
+    # ── config row-delete ──────────────────────────────────────────────────────
+
+    def delete_config_row(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        row_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Delete a configuration row.
+
+        Args:
+            alias: Project alias.
+            component_id: The component ID.
+            config_id: The configuration ID the row belongs to.
+            row_id: The row ID to delete.
+            branch_id: If set, delete from a specific dev branch. Falls back
+                to the project's active branch when None.
+
+        Returns:
+            Dict with ``deleted: True`` plus identifiers (``project_alias``,
+            ``component_id``, ``config_id``, ``row_id``, ``branch_id``).
+
+        Raises:
+            ConfigError: If the alias is not found.
+            KeboolaApiError: If the API call fails (e.g. row not found = 404).
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch_id = branch_id or project.active_branch_id
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            client.delete_config_row(
+                component_id=component_id,
+                config_id=config_id,
+                row_id=row_id,
+                branch_id=effective_branch_id,
+            )
+        finally:
+            client.close()
+
+        return {
+            "deleted": True,
+            "project_alias": alias,
+            "component_id": component_id,
+            "config_id": config_id,
+            "row_id": row_id,
+            "branch_id": effective_branch_id,
+        }
+
+    # ── config oauth-url ───────────────────────────────────────────────────────
+
+    def get_oauth_url(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        redirect_url: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate an OAuth authorization URL for a component configuration.
+
+        Creates a short-lived Storage API token scoped to the component and
+        builds the URL the user must open in a browser to grant OAuth access.
+
+        Args:
+            alias: Project alias.
+            component_id: The component ID (e.g. 'keboola.ex-google-drive').
+            config_id: The configuration ID to authorize.
+            redirect_url: Optional URL the OAuth wizard returns to after the
+                flow completes (passed as the ``returnUrl`` query param).
+
+        Returns:
+            Dict with 'url', 'component_id', 'config_id', 'project_alias',
+            and ``redirect_url`` when provided.
+
+        Raises:
+            ConfigError: If the alias is not found.
+            KeboolaApiError: If the API call fails.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            # Pre-flight: minting a short-lived component-scoped child token
+            # via POST /v2/storage/tokens requires `canManageTokens`, which only
+            # master tokens carry by default. Without this guard the Storage
+            # API returns a vague 500 "Application error" that misleads
+            # operators into thinking the OAuth wizard is broken.
+            info = client.get_project_info()
+            if not info.get("isMasterToken", False):
+                raise KeboolaApiError(
+                    status_code=403,
+                    error_code=ErrorCode.MISSING_MASTER_TOKEN,
+                    message=(
+                        f"`config oauth-url` requires a master Storage API token "
+                        f"on project '{alias}'. The current token "
+                        f"(id={info.get('id', '?')}, "
+                        f"description='{info.get('description', '?')}') is not a "
+                        f"master token, so it cannot mint the short-lived "
+                        f"component-scoped child token the OAuth wizard expects. "
+                        f"Either re-add the project with a master token "
+                        f"(`kbagent project edit --project {alias} --token <MASTER>`) "
+                        f"or open the OAuth flow via the Keboola UI."
+                    ),
+                )
+
+            url = client.get_oauth_url(
+                component_id=component_id,
+                config_id=config_id,
+                redirect_url=redirect_url,
+            )
+        finally:
+            client.close()
+
+        result: dict[str, Any] = {
+            "url": url,
+            "component_id": component_id,
+            "config_id": config_id,
+            "project_alias": alias,
+        }
+        if redirect_url:
+            result["redirect_url"] = redirect_url
+        return result

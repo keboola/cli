@@ -94,7 +94,7 @@ def map_error_to_exit_code(exc: KeboolaApiError) -> int:
       job; scripts can distinguish "we killed it" from "it failed on its own")
     - Everything else -> 1 (general error)
     """
-    if exc.error_code == "INVALID_TOKEN":
+    if exc.error_code in ("INVALID_TOKEN", "MISSING_MASTER_TOKEN"):
         return 3
     if exc.error_code in (
         "TIMEOUT",

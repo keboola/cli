@@ -175,6 +175,21 @@ AI_SERVICE_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=15.0, write=
 # See plugins/kbagent/skills/kbagent/references/storage-types-workflow.md.
 STORAGE_BRANCHES_FEATURE: str = "storage-branches"
 
+# --- Global Search ---
+# Feature flag that gates the Storage API ``GET /v2/storage/global-search``
+# endpoint used by ``kbagent search`` (textual mode). Projects without this
+# flag receive a 404; ``SearchService`` checks the flag pre-flight and
+# returns a descriptive per-project error rather than letting the raw 404
+# bubble up.
+GLOBAL_SEARCH_FEATURE: str = "global-search"
+
+# --- OAuth ---
+# Host of the Keboola-hosted OAuth wizard used by ``kbagent config oauth-url``.
+# Constant across all stacks (EU/US/AWS/GCP/Azure); the per-stack difference
+# is reflected in the ``sapiUrl`` query parameter, not the wizard host.
+OAUTH_HOST: str = "external.keboola.com"
+OAUTH_PATH: str = "/oauth/index.html"
+
 # --- Kai (Keboola AI Assistant) ---
 KAI_FEATURE_FLAG: str = "agent-chat"
 KAI_REQUEST_TIMEOUT: float = 300.0  # 5 min for non-streaming requests

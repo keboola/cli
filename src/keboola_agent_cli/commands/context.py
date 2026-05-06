@@ -94,6 +94,10 @@ Use `kbagent <command> --help` for full flag details and examples.
     Print the effective default project and its source (env / pin / none).
     Resolution order for single-project operations: --project > KBAGENT_PROJECT > pin.
 
+  kbagent project info --project NAME
+    Return full project details: ID, name, stack URL, default backend, enabled features,
+    quota limits, and usage metrics. Useful for auditing project capabilities.
+
 ### Project Members & Invitations (since v0.29.0)
 
   Requires KBC_MANAGE_API_TOKEN (Manage API auth). Allowed roles: admin, guest, readOnly, share.
@@ -214,6 +218,26 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent config set-folder --project NAME --component-id ID --config-id ID --name "FolderName" [--branch ID]
     Sugar: writes KBC.configuration.folderName metadata. Groups the config in the Keboola UI.
     Pass --name "" to remove the folder assignment.
+
+  kbagent config row-create --project NAME --component-id ID --config-id ID --name ROW_NAME [--description D] [--configuration JSON|@file|-] [--is-disabled] [--branch ID]
+    Create a new configuration row. Returns the new row ID. Optional --configuration accepts JSON inline, @file, or stdin.
+
+  kbagent config row-update --project NAME --component-id ID --config-id ID --row-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--is-disabled | --is-enabled] [--branch ID]
+    Update an existing configuration row. Pass only the fields you want to change.
+
+  kbagent config row-delete --project NAME --component-id ID --config-id ID --row-id ID [--branch ID] [--yes]
+    Delete a configuration row. Destructive; --yes to skip confirmation prompt.
+
+  kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL]
+    Return the OAuth authorization URL for a component that uses OAuth authentication.
+    Open the URL in a browser to complete the OAuth flow.
+
+### Cross-Project Search
+
+  kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--limit N]
+    Search for items across one or more projects. Textual mode (default) searches item names
+    via the Storage API global-search endpoint. Config-based mode scans full configuration JSON bodies.
+    --type is repeatable. --limit applies per project in textual mode (1-100, default 50).
 
 ### Job History
 

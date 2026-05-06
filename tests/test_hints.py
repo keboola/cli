@@ -543,6 +543,128 @@ class TestHintCLI:
 
         assert result.exit_code == 0
 
+    def test_hint_client_config_row_create(self, tmp_path: Path) -> None:
+        """`--hint client config row-create` short-circuits before service call."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.client.KeboolaClient") as MockClient:
+            result = runner.invoke(
+                app,
+                [
+                    "--config-dir",
+                    str(config_dir),
+                    "--hint",
+                    "client",
+                    "config",
+                    "row-create",
+                    "--project",
+                    "p",
+                    "--component-id",
+                    "keboola.ex-mysql",
+                    "--config-id",
+                    "cfg-1",
+                    "--name",
+                    "My Row",
+                ],
+            )
+            # No HTTP client must be instantiated when hint guard is in place.
+            MockClient.assert_not_called()
+
+        assert result.exit_code == 0, result.stdout
+        assert "create_config_row" in result.stdout
+
+    def test_hint_client_config_row_update(self, tmp_path: Path) -> None:
+        """`--hint client config row-update` short-circuits before service call."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.client.KeboolaClient") as MockClient:
+            result = runner.invoke(
+                app,
+                [
+                    "--config-dir",
+                    str(config_dir),
+                    "--hint",
+                    "client",
+                    "config",
+                    "row-update",
+                    "--project",
+                    "p",
+                    "--component-id",
+                    "keboola.ex-mysql",
+                    "--config-id",
+                    "cfg-1",
+                    "--row-id",
+                    "row-1",
+                    "--name",
+                    "Updated",
+                ],
+            )
+            MockClient.assert_not_called()
+
+        assert result.exit_code == 0, result.stdout
+        assert "update_config_row" in result.stdout
+
+    def test_hint_client_config_oauth_url(self, tmp_path: Path) -> None:
+        """`--hint client config oauth-url` short-circuits before service call."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.client.KeboolaClient") as MockClient:
+            result = runner.invoke(
+                app,
+                [
+                    "--config-dir",
+                    str(config_dir),
+                    "--hint",
+                    "client",
+                    "config",
+                    "oauth-url",
+                    "--project",
+                    "p",
+                    "--component-id",
+                    "keboola.ex-google-drive",
+                    "--config-id",
+                    "cfg-1",
+                ],
+            )
+            MockClient.assert_not_called()
+
+        assert result.exit_code == 0, result.stdout
+        assert "get_oauth_url" in result.stdout
+
+    def test_hint_client_config_row_delete(self, tmp_path: Path) -> None:
+        """`--hint client config row-delete` short-circuits before service call."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.client.KeboolaClient") as MockClient:
+            result = runner.invoke(
+                app,
+                [
+                    "--config-dir",
+                    str(config_dir),
+                    "--hint",
+                    "client",
+                    "config",
+                    "row-delete",
+                    "--project",
+                    "p",
+                    "--component-id",
+                    "keboola.ex-mysql",
+                    "--config-id",
+                    "cfg-1",
+                    "--row-id",
+                    "row-1",
+                    "--yes",
+                ],
+            )
+            MockClient.assert_not_called()
+
+        assert result.exit_code == 0, result.stdout
+        assert "delete_config_row" in result.stdout
+
 
 # ── Security tests ─────────────────────────────────────────────────
 

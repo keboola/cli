@@ -24,6 +24,7 @@ from .commands.permissions import permissions_app
 from .commands.project import project_app
 from .commands.repl import repl_command
 from .commands.schedule import schedule_app
+from .commands.search import search_command
 from .commands.sharing import sharing_app
 from .commands.storage import storage_app
 from .commands.sync import sync_app
@@ -53,6 +54,7 @@ from .services.org_service import OrgService
 from .services.project_service import ProjectService
 from .services.repo_validate_service import RepoValidateService
 from .services.schedule_service import ScheduleService
+from .services.search_service import SearchService
 from .services.sharing_service import SharingService
 from .services.storage_service import StorageService
 from .services.sync_service import SyncService
@@ -86,6 +88,12 @@ app.add_typer(org_app, name="org", rich_help_panel=_PROJ)
 _BROWSE = "Browse & Inspect"
 app.add_typer(component_app, name="component", rich_help_panel=_BROWSE)
 app.add_typer(config_app, name="config", rich_help_panel=_BROWSE)
+app.command(
+    "search",
+    rich_help_panel=_BROWSE,
+    help="Search for items (tables, buckets, configs, flows, …) by name or content.",
+    no_args_is_help=True,
+)(search_command)
 app.add_typer(data_app_app, name="data-app", rich_help_panel=_BROWSE)
 app.add_typer(job_app, name="job", rich_help_panel=_BROWSE)
 app.add_typer(storage_app, name="storage", rich_help_panel=_BROWSE)
@@ -308,6 +316,7 @@ def main(
     mcp_service = McpService(config_store=config_store)
     branch_service = BranchService(config_store=config_store)
     sharing_service = SharingService(config_store=config_store)
+    search_service = SearchService(config_store=config_store)
     storage_service = StorageService(config_store=config_store)
     sync_service = SyncService(config_store=config_store)
     variables_service = VariablesService(config_store=config_store)
@@ -364,6 +373,7 @@ def main(
     ctx.obj["mcp_service"] = mcp_service
     ctx.obj["branch_service"] = branch_service
     ctx.obj["sharing_service"] = sharing_service
+    ctx.obj["search_service"] = search_service
     ctx.obj["storage_service"] = storage_service
     ctx.obj["sync_service"] = sync_service
     ctx.obj["variables_service"] = variables_service

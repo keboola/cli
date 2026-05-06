@@ -1,4 +1,4 @@
-"""Hint definitions for project-level commands (project description)."""
+"""Hint definitions for project-level commands (project description, info)."""
 
 from .. import HintRegistry
 from ..models import ClientCall, CommandHint, HintStep, ServiceCall
@@ -68,6 +68,41 @@ HintRegistry.register(
         notes=[
             "Writes to the default branch metadata - always the main branch, "
             "regardless of any active dev branch.",
+        ],
+    )
+)
+
+# ── project info ──────────────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="project.info",
+        description="Return full project metadata from /v2/storage/tokens/verify",
+        steps=[
+            HintStep(
+                comment=(
+                    "Fetch the full token-verify response; includes owner.features, "
+                    "owner.limits, owner.metrics, owner.defaultBackend, token expiry."
+                ),
+                client=ClientCall(
+                    method="get_project_info",
+                    args={},
+                    result_var="info",
+                    result_hint="dict",
+                ),
+                service=ServiceCall(
+                    service_class="ProjectService",
+                    service_module="project_service",
+                    method="get_info",
+                    args={"alias": "{project}"},
+                ),
+            ),
+        ],
+        notes=[
+            "get_project_info() returns the raw API response dict; "
+            "the service layer formats it into a stable structure.",
+            "Features are in owner.features (list of strings). "
+            "Limits and metrics are in owner.limits / owner.metrics (dicts).",
         ],
     )
 )

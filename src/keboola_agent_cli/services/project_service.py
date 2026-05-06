@@ -327,6 +327,50 @@ class ProjectService(BaseService):
             "env_points_to_configured_project": None,
         }
 
+    def get_info(self, alias: str) -> dict[str, Any]:
+        """Return detailed project metadata for a single project.
+
+        Calls /v2/storage/tokens/verify and formats the full response
+        into a structured dict suitable for both JSON and human output.
+
+        Args:
+            alias: The project alias to query.
+
+        Returns:
+            Dict with project_id, project_name, stack_url, default_backend,
+            features, limits, metrics, token_id, token_description,
+            is_master_token, token_expires, and description fields.
+
+        Raises:
+            ConfigError: If the alias does not exist.
+            KeboolaApiError: If the API call fails.
+        """
+        project = self._config_store.get_project(alias)
+        if project is None:
+            raise ConfigError(f"Project '{alias}' not found.")
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            raw = client.get_project_info()
+        finally:
+            client.close()
+
+        owner = raw.get("owner", {})
+        return {
+            "alias": alias,
+            "project_id": owner.get("id"),
+            "project_name": owner.get("name", ""),
+            "stack_url": project.stack_url,
+            "default_backend": owner.get("defaultBackend", "snowflake"),
+            "features": owner.get("features", []),
+            "limits": owner.get("limits", {}),
+            "metrics": owner.get("metrics", {}),
+            "token_id": str(raw.get("id", "")),
+            "token_description": raw.get("description", ""),
+            "is_master_token": raw.get("isMasterToken", False),
+            "token_expires": raw.get("expires"),
+        }
+
     def resolve_pinned_alias(self, explicit: str | None = None) -> tuple[str, str]:
         """Resolve the effective project alias for a single-project operation.
 
