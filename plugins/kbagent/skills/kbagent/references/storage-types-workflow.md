@@ -273,5 +273,9 @@ Rules:
 - Aliases keep pointing at the same physical position, i.e. they expose
   the OTHER table's data after the swap. If your downstream relies on
   alias-by-name, validate post-swap before merging.
-- The swap is symmetric and synchronous; there is no rollback besides
-  swapping again (or aborting the dev branch).
+- The Storage API queues the swap as an async storage job
+  (`operationName: tableSwap`); the kbagent client polls the job to
+  completion before returning, so callers can rely on the schemas being
+  exchanged on return. Real swaps observed at ~10s on Snowflake.
+- The swap is symmetric; there is no rollback besides swapping again
+  (or aborting the dev branch).

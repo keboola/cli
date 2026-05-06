@@ -51,11 +51,24 @@ class TestSwapTablesClient:
     """Tests for KeboolaClient.swap_tables() - HTTP layer."""
 
     def test_correct_url_and_body(self, httpx_mock) -> None:
-        """POSTs to /v2/storage/branch/{branch}/tables/{tid}/swap with targetTableId in body."""
+        """POSTs to /v2/storage/branch/{branch}/tables/{tid}/swap with targetTableId in body.
+
+        Storage API responds with a queued storage job (operationName=tableSwap);
+        the client polls to completion. Returning ``status: success`` from the
+        first response avoids exercising the poll loop in this unit test.
+        """
         httpx_mock.add_response(
             url="https://connection.keboola.com/v2/storage/branch/9999/tables/in.c-foo.data/swap",
             method="POST",
-            json={"status": "ok", "swappedAt": "2026-05-06T10:00:00+0000"},
+            json={
+                "id": 386488069,
+                "status": "success",
+                "operationName": "tableSwap",
+                "operationParams": {
+                    "branchId": 9999,
+                    "targetTableStringId": "in.c-foo.data_change_log",
+                },
+            },
             status_code=200,
         )
 
@@ -69,8 +82,9 @@ class TestSwapTablesClient:
             branch_id=9999,
         )
 
-        # Verify response is returned untouched
-        assert result == {"status": "ok", "swappedAt": "2026-05-06T10:00:00+0000"}
+        # Returned dict is the completed storage job
+        assert result["status"] == "success"
+        assert result["operationName"] == "tableSwap"
 
         # Verify request body contained targetTableId
         sent_request = httpx_mock.get_request()
@@ -83,7 +97,7 @@ class TestSwapTablesClient:
         httpx_mock.add_response(
             url="https://connection.keboola.com/v2/storage/branch/1/tables/in.c-bucket-with-dashes.tbl/swap",
             method="POST",
-            json={"status": "ok"},
+            json={"id": 1, "status": "success", "operationName": "tableSwap"},
             status_code=200,
         )
 
@@ -96,6 +110,34 @@ class TestSwapTablesClient:
             target_table_id="in.c-bucket-with-dashes.tbl2",
             branch_id=1,
         )
+        client.close()
+
+    def test_polls_async_job_to_completion(self, httpx_mock) -> None:
+        """If POST returns ``status: waiting``, client polls /v2/storage/jobs/{id}."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/42/tables/in.c-foo.a/swap",
+            method="POST",
+            json={"id": 555, "status": "waiting", "operationName": "tableSwap"},
+            status_code=200,
+        )
+        # Subsequent poll returns success
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/jobs/555",
+            method="GET",
+            json={"id": 555, "status": "success", "operationName": "tableSwap"},
+            status_code=200,
+        )
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token=TEST_TOKEN,
+        )
+        result = client.swap_tables(
+            table_id="in.c-foo.a",
+            target_table_id="in.c-foo.b",
+            branch_id=42,
+        )
+        assert result["status"] == "success"
         client.close()
 
     def test_api_error_propagates(self, httpx_mock) -> None:
