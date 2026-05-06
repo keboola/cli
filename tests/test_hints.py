@@ -340,6 +340,53 @@ class TestHintRegistry:
         assert commands == sorted(commands)
         assert len(commands) >= 3  # At least config.list/detail/search
 
+    def test_storage_swap_tables_registered(self) -> None:
+        """Regression: storage.swap-tables must have a registered hint.
+
+        Without it, ``kbagent --hint client storage swap-tables ...`` raises
+        ValueError instead of emitting a Python snippet -- the silent-drift
+        bug caught in PR #247 review.
+        """
+        from keboola_agent_cli.hints import definitions as _  # noqa: F401
+
+        hint = HintRegistry.get("storage.swap-tables")
+        assert hint is not None, "storage.swap-tables CommandHint missing"
+        assert len(hint.steps) == 1
+        assert hint.steps[0].client is not None
+        assert hint.steps[0].client.method == "swap_tables"
+        assert hint.steps[0].service is not None
+        assert hint.steps[0].service.method == "swap_tables"
+
+    def test_storage_swap_tables_renders_valid_python(self) -> None:
+        """Both client and service hint snippets must compile."""
+        from keboola_agent_cli.hints import definitions as _  # noqa: F401
+
+        hint = HintRegistry.get("storage.swap-tables")
+        assert hint is not None
+        params = {
+            "project": "myproj",
+            "table_id": "in.c-foo.a",
+            "target_table_id": "in.c-foo.b",
+            "branch": 1234,
+            "dry_run": False,
+        }
+        client_code = ClientRenderer.render(hint, params, stack_url=STACK_URL, branch_id=1234)
+        compile(client_code, "<hint-client>", "exec")
+        assert "swap_tables" in client_code
+        assert "in.c-foo.a" in client_code
+        assert "in.c-foo.b" in client_code
+
+        service_code = ServiceRenderer.render(
+            hint,
+            params,
+            stack_url=STACK_URL,
+            config_dir=CONFIG_DIR,
+            branch_id=1234,
+        )
+        compile(service_code, "<hint-service>", "exec")
+        assert "swap_tables" in service_code
+        assert "myproj" in service_code
+
 
 # ── render_hint integration tests ──────────────────────────────────
 

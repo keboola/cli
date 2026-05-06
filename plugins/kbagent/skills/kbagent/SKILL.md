@@ -133,6 +133,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Export a storage table to a local CSV file | `kbagent storage download-table --project PROJECT --table-id TABLE-ID` |
 | Delete one or more storage tables | `kbagent storage delete-table --project PROJECT --table-id TABLE-ID` |
 | Delete one or more columns from a storage table | `kbagent storage delete-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
+| Swap two storage tables in a development branch | `kbagent storage swap-tables --project PROJECT --table-id TABLE-ID --target-table-id TARGET-TABLE-ID` |
 | Delete one or more storage buckets | `kbagent storage delete-bucket --project PROJECT --bucket-id BUCKET-ID` |
 | Set the description on a storage bucket | `kbagent storage describe-bucket --project PROJECT --bucket-id BUCKET-ID` |
 | Set the description on a storage table | `kbagent storage describe-table --project PROJECT --table-id TABLE-ID` |
@@ -244,6 +245,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Data apps** (create / deploy / start / stop / password / delete; the §9 redeploy contract) | [data-app-workflow](references/data-app-workflow.md) |
 | Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
 | **Storage column types** (native types, NOT NULL, DEFAULT, branch materialize) | [storage-types-workflow](references/storage-types-workflow.md) |
+| **Typify a typeless table** (profile -> CTAS -> swap-tables -> validate -> handoff) | [typify-table-workflow](references/typify-table-workflow.md) |
 | Bucket sharing & linking | [sharing-workflow](references/sharing-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
 | Encrypting secrets for MCP tools | [encrypt-workflow](references/encrypt-workflow.md) |

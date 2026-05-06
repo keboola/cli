@@ -5867,6 +5867,254 @@ class TestE2EStorageNativeTypesAndBranchMaterialize:
 
 
 # ---------------------------------------------------------------------------
+# TestE2EStorageSwapTables -- storage swap-tables in a dev branch
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EStorageSwapTables:
+    """End-to-end coverage for ``kbagent storage swap-tables``.
+
+    Verifies:
+    - swap exchanges schemas between two tables in a dev branch
+      (table IDs stay stable, ``definition.columns`` are swapped),
+    - production calls (no branch + no active branch) are rejected
+      before any HTTP traffic.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-swap"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+
+        self._created_branch_ids: list[int] = []
+        self._created_buckets: list[str] = []
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        yield
+
+        # Teardown: branches first (cascades to their buckets/tables),
+        # then any production buckets we created outside of a branch.
+        for branch_id in self._created_branch_ids:
+            with contextlib.suppress(Exception):
+                self.client.delete_dev_branch(branch_id)
+        for bucket_id in self._created_buckets:
+            with contextlib.suppress(Exception):
+                self.client.delete_bucket(bucket_id, force=True)
+        self.client.close()
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(_invoke(self.config_dir, ["--json", *args]))
+
+    def test_swap_in_dev_branch_exchanges_schemas(self) -> None:
+        """Live swap: two tables with different VARCHAR lengths swap definitions."""
+
+        _step(1, "branch create", "isolate the swap test in a dev branch")
+        branch = self._run_ok(
+            "branch", "create", "--project", self.alias, "--name", f"{RUN_ID}-swap-branch"
+        )["data"]
+        branch_id = int(branch["branch_id"])
+        self._created_branch_ids.append(branch_id)
+
+        bucket_id = f"in.c-{RUN_ID.replace('-', '_')}_swap"
+        original_id = f"{bucket_id}.original"
+        typed_id = f"{bucket_id}.typed_copy"
+
+        _step(
+            2,
+            "create two typed tables with distinguishable column lengths",
+            "VARCHAR(20) vs VARCHAR(80) on the 'value' column",
+        )
+        self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            "original",
+            "--branch",
+            str(branch_id),
+            "--column",
+            "id:VARCHAR(40)",
+            "--column",
+            "value:VARCHAR(20)",
+            "--primary-key",
+            "id",
+        )
+        self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            "typed_copy",
+            "--branch",
+            str(branch_id),
+            "--column",
+            "id:VARCHAR(40)",
+            "--column",
+            "value:VARCHAR(80)",
+            "--primary-key",
+            "id",
+        )
+
+        def _value_len(table_detail: dict[str, Any]) -> str:
+            cols = {c["name"]: c for c in table_detail["definition"]["columns"]}
+            return cols["value"]["definition"]["length"]
+
+        before_original = self.client.get_table_detail(original_id, branch_id=branch_id)
+        before_typed = self.client.get_table_detail(typed_id, branch_id=branch_id)
+        assert _value_len(before_original) == "20"
+        assert _value_len(before_typed) == "80"
+
+        _step(3, "storage swap-tables", "POST /tables/.../swap with targetTableId")
+        result = self._run_ok(
+            "storage",
+            "swap-tables",
+            "--project",
+            self.alias,
+            "--table-id",
+            original_id,
+            "--target-table-id",
+            typed_id,
+            "--branch",
+            str(branch_id),
+            "--yes",
+        )["data"]
+        assert result["table_id"] == original_id
+        assert result["target_table_id"] == typed_id
+        assert result["branch_id"] == branch_id
+        assert result["dry_run"] is False
+
+        _step(4, "table-detail", "verify VARCHAR lengths exchanged")
+        after_original = self.client.get_table_detail(original_id, branch_id=branch_id)
+        after_typed = self.client.get_table_detail(typed_id, branch_id=branch_id)
+        assert _value_len(after_original) == "80", (
+            f"After swap, '{original_id}' should adopt the schema of '{typed_id}' "
+            f"(VARCHAR(80)); got VARCHAR({_value_len(after_original)})."
+        )
+        assert _value_len(after_typed) == "20", (
+            f"After swap, '{typed_id}' should adopt the schema of '{original_id}' "
+            f"(VARCHAR(20)); got VARCHAR({_value_len(after_typed)})."
+        )
+
+    def test_swap_dry_run_does_not_call_api(self) -> None:
+        """Dry-run skips the HTTP call: no schema change, exit 0."""
+        _step(1, "branch create", "dry-run still requires a branch context")
+        branch = self._run_ok(
+            "branch", "create", "--project", self.alias, "--name", f"{RUN_ID}-swap-dry"
+        )["data"]
+        branch_id = int(branch["branch_id"])
+        self._created_branch_ids.append(branch_id)
+
+        bucket_id = f"in.c-{RUN_ID.replace('-', '_')}_swap_dry"
+        a_id = f"{bucket_id}.a"
+        b_id = f"{bucket_id}.b"
+        self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            "a",
+            "--branch",
+            str(branch_id),
+            "--column",
+            "id:VARCHAR(40)",
+            "--primary-key",
+            "id",
+        )
+        self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            "b",
+            "--branch",
+            str(branch_id),
+            "--column",
+            "id:VARCHAR(40)",
+            "--primary-key",
+            "id",
+        )
+
+        before = self.client.get_table_detail(a_id, branch_id=branch_id)
+
+        result = self._run_ok(
+            "storage",
+            "swap-tables",
+            "--project",
+            self.alias,
+            "--table-id",
+            a_id,
+            "--target-table-id",
+            b_id,
+            "--branch",
+            str(branch_id),
+            "--dry-run",
+        )["data"]
+        assert result["dry_run"] is True
+        assert "response" not in result
+
+        after = self.client.get_table_detail(a_id, branch_id=branch_id)
+        assert before["lastChangeDate"] == after["lastChangeDate"], (
+            "Dry-run must not modify the table"
+        )
+
+    def test_swap_without_branch_is_rejected(self) -> None:
+        """Without active branch and without --branch, exit 5 / ConfigError before any HTTP."""
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "storage",
+                "swap-tables",
+                "--project",
+                self.alias,
+                "--table-id",
+                "in.c-foo.bar",
+                "--target-table-id",
+                "in.c-foo.baz",
+                "--yes",
+            ],
+        )
+        assert result.exit_code == 5, result.output
+        payload = json.loads(result.output)
+        assert payload["status"] == "error"
+        assert "dev branch" in payload["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
 # TestE2EDataAppLifecycle -- data-app create / detail / deploy / start / stop / delete
 # ---------------------------------------------------------------------------
 
@@ -6082,3 +6330,336 @@ class TestE2EDataAppLifecycle:
             )
         )["data"]
         assert deploy["config_version"], "deploy must pin a configVersion"
+
+
+# ---------------------------------------------------------------------------
+# Issue #245: parameters.blocks[].codes[].script auto-normalize on config update
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+class TestE2EConfigUpdateNormalization:
+    """End-to-end coverage for the v0.28.0 ``script[]`` auto-normalize fix.
+
+    The Storage API silently accepts a string for
+    ``parameters.blocks[].codes[].script`` while the runtime validator
+    requires an array. ``kbagent config update`` closes the gap by
+    splitting / wrapping before pushing to Storage.
+
+    The test creates a Snowflake transformation in an isolated dev branch,
+    pushes a multi-statement string ``script`` via three different code
+    paths -- ``--configuration-file``, ``--set`` on a nested path, and
+    ``--dry-run`` preview -- and asserts each one writes (or previews)
+    an array, exposes the change record on the result envelope, and
+    leaves the API config in a state the runtime can parse.
+
+    The job is then run on the normalized config to confirm Snowflake
+    accepts the multi-statement form (with ``MULTI_STATEMENT_COUNT = 0``
+    set as the first statement, per the workflow doc).
+
+    Branch + config are torn down even on failure.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> Any:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-norm"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+
+        self._created_branch_ids: list[int] = []
+        self._created_config_ids: list[tuple[str, str, int | None]] = []
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        yield
+
+        # Teardown: configs first, then branches (branch delete cascades but
+        # configs in the default branch must be cleaned up explicitly).
+        for component_id, config_id, branch_id in self._created_config_ids:
+            with contextlib.suppress(Exception):
+                self.client.delete_config(
+                    component_id=component_id,
+                    config_id=config_id,
+                    branch_id=branch_id,
+                )
+        for branch_id in self._created_branch_ids:
+            with contextlib.suppress(Exception):
+                self.client.delete_dev_branch(branch_id)
+        self.client.close()
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(_invoke(self.config_dir, ["--json", *args]))
+
+    def test_config_update_auto_normalizes_script_array(self, tmp_path: Path) -> None:
+        """Full path: create transformation, push string-script, verify
+        every observable surface (envelope, API state, runtime job) reflects
+        the post-normalize array shape."""
+
+        _step(1, "branch create", "isolate the test in a short-lived dev branch")
+        branch_data = self._run_ok(
+            "branch",
+            "create",
+            "--project",
+            self.alias,
+            "--name",
+            f"{RUN_ID}-norm-branch",
+        )["data"]
+        branch_id = int(branch_data["branch_id"])
+        self._created_branch_ids.append(branch_id)
+
+        _step(2, "create Snowflake transformation in the dev branch")
+        # Minimum-viable Snowflake transformation: one block, one code,
+        # initial script as an already-valid array (so create succeeds).
+        # We will then test config update by REPLACING the script with a
+        # malformed string -- the bug scenario.
+        cfg_body = self.client.create_config(
+            component_id="keboola.snowflake-transformation",
+            name=f"{RUN_ID} normalize-test",
+            configuration={
+                "parameters": {
+                    "blocks": [
+                        {
+                            "name": "Block 1",
+                            "codes": [
+                                {
+                                    "name": "init",
+                                    "script": ["ALTER SESSION SET MULTI_STATEMENT_COUNT = 0;"],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+            description=f"E2E #245 normalize check ({RUN_ID})",
+            branch_id=branch_id,
+        )
+        config_id = str(cfg_body["id"])
+        self._created_config_ids.append(("keboola.snowflake-transformation", config_id, branch_id))
+
+        _step(
+            3,
+            "config update --dry-run with string script",
+            "preview must show the post-normalize array shape; no API write",
+        )
+        # Multi-statement string with comments and string literals to
+        # exercise the splitter's state machine (semicolons inside `'...'`
+        # and `/* ... */` must NOT split).
+        bad_payload_path = tmp_path / "bad_string_script.json"
+        bad_payload_path.write_text(
+            json.dumps(
+                {
+                    "parameters": {
+                        "blocks": [
+                            {
+                                "name": "Block 1",
+                                "codes": [
+                                    {
+                                        "name": "multi",
+                                        "script": (
+                                            "ALTER SESSION SET MULTI_STATEMENT_COUNT = 0;"
+                                            " /* trailing block comment with ; semicolons */"
+                                            " SELECT 'a;b;c' AS literal_with_semicolons;"
+                                            " SELECT 1 AS one;"
+                                            " -- trailing line comment"
+                                        ),
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                }
+            )
+        )
+
+        dry_run = self._run_ok(
+            "config",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.snowflake-transformation",
+            "--config-id",
+            config_id,
+            "--branch",
+            str(branch_id),
+            "--configuration-file",
+            str(bad_payload_path),
+            "--dry-run",
+        )["data"]
+        assert dry_run.get("dry_run") is True, "dry-run flag must be set"
+        norms = dry_run.get("normalizations") or []
+        assert len(norms) == 1, f"expected exactly 1 normalization, got {norms}"
+        assert norms[0]["action"] == "sql_split"
+        assert norms[0]["before_type"] == "str"
+        assert norms[0]["after_type"] == "list"
+        assert norms[0]["after_length"] >= 3, (
+            f"splitter should produce >=3 elements (ALTER + 2 SELECTs at minimum); "
+            f"got after_length={norms[0]['after_length']}"
+        )
+        # The dry-run preview must reflect the post-normalize shape so the
+        # operator sees what would actually land on Storage.
+        new_cfg = dry_run["new_configuration"]
+        new_script = new_cfg["parameters"]["blocks"][0]["codes"][0]["script"]
+        assert isinstance(new_script, list), (
+            f"new_configuration.script must be list after normalize; got {type(new_script).__name__}"
+        )
+
+        _step(4, "config update real push", "Storage API must end up with array, not string")
+        write_envelope = self._run_ok(
+            "config",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.snowflake-transformation",
+            "--config-id",
+            config_id,
+            "--branch",
+            str(branch_id),
+            "--configuration-file",
+            str(bad_payload_path),
+        )["data"]
+        write_norms = write_envelope.get("normalizations") or []
+        assert len(write_norms) == 1, (
+            f"expected 1 normalization in write envelope, got {write_norms}"
+        )
+        assert write_norms[0]["action"] == "sql_split"
+
+        _step(5, "fetch from API and assert script[] is array")
+        detail = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.snowflake-transformation",
+            "--config-id",
+            config_id,
+            "--branch",
+            str(branch_id),
+        )["data"]
+        stored_script = detail["configuration"]["parameters"]["blocks"][0]["codes"][0]["script"]
+        assert isinstance(stored_script, list), (
+            f"Storage API stored script as {type(stored_script).__name__}, "
+            f"not list -- normalization did not fire. Value: {stored_script!r}"
+        )
+        # Spot-check splitter correctness: block comment must not have caused
+        # an extra split, string literal `'a;b;c'` must not have caused one
+        # either. After normalize we expect ALTER + literal SELECT + numeric
+        # SELECT + trailing comment as separate elements.
+        joined = "\n".join(stored_script)
+        assert "MULTI_STATEMENT_COUNT" in joined, "ALTER SESSION line must survive splitter intact"
+        assert "'a;b;c'" in joined, (
+            "string literal with embedded semicolons must NOT have been split mid-literal"
+        )
+        # Find the literal element and verify it contains the full quoted text
+        literal_elem = next((s for s in stored_script if "'a;b;c'" in s), None)
+        assert literal_elem is not None and literal_elem.count("'") >= 2, (
+            f"literal element must keep both quotes: {literal_elem!r}"
+        )
+
+        _step(
+            6,
+            "--set on a nested path also normalizes",
+            "even when the user pushes a string at a deep --set path",
+        )
+        # Reset to a known starting point with a single-element array, then
+        # push a string via --set and assert the same normalize behaviour.
+        self._run_ok(
+            "config",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.snowflake-transformation",
+            "--config-id",
+            config_id,
+            "--branch",
+            str(branch_id),
+            "--set",
+            (
+                "parameters.blocks.0.codes.0.script="
+                "ALTER SESSION SET MULTI_STATEMENT_COUNT = 0;"
+                " SELECT 1 AS one;"
+                " SELECT 2 AS two;"
+            ),
+        )
+        after_set = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.snowflake-transformation",
+            "--config-id",
+            config_id,
+            "--branch",
+            str(branch_id),
+        )["data"]
+        after_set_script = after_set["configuration"]["parameters"]["blocks"][0]["codes"][0][
+            "script"
+        ]
+        assert isinstance(after_set_script, list), (
+            f"--set path must also normalize; got {type(after_set_script).__name__}"
+        )
+        assert len(after_set_script) >= 3, (
+            f"three statements separated by ; must split into >=3 elements; "
+            f"got {after_set_script!r}"
+        )
+
+        _step(
+            7,
+            "run job on the normalized config",
+            "Snowflake runtime must accept the array shape (no 'Expected array, got string')",
+        )
+        job_result = self._run_ok(
+            "job",
+            "run",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.snowflake-transformation",
+            "--config-id",
+            config_id,
+            "--branch",
+            str(branch_id),
+            "--wait",
+            "--timeout",
+            "180",
+        )["data"]
+        # We only need a successful schema validation pass + Snowflake parse.
+        # The transformation has no input/output mappings so it may report
+        # `success` (no rows moved) or `warning` (no work done); both are
+        # acceptable -- what we are asserting is the ABSENCE of the runtime
+        # validator's "Expected array, got string" failure mode.
+        assert job_result.get("status") in ("success", "warning"), (
+            f"Job ended in unexpected state: {job_result.get('status')!r} "
+            f"(error: {job_result.get('error_message')!r}). "
+            "If status is 'error' with the schema-validator message, the "
+            "v0.28.0 normalize fix regressed -- script[] reached the runtime "
+            "as a string."
+        )
+        # Belt-and-braces: explicitly assert the failure-mode string is NOT
+        # present anywhere on the envelope, even on a non-error status.
+        rendered = json.dumps(job_result)
+        assert "Expected" not in rendered or "script" not in rendered, (
+            f"job envelope still mentions the script type-mismatch failure: {rendered}"
+        )

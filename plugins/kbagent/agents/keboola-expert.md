@@ -64,11 +64,13 @@ a critical failure.
    needed for the current task (e.g. `flow update` needs 0.22.0+,
    `schedule find` needs 0.23.0+, `config set-default-bucket` needs
    0.26.0+, `data-app create / deploy / start / stop / delete / password`
-   need 0.27.0+, `storage retype` is a future composite), you MUST refuse
-   the task and return a handoff message to the parent: `"Cannot proceed
-   safely on kbagent <version>. Missing: <commands>. Ask user to run
-   kbagent update, then re-invoke me."` Do not attempt the task with
-   workarounds that use MCP strip-bug-prone tools.
+   need 0.27.0+, `config update` script[] auto-normalize against #245
+   trap needs 0.28.0+, `storage swap-tables` needs 0.28.0+,
+   `storage retype` is a future composite), you
+   MUST refuse the task and return a handoff message to the parent:
+   `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
+   Ask user to run kbagent update, then re-invoke me."` Do not attempt
+   the task with workarounds that use MCP strip-bug-prone tools.
 
 7. **ALWAYS USE `--json`**. Every `kbagent` invocation MUST have
    `--json` as the first flag after `kbagent`. This makes output
@@ -87,13 +89,15 @@ a critical failure.
 | Update flow (rename, description, phases) | `kbagent flow update` (partial, no `--file`) | `--file` after fetching current phases, merging locally, passing full YAML | `tool call update_flow` (strips `behavior.onError` pre-MCP v1.60); partial `--file` that drops fields |
 | Schedule flow | `kbagent flow schedule --cron ... [--timezone]` | `tool call create_flow_schedule` | raw REST to `/storage/configurations/keboola.scheduler` |
 | Create Snowflake transformation | `kbagent config new --component-id keboola.snowflake-transformation` + `config update --set ...` | `tool call create_sql_transformation` (lower schema, avoids the component refusal) | `tool call create_config` (refuses keboola.snowflake-transformation) |
+| Update SQL transformation body (script[]) | `kbagent config update --project P --component-id keboola.snowflake-transformation --config-id K --configuration @body.json` (0.28.0+ auto-normalizes string `script` to array; SQL gets statement-level split, Python/R gets `[script]` wrap; envelope's `normalizations: [...]` records every change) | `kbagent --hint client config update ...` if you need to bypass the auto-normalize for some reason | `tool call update_sql_transformation` -- still vulnerable to the #245 string-vs-array runtime crash because it pushes raw to Storage API; raw `PUT /v2/storage/components/.../configs/...` -- same trap |
 | Run a job (and wait) | `kbagent job run --project P --component-id C --config-id K --wait` | `tool call run_component` | `job run` without `--wait` when user expects the result |
 | Browse configs (exploration) | `kbagent config list` / `kbagent config search --query Q` | `tool call list_configs` | full-project pull via MCP just to grep locally |
 | Fetch a specific config | `kbagent config detail --project P --component-id C --config-id K --json` | `tool call get_config` | re-using an earlier JSON dump |
 | Override the auto-derived output bucket on a config | `kbagent config set-default-bucket --bucket in.c-name` (0.26.0+) -- read-modify-write of `storage.output.default_bucket`, preserves siblings; `--clear` removes it | `kbagent config update --set 'storage.output.default_bucket=in.c-name'` (works pre-0.26.0 but not discoverable) | editing the raw JSON in the UI; full-config replace with `--configuration` (wipes other storage keys) |
 | Cross-project migration | `kbagent sync pull` + edit files locally + `kbagent sync push --dry-run` | custom script via `kbagent --hint client` | repeated `tool call` loops, one per resource |
-| Retype table columns | fetch types via `workspace query`, draft types YAML, write new transformation that produces typed output table, redirect downstream configs via `kbagent config update` | `kbagent --hint client create_table_definition` if the future `storage retype` composite (§14.3) is not yet present | `POST /v2/storage/buckets/.../tables-definition` (REST) |
+| Retype table columns | fetch types via `workspace query`, draft types YAML, write new transformation that produces typed output table, then `kbagent storage swap-tables` (0.28.0+) to flip the typed copy into the original name in a dev branch | `kbagent --hint client create_table_definition` if the future `storage retype` composite (§14.3) is not yet present | `POST /v2/storage/buckets/.../tables-definition` (REST) followed by manual config rewrites |
 | Create typed table with native types | `kbagent storage create-table --column pk:VARCHAR(40) --column amount:NUMBER(18,2) --not-null pk --default amount=0` (0.25.0+) | `tool call create_table` (accepts the same `definition.length` shape via MCP) | re-creating via raw REST to `/v2/storage/...tables-definition` |
+| Promote typed rebuild back into the original name | `kbagent storage swap-tables --project P --table-id in.c-foo.data --target-table-id in.c-foo.data_change_log --branch <ID> --yes` (0.28.0+) -- async storage job (`tableSwap`); client polls to completion before returning. Service refuses without a branch | -- | renaming or deleting + re-uploading (loses history; downstream configs need to be rewritten) |
 | Debug a failed job | `kbagent job detail --project P --job-id J --json` + `kbagent job run ... --log-tail-lines 200` | `kbagent workspace from-transformation` for SQL repro | "I think the issue is..." without reading logs |
 | Ad-hoc SQL / row-count / type audit | `kbagent workspace create` + `kbagent workspace load` + `kbagent workspace query --sql "..."` | `kbagent workspace from-transformation` for existing transform debugging | querying Keboola Storage directly via Snowflake credentials outside the workspace abstraction |
 | Inspect dev branch | `kbagent branch list --project P`, `kbagent branch use --project P --branch ID` | `tool call get_branch` | acting on `main` when a dev branch exists |
@@ -126,6 +130,22 @@ success, not a failure.
   `kbagent config new --component-id keboola.snowflake-transformation`
   for the local scaffold, then `kbagent config update` for the body.
   Or MCP `create_sql_transformation` which uses a lower-level schema.
+
+- **`script[]` string-vs-array runtime crash** (0.28.0+ auto-fix; #245):
+  the Storage API silently accepts `parameters.blocks[].codes[].script`
+  as a string, but the runtime validator rejects it (`Expected array,
+  got string`) -- the broken push lands silently and the job crashes
+  hours later (often via the scheduler). `kbagent config update`
+  auto-normalizes string -> array before pushing: SQL transformations
+  get statement-level split via the existing `split_statements()` state
+  machine; Python / R / `kds-team.app-custom-python` get a single-element
+  `[script]` wrap. Inspect the result envelope's `normalizations: [...]`
+  to see what was changed (empty list means already-valid input).
+  **Caveat**: the trap STILL FIRES if you bypass kbagent. `tool call
+  update_sql_transformation` / `create_sql_transformation` and raw
+  `PUT /v2/storage/components/.../configs/...` calls do NOT inherit the
+  normalization (as of MCP v1.59.x). For SQL transformation body
+  updates, prefer `kbagent config update` over MCP/REST.
 
 - **Primary keys on new output tables**: Keboola creates columns as
   nullable by default on first insert. A PK on a nullable column

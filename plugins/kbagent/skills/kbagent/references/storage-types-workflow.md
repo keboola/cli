@@ -230,3 +230,52 @@ kbagent --json storage create-table \
   them to the API shape `[{"name": ..., "definition": {...}}]` before
   sending via `KeboolaClient.create_table()`. Service-mode `--hint` uses
   the service layer which does the parsing for you.
+
+## Promoting a typed rebuild back into the original name (since v0.28.0)
+
+Common pattern: an existing typeless table needs proper column types. AI
+agent profiles the data in a workspace, builds a typed copy via CTAS, and
+needs to flip the typed copy back into the original name so downstream
+configs (extractors, transformations, writers) keep working unchanged.
+
+```bash
+# 1. Isolate the work in a dev branch
+kbagent branch create --project prod --name typify-data
+kbagent branch use --project prod --branch <ID>
+
+# 2. In a workspace, build a typed CTAS into a sibling table
+kbagent workspace create --project prod
+kbagent workspace load --workspace-id W --tables in.c-foo.data
+kbagent workspace query --workspace-id W --sql "
+  CREATE TABLE \"in.c-foo.data_change_log\" AS
+  SELECT id::VARCHAR(40) AS id, amount::NUMBER(18,2) AS amount
+  FROM \"in.c-foo.data\"
+"
+# (or use kbagent storage create-table + an SQL transformation)
+
+# 3. Swap: the typed copy becomes 'data', the typeless original moves
+#    to 'data_change_log'. Aliases stay put -- they expose the OTHER
+#    table's data after the swap.
+kbagent storage swap-tables \
+  --project prod \
+  --table-id in.c-foo.data \
+  --target-table-id in.c-foo.data_change_log \
+  --branch <ID> --yes
+
+# 4. Merge the dev branch when satisfied
+kbagent branch merge --project prod --branch <ID>
+```
+
+Rules:
+- The Storage API rejects this on production. The service refuses with
+  exit 5 (`ConfigError`) before any HTTP if `--branch` is missing AND no
+  active branch is set via `branch use`.
+- Aliases keep pointing at the same physical position, i.e. they expose
+  the OTHER table's data after the swap. If your downstream relies on
+  alias-by-name, validate post-swap before merging.
+- The Storage API queues the swap as an async storage job
+  (`operationName: tableSwap`); the kbagent client polls the job to
+  completion before returning, so callers can rely on the schemas being
+  exchanged on return. Real swaps observed at ~10s on Snowflake.
+- The swap is symmetric; there is no rollback besides swapping again
+  (or aborting the dev branch).

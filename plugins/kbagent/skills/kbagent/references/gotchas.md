@@ -1,5 +1,23 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## `storage swap-tables` is dev-branch only and aliases stay put (since v0.28.0)
+
+- `kbagent storage swap-tables --project P --table-id A --target-table-id B
+  --branch <ID>` swaps two tables' physical positions in a dev branch
+  (`POST /v2/storage/branch/{branch}/tables/{id}/swap`).
+- The Storage API rejects this on production. The service refuses with
+  exit 5 / `ConfigError` *before* any HTTP call when neither `--branch`
+  nor an active branch (via `branch use`) is set.
+- **Aliases are NOT transferred.** They keep pointing at the same
+  physical position, so after the swap they expose the OTHER table's
+  data. Plan downstream config rewrites if any aliased consumer relies
+  on schema, not data.
+- Typical use: AI agent profiles a typeless table, builds a typed
+  rebuild called `<name>_change_log` via CTAS in a dev branch, then
+  swaps it back into the original name. After merging the branch the
+  original table now carries the typed schema with no downstream config
+  rewrite required.
+
 ## `data-app deploy` is required after `config update` -- the running container does NOT auto-pick-up new config versions (since v0.27.0)
 
 - `kbagent config update --component-id keboola.data-apps ...` bumps the
@@ -525,6 +543,67 @@ CREATE TABLE foo AS
 ```
 
 See `scaffold-workflow.md` for the complete file structure reference.
+
+## `config update` auto-normalizes `script[]` from string to array (since v0.28.0)
+
+The Storage API silently accepts a string for `parameters.blocks[].codes[].script`,
+but the Keboola runtime validator rejects it with:
+
+```
+Invalid type for path "root.parameters.blocks.0.codes.X.script".
+Expected "array", but got "string"
+```
+
+The trap: the failed PUT returns 200, the version increments, the UI looks
+fine -- the crash happens only when the job runs (often hours later, e.g. by
+the scheduler), with no attribution back to the offending write. Reported in
+issue #245 after a programmatic refactor of 3 production Snowflake
+transformations.
+
+`kbagent config update` (and any wrapper that takes a full configuration --
+`--configuration`, `--configuration-file`, `--set parameters.blocks.0.codes.0.script=...`,
+and dry-run preview) now closes the gap on the write side **before** the
+Storage API touch:
+
+- **SQL transformations** (Snowflake / Synapse / Oracle / Redshift /
+  BigQuery / DuckDB, plus fragment fallback for `*-exasol-transformation`,
+  `*-teradata-transformation`, etc.): the string is split on statement
+  boundaries via the existing `split_statements()` state machine that
+  already powers `kbagent sync push`. The splitter respects `'...'` /
+  `"..."` / `$$...$$` / `--` / `#` / `//` / `/* ... */`, so semicolons
+  inside string literals and block comments do NOT cause splits.
+- **Python / R / `kds-team.app-custom-python`** and any other component
+  sharing the `parameters.blocks[].codes[].script` shape: the string is
+  wrapped as a single-element array `[script]`. Statement-level split
+  does not apply -- the runtime treats the script as one code chunk.
+- **Already-array `script` values pass through unchanged.**
+
+Observability: every normalization is surfaced.
+- JSON mode: the result envelope gains
+  `"normalizations": [{"path": "parameters.blocks[0].codes[0].script",
+  "action": "sql_split", "before_type": "str", "after_type": "list",
+  "after_length": 3}]`. Empty list when nothing was normalized.
+- Human mode: a yellow `Auto-normalized N script field(s) to array
+  (string -> list). See --json for details.` warning followed by a
+  per-element trace.
+- `--dry-run`: the `new_configuration` field already reflects the
+  post-normalize shape, so the preview matches what would actually land.
+
+**The trap still exists when bypassing kbagent.** Direct
+`PUT /v2/storage/components/{component}/configs/{config}` calls (curl,
+custom Python, the MCP `update_sql_transformation` / `create_sql_transformation`
+tools as of MCP v1.59.x) do NOT inherit this normalization. If an LLM agent
+is composing the configuration JSON itself, prefer
+`kbagent config update --configuration ...` over raw REST or MCP tool calls
+for SQL transformations -- that way the normalization fires regardless of
+upstream client behaviour.
+
+Bonus fix in 0.28.0: `kbagent sync push` previously did NOT split semicolons
+in BigQuery / DuckDB transformations because those component IDs were
+missing from `SQL_TRANSFORMATION_COMPONENTS`. Push collapsed multiple
+statements into one `script` element, mirroring closed issue #119 on a
+different backend. The 0.28.0 registry now covers BQ / DuckDB explicitly,
+plus fragment-based fallback for future / self-hosted SQL backends.
 
 ## Snowflake: MULTI_STATEMENT_COUNT
 
