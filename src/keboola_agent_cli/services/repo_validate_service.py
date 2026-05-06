@@ -23,6 +23,14 @@ to raise the limit to 5,000/hour.
 Scope of this PR: ``--type python-js`` only. Streamlit / pure-Python /
 R repo layouts differ and need their own per-type canon citations -- a
 follow-up PR adds them.
+
+TODO: extract ``GitHubContentsClient`` (defined below) into a top-level
+``src/keboola_agent_cli/github_client.py`` module that inherits from
+``BaseHttpClient`` so this stays consistent with the 3-layer architecture
+(LAYER 3 = clients, LAYER 2 = services). The ``github_client_factory``
+dependency-injection pattern in ``RepoValidateService`` already isolates
+the client for testing; the extraction is a pure refactor with no
+behaviour change.
 """
 
 from __future__ import annotations

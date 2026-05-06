@@ -45,6 +45,7 @@ from typer.testing import CliRunner
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.models import ProjectConfig
 
 # ---------------------------------------------------------------------------
 # Environment & skip logic
@@ -6139,8 +6140,12 @@ skip_without_data_app_private = pytest.mark.skipif(
     reason=(
         f"requires {ENV_TOKEN} + {ENV_DATA_APP_GIT_REPO_PRIVATE} + "
         f"{ENV_DATA_APP_GIT_USER} + {ENV_DATA_APP_GIT_PAT}"
+    ),
+)
+
+
 # ──────────────────────────────────────────────────────────────────────
-# Project invite E2E (since v0.26.1)
+# Project invite E2E (since v0.29.0)
 #
 # Opt-in via `make test-e2e-invite`. Default-skipped in `make test-e2e` because
 # (a) it sends a real invitation email and (b) it depends on a separate manage
@@ -6148,7 +6153,6 @@ skip_without_data_app_private = pytest.mark.skipif(
 # ──────────────────────────────────────────────────────────────────────
 
 
-ENV_MANAGE_TOKEN = "E2E_MANAGE_TOKEN"
 ENV_INVITE_PROJECT_ID = "E2E_INVITE_PROJECT_ID"
 ENV_INVITE_EMAIL = "E2E_INVITE_EMAIL"
 DEFAULT_INVITE_EMAIL = "ottomansky.max@gmail.com"
@@ -6353,6 +6357,210 @@ class TestE2EDataAppLifecycle:
             )
         )["data"]
         assert deploy["config_version"], "deploy must pin a configVersion"
+
+    @skip_without_data_app_public
+    def test_data_app_secrets_round_trip(self) -> None:
+        """secrets-set -> secrets-list -> secrets-get -> secrets-remove on a real app.
+
+        Uses --no-deploy + --auth public to mint a cheap shell app, then
+        verifies the four-step lifecycle:
+        1. set: encrypts via per-project KMS, writes to parameters.dataApp.secrets.
+        2. list: enumerates keys + derived runtime env-var names; never decrypts.
+        3. get: returns metadata only (NEVER plaintext).
+        4. remove: idempotent (second remove returns removed: 0, exit 0).
+
+        The decrypted plaintext value must NEVER appear in any CLI output.
+        """
+        repo = os.environ[ENV_DATA_APP_GIT_REPO_PUBLIC]
+        slug = f"e2e-secrets-{RUN_ID}"[:60]
+        secret_key = "#E2E_TEST_KEY"
+        secret_plaintext = "supersecret-do-not-leak"
+
+        _step(1, "Create shell app for secrets round-trip")
+        create = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "create",
+                    "--project",
+                    self.alias,
+                    "--name",
+                    f"E2E Secrets {RUN_ID}",
+                    "--slug",
+                    slug,
+                    "--git-repo",
+                    repo,
+                    "--git-public",
+                    "--auth",
+                    "public",
+                    "--no-deploy",
+                ],
+            )
+        )["data"]
+        app_id = create["id"]
+        self._created_app_ids.append(app_id)
+
+        _step(2, "secrets-set: encrypt and write")
+        set_result = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "secrets-set",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                    "--secret",
+                    f"{secret_key}={secret_plaintext}",
+                    "--no-hint-next",
+                ],
+            )
+        )
+        assert secret_plaintext not in set_result["raw_output"], (
+            "Plaintext value MUST NEVER appear in secrets-set output"
+        )
+
+        _step(3, "secrets-list: enumerate keys (never decrypts)")
+        list_result = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "secrets-list",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                ],
+            )
+        )
+        keys_in_list = [s["key"] for s in list_result["data"]["secrets"]]
+        assert secret_key in keys_in_list, (
+            f"secrets-list must surface the just-written key; got {keys_in_list}"
+        )
+        assert secret_plaintext not in list_result["raw_output"], (
+            "Plaintext value MUST NEVER appear in secrets-list output"
+        )
+
+        _step(4, "secrets-get: metadata only (never plaintext)")
+        get_result = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "secrets-get",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                    "--key",
+                    secret_key,
+                ],
+            )
+        )
+        assert get_result["data"]["key"] == secret_key
+        assert secret_plaintext not in get_result["raw_output"], (
+            "secrets-get MUST NEVER echo the decrypted plaintext (Encryption API is one-way)"
+        )
+
+        _step(5, "secrets-remove: first call removes the key")
+        remove_result = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "secrets-remove",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                    "--key",
+                    secret_key,
+                    "--yes",
+                ],
+            )
+        )
+        assert remove_result["data"]["removed"] == 1, "first remove must report removed=1"
+
+        _step(6, "secrets-remove: second call is idempotent (removed=0)")
+        idempotent = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "secrets-remove",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                    "--key",
+                    secret_key,
+                    "--yes",
+                ],
+            )
+        )
+        assert idempotent["data"]["removed"] == 0, (
+            "second remove of the same key must be idempotent (removed=0, exit 0)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Data-app validate-repo (since v0.29.0) -- GitHub-only, no Keboola creds needed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.e2e
+def test_data_app_validate_repo_against_public_repo(tmp_path: Path) -> None:
+    """validate-repo against a real public GitHub repo.
+
+    Does NOT require Keboola credentials -- the command only hits GitHub.
+    Uses a known-public Keboola example repo via E2E_DATA_APP_GIT_REPO_PUBLIC
+    when set; otherwise skipped (no hard-coded URL to keep the test
+    independent of upstream-template renames).
+
+    Asserts the command exits cleanly and emits the expected envelope
+    shape (status + checks list with BLOCKING / WARN / OK severities).
+    """
+    repo = os.environ.get(ENV_DATA_APP_GIT_REPO_PUBLIC)
+    if not repo:
+        pytest.skip(f"requires {ENV_DATA_APP_GIT_REPO_PUBLIC} (any public Keboola data-app repo)")
+
+    config_dir = tmp_path / "kbagent-config"
+    config_dir.mkdir()
+
+    result = _invoke(
+        config_dir,
+        [
+            "--json",
+            "data-app",
+            "validate-repo",
+            "--git-repo",
+            repo,
+            "--git-public",
+            "--type",
+            "python-js",
+        ],
+    )
+    # Exit 0 when no BLOCKING; exit 1 when at least one BLOCKING. Either is
+    # a successful invocation -- the assertion is on shape, not verdict.
+    assert result.exit_code in (0, 1), result.output
+
+    body = json.loads(result.output)
+    assert body["status"] in ("ok", "error"), f"unexpected status: {body['status']}"
+    if body["status"] == "ok":
+        assert "checks" in body["data"], "envelope must list per-rule checks"
+        # Every check must carry severity + a citation back to the help-doc.
+        for check in body["data"]["checks"]:
+            assert check["severity"] in ("BLOCKING", "WARN", "OK")
+            assert "citation" in check, "each check must cite the help-doc canon"
 
 
 # ---------------------------------------------------------------------------
@@ -6686,6 +6894,8 @@ class TestE2EConfigUpdateNormalization:
         assert "Expected" not in rendered or "script" not in rendered, (
             f"job envelope still mentions the script type-mismatch failure: {rendered}"
         )
+
+
 @pytest.mark.e2e_invite
 @skip_without_invite_credentials
 def test_project_invite_e2e(tmp_path: Path) -> None:
@@ -6695,9 +6905,6 @@ def test_project_invite_e2e(tmp_path: Path) -> None:
     invalidates the invitation link before the inbox sees it, so this is a
     "the system can send + clean up" check, not a "join my project" check.
     """
-    from keboola_agent_cli.config_store import ConfigStore as _Store
-    from keboola_agent_cli.models import ProjectConfig as _Project
-
     invite_email = os.environ.get(ENV_INVITE_EMAIL, DEFAULT_INVITE_EMAIL)
     project_id = int(os.environ[ENV_INVITE_PROJECT_ID])
     stack_url = (
@@ -6712,10 +6919,10 @@ def test_project_invite_e2e(tmp_path: Path) -> None:
     # field is unused. Write a minimal config.json with a placeholder token.
     config_dir = tmp_path / "kbagent-config"
     config_dir.mkdir()
-    store = _Store(config_dir=config_dir)
+    store = ConfigStore(config_dir=config_dir)
     store.add_project(
         alias,
-        _Project(
+        ProjectConfig(
             stack_url=stack_url,
             token="901-e2e-placeholder-not-used-by-member-commands-xxxxxxxxxx",
             project_id=project_id,
