@@ -64,8 +64,12 @@ a critical failure.
    needed for the current task (e.g. `flow update` needs 0.22.0+,
    `schedule find` needs 0.23.0+, `config set-default-bucket` needs
    0.26.0+, `data-app create / deploy / start / stop / delete / password`
+<<<<<<< HEAD
    need 0.27.0+, `config update` script[] auto-normalize against #245
    trap needs 0.28.0+, `storage swap-tables` needs 0.28.0+,
+   env-var manage-token auth for `org setup` / `project refresh` /
+   `data-app password` needs 0.28.0+ with `--allow-env-manage-token`
+   (the env var is default-deny on 0.28.0+),
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
@@ -106,7 +110,7 @@ a critical failure.
 | Roll out a new code or config version on a data app | `kbagent data-app deploy --project P --app-id N --wait` (0.27.0+) -- always sends the §9 trio | `kbagent --hint client data-app deploy ...` to inspect the generated `patch_app(desired_state=, config_version=, restart_if_running=True)` call | `tool call update_config` then `tool call run_component` (data apps are not jobs -- the queue runner does not deploy them) |
 | Wake an auto-suspended data app | `kbagent data-app start --project P --app-id N` (0.27.0+) -- does NOT bump configVersion | hitting the app's URL (auto-restart triggers a 30-60s cold boot) | `kbagent data-app deploy` (overkill -- bumps the deployed configVersion unnecessarily) |
 | Pause a running data app | `kbagent data-app stop --project P --app-id N` (0.27.0+) | -- | `kbagent data-app delete` (irreversible; cascades to Storage config) |
-| Read the simpleAuth password for a password-gated app | `kbagent data-app password --project P --app-id N` (0.27.0+) -- requires `KBC_MANAGE_API_TOKEN` | -- | trying to "rotate" the password (not supported by the API; delete + recreate to mint a new one) |
+| Read the simpleAuth password for a password-gated app | `kbagent data-app password --project P --app-id N` (0.27.0+) -- needs Manage API token (interactive prompt by default; `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.28.0+) | -- | trying to "rotate" the password (not supported by the API; delete + recreate to mint a new one) |
 | Tear down a data app | `kbagent data-app delete --project P --app-id N` (0.27.0+) -- cascades to Storage config; URL retired | -- | manually `tool call delete_config keboola.data-apps` while leaving the deployment record orphaned |
 
 If the table does not cover the user's task, **ask clarifying
@@ -272,6 +276,20 @@ success, not a failure.
   BigQuery `databaseName` is empty on Keboola-managed BQ projects, so
   `bigquery_path` will be dataset-qualified only -- if the user needs a
   fully-qualified GCP path, ask them for the project name explicitly.
+
+- **Manage-token env-var is opt-in (since 0.28.0)**.
+  `KBC_MANAGE_API_TOKEN` is no longer auto-resolved for `org setup`,
+  `project refresh`, or `data-app password`. Default behaviour: emit a
+  warning, ignore the env var, fall through to a TTY hidden-input prompt;
+  exit 2 with no TTY. To opt in (CI/CD), pass the top-level flag:
+  `kbagent --allow-env-manage-token --json org setup ...`. The flag is
+  session-only -- not persisted, no env-var equivalent. Default-deny
+  closes the AI-exfiltration risk where a subprocess running as the same
+  user (including the agent itself) inherits the manage token. If you
+  see `Warning: KBC_MANAGE_API_TOKEN found in environment but ignored`
+  in stderr, that is the expected default; tell the user to add
+  `--allow-env-manage-token` to their invocation, never strip the
+  warning by suppressing stderr.
 
 ---
 

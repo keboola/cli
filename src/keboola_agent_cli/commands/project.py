@@ -394,7 +394,9 @@ def project_refresh(
     """Refresh expired or invalid Storage API tokens.
 
     Creates new tokens via the Manage API and updates the local config.
-    Requires a Manage API token (via KBC_MANAGE_API_TOKEN env var or interactive prompt).
+    Requires a Manage API token: interactive hidden prompt by default
+    (since 0.28.0); pass top-level --allow-env-manage-token to read
+    KBC_MANAGE_API_TOKEN from env (CI/CD).
 
     \b
     Examples:
@@ -420,7 +422,7 @@ def project_refresh(
         )
         raise typer.Exit(code=2)
 
-    manage_token = resolve_manage_token()
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
 
     aliases = [project] if project else None
 

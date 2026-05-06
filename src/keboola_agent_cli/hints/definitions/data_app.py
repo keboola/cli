@@ -393,8 +393,11 @@ HintRegistry.register(
         notes=[
             "Password is auto-generated at app create time and cannot be rotated. "
             "Delete + recreate the app to mint a new one (writeup §11.2).",
-            "Manage token is read from KBC_MANAGE_API_TOKEN env var or interactive "
-            "hidden prompt; never persisted, never logged.",
+            "Manage token is read from an interactive hidden prompt by default "
+            "(since kbagent v0.28.0). For non-interactive runners, the calling "
+            "kbagent invocation must pass `--allow-env-manage-token` to opt in "
+            "to KBC_MANAGE_API_TOKEN env-var resolution. Never persisted, never "
+            "logged.",
         ],
     )
 )

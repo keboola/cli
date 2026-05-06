@@ -24,11 +24,12 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 ## Permission flags (top-level, session-only)
 - `--deny-writes` -- block all write/destructive/admin operations for this single invocation. Merges with any persisted permission policy; never written to config.json. Exit code 6 (PERMISSION_DENIED) on blocked operations
 - `--deny-destructive` -- block only destructive operations (delete-table, delete-bucket, terminate-job, etc.) for this invocation. Pure-write ops like create-table stay allowed. Use this when you want to keep build-up capabilities but lock out tear-downs
-- Both flags compose: `kbagent --deny-writes --deny-destructive ...` is the safest read-only run
+- `--allow-env-manage-token` -- opt in to reading `KBC_MANAGE_API_TOKEN` from env (default-deny since v0.28.0). Without it the env var is ignored and an interactive hidden prompt is required for `org setup` / `project refresh` / `data-app password`. Closes the AI-exfiltration risk where any subprocess inherits the manage token via env. Session-only; not persisted; no env-var equivalent (intentional, would re-create the hole). REPL forwards this flag to nested invocations the same way it forwards the deny-* flags
+- All three flags compose: `kbagent --deny-writes --deny-destructive --allow-env-manage-token ...` is the safest CI-friendly invocation
 
 ## Organization
-- `org setup --org-id ID --url URL [--dry-run] [--yes]` -- bulk-onboard all projects from an org (org admin, needs `KBC_MANAGE_API_TOKEN`)
-- `org setup --project-ids 1,2,3 --url URL [--dry-run] [--yes]` -- onboard specific projects by ID (any project member, works with Personal Access Token via `KBC_MANAGE_API_TOKEN`)
+- `org setup --org-id ID --url URL [--dry-run] [--yes]` -- bulk-onboard all projects from an org (org admin; manage token via interactive prompt by default, or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.28.0+)
+- `org setup --project-ids 1,2,3 --url URL [--dry-run] [--yes]` -- onboard specific projects by ID (any project member; manage token / Personal Access Token via interactive prompt by default, or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.28.0+)
 
 ## Component Discovery
 - `component list [--project NAME] [--type TYPE] [--query "text"]` -- list/search components (AI-powered with `--query`)
@@ -126,7 +127,7 @@ Lifecycle for `keboola.data-apps`. Combines Storage API (config body, git block,
 - `data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]` -- wake an auto-suspended app at the currently-pinned version. Distinct from deploy: does NOT bump configVersion.
 - `data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]` -- stop a running app (URL and Storage config preserved).
 - `data-app delete --project NAME --app-id ID [--yes]` -- destructive, cascades to Storage config; URL retired permanently.
-- `data-app password --project NAME --app-id ID` -- read the simpleAuth password. Requires `KBC_MANAGE_API_TOKEN`. Auto-generated, not rotatable -- delete + recreate to mint a new one.
+- `data-app password --project NAME --app-id ID` -- read the simpleAuth password. Manage token via interactive prompt by default, or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.28.0+. Auto-generated, not rotatable -- delete + recreate to mint a new one.
 
 ## MCP Tools
 - `tool list [--project NAME] [--branch ID]` -- list available MCP tools (multi_project annotation)
@@ -187,7 +188,7 @@ Lifecycle for `keboola.data-apps`. Combines Storage API (config body, git block,
 |----------|---------|
 | `KBC_TOKEN` | Fallback for `--token` |
 | `KBC_STORAGE_API_URL` | Default stack URL |
-| `KBC_MANAGE_API_TOKEN` | Manage API token (org setup) |
+| `KBC_MANAGE_API_TOKEN` | Manage API token (org setup, project refresh, data-app password). Default-DENY since 0.28.0: requires top-level `--allow-env-manage-token` to opt in, otherwise ignored with a warning. |
 | `KBAGENT_CONFIG_DIR` | Override config directory |
 
 ## Exit Codes

@@ -747,7 +747,8 @@ class DataAppService(BaseService):
             raise KeboolaApiError(
                 message=(
                     "Manage API token is required to read the data-app simpleAuth "
-                    "password. Set KBC_MANAGE_API_TOKEN or run interactively."
+                    "password. Run interactively (default since v0.28.0), or pass "
+                    "--allow-env-manage-token + set KBC_MANAGE_API_TOKEN for CI."
                 ),
                 status_code=0,
                 error_code=ErrorCode.INVALID_TOKEN,
