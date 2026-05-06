@@ -68,7 +68,7 @@ def _config_permission_check(ctx: typer.Context) -> None:
     check_cli_permission(ctx, "config")
 
 
-@config_app.command("list")
+@config_app.command("list", rich_help_panel="Browse")
 def config_list(
     ctx: typer.Context,
     project: list[str] | None = typer.Option(
@@ -166,7 +166,7 @@ def config_list(
         emit_project_warnings(formatter, result)
 
 
-@config_app.command("detail")
+@config_app.command("detail", rich_help_panel="Browse")
 def config_detail(
     ctx: typer.Context,
     project: list[str] | None = typer.Option(
@@ -400,7 +400,7 @@ def _format_config_detail_bulk(
         console.print()
 
 
-@config_app.command("search")
+@config_app.command("search", rich_help_panel="Browse")
 def config_search(
     ctx: typer.Context,
     query: str = typer.Option(..., "--query", "-q", help="Search string or regex pattern"),
@@ -538,7 +538,7 @@ def _parse_set_value(raw: str) -> object:
         return raw
 
 
-@config_app.command("update")
+@config_app.command("update", rich_help_panel="Lifecycle")
 def config_update(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -757,7 +757,7 @@ def _emit_normalizations_warning(formatter: Any, normalizations: list[dict[str, 
         )
 
 
-@config_app.command("set-default-bucket")
+@config_app.command("set-default-bucket", rich_help_panel="Storage")
 def config_set_default_bucket(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -900,7 +900,7 @@ def config_set_default_bucket(
         formatter.success(f"Set default_bucket on {target} to '{bucket}'.")
 
 
-@config_app.command("rename")
+@config_app.command("rename", rich_help_panel="Lifecycle")
 def config_rename(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -1011,7 +1011,7 @@ def config_rename(
             )
 
 
-@config_app.command("delete")
+@config_app.command("delete", rich_help_panel="Lifecycle")
 def config_delete(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -1091,7 +1091,7 @@ _EXT_TO_LEXER: dict[str, str] = {
 }
 
 
-@config_app.command("new")
+@config_app.command("new", rich_help_panel="Lifecycle")
 def config_new(
     ctx: typer.Context,
     component_id: str = typer.Option(
@@ -1198,7 +1198,7 @@ def config_new(
 # ── Config metadata commands ───────────────────────────────────────────
 
 
-@config_app.command("metadata-list")
+@config_app.command("metadata-list", rich_help_panel="Metadata")
 def config_metadata_list(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
@@ -1250,7 +1250,7 @@ def config_metadata_list(
                 )
 
 
-@config_app.command("get-metadata")
+@config_app.command("get-metadata", rich_help_panel="Metadata")
 def config_get_metadata(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
@@ -1297,7 +1297,7 @@ def config_get_metadata(
     formatter.output(result, lambda c, d: c.print(d["value"]))
 
 
-@config_app.command("set-metadata")
+@config_app.command("set-metadata", rich_help_panel="Metadata")
 def config_set_metadata(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
@@ -1346,7 +1346,7 @@ def config_set_metadata(
     )
 
 
-@config_app.command("delete-metadata")
+@config_app.command("delete-metadata", rich_help_panel="Metadata")
 def config_delete_metadata(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
@@ -1402,7 +1402,7 @@ def config_delete_metadata(
     )
 
 
-@config_app.command("set-folder")
+@config_app.command("set-folder", rich_help_panel="Metadata")
 def config_set_folder(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
@@ -1465,7 +1465,7 @@ def _parse_kv_var(raw: str) -> tuple[str, str]:
     return key, value
 
 
-@config_app.command("variables-set")
+@config_app.command("variables-set", rich_help_panel="Variables")
 def config_variables_set(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
@@ -1619,7 +1619,7 @@ def config_variables_set(
         _format_variables_set(formatter, result)
 
 
-@config_app.command("variables-get")
+@config_app.command("variables-get", rich_help_panel="Variables")
 def config_variables_get(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
@@ -1672,7 +1672,7 @@ def config_variables_get(
         _format_variables_get(formatter, result)
 
 
-@config_app.command("variables-clear")
+@config_app.command("variables-clear", rich_help_panel="Variables")
 def config_variables_clear(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
@@ -1846,7 +1846,7 @@ def _format_variables_dry_run(formatter: Any, result: dict) -> None:
 # ── config row-create ──────────────────────────────────────────────────────────
 
 
-@config_app.command("row-create")
+@config_app.command("row-create", rich_help_panel="Rows")
 def config_row_create(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -1976,7 +1976,7 @@ def config_row_create(
 # ── config row-update ──────────────────────────────────────────────────────────
 
 
-@config_app.command("row-update")
+@config_app.command("row-update", rich_help_panel="Rows")
 def config_row_update(
     ctx: typer.Context,
     project: str = typer.Option(
@@ -2191,7 +2191,13 @@ def config_row_update(
 # ── config oauth-url ───────────────────────────────────────────────────────────
 
 
-@config_app.command("oauth-url")
+@config_app.command(
+    "oauth-url",
+    rich_help_panel="OAuth",
+    help=(
+        "Requires master token. Generate an OAuth authorization URL for a component configuration."
+    ),
+)
 def config_oauth_url(
     ctx: typer.Context,
     project: str = typer.Option(

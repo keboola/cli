@@ -115,7 +115,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Unlink variables from a config (does NOT delete the underlying keboola.variables) | `kbagent config variables-clear --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Create a new configuration row | `kbagent config row-create --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Update an existing configuration row | `kbagent config row-update --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --row-id ROW-ID` |
-| Generate an OAuth authorization URL for a component configuration | `kbagent config oauth-url --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Requires master token. | `kbagent config oauth-url --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | List data apps across one or more registered projects | `kbagent data-app list` |
 | Show merged Data Science + Storage detail for one data app | `kbagent data-app detail --project PROJECT --app-id APP-ID` |
 | Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy) | `kbagent data-app create --project PROJECT --name NAME --slug SLUG --git-repo GIT-REPO` |
