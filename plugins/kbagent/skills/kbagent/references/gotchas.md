@@ -104,6 +104,36 @@
   container after `autoSuspendAfterSeconds` of inactivity. Hit the URL
   to wake it (auto-restart triggers a 30-60s cold boot) or run
   `kbagent data-app start --app-id N`.
+## `project invite` "already invited / already member" returns HTTP 400, not 422 (since v0.26.1)
+
+- Re-inviting a user the project already knows about returns HTTP **400** with
+  one of two error strings:
+  - `"This user has already been invited to this project."` (pending invitation)
+  - `"This user is already a member of this project."` (active member)
+- `MemberService.invite()` translates both cases to `status="noop"` with
+  `note="already_invited"` / `"already_member"` -- they are *not* exit-1
+  failures. Bulk runs (`--from-csv`) count them as `noop` in the summary, not
+  `failed`.
+- The 422 heuristic in pre-v0.26.1 orchestrator scripts (`invite_participants.py:25`)
+  is **wrong** for this API. If you write a parallel implementation, key off
+  status_code 400 + the substring marker, not 422.
+
+## `project member-set-role` is PATCH, not PUT (since v0.26.1)
+
+- The Manage API role-change endpoint is `PATCH /manage/projects/{id}/users/{userId}`
+  with body `{"role": "..."}`. **PUT returns 404** ("resource not found") even
+  on a real, currently-active member -- the endpoint shape is PATCH-only.
+- The kbagent `ManageClient.update_project_member_role` method emits PATCH;
+  any custom code re-implementing the call must do the same.
+
+## `project invite --from-csv` order is not deterministic (since v0.26.1)
+
+- Bulk invitation parallelises via `ThreadPoolExecutor` (default 8 workers).
+  The `rows[]` array in the result is in completion order, not CSV order.
+- Per-row parsing of `failed_rows` should match by `email`, not by index.
+- A failed row never aborts the run -- the executor accumulates results and
+  the command exits 0 with `failed > 0` reflected in the JSON summary. Mirror
+  the `org setup` partial-success exit semantics.
 
 ## `default_bucket` is per-config and only an output prefix (since 0.26.0)
 

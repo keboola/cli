@@ -112,6 +112,13 @@ a critical failure.
 | Pause a running data app | `kbagent data-app stop --project P --app-id N` (0.27.0+) | -- | `kbagent data-app delete` (irreversible; cascades to Storage config) |
 | Read the simpleAuth password for a password-gated app | `kbagent data-app password --project P --app-id N` (0.27.0+) -- needs Manage API token (interactive prompt by default; `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.28.0+) | -- | trying to "rotate" the password (not supported by the API; delete + recreate to mint a new one) |
 | Tear down a data app | `kbagent data-app delete --project P --app-id N` (0.27.0+) -- cascades to Storage config; URL retired | -- | manually `tool call delete_config keboola.data-apps` while leaving the deployment record orphaned |
+| Invite a user to a project (single) | `kbagent project invite --project P --email E --role admin\|guest\|readOnly\|share` (0.26.1+) | raw `requests.post(/manage/projects/{id}/invitations)` only if version-gated out | `kbagent project invite` without `KBC_MANAGE_API_TOKEN` set; passing manage token via CLI flag |
+| Invite many users (bulk) | `kbagent project invite --from-csv FILE [--default-role guest] [--workers N] [--dry-run]` (0.26.1+) | `--hint client` to generate a parallel script using `ManageClient` | per-row shell loop calling the CLI -- defeats the parallelism + idempotency the service already does |
+| List active project members | `kbagent project member-list --project P [--include-pending]` (0.26.1+) | `tool call run_sync_action` against the Manage API | reading `.kbagent/config.json` to infer membership (it only stores the local user's token) |
+| List pending invitations | `kbagent project invitation-list --project P` (0.26.1+) | -- | -- |
+| Cancel a pending invitation | `kbagent project invitation-cancel --project P --email E --yes` (0.26.1+) | `--invitation-id ID` if email lookup is ambiguous | DELETE via raw HTTP without going through the service layer |
+| Remove an active member | `kbagent project member-remove --project P --email E --yes` (0.26.1+, **destructive**) | `--hint client` for a script that removes by user_id directly | calling `member-remove` without `--yes` in non-interactive contexts (it will prompt and hang) |
+| Change a member's role | `kbagent project member-set-role --project P --email E --role admin\|guest\|readOnly\|share` (0.26.1+) | -- | `PUT /manage/projects/{id}/users/{userId}` -- the API rejects PUT with 404, the kbagent client correctly uses **PATCH** |
 
 If the table does not cover the user's task, **ask clarifying
 questions** instead of guessing. Returning a targeted question is a
@@ -186,6 +193,29 @@ success, not a failure.
   informational, not an error -- surface it to the user in a write
   verification payload but do not treat it as a failure signal.
   Production writes never materialize anything.
+
+- **`project invite` "already invited / already member" is a no-op, not a failure** (0.26.1+):
+  Re-inviting a user the project already knows returns HTTP 400 from the
+  Manage API. kbagent normalises both "...already been invited..." and
+  "...already a member..." to `status="noop"` with a `note` field, exit 0.
+  **Do not retry on 400 from these commands** -- the user is already
+  on the project (or already pending). For bulk runs, `noop` rows count
+  toward `noop`, not `failed`, in the summary; surface that distinction
+  to the user when reporting bulk results.
+
+- **`project invite --from-csv` ordering is non-deterministic** (0.26.1+):
+  Bulk invitation parallelises via `ThreadPoolExecutor` (default 8 workers).
+  The `rows[]` array in the JSON result is in completion order, not CSV
+  order. When reporting per-row outcomes to the user, **match by `email`,
+  not by index**. Partial-success exits 0 with `failed > 0` reflected in
+  the JSON -- treat that as a soft failure that needs review, not a
+  catastrophe.
+
+- **`project member-set-role` uses PATCH, not PUT** (0.26.1+): The Manage
+  API endpoint is `PATCH /manage/projects/{id}/users/{userId}` with
+  `{"role": "..."}`. PUT returns 404 even on real members. kbagent's
+  `ManageClient.update_project_member_role` emits PATCH; if you write a
+  `--hint client` script that hits the endpoint directly, do the same.
 
 - **`legacy_branch_storage: true` on `--branch` writes** (0.25.2+):
   Projects without the `storage-branches` feature flag (legacy fake-branch

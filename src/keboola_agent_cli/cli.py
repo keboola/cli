@@ -48,6 +48,7 @@ from .services.job_service import JobService
 from .services.kai_service import KaiService
 from .services.lineage_service import LineageService
 from .services.mcp_service import McpService
+from .services.member_service import MemberService
 from .services.org_service import OrgService
 from .services.project_service import ProjectService
 from .services.schedule_service import ScheduleService
@@ -302,6 +303,7 @@ def main(
     lineage_service = LineageService(config_store=config_store)
     deep_lineage_service = DeepLineageService(config_store=config_store)
     org_service = OrgService(config_store=config_store)
+    member_service = MemberService(config_store=config_store)
     mcp_service = McpService(config_store=config_store)
     branch_service = BranchService(config_store=config_store)
     sharing_service = SharingService(config_store=config_store)
@@ -356,6 +358,7 @@ def main(
     ctx.obj["lineage_service"] = lineage_service
     ctx.obj["deep_lineage_service"] = deep_lineage_service
     ctx.obj["org_service"] = org_service
+    ctx.obj["member_service"] = member_service
     ctx.obj["mcp_service"] = mcp_service
     ctx.obj["branch_service"] = branch_service
     ctx.obj["sharing_service"] = sharing_service
