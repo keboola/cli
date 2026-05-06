@@ -634,6 +634,49 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     persisted, never logged. Password is auto-generated at create time
     and CANNOT be rotated -- delete and recreate the app to mint a new one.
 
+  kbagent data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE'
+        [--secret '#KEY2=VALUE2' ...] [--secrets-file PATH] [--branch ID]
+        [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]
+    Encrypt and write '#'-prefixed secrets into parameters.dataApp.secrets.
+    Per-project KMS via the Encryption API; ciphertext does not cross
+    projects (writeup §8). Read-modify-write at the service layer to
+    preserve sibling keys; never use Storage merge=True for nested edits.
+    The runtime exposes each key as an env var with '#' stripped, '-'
+    replaced with '_', uppercased ('#my-api-key' -> 'MY_API_KEY').
+    Adding a secret bumps the Storage version; the running container
+    keeps the OLD config until the next 'kbagent data-app deploy'.
+
+  kbagent data-app secrets-list --project ALIAS --app-id ID [--branch ID]
+        [--show-fingerprint]
+    List the keys in parameters.dataApp.secrets with derived runtime
+    env-var names. Never echoes encrypted ciphertext in full and never
+    decrypts. --show-fingerprint includes a short fingerprint per key.
+
+  kbagent data-app secrets-get --project ALIAS --app-id ID --key '#KEY'
+        [--branch ID]
+    Show metadata for ONE secret. NEVER echoes the decrypted value --
+    the Encryption API has no decrypt endpoint and the CLI cannot
+    decrypt. NOT_FOUND on absent key; never enumerates sibling keys.
+
+  kbagent data-app secrets-remove --project ALIAS --app-id ID --key '#KEY'
+        [--key '#KEY2' ...] [--branch ID] [--yes] [--dry-run]
+    Remove one or more secrets. Idempotent (missing keys -> exit 0,
+    removed: 0). Destructive: a removal can break the running app at
+    next deploy if it depends on the value. Confirmation prompt unless
+    --yes or --json.
+
+  kbagent data-app validate-repo --git-repo URL [--git-branch BRANCH]
+        [--git-public/--no-git-public] [--git-pat-env VAR | --git-pat-file PATH]
+        [--type python-js] [--strict]
+    Pre-flight check that a git repo follows the Keboola data-app
+    Golden Rule (https://help.keboola.com/data-apps/python-js/). Walks
+    the repo via GitHub Contents + Trees API (<=5 calls -- 1 tree +
+    up to 4 contents -- regardless of
+    repo size); each check emits BLOCKING / WARN / OK with a help-doc
+    citation. --type currently restricted to python-js; streamlit /
+    pure-Python / R / Node-only follow-up. --strict treats WARNs as
+    failures (exit 1).
+
 ### Project Sync
 
   kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]

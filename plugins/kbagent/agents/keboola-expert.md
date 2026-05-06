@@ -70,7 +70,9 @@ a critical failure.
    `data-app password` needs 0.28.0+ with `--allow-env-manage-token`
    (the env var is default-deny on 0.28.0+),
    `project invite` / `project member-*` / `project invitation-*`
-   need 0.26.1+, `storage retype` is a future composite), you
+   need 0.26.1+,
+   `data-app secrets-* / validate-repo` need 0.28.0+,
+   `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
    Ask user to run kbagent update, then re-invoke me."` Do not attempt
@@ -119,6 +121,11 @@ a critical failure.
 | Cancel a pending invitation | `kbagent project invitation-cancel --project P --email E --yes` (0.26.1+) | `--invitation-id ID` if email lookup is ambiguous | DELETE via raw HTTP without going through the service layer |
 | Remove an active member | `kbagent project member-remove --project P --email E --yes` (0.26.1+, **destructive**) | `--hint client` for a script that removes by user_id directly | calling `member-remove` without `--yes` in non-interactive contexts (it will prompt and hang) |
 | Change a member's role | `kbagent project member-set-role --project P --email E --role admin\|guest\|readOnly\|share` (0.26.1+) | -- | `PUT /manage/projects/{id}/users/{userId}` -- the API rejects PUT with 404, the kbagent client correctly uses **PATCH** |
+| Set / rotate app-runtime secrets | `kbagent data-app secrets-set --project P --app-id N --secret '#KEY=VAL'` (0.28.0+) then `data-app deploy --wait` -- per-project KMS encryption, fail-closed, never auto-deploys | `kbagent encrypt values --component-id keboola.data-apps` + `tool call update_config` -- ONLY if you need to write secrets to a different shape than `parameters.dataApp.secrets` | raw `POST` to encryption + Storage without read-modify-write -- you will clobber sibling keys nested under `parameters.dataApp.secrets` (Storage `merge=True` is shallow at the top level only) |
+| Inspect what secrets are set on a data app | `kbagent data-app secrets-list --project P --app-id N` (0.28.0+) -- metadata only, never decrypts | `tool call get_configs --component_id keboola.data-apps` then read `parameters.dataApp.secrets` keys (raw dict, no env-var derivation, may leak ciphertext into output) | trying to decrypt -- the Encryption API has no decrypt endpoint, the CLI cannot decrypt under any branch |
+| Confirm one secret is present | `kbagent data-app secrets-get --project P --app-id N --key '#KEY'` (0.28.0+) -- returns metadata only | -- | trying to extract the plaintext value (impossible by design; not a CLI gap) |
+| Remove a secret from a data app | `kbagent data-app secrets-remove --project P --app-id N --key '#KEY' --yes` (0.28.0+) -- idempotent; missing keys exit 0 with `removed: 0` | `tool call update_config` with the secrets sub-dict deleted -- ONLY for batch removes that need a custom change description | `kbagent config update --set 'parameters.dataApp.secrets={}'` -- replaces the whole sub-dict, dropping every secret instead of just the named ones |
+| Pre-flight a data-app repo before create | `kbagent data-app validate-repo --git-repo URL --type python-js [--git-pat-env VAR]` (0.28.0+) -- BLOCKING / WARN / OK with help-doc citations; ≤5 GitHub API calls regardless of repo size | git-clone the repo locally and inspect by hand | `data-app create --dry-run` (only shows the request bodies; does not validate repo structure) |
 
 If the table does not cover the user's task, **ask clarifying
 questions** instead of guessing. Returning a targeted question is a
@@ -289,6 +296,44 @@ success, not a failure.
   projects, so `kbagent data-app create` always re-encrypts plaintext via
   the target project's Encryption API and refuses to write plaintext if
   the round-trip does not return a `KBC::Project*` ciphertext.
+
+- **`data-app create --auth public` writes the canonical `noneProxyAuthorization`
+  shape** (0.28.0+, fixes a v0.27.0 silent-503 bug): v0.27.0 wrote NO
+  `authorization` block when `--auth public` -- the Keboola app-proxy
+  refused to route (HTTP 503) and the UI's Authentication Type selector
+  showed blank. v0.28.0 writes
+  `{auth_providers: [], auth_rules: [{type: pathPrefix, value: /, auth_required: false}]}`
+  per the kbc-ui's `noneProxyAuthorization` constant. If a user reports a
+  v0.27.0 public app returning 503, the fix is to recreate on 0.28.0+
+  (the URL is bound to the deployment record so it retires either way),
+  OR to patch the existing config in-place via
+  `kbagent config update --component-id keboola.data-apps --config-id ID
+  --set 'authorization=...'` with the canonical shape. `--auth password`
+  behaviour is unchanged. Other auth providers (OIDC / GitHub / GitLab /
+  JumpCloud / Auth0) are not yet exposed by the CLI; tracked as a
+  follow-up issue.
+
+- **`data-app secrets-* metadata-only`** (0.28.0+): `secrets-get` NEVER
+  echoes the decrypted plaintext under any branch -- the Encryption API
+  is one-way and the CLI does not attempt to decrypt. NOT_FOUND on an
+  absent key never enumerates sibling keys (avoids leaking neighbour
+  presence). `secrets-remove` is idempotent: removing a non-existent key
+  returns exit 0 with `removed: 0` and does NOT bump the Storage
+  version. Setting a key whose derived env-var name collides with the
+  runtime-injected set (`KBC_TOKEN`, `KBC_URL` for sure; more TODO) is
+  silently shadowed by the platform; the CLI emits a stderr WARN and
+  surfaces `shadowed_by_runtime` in JSON envelope -- the WRITE still
+  happens. Read-modify-write is at the SERVICE layer (Storage `merge=True`
+  is shallow at the top level only and would clobber siblings nested in
+  `parameters.dataApp.secrets`).
+
+- **`data-app validate-repo` is GitHub-only**, `--type python-js` only
+  (0.28.0+): pre-flight Golden-Rule check via the GitHub Trees+Contents
+  API. Total <=5 calls regardless of repo size. Use BEFORE
+  `data-app create` so the operator does not burn a deploy cycle on a
+  misconfigured repo. WARNs are advisory unless `--strict` is set;
+  BLOCKINGs always fail. Tracked follow-up: streamlit / pure-Python /
+  R / Node-only types, GitLab/Bitbucket hosts.
 
 - **`storage bucket-detail` is dialect-aware** (0.25.3+): the response
   shape depends on the bucket's backend. Snowflake buckets carry
