@@ -30,11 +30,15 @@ description: >
   data-app create, data-app deploy, data-app password, data-app start,
   app proxy, simpleAuth, app auto-suspend, configVersion, redeploy contract,
   Data Science API, /apps endpoint, app password, KBC::Project ciphertext,
-  local workspace, project directory, kbagent init.
+  data-app secrets, app secrets, app runtime secrets, secrets-set,
+  secrets-list, secrets-get, secrets-remove, encrypt app secret,
+  app environment variable, validate repo, validate-repo,
+  data-app golden rule, pre-flight repo check, repo structure check,
   local workspace, project directory, kbagent init,
   invite user, invite member, project invitation, manage members,
   list members, remove member, change role, project role,
-  bulk invite, invite from CSV, project access, member management.
+  bulk invite, invite from CSV, project access, member management,
+  manage token prompt, --allow-env-manage-token, KBC_MANAGE_API_TOKEN.
 ---
 
 # kbagent -- Keboola Agent CLI
