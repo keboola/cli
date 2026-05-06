@@ -652,3 +652,79 @@ def project_description_set(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
+
+
+# ── Project info (full project metadata) ─────────────────────────────
+
+
+def _format_info_table(console: Console, data: dict[str, Any]) -> None:
+    """Render detailed project metadata as a Rich table."""
+    from rich.panel import Panel
+
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column("Field", style="bold cyan", no_wrap=True)
+    table.add_column("Value")
+
+    table.add_row("Alias", str(data.get("alias", "")))
+    table.add_row("Project ID", str(data.get("project_id", "")))
+    table.add_row("Project Name", str(data.get("project_name", "")))
+    table.add_row("Stack URL", str(data.get("stack_url", "")))
+    table.add_row("Default Backend", str(data.get("default_backend", "")))
+    table.add_row("Token ID", str(data.get("token_id", "")))
+    table.add_row("Token Description", str(data.get("token_description", "")))
+    table.add_row("Master Token", "Yes" if data.get("is_master_token") else "No")
+
+    expires = data.get("token_expires")
+    table.add_row("Token Expires", str(expires) if expires else "[dim]never[/dim]")
+
+    features = data.get("features", [])
+    if features:
+        table.add_row("Features", ", ".join(sorted(features)))
+    else:
+        table.add_row("Features", "[dim](none)[/dim]")
+
+    limits = data.get("limits", {})
+    if limits:
+        limit_lines = [f"{k}: {v}" for k, v in sorted(limits.items())]
+        table.add_row("Limits", "\n".join(limit_lines))
+
+    metrics = data.get("metrics", {})
+    if metrics:
+        metric_lines = [f"{k}: {v}" for k, v in sorted(metrics.items())]
+        table.add_row("Metrics", "\n".join(metric_lines))
+
+    console.print(Panel(table, title=f"Project Info: {data.get('alias', '')}", expand=False))
+
+
+@project_app.command("info")
+def project_info(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias to query",
+    ),
+) -> None:
+    """Show detailed project metadata.
+
+    Returns project name, ID, stack URL, default backend, feature flags,
+    storage limits and metrics, and token information.
+    """
+    if should_hint(ctx):
+        emit_hint(ctx, "project.info", project=project)
+        return
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "project_service")
+
+    try:
+        result = service.get_info(alias=project)
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=exit_code) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+
+    formatter.output(result, _format_info_table)

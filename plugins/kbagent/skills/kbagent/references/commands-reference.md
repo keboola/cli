@@ -51,6 +51,12 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `config set-metadata --project NAME --component-id ID --config-id ID --key KEY --value VALUE [--branch ID]` -- set (upsert) a metadata key/value on a configuration. Common keys: `KBC.configuration.folderName`, plus any custom `KBC.*` agent-facing tags
 - `config delete-metadata --project NAME --component-id ID --config-id ID --metadata-id ID [--branch ID] [--yes]` -- delete a configuration metadata entry by its numeric ID (from `metadata-list`)
 - `config set-folder --project NAME --component-id ID --config-id ID --name FOLDER [--branch ID]` -- set (or clear, with empty `--name`) the `KBC.configuration.folderName` metadata, which groups configs into named folders in the Keboola UI. See `config-metadata-workflow.md`
+- `config row-create --project NAME --component-id ID --config-id ID --name ROW_NAME [--description D] [--configuration JSON|@file|-] [--is-disabled] [--branch ID]` -- create a new configuration row. Returns the full row dict with `id`, `name`, `version`. Optional `--configuration` accepts JSON inline, `@file`, or stdin (`-`).
+- `config row-update --project NAME --component-id ID --config-id ID --row-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--is-disabled | --is-enabled] [--branch ID]` -- update an existing configuration row. Pass only the fields you want to change; omitted fields are preserved. `--is-disabled` / `--is-enabled` toggle the row's enabled state.
+- `config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL]` -- return the OAuth authorization URL for a component that uses OAuth authentication. Open the URL in a browser to complete the OAuth flow.
+
+## Cross-Project Search
+- `search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--limit N]` -- search for items across one or more projects. **Textual** mode (default, fast) matches item names via the Storage API `global-search` endpoint. **Config-based** mode scans full configuration JSON bodies (slow, complete). `--type` is repeatable; `--limit` applies per project in textual mode (1-100, default 50). `--project` is repeatable for multi-project scope.
 
 ## Job History
 - `job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N]` -- list jobs (default 50, max 500)

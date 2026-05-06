@@ -1,0 +1,191 @@
+"""CLI commands for cross-project search.
+
+Provides a single ``kbagent search QUERY`` command that searches item names or
+configuration bodies across all (or selected) Keboola projects.
+
+Supports two search modes:
+- ``textual`` (default): fast name-based search via Storage API global-search.
+- ``config-based``: slower full-body scan via ConfigService (searches JSON bodies).
+
+Examples::
+
+    kbagent search "customer_data"
+    kbagent search "sales" --type table --project prod
+    kbagent search "WHERE" --search-type config-based
+    kbagent --json search "revenue" --type config --type flow
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import typer
+from rich.table import Table
+
+from ..commands._helpers import (
+    emit_hint,
+    emit_project_warnings,
+    get_formatter,
+    get_service,
+    should_hint,
+)
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
+
+# Valid user-facing type values.
+VALID_TYPES = ["table", "bucket", "config", "flow", "data-app", "transformation"]
+
+# Valid search type values.
+VALID_SEARCH_TYPES = ["textual", "config-based"]
+
+
+def search_command(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Search query string."),
+    project: list[str] | None = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help="Project alias to search (repeatable; defaults to all projects).",
+    ),
+    item_type: list[str] | None = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help=(
+            f"Item type to restrict results. Repeatable. Valid values: {', '.join(VALID_TYPES)}."
+        ),
+    ),
+    search_type: str = typer.Option(
+        "textual",
+        "--search-type",
+        help=(
+            "Search mode. ``textual`` (default) searches item names via the "
+            "Storage API. ``config-based`` scans full configuration JSON bodies."
+        ),
+    ),
+    limit: int = typer.Option(
+        50,
+        "--limit",
+        "-l",
+        min=1,
+        max=100,
+        help="Maximum number of results per project (textual search only, 1-100).",
+    ),
+) -> None:
+    """Search for items across one or more Keboola projects.
+
+    In ``textual`` mode (default) the Storage API global-search endpoint is
+    called, which matches item names efficiently. In ``config-based`` mode the
+    full JSON body of every configuration is scanned for the query string.
+
+    Results from all queried projects are merged and printed together.
+    One project failing does not stop others.
+
+    Examples:
+
+      kbagent search customer_data
+
+      kbagent search sales --type table --project prod
+
+      kbagent search "JOIN orders" --search-type config-based
+
+      kbagent --json search revenue --type config --type flow
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "search.search",
+            query=query,
+            project=project,
+            item_type=item_type,
+            search_type=search_type,
+            limit=limit,
+        )
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "search_service")
+
+    # Validate --type values.
+    if item_type:
+        for t in item_type:
+            if t not in VALID_TYPES:
+                formatter.error(
+                    message=(f"Invalid item type '{t}'. Valid values: {', '.join(VALID_TYPES)}"),
+                    error_code=ErrorCode.INVALID_ARGUMENT,
+                )
+                raise typer.Exit(code=2)
+
+    # Validate --search-type.
+    if search_type not in VALID_SEARCH_TYPES:
+        formatter.error(
+            message=(
+                f"Invalid search type '{search_type}'. "
+                f"Valid values: {', '.join(VALID_SEARCH_TYPES)}"
+            ),
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+
+    try:
+        result = service.search(
+            query=query,
+            aliases=project or None,
+            item_types=item_type or None,
+            search_type=search_type,
+            limit=limit,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.API_ERROR)
+        raise typer.Exit(code=1) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        _format_search_results(formatter.console, result, query, search_type)
+        emit_project_warnings(formatter, result)
+
+
+# ── Human-readable output ──────────────────────────────────────────────────
+
+
+def _format_search_results(console: Any, result: dict, query: str, search_type: str) -> None:
+    """Render search results as a Rich table with stats header."""
+    stats = result.get("stats", {})
+    projects_searched = stats.get("projects_searched", 0)
+    results_found = stats.get("results_found", 0)
+    errors = result.get("errors", [])
+
+    mode_label = "config-based" if search_type == "config-based" else "textual"
+    console.print(
+        f'[bold]Search results[/bold] for [yellow]"{query}"[/yellow] '
+        f"([dim]{mode_label}[/dim]) — "
+        f"[cyan]{results_found}[/cyan] result(s) across "
+        f"[cyan]{projects_searched}[/cyan] project(s)"
+        + (f", [yellow]{len(errors)} error(s)[/yellow]" if errors else "")
+    )
+
+    rows = result.get("results", [])
+    if not rows:
+        console.print("[dim]No results found.[/dim]")
+        return
+
+    table = Table(show_header=True, header_style="bold blue", show_lines=False)
+    table.add_column("Project", style="cyan", no_wrap=True)
+    table.add_column("Type", style="magenta", no_wrap=True)
+    table.add_column("ID", style="green", overflow="fold")
+    table.add_column("Name", overflow="fold")
+    table.add_column("Component ID", style="dim", overflow="fold")
+
+    for row in rows:
+        table.add_row(
+            row.get("project_alias", ""),
+            row.get("type", ""),
+            row.get("id", ""),
+            row.get("name", ""),
+            row.get("component_id") or "",
+        )
+
+    console.print(table)

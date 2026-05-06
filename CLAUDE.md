@@ -264,6 +264,7 @@ kbagent project description-get --project NAME
 kbagent project description-set --project NAME [--text STR | --file PATH | --stdin]
 kbagent project use ALIAS
 kbagent project current
+kbagent project info --project NAME
 
 kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID] [--include-rows]
 kbagent config detail --project NAME [--project NAME ...] --component-id ID [--config-id ID] [--branch ID] [--with-state]
@@ -279,6 +280,11 @@ kbagent config get-metadata --project NAME --component-id ID --config-id ID --ke
 kbagent config set-metadata --project NAME --component-id ID --config-id ID --key KEY --value VALUE [--branch ID]
 kbagent config delete-metadata --project NAME --component-id ID --config-id ID --metadata-id ID [--branch ID] [--yes]
 kbagent config set-folder --project NAME --component-id ID --config-id ID --name FOLDER [--branch ID]
+kbagent config row-create --project NAME --component-id ID --config-id ID --name ROW_NAME [--description D] [--configuration JSON|@file|-] [--is-disabled] [--branch ID]
+kbagent config row-update --project NAME --component-id ID --config-id ID --row-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--is-disabled | --is-enabled] [--branch ID]
+kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL]
+
+kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--limit N]
 
 kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
 kbagent job detail --project NAME --job-id ID

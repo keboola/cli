@@ -77,6 +77,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 |------|---------|
 | Update kbagent to the latest version | `kbagent update` |
 | Show recent changelog (what changed in each version) | `kbagent changelog` |
+| Search for items (tables, buckets, configs, flows, …) by name or content | `kbagent search <QUERY>` |
 | List all operations with their risk category and current allowed/denied status | `kbagent permissions list` |
 | Show the current active permission policy | `kbagent permissions show` |
 | Set the permission policy (firewall rules) | `kbagent permissions set --mode MODE` |
@@ -92,6 +93,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show the effective default project | `kbagent project current` |
 | Get the Keboola dashboard project description | `kbagent project description-get --project PROJECT` |
 | Set the Keboola dashboard project description (markdown) | `kbagent project description-set --project PROJECT` |
+| Show detailed project metadata | `kbagent project info --project PROJECT` |
 | Set up projects and register them in the kbagent config | `kbagent org setup --url URL` |
 | List available components from connected projects | `kbagent component list` |
 | Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
@@ -111,6 +113,9 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Assign variables to a config (auto-creates backing keboola.variables on first call) | `kbagent config variables-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Read the current variable values attached to a config | `kbagent config variables-get --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Unlink variables from a config (does NOT delete the underlying keboola.variables) | `kbagent config variables-clear --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Create a new configuration row | `kbagent config row-create --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
+| Update an existing configuration row | `kbagent config row-update --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --row-id ROW-ID` |
+| Generate an OAuth authorization URL for a component configuration | `kbagent config oauth-url --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | List data apps across one or more registered projects | `kbagent data-app list` |
 | Show merged Data Science + Storage detail for one data app | `kbagent data-app detail --project PROJECT --app-id APP-ID` |
 | Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy) | `kbagent data-app create --project PROJECT --name NAME --slug SLUG --git-repo GIT-REPO` |

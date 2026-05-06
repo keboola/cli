@@ -990,3 +990,13 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
 - To inspect or remove schedules: `kbagent flow schedule-remove` deletes all
   scheduler configs that target the flow. Pair it with `--dry-run` to see the
   affected configs (cron + timezone) without calling `delete_config`.
+
+## `search` is a top-level command, not `config search` (since v0.29.0)
+
+`kbagent search QUERY` searches across **all item types** (tables, buckets, configs, flows, data apps, transformations) via the Storage API global-search endpoint. It is distinct from `kbagent config search --query Q` which scans only configuration JSON bodies.
+- `search --search-type config-based` delegates to `config search` internally but exposes the unified results shape.
+- Options (`--type`, `--project`, `--limit`) must come AFTER the QUERY argument: `kbagent search "text" --type table --limit 10`.
+
+## `config row-create` / `config row-update` require `--row-id` for updates (since v0.29.0)
+
+`row-create` returns the new row object including `id`. Capture this ID for subsequent `row-update` calls. `row-update` preserves all unspecified fields — pass only the keys you want to change. `--is-disabled` and `--is-enabled` are mutually exclusive flags for toggling the row's active state.

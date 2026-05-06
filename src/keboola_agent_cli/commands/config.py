@@ -1841,3 +1841,340 @@ def _format_variables_dry_run(formatter: Any, result: dict) -> None:
         else:
             display = "<encrypted>" if k.startswith("#") else escape(str(current_v))
             formatter.console.print(f"  [dim]= {escape(k)} = {display}[/dim]")
+
+
+# ── config row-create ──────────────────────────────────────────────────────────
+
+
+@config_app.command("row-create")
+def config_row_create(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    component_id: str = typer.Option(
+        ...,
+        "--component-id",
+        help="Component ID (e.g. keboola.python-transformation-v2)",
+    ),
+    config_id: str = typer.Option(
+        ...,
+        "--config-id",
+        help="Configuration ID to add the row to",
+    ),
+    name: str = typer.Option(
+        ...,
+        "--name",
+        help="Row name",
+    ),
+    description: str = typer.Option(
+        "",
+        "--description",
+        help="Row description",
+    ),
+    configuration: str | None = typer.Option(
+        None,
+        "--configuration",
+        help="Row configuration JSON: inline, @file.json, or - for stdin",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Create in a specific dev branch ID (defaults to active branch)",
+    ),
+) -> None:
+    """Create a new configuration row.
+
+    \b
+    Examples:
+      # Create a row with a name only (empty configuration)
+      kbagent config row-create --project P --component-id C --config-id ID --name "Row 1"
+
+      # Create a row with configuration content
+      kbagent config row-create --project P --component-id C --config-id ID \\
+        --name "Row 1" --configuration '{"parameters": {"table": "orders"}}'
+
+      # Create from a JSON file
+      kbagent config row-create --project P --component-id C --config-id ID \\
+        --name "Row 1" --configuration @row.json
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "config_service")
+
+    config_dict: dict | None = None
+    if configuration:
+        try:
+            config_dict = _parse_json_input(configuration)
+        except (json.JSONDecodeError, FileNotFoundError) as exc:
+            formatter.error(
+                message=f"Invalid --configuration input: {exc}",
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
+            raise typer.Exit(code=2) from None
+
+    try:
+        result = service.create_config_row(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            name=name,
+            description=description,
+            configuration=config_dict,
+            branch_id=branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        row_name = result.get("name", name)
+        row_id = result.get("id", "")
+        branch_info = ""
+        if result.get("branch_id"):
+            branch_info = f" (branch {result['branch_id']})"
+        formatter.success(
+            f"Created row '{escape(row_name)}' [{row_id}] "
+            f"in {escape(component_id)}/{escape(config_id)}{branch_info}"
+        )
+
+
+# ── config row-update ──────────────────────────────────────────────────────────
+
+
+@config_app.command("row-update")
+def config_row_update(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    component_id: str = typer.Option(
+        ...,
+        "--component-id",
+        help="Component ID",
+    ),
+    config_id: str = typer.Option(
+        ...,
+        "--config-id",
+        help="Configuration ID",
+    ),
+    row_id: str = typer.Option(
+        ...,
+        "--row-id",
+        help="Row ID to update",
+    ),
+    name: str | None = typer.Option(
+        None,
+        "--name",
+        help="New row name",
+    ),
+    description: str | None = typer.Option(
+        None,
+        "--description",
+        help="New row description",
+    ),
+    configuration: str | None = typer.Option(
+        None,
+        "--configuration",
+        help="Row configuration JSON: inline, @file.json, or - for stdin",
+    ),
+    set_values: list[str] | None = typer.Option(
+        None,
+        "--set",
+        help="Set a nested value: PATH=VALUE (e.g. --set 'parameters.table=orders')",
+    ),
+    merge: bool = typer.Option(
+        False,
+        "--merge",
+        help="Deep-merge into existing row config instead of replacing",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would change without applying",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Update in a specific dev branch ID (defaults to active branch)",
+    ),
+) -> None:
+    """Update an existing configuration row.
+
+    \b
+    Content options modify the row configuration JSON:
+      --configuration : provide a full JSON blob (inline, @file, or -)
+      --set PATH=VALUE : set a single nested key (repeatable)
+      --merge : deep-merge into existing row config (preserves sibling keys)
+      --dry-run : preview changes without applying
+
+    \b
+    Examples:
+      # Update just the name
+      kbagent config row-update --project P --component-id C --config-id ID --row-id R --name "New name"
+
+      # Replace row configuration from a file
+      kbagent config row-update --project P --component-id C --config-id ID --row-id R \\
+        --configuration @row.json
+
+      # Set a single nested value (merge implied)
+      kbagent config row-update --project P --component-id C --config-id ID --row-id R \\
+        --set 'parameters.table=new_table'
+
+      # Preview changes without applying
+      kbagent config row-update --project P --component-id C --config-id ID --row-id R \\
+        --set 'parameters.table=new_table' --dry-run
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "config_service")
+
+    config_dict: dict | None = None
+    if configuration:
+        try:
+            config_dict = _parse_json_input(configuration)
+        except (json.JSONDecodeError, FileNotFoundError) as exc:
+            formatter.error(
+                message=f"Invalid --configuration input: {exc}",
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
+            raise typer.Exit(code=2) from None
+
+    parsed_sets: list[tuple[str, object]] | None = None
+    if set_values:
+        parsed_sets = []
+        for item in set_values:
+            if "=" not in item:
+                formatter.error(
+                    message=f"Invalid --set format: '{item}'. Expected PATH=VALUE.",
+                    error_code=ErrorCode.VALIDATION_ERROR,
+                )
+                raise typer.Exit(code=2) from None
+            path, _, raw_value = item.partition("=")
+            parsed_sets.append((path.strip(), _parse_set_value(raw_value.strip())))
+
+    effective_merge = merge or bool(parsed_sets)
+
+    try:
+        result = service.update_config_row(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            row_id=row_id,
+            name=name,
+            description=description,
+            configuration=config_dict,
+            set_paths=parsed_sets,
+            merge=effective_merge,
+            dry_run=dry_run,
+            branch_id=branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if result.get("dry_run"):
+        changes = result.get("changes", [])
+        if formatter.json_mode:
+            formatter.output(result)
+        else:
+            if not changes:
+                formatter.success("No changes detected.")
+            else:
+                formatter.console.print(f"\n[bold]Dry-run: {len(changes)} change(s)[/bold]\n")
+                for change in changes:
+                    formatter.console.print(f"  {change}")
+                formatter.console.print()
+        return
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        updated_name = result.get("name", row_id)
+        branch_info = ""
+        if result.get("branch_id"):
+            branch_info = f" (branch {result['branch_id']})"
+        formatter.success(
+            f"Updated row '{escape(updated_name)}' [{row_id}] "
+            f"in {escape(component_id)}/{escape(config_id)}{branch_info}"
+        )
+
+
+# ── config oauth-url ───────────────────────────────────────────────────────────
+
+
+@config_app.command("oauth-url")
+def config_oauth_url(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    component_id: str = typer.Option(
+        ...,
+        "--component-id",
+        help="Component ID (e.g. keboola.ex-google-drive)",
+    ),
+    config_id: str = typer.Option(
+        ...,
+        "--config-id",
+        help="Configuration ID to authorize",
+    ),
+) -> None:
+    """Generate an OAuth authorization URL for a component configuration.
+
+    Opens a short-lived, component-scoped authorization link.
+    The user must open this URL in a browser and grant access.
+
+    \b
+    Examples:
+      kbagent config oauth-url --project P --component-id keboola.ex-google-drive --config-id ID
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "config_service")
+
+    try:
+        result = service.get_oauth_url(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        formatter.console.print(
+            f"[bold]OAuth URL for[/bold] [cyan]{escape(component_id)}[/cyan]/"
+            f"[cyan]{escape(config_id)}[/cyan]:\n"
+        )
+        formatter.console.print(f"  [link]{result['url']}[/link]")
+        formatter.console.print("\n[dim]Open this URL in a browser and grant access.[/dim]")

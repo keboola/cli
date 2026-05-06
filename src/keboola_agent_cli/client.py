@@ -233,6 +233,142 @@ class KeboolaClient(BaseHttpClient):
         self._features_cache = frozenset(response.features)
         return response
 
+    def get_project_info(self) -> dict[str, Any]:
+        """Return full project/token info from /v2/storage/tokens/verify.
+
+        Unlike verify_token() which parses only a subset of fields into
+        TokenVerifyResponse, this method returns the complete raw API response
+        so callers can access all fields (features, limits, metrics, etc.).
+
+        Returns:
+            Full JSON response dict from /v2/storage/tokens/verify.
+
+        Raises:
+            KeboolaApiError: If token is invalid (401) or other API error.
+        """
+        response = self._request("GET", "/v2/storage/tokens/verify")
+        return response.json()
+
+    def create_short_lived_token(
+        self,
+        description: str,
+        component_access: list[str],
+        expires_in: int = 3600,
+    ) -> dict[str, Any]:
+        """Create a short-lived Storage API token restricted to a component.
+
+        POST /v2/storage/tokens
+
+        Args:
+            description: Human-readable token description.
+            component_access: List of component IDs this token may access.
+            expires_in: Token lifetime in seconds (default: 3600 = 1 hour).
+
+        Returns:
+            Token dict from the API, including the 'token' field.
+        """
+        response = self._request(
+            "POST",
+            "/v2/storage/tokens",
+            data={
+                "description": description,
+                "expiresIn": str(expires_in),
+                "componentAccess[]": component_access,
+            },
+        )
+        return response.json()
+
+    def global_search(
+        self,
+        query: str,
+        project_id: int,
+        types: list[str] | None = None,
+        branch_type: str = "production",
+        branch_id: int | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Search for items by name across the project using the Storage API global-search endpoint.
+
+        Calls GET /v2/storage/global-search with the given query and optional type filters.
+        This performs textual (name-based) search only — it does not scan configuration bodies.
+        Results are scoped to the single project identified by ``project_id``.
+
+        Args:
+            query: Search string to match against item names.
+            project_id: Numeric Keboola project ID (required by the API).
+            types: Optional list of item types to filter results. Supported values:
+                   ``bucket``, ``table``, ``flow``, ``transformation``, ``configuration``,
+                   ``configuration-row``, ``workspace``, ``shared-code``.
+                   If None or empty, all types are returned.
+            branch_type: ``"production"`` (default) or ``"development"``.
+            branch_id: Required when ``branch_type="development"``; ignored otherwise.
+            limit: Maximum number of results to return (default 50, max 100).
+            offset: Pagination offset (default 0).
+
+        Returns:
+            Raw API response dict with keys ``"all"`` (total count) and
+            ``"items"`` (list of matching item dicts).
+
+        Raises:
+            KeboolaApiError: On API errors (auth, network, rate limits).
+        """
+        params: dict[str, Any] = {
+            "query": query,
+            "projectIds[]": project_id,
+            "limit": limit,
+            "offset": offset,
+        }
+        if types:
+            params["types[]"] = types
+        if branch_type == "development" and branch_id is not None:
+            params["branchTypes[]"] = "development"
+            params["branchIds[]"] = branch_id
+        else:
+            params["branchTypes[]"] = "production"
+
+        response = self._request("GET", "/v2/storage/global-search", params=params)
+        return response.json()
+
+    def get_oauth_url(
+        self,
+        component_id: str,
+        config_id: str,
+    ) -> str:
+        """Generate an OAuth authorization URL for a component configuration.
+
+        Creates a short-lived, component-scoped Storage API token and builds
+        the URL the user must open to grant OAuth access.
+
+        Args:
+            component_id: The component ID (e.g. 'keboola.ex-google-drive').
+            config_id: The configuration ID to authorize.
+
+        Returns:
+            The full OAuth authorization URL as a string.
+        """
+        from urllib.parse import urlencode, urlunsplit
+
+        token_response = self.create_short_lived_token(
+            description=f"Short-lived token for OAuth URL - {component_id}/{config_id}",
+            component_access=[component_id],
+            expires_in=3600,
+        )
+        sapi_token = token_response["token"]
+
+        query_params = urlencode({"token": sapi_token, "sapiUrl": self._stack_url})
+        fragment = f"/{component_id}/{config_id}"
+
+        return urlunsplit(
+            (
+                "https",
+                "external.keboola.com",
+                "/oauth/index.html",
+                query_params,
+                fragment,
+            )
+        )
+
     def get_project_features(self) -> frozenset[str]:
         """Return the project's feature flags, fetching once per client lifetime.
 
@@ -363,6 +499,31 @@ class KeboolaClient(BaseHttpClient):
         resp = self._request(
             "GET",
             f"{prefix}/components/{quote(component_id)}/configs/{quote(config_id)}/rows",
+        )
+        return resp.json()
+
+    def get_config_row(
+        self,
+        component_id: str,
+        config_id: str,
+        row_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Get a single configuration row by ID.
+
+        Args:
+            component_id: Component identifier.
+            config_id: Configuration ID.
+            row_id: Row ID.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Row detail dict from the API.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        resp = self._request(
+            "GET",
+            f"{prefix}/components/{quote(component_id)}/configs/{quote(config_id)}/rows/{quote(row_id)}",
         )
         return resp.json()
 
