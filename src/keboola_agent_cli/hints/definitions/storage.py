@@ -407,6 +407,46 @@ HintRegistry.register(
     )
 )
 
+# ── storage swap-tables ───────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="storage.swap-tables",
+        description="Swap two storage tables in a dev branch",
+        steps=[
+            HintStep(
+                comment="Swap two tables (dev branch only; aliases not transferred)",
+                client=ClientCall(
+                    method="swap_tables",
+                    args={
+                        "table_id": "{table_id}",
+                        "target_table_id": "{target_table_id}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="result",
+                ),
+                service=ServiceCall(
+                    service_class="StorageService",
+                    service_module="storage_service",
+                    method="swap_tables",
+                    args={
+                        "alias": "{project}",
+                        "table_id": "{table_id}",
+                        "target_table_id": "{target_table_id}",
+                        "branch_id": "{branch}",
+                        "dry_run": "{dry_run}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Storage API rejects swaps on production: branch_id is mandatory.",
+            "Returns a completed storage job dict (operationName=tableSwap); the client polls the async job to completion before returning.",
+            "Aliases keep pointing at the same physical position, exposing the OTHER table's data after the swap.",
+        ],
+    )
+)
+
 # ── storage files ──────��──────────────────────────────────���────────
 
 HintRegistry.register(

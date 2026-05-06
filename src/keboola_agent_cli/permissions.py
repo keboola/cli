@@ -124,6 +124,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.delete-column": "destructive",
     "storage.delete-bucket": "destructive",
     "storage.file-delete": "destructive",
+    "storage.swap-tables": "destructive",
     # Storage descriptions
     "storage.describe-bucket": "write",
     "storage.describe-table": "write",

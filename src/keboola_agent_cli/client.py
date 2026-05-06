@@ -1535,6 +1535,39 @@ class KeboolaClient(BaseHttpClient):
         )
         return self._wait_for_storage_job(response.json())
 
+    def swap_tables(
+        self,
+        table_id: str,
+        target_table_id: str,
+        branch_id: int,
+    ) -> dict[str, Any]:
+        """Swap two storage tables (async, waits for completion, dev branch only).
+
+        Both tables exchange physical positions; aliases keep pointing at the
+        same physical position and therefore expose the OTHER table's data
+        after the swap. The Storage API rejects this on production -- a
+        ``branch_id`` is mandatory.
+
+        The API returns a queued storage job (``operationName: tableSwap``)
+        which this method polls to completion before returning, mirroring
+        ``delete_table`` semantics. (The PHP reference client returns the
+        raw initial response, but the operation is asynchronous on every
+        backend tested -- callers expect a finished swap on return.)
+
+        Args:
+            table_id: Full ID of the first table (e.g. "in.c-bucket.table").
+            target_table_id: Full ID of the second table to swap with.
+            branch_id: Development branch ID. Required by the API.
+
+        Returns:
+            Completed storage job dict.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}"
+        safe_id = quote(table_id, safe="")
+        body = {"targetTableId": target_table_id}
+        response = self._request("POST", f"{prefix}/tables/{safe_id}/swap", json=body)
+        return self._wait_for_storage_job(response.json())
+
     def list_tables_with_metadata(self) -> list[dict[str, Any]]:
         """List all storage tables with columns and metadata.
 

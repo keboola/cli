@@ -1,5 +1,23 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## `storage swap-tables` is dev-branch only and aliases stay put (since v0.28.0)
+
+- `kbagent storage swap-tables --project P --table-id A --target-table-id B
+  --branch <ID>` swaps two tables' physical positions in a dev branch
+  (`POST /v2/storage/branch/{branch}/tables/{id}/swap`).
+- The Storage API rejects this on production. The service refuses with
+  exit 5 / `ConfigError` *before* any HTTP call when neither `--branch`
+  nor an active branch (via `branch use`) is set.
+- **Aliases are NOT transferred.** They keep pointing at the same
+  physical position, so after the swap they expose the OTHER table's
+  data. Plan downstream config rewrites if any aliased consumer relies
+  on schema, not data.
+- Typical use: AI agent profiles a typeless table, builds a typed
+  rebuild called `<name>_change_log` via CTAS in a dev branch, then
+  swaps it back into the original name. After merging the branch the
+  original table now carries the typed schema with no downstream config
+  rewrite required.
+
 ## `data-app deploy` is required after `config update` -- the running container does NOT auto-pick-up new config versions (since v0.27.0)
 
 - `kbagent config update --component-id keboola.data-apps ...` bumps the

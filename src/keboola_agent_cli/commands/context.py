@@ -306,6 +306,13 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
     Delete one or more buckets. --force cascade-deletes tables. Linked/shared buckets protected. Branch-aware.
 
+  kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes]
+    Swap two storage tables in a dev branch (POST /tables/{id}/swap). Both tables exchange physical positions;
+    aliases are NOT transferred (they keep pointing at the same physical position and therefore expose the
+    OTHER table's data after the swap). Use to promote a typed rebuild back into the original name without
+    touching downstream config references. Storage API rejects this on production: --branch (or active branch
+    via 'kbagent branch use') is mandatory. Service guards before any HTTP call when no branch is set.
+
 ### Storage Descriptions
 
   kbagent storage describe-bucket --project NAME --bucket-id ID [--text STR | --file PATH | --stdin] [--branch ID]
