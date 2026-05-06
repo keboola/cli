@@ -66,7 +66,9 @@ a critical failure.
    0.26.0+, `data-app create / deploy / start / stop / delete / password`
    need 0.27.0+, `config update` script[] auto-normalize against #245
    trap needs 0.28.0+, `storage swap-tables` needs 0.28.0+,
-   `storage retype` is a future composite), you
+   `search`, `project info`, `config row-create`, `config row-update`,
+   `config oauth-url` need 0.29.0+, `storage retype` is a future
+   composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
    Ask user to run kbagent update, then re-invoke me."` Do not attempt

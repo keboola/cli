@@ -558,6 +558,7 @@ HintRegistry.register(
                         "name": "{name}",
                         "configuration": "{configuration}",
                         "description": "{description}",
+                        "is_disabled": "{is_disabled}",
                         "branch_id": "{branch}",
                     },
                     result_var="row",
@@ -574,6 +575,7 @@ HintRegistry.register(
                         "name": "{name}",
                         "description": "{description}",
                         "configuration": "{configuration}",
+                        "is_disabled": "{is_disabled}",
                         "branch_id": "{branch}",
                     },
                 ),
@@ -583,6 +585,7 @@ HintRegistry.register(
             "configuration defaults to {} if omitted.",
             "The returned dict includes the new row 'id' assigned by the API.",
             "Rows are sub-units of a configuration; one config may have many rows.",
+            "is_disabled=True creates the row in disabled state (excluded from job runs).",
         ],
     )
 )
@@ -608,6 +611,7 @@ HintRegistry.register(
                         "name": "{name}",
                         "description": "{description}",
                         "configuration": "{configuration}",
+                        "is_disabled": "{is_disabled}",
                         "branch_id": "{branch}",
                     },
                     result_var="row",
@@ -628,6 +632,7 @@ HintRegistry.register(
                         "set_paths": "{set}",
                         "merge": "{merge}",
                         "dry_run": "{dry_run}",
+                        "is_disabled": "{is_disabled}",
                         "branch_id": "{branch}",
                     },
                 ),
@@ -638,7 +643,9 @@ HintRegistry.register(
             "--merge deep-merges the provided configuration into the existing row config.",
             "--dry-run returns {'dry_run': True, 'changes': [...], 'old_configuration': {...}, "
             "'new_configuration': {...}} without writing.",
-            "At least one of --name, --description, --configuration, or --set must be provided.",
+            "--is-disabled / --is-enabled toggle the row's enabled state (mutually exclusive).",
+            "At least one of --name, --description, --configuration, --set, --is-disabled, "
+            "or --is-enabled must be provided.",
         ],
     )
 )
@@ -663,6 +670,7 @@ HintRegistry.register(
                     args={
                         "component_id": "{component_id}",
                         "config_id": "{config_id}",
+                        "redirect_url": "{redirect_url}",
                     },
                     result_var="url",
                     result_hint="str",
@@ -675,6 +683,7 @@ HintRegistry.register(
                         "alias": "{project}",
                         "component_id": "{component_id}",
                         "config_id": "{config_id}",
+                        "redirect_url": "{redirect_url}",
                     },
                 ),
             ),
@@ -685,6 +694,8 @@ HintRegistry.register(
             "Only applicable to OAuth-requiring components (e.g. keboola.ex-google-drive, "
             "keboola.ex-google-analytics-v4, keboola.ex-gmail).",
             "Call this AFTER creating the configuration, not before.",
+            "redirect_url adds a returnUrl query param so the OAuth wizard returns to a "
+            "custom URL after the flow completes.",
         ],
     )
 )

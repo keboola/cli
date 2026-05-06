@@ -1879,6 +1879,11 @@ def config_row_create(
         "--configuration",
         help="Row configuration JSON: inline, @file.json, or - for stdin",
     ),
+    is_disabled: bool = typer.Option(
+        False,
+        "--is-disabled",
+        help="Create the row in disabled state (excluded from job runs)",
+    ),
     branch: int | None = typer.Option(
         None,
         "--branch",
@@ -1899,7 +1904,25 @@ def config_row_create(
       # Create from a JSON file
       kbagent config row-create --project P --component-id C --config-id ID \\
         --name "Row 1" --configuration @row.json
+
+      # Create a disabled row
+      kbagent config row-create --project P --component-id C --config-id ID \\
+        --name "Row 1" --is-disabled
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.row-create",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            name=name,
+            description=description,
+            configuration=configuration,
+            is_disabled=is_disabled,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
 
@@ -1922,6 +1945,7 @@ def config_row_create(
             name=name,
             description=description,
             configuration=config_dict,
+            is_disabled=is_disabled,
             branch_id=branch,
         )
     except ConfigError as exc:
@@ -2005,6 +2029,16 @@ def config_row_update(
         "--dry-run",
         help="Show what would change without applying",
     ),
+    is_disabled: bool = typer.Option(
+        False,
+        "--is-disabled",
+        help="Disable the row (mutually exclusive with --is-enabled)",
+    ),
+    is_enabled: bool = typer.Option(
+        False,
+        "--is-enabled",
+        help="Enable the row (mutually exclusive with --is-disabled)",
+    ),
     branch: int | None = typer.Option(
         None,
         "--branch",
@@ -2036,7 +2070,42 @@ def config_row_update(
       # Preview changes without applying
       kbagent config row-update --project P --component-id C --config-id ID --row-id R \\
         --set 'parameters.table=new_table' --dry-run
+
+      # Disable a row (excludes it from job runs)
+      kbagent config row-update --project P --component-id C --config-id ID --row-id R --is-disabled
     """
+    if is_disabled and is_enabled:
+        formatter = get_formatter(ctx)
+        formatter.error(
+            message="--is-disabled and --is-enabled are mutually exclusive.",
+            error_code=ErrorCode.VALIDATION_ERROR,
+        )
+        raise typer.Exit(code=2) from None
+
+    is_disabled_value: bool | None = None
+    if is_disabled:
+        is_disabled_value = True
+    elif is_enabled:
+        is_disabled_value = False
+
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.row-update",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            row_id=row_id,
+            name=name,
+            description=description,
+            configuration=configuration,
+            set=set_values,
+            merge=merge,
+            dry_run=dry_run,
+            is_disabled=is_disabled_value,
+            branch=branch,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
 
@@ -2078,6 +2147,7 @@ def config_row_update(
             set_paths=parsed_sets,
             merge=effective_merge,
             dry_run=dry_run,
+            is_disabled=is_disabled_value,
             branch_id=branch,
         )
     except ConfigError as exc:
@@ -2139,6 +2209,11 @@ def config_oauth_url(
         "--config-id",
         help="Configuration ID to authorize",
     ),
+    redirect_url: str | None = typer.Option(
+        None,
+        "--redirect-url",
+        help="Optional URL to return to after the OAuth flow completes (sets returnUrl query param)",
+    ),
 ) -> None:
     """Generate an OAuth authorization URL for a component configuration.
 
@@ -2148,7 +2223,21 @@ def config_oauth_url(
     \b
     Examples:
       kbagent config oauth-url --project P --component-id keboola.ex-google-drive --config-id ID
+
+      # Redirect back to a custom URL after the OAuth flow completes
+      kbagent config oauth-url --project P --component-id keboola.ex-google-drive --config-id ID \\
+        --redirect-url https://example.com/oauth-done
     """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.oauth-url",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            redirect_url=redirect_url,
+        )
+
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
 
@@ -2157,6 +2246,7 @@ def config_oauth_url(
             alias=project,
             component_id=component_id,
             config_id=config_id,
+            redirect_url=redirect_url,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)

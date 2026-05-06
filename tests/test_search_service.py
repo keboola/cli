@@ -56,10 +56,14 @@ def _make_verify_response(project_id: int = 1234) -> TokenVerifyResponse:
 def _make_mock_client(
     project_id: int = 1234,
     global_search_result: dict | None = None,
+    has_feature: bool = True,
 ) -> MagicMock:
     mock = MagicMock()
     mock.verify_token.return_value = _make_verify_response(project_id)
     mock.global_search.return_value = global_search_result or {"all": 0, "items": []}
+    # Default: feature is enabled. Tests that need to exercise the feature-gate
+    # branch override this via _make_mock_client(has_feature=False).
+    mock.has_feature.return_value = has_feature
     return mock
 
 
@@ -359,3 +363,149 @@ class TestSearchServiceConfigBased:
 
         assert result["results"] == []
         assert result["stats"]["results_found"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Feature-flag pre-flight check
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalSearchFeatureGate:
+    """Pre-flight has_feature(GLOBAL_SEARCH_FEATURE) check before global_search call."""
+
+    def test_feature_disabled_returns_per_project_error(self, tmp_path: Path) -> None:
+        """A project without the global-search feature gets a clear FEATURE_NOT_ENABLED error."""
+        store = _make_store(tmp_path, {"prod": {"token": TEST_TOKEN}})
+        mock_client = _make_mock_client(has_feature=False)
+        service = SearchService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.search(query="anything")
+
+        assert result["results"] == []
+        assert len(result["errors"]) == 1
+        err = result["errors"][0]
+        assert err["error_code"] == "FEATURE_NOT_ENABLED"
+        assert "global-search" in err["message"]
+        # global_search MUST NOT be called when the feature is off
+        mock_client.global_search.assert_not_called()
+
+    def test_feature_enabled_proceeds_to_api_call(self, tmp_path: Path) -> None:
+        """When the feature is enabled, global_search is called normally."""
+        store = _make_store(tmp_path, {"prod": {"token": TEST_TOKEN}})
+        mock_client = _make_mock_client(
+            has_feature=True,
+            global_search_result={"items": [{"type": "table", "id": "t1", "name": "t1"}]},
+        )
+        service = SearchService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.search(query="anything")
+
+        assert result["errors"] == []
+        assert len(result["results"]) == 1
+        mock_client.global_search.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# data-app vs config post-filter
+# ---------------------------------------------------------------------------
+
+
+class TestDataAppPostFilter:
+    """`--type data-app` only returns configurations of `keboola.data-apps`."""
+
+    def test_data_app_filters_to_data_apps_component_id(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path, {"prod": {"token": TEST_TOKEN}})
+        mock_client = _make_mock_client(
+            global_search_result={
+                "items": [
+                    {
+                        "type": "configuration",
+                        "id": "cfg-1",
+                        "name": "Data App",
+                        "componentId": "keboola.data-apps",
+                    },
+                    {
+                        "type": "configuration",
+                        "id": "cfg-2",
+                        "name": "MySQL Extractor",
+                        "componentId": "keboola.ex-mysql",
+                    },
+                ]
+            }
+        )
+        service = SearchService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.search(query="x", item_types=["data-app"])
+
+        # Only the keboola.data-apps row survives the post-filter.
+        assert len(result["results"]) == 1
+        assert result["results"][0]["component_id"] == "keboola.data-apps"
+
+    def test_config_does_not_post_filter(self, tmp_path: Path) -> None:
+        """`--type config` returns all configurations (no post-filter)."""
+        store = _make_store(tmp_path, {"prod": {"token": TEST_TOKEN}})
+        mock_client = _make_mock_client(
+            global_search_result={
+                "items": [
+                    {
+                        "type": "configuration",
+                        "id": "cfg-1",
+                        "name": "Data App",
+                        "componentId": "keboola.data-apps",
+                    },
+                    {
+                        "type": "configuration",
+                        "id": "cfg-2",
+                        "name": "MySQL Extractor",
+                        "componentId": "keboola.ex-mysql",
+                    },
+                ]
+            }
+        )
+        service = SearchService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.search(query="x", item_types=["config"])
+
+        assert len(result["results"]) == 2
+
+    def test_config_and_data_app_together_keeps_all_configs(self, tmp_path: Path) -> None:
+        """When both `config` and `data-app` are requested, NO post-filter is applied."""
+        store = _make_store(tmp_path, {"prod": {"token": TEST_TOKEN}})
+        mock_client = _make_mock_client(
+            global_search_result={
+                "items": [
+                    {
+                        "type": "configuration",
+                        "id": "cfg-1",
+                        "name": "Data App",
+                        "componentId": "keboola.data-apps",
+                    },
+                    {
+                        "type": "configuration",
+                        "id": "cfg-2",
+                        "name": "MySQL Extractor",
+                        "componentId": "keboola.ex-mysql",
+                    },
+                ]
+            }
+        )
+        service = SearchService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.search(query="x", item_types=["config", "data-app"])
+
+        assert len(result["results"]) == 2

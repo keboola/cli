@@ -325,6 +325,7 @@ class TestGetOauthUrl:
         client.get_oauth_url.assert_called_once_with(
             component_id="keboola.ex-gmail",
             config_id="gmail-cfg",
+            redirect_url=None,
         )
 
     def test_api_error_propagates(self, tmp_config_dir: Path) -> None:
@@ -340,3 +341,130 @@ class TestGetOauthUrl:
                 component_id="keboola.ex-google-drive",
                 config_id="cfg-001",
             )
+
+    def test_redirect_url_propagates_to_client(self, tmp_config_dir: Path) -> None:
+        """When redirect_url is provided, it is forwarded to the client."""
+        service, client = _make_service(tmp_config_dir)
+
+        result = service.get_oauth_url(
+            alias="prod",
+            component_id="keboola.ex-google-drive",
+            config_id="cfg-001",
+            redirect_url="https://example.com/oauth-done",
+        )
+
+        client.get_oauth_url.assert_called_once_with(
+            component_id="keboola.ex-google-drive",
+            config_id="cfg-001",
+            redirect_url="https://example.com/oauth-done",
+        )
+        assert result["redirect_url"] == "https://example.com/oauth-done"
+
+    def test_redirect_url_omitted_from_result_when_not_provided(self, tmp_config_dir: Path) -> None:
+        """Without redirect_url, the result dict does NOT contain a redirect_url key."""
+        service, _client = _make_service(tmp_config_dir)
+
+        result = service.get_oauth_url(
+            alias="prod",
+            component_id="keboola.ex-google-drive",
+            config_id="cfg-001",
+        )
+
+        assert "redirect_url" not in result
+
+
+# ---------------------------------------------------------------------------
+# is_disabled / is_enabled tests
+# ---------------------------------------------------------------------------
+
+
+class TestRowIsDisabledFlag:
+    """Tests for ``--is-disabled`` / ``--is-enabled`` semantics."""
+
+    def test_create_with_is_disabled_true(self, tmp_config_dir: Path) -> None:
+        """create_config_row with is_disabled=True forwards the flag to the client."""
+        service, client = _make_service(tmp_config_dir)
+
+        service.create_config_row(
+            alias="prod",
+            component_id="keboola.ex-mysql",
+            config_id="cfg-001",
+            name="My Row",
+            is_disabled=True,
+        )
+
+        kwargs = client.create_config_row.call_args.kwargs
+        assert kwargs["is_disabled"] is True
+
+    def test_create_default_is_not_disabled(self, tmp_config_dir: Path) -> None:
+        """create_config_row defaults to is_disabled=False."""
+        service, client = _make_service(tmp_config_dir)
+
+        service.create_config_row(
+            alias="prod",
+            component_id="keboola.ex-mysql",
+            config_id="cfg-001",
+            name="My Row",
+        )
+
+        kwargs = client.create_config_row.call_args.kwargs
+        assert kwargs["is_disabled"] is False
+
+    def test_update_with_is_disabled_true(self, tmp_config_dir: Path) -> None:
+        """update_config_row with is_disabled=True forwards True to the client."""
+        service, client = _make_service(tmp_config_dir)
+
+        service.update_config_row(
+            alias="prod",
+            component_id="keboola.ex-mysql",
+            config_id="cfg-001",
+            row_id="row-001",
+            is_disabled=True,
+        )
+
+        kwargs = client.update_config_row.call_args.kwargs
+        assert kwargs["is_disabled"] is True
+
+    def test_update_with_is_disabled_false_means_enable(self, tmp_config_dir: Path) -> None:
+        """update_config_row with is_disabled=False forwards False (re-enable)."""
+        service, client = _make_service(tmp_config_dir)
+
+        service.update_config_row(
+            alias="prod",
+            component_id="keboola.ex-mysql",
+            config_id="cfg-001",
+            row_id="row-001",
+            is_disabled=False,
+        )
+
+        kwargs = client.update_config_row.call_args.kwargs
+        assert kwargs["is_disabled"] is False
+
+    def test_update_with_is_disabled_none_omits_field(self, tmp_config_dir: Path) -> None:
+        """update_config_row with is_disabled=None forwards None (no change)."""
+        service, client = _make_service(tmp_config_dir)
+
+        service.update_config_row(
+            alias="prod",
+            component_id="keboola.ex-mysql",
+            config_id="cfg-001",
+            row_id="row-001",
+            name="Just rename",
+        )
+
+        kwargs = client.update_config_row.call_args.kwargs
+        assert kwargs["is_disabled"] is None
+
+    def test_update_with_only_is_disabled_is_valid(self, tmp_config_dir: Path) -> None:
+        """is_disabled alone (no other field) does NOT raise the 'must provide' error."""
+        service, client = _make_service(tmp_config_dir)
+
+        service.update_config_row(
+            alias="prod",
+            component_id="keboola.ex-mysql",
+            config_id="cfg-001",
+            row_id="row-001",
+            is_disabled=True,
+        )
+
+        client.update_config_row.assert_called_once()

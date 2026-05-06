@@ -31,6 +31,8 @@ from .constants import (
     IMPORT_JOB_MAX_WAIT,
     JOB_POLL_CURVE,
     METADATA_NOT_FOUND,
+    OAUTH_HOST,
+    OAUTH_PATH,
     QUERY_JOB_MAX_WAIT,
     QUERY_JOB_POLL_INTERVAL,
     STORAGE_JOB_MAX_WAIT,
@@ -334,6 +336,7 @@ class KeboolaClient(BaseHttpClient):
         self,
         component_id: str,
         config_id: str,
+        redirect_url: str | None = None,
     ) -> str:
         """Generate an OAuth authorization URL for a component configuration.
 
@@ -343,6 +346,8 @@ class KeboolaClient(BaseHttpClient):
         Args:
             component_id: The component ID (e.g. 'keboola.ex-google-drive').
             config_id: The configuration ID to authorize.
+            redirect_url: Optional URL the OAuth wizard returns to after the
+                flow completes (passed as the ``returnUrl`` query param).
 
         Returns:
             The full OAuth authorization URL as a string.
@@ -356,18 +361,13 @@ class KeboolaClient(BaseHttpClient):
         )
         sapi_token = token_response["token"]
 
-        query_params = urlencode({"token": sapi_token, "sapiUrl": self._stack_url})
+        query: dict[str, str] = {"token": sapi_token, "sapiUrl": self._stack_url}
+        if redirect_url:
+            query["returnUrl"] = redirect_url
+        query_params = urlencode(query)
         fragment = f"/{component_id}/{config_id}"
 
-        return urlunsplit(
-            (
-                "https",
-                "external.keboola.com",
-                "/oauth/index.html",
-                query_params,
-                fragment,
-            )
-        )
+        return urlunsplit(("https", OAUTH_HOST, OAUTH_PATH, query_params, fragment))
 
     def get_project_features(self) -> frozenset[str]:
         """Return the project's feature flags, fetching once per client lifetime.
@@ -765,24 +765,38 @@ class KeboolaClient(BaseHttpClient):
         name: str,
         configuration: dict[str, Any],
         description: str = "",
+        is_disabled: bool = False,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Create a new configuration row.
 
         POST /v2/storage/[branch/{id}/]components/{comp_id}/configs/{config_id}/rows
 
+        Args:
+            component_id: The component ID.
+            config_id: The parent configuration ID.
+            name: Row name.
+            configuration: Row-level configuration dict.
+            description: Optional row description.
+            is_disabled: When True, the row is created in disabled state and
+                excluded from job runs until re-enabled.
+            branch_id: Optional dev branch ID.
+
         Returns:
             Created row dict including the assigned 'id'.
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        data: dict[str, Any] = {
+            "name": name,
+            "description": description,
+            "configuration": json.dumps(configuration),
+        }
+        if is_disabled:
+            data["isDisabled"] = "1"
         resp = self._request(
             "POST",
             f"{prefix}/components/{quote(component_id)}/configs/{quote(config_id)}/rows",
-            data={
-                "name": name,
-                "description": description,
-                "configuration": json.dumps(configuration),
-            },
+            data=data,
         )
         return resp.json()
 
@@ -794,12 +808,17 @@ class KeboolaClient(BaseHttpClient):
         name: str | None = None,
         configuration: dict[str, Any] | None = None,
         description: str | None = None,
+        is_disabled: bool | None = None,
         change_description: str = "",
         branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Update an existing configuration row.
 
         PUT /v2/storage/[branch/{id}/]components/{comp_id}/configs/{config_id}/rows/{row_id}
+
+        Args:
+            is_disabled: When True, disable the row; when False, enable it;
+                when None, leave the current state unchanged.
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         data: dict[str, Any] = {}
@@ -809,6 +828,8 @@ class KeboolaClient(BaseHttpClient):
             data["description"] = description
         if configuration is not None:
             data["configuration"] = json.dumps(configuration)
+        if is_disabled is not None:
+            data["isDisabled"] = "1" if is_disabled else "0"
         if change_description:
             data["changeDescription"] = change_description
         resp = self._request(

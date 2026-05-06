@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from ..constants import GLOBAL_SEARCH_FEATURE
 from ..errors import KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService, sanitize_unexpected_error
@@ -28,9 +29,15 @@ USER_TYPE_TO_API_TYPES: dict[str, list[str]] = {
     "table": ["table"],
     "config": ["configuration"],
     "flow": ["flow"],
-    "data-app": ["configuration"],  # data-apps are configurations of keboola.data-apps component
+    # data-app reuses the "configuration" API type; results are post-filtered
+    # to component_id == "keboola.data-apps" in `_normalise_item` so users
+    # asking for --type data-app do not get every other configuration too.
+    "data-app": ["configuration"],
     "transformation": ["transformation"],
 }
+
+# Component ID used to identify data-app configurations after post-filtering.
+DATA_APP_COMPONENT_ID = "keboola.data-apps"
 
 # All API types for unfiltered search.
 ALL_API_TYPES: list[str] = [
@@ -41,9 +48,6 @@ ALL_API_TYPES: list[str] = [
     "configuration",
     "configuration-row",
 ]
-
-# Feature flag required for global-search endpoint.
-GLOBAL_SEARCH_FEATURE = "global-search"
 
 
 class SearchService(BaseService):
@@ -108,7 +112,9 @@ class SearchService(BaseService):
         def worker(
             alias: str, project: ProjectConfig
         ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, str]]:
-            return self._search_project_textual(alias, project, query, api_types, limit)
+            return self._search_project_textual(
+                alias, project, query, api_types, limit, item_types=item_types
+            )
 
         successes, errors = self._run_parallel(projects, worker)
 
@@ -135,6 +141,7 @@ class SearchService(BaseService):
         query: str,
         api_types: list[str],
         limit: int,
+        item_types: list[str] | None = None,
     ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, str]]:
         """Worker: run textual search against a single project (thread-safe)."""
         client = self._client_factory(project.stack_url, project.token)
@@ -152,6 +159,22 @@ class SearchService(BaseService):
                     },
                 )
 
+            # Pre-flight: refuse fast on stacks/projects without the global-search
+            # feature instead of letting a raw 404/403 confuse the caller.
+            if not client.has_feature(GLOBAL_SEARCH_FEATURE):
+                return (
+                    alias,
+                    {
+                        "project_alias": alias,
+                        "error_code": "FEATURE_NOT_ENABLED",
+                        "message": (
+                            f"Project does not have the '{GLOBAL_SEARCH_FEATURE}' feature "
+                            "enabled. Use --search-type config-based for body scanning, or "
+                            "ask a Keboola admin to enable the feature."
+                        ),
+                    },
+                )
+
             raw = client.global_search(
                 query=query,
                 project_id=project_id,
@@ -160,6 +183,18 @@ class SearchService(BaseService):
             )
             items = raw.get("items", [])
             results = [_normalise_item(alias, item) for item in items]
+
+            # Post-filter when --type data-app was requested without --type config:
+            # data-app maps to the same API type as config, so without filtering
+            # users would receive every configuration in the project.
+            if item_types and "data-app" in item_types and "config" not in item_types:
+                results = [
+                    r
+                    for r in results
+                    if r.get("type") != "configuration"
+                    or r.get("component_id") == DATA_APP_COMPONENT_ID
+                ]
+
             return alias, results, True
 
         except KeboolaApiError as exc:

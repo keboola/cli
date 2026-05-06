@@ -544,3 +544,137 @@ class TestConfigOauthUrlCli:
             ],
         )
         assert result.exit_code != 0
+
+    def test_redirect_url_propagates(self, tmp_config_dir: Path) -> None:
+        """--redirect-url is forwarded to the service and surfaced in JSON output."""
+        store = setup_single_project(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.get_oauth_url.return_value = (
+            "https://external.keboola.com/oauth/index.html"
+            "?token=abc&sapiUrl=https%3A%2F%2Fconnection.keboola.com"
+            "&returnUrl=https%3A%2F%2Fexample.com%2Fdone"
+            "#/keboola.ex-google-drive/cfg-001"
+        )
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.config.get_service",
+                lambda ctx, name: service,
+            )
+            result = _invoke(
+                tmp_config_dir,
+                "oauth-url",
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-google-drive",
+                    "--config-id",
+                    "cfg-001",
+                    "--redirect-url",
+                    "https://example.com/done",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        kwargs = mock_client.get_oauth_url.call_args.kwargs
+        assert kwargs["redirect_url"] == "https://example.com/done"
+        output = json.loads(result.output)
+        assert output["data"]["redirect_url"] == "https://example.com/done"
+
+
+# ---------------------------------------------------------------------------
+# is_disabled / is_enabled CLI tests
+# ---------------------------------------------------------------------------
+
+
+class TestRowDisableFlagsCli:
+    """CLI-level tests for --is-disabled / --is-enabled on row-create / row-update."""
+
+    def test_create_with_is_disabled(self, tmp_config_dir: Path) -> None:
+        """row-create --is-disabled forwards is_disabled=True to the client."""
+        service = _make_service(tmp_config_dir)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.config.get_service",
+                lambda ctx, name: service,
+            )
+            result = _invoke(
+                tmp_config_dir,
+                "row-create",
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-mysql",
+                    "--config-id",
+                    "cfg-001",
+                    "--name",
+                    "New Row",
+                    "--is-disabled",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+
+    def test_update_is_disabled_and_is_enabled_mutually_exclusive(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Passing both --is-disabled and --is-enabled exits 2."""
+        service = _make_service(tmp_config_dir)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.config.get_service",
+                lambda ctx, name: service,
+            )
+            result = _invoke(
+                tmp_config_dir,
+                "row-update",
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-mysql",
+                    "--config-id",
+                    "cfg-001",
+                    "--row-id",
+                    "row-001",
+                    "--is-disabled",
+                    "--is-enabled",
+                ],
+            )
+
+        assert result.exit_code == 2
+
+    def test_update_is_enabled_alone_is_valid(self, tmp_config_dir: Path) -> None:
+        """row-update --is-enabled (without other flags) is valid; forwards False."""
+        service = _make_service(tmp_config_dir)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.config.get_service",
+                lambda ctx, name: service,
+            )
+            result = _invoke(
+                tmp_config_dir,
+                "row-update",
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-mysql",
+                    "--config-id",
+                    "cfg-001",
+                    "--row-id",
+                    "row-001",
+                    "--is-enabled",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output

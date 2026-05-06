@@ -1392,6 +1392,7 @@ class ConfigService(BaseService):
         name: str,
         description: str = "",
         configuration: dict[str, Any] | None = None,
+        is_disabled: bool = False,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Create a new configuration row.
@@ -1403,6 +1404,7 @@ class ConfigService(BaseService):
             name: Row name (required by Storage API).
             description: Optional row description.
             configuration: Row-level configuration dict. Defaults to empty dict.
+            is_disabled: Create the row in disabled state (excluded from job runs).
             branch_id: If set, create in a specific dev branch. Falls back to
                 the project's active branch when None.
 
@@ -1424,6 +1426,7 @@ class ConfigService(BaseService):
                 name=name,
                 configuration=configuration if configuration is not None else {},
                 description=description,
+                is_disabled=is_disabled,
                 branch_id=effective_branch_id,
             )
         finally:
@@ -1447,6 +1450,7 @@ class ConfigService(BaseService):
         set_paths: list[tuple[str, Any]] | None = None,
         merge: bool = False,
         dry_run: bool = False,
+        is_disabled: bool | None = None,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Update an existing configuration row.
@@ -1463,6 +1467,8 @@ class ConfigService(BaseService):
             merge: If True, deep-merge *configuration* into the existing row
                    config instead of replacing.
             dry_run: If True, compute and return the diff without applying.
+            is_disabled: When True, disable the row; when False, enable it;
+                   when None, leave the current state unchanged.
             branch_id: If set, update in a specific dev branch. Falls back to
                 the project's active branch when None.
 
@@ -1476,14 +1482,15 @@ class ConfigService(BaseService):
             KeboolaApiError: If the API call fails or no changes are requested.
         """
         has_content = configuration is not None or bool(set_paths)
-        has_metadata = name is not None or description is not None
+        has_metadata = name is not None or description is not None or is_disabled is not None
 
         if not has_content and not has_metadata:
             raise KeboolaApiError(
                 status_code=400,
                 error_code=ErrorCode.VALIDATION_ERROR,
                 message=(
-                    "At least one of --name, --description, --configuration, or --set must be provided."
+                    "At least one of --name, --description, --configuration, --set, "
+                    "--is-disabled, or --is-enabled must be provided."
                 ),
             )
 
@@ -1516,6 +1523,10 @@ class ConfigService(BaseService):
                     old_cfg = json.loads(old_cfg) if old_cfg else {}
                 new_cfg = final_config if final_config is not None else old_cfg
                 changes = compute_diff(old_cfg, new_cfg)
+                if is_disabled is not None:
+                    old_state = bool(current_row.get("isDisabled", False))
+                    if old_state != is_disabled:
+                        changes.append(f"isDisabled: {old_state} -> {is_disabled}")
                 return {
                     "dry_run": True,
                     "project_alias": alias,
@@ -1542,6 +1553,7 @@ class ConfigService(BaseService):
                 name=name,
                 description=description,
                 configuration=final_config,
+                is_disabled=is_disabled,
                 change_description=change_desc,
                 branch_id=effective_branch_id,
             )
@@ -1599,6 +1611,7 @@ class ConfigService(BaseService):
         alias: str,
         component_id: str,
         config_id: str,
+        redirect_url: str | None = None,
     ) -> dict[str, Any]:
         """Generate an OAuth authorization URL for a component configuration.
 
@@ -1609,9 +1622,12 @@ class ConfigService(BaseService):
             alias: Project alias.
             component_id: The component ID (e.g. 'keboola.ex-google-drive').
             config_id: The configuration ID to authorize.
+            redirect_url: Optional URL the OAuth wizard returns to after the
+                flow completes (passed as the ``returnUrl`` query param).
 
         Returns:
-            Dict with 'url', 'component_id', 'config_id', 'project_alias'.
+            Dict with 'url', 'component_id', 'config_id', 'project_alias',
+            and ``redirect_url`` when provided.
 
         Raises:
             ConfigError: If the alias is not found.
@@ -1624,13 +1640,17 @@ class ConfigService(BaseService):
             url = client.get_oauth_url(
                 component_id=component_id,
                 config_id=config_id,
+                redirect_url=redirect_url,
             )
         finally:
             client.close()
 
-        return {
+        result: dict[str, Any] = {
             "url": url,
             "component_id": component_id,
             "config_id": config_id,
             "project_alias": alias,
         }
+        if redirect_url:
+            result["redirect_url"] = redirect_url
+        return result
