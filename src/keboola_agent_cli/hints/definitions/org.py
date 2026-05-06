@@ -32,7 +32,9 @@ HintRegistry.register(
             ),
         ],
         notes=[
-            "Uses the Manage API with KBC_MANAGE_API_TOKEN (not Storage token).",
+            "Uses the Manage API token (not Storage token). Default-deny on env "
+            "since kbagent v0.28.0: pass top-level `--allow-env-manage-token` "
+            "to read KBC_MANAGE_API_TOKEN, or run interactively (TTY hidden prompt).",
             "Service layer creates per-project tokens and registers them in CLI config.",
         ],
     )

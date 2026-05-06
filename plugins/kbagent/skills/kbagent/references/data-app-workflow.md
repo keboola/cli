@@ -58,7 +58,9 @@ with:
 
 ```bash
 kbagent data-app password --project prod --app-id <ID>
-# Requires KBC_MANAGE_API_TOKEN in addition to the project's Storage token.
+# Manage token: interactive prompt by default (since v0.29.0); for CI add
+# --allow-env-manage-token alongside KBC_MANAGE_API_TOKEN. Storage token
+# is read from .kbagent/config.json as usual.
 ```
 
 The simpleAuth password CANNOT be rotated (writeup §11.2). To change it,
@@ -114,6 +116,68 @@ kbagent data-app deploy --project prod --app-id 12345678 \
 (rollback). Subsequent deploys without the flag will jump back to the
 latest.
 
+### Pre-flight repo validation (since v0.29.0)
+
+```bash
+kbagent data-app validate-repo \
+  --git-repo https://github.com/myorg/dashboard \
+  --git-branch main \
+  --git-pat-env GITHUB_PAT_DATAAPP \
+  --type python-js
+```
+
+Walks the repo via the GitHub Contents + Trees API and emits
+BLOCKING / WARN / OK per check (Golden-Rule structure, no `pip install`
+in `setup.sh`, `requires-python` consistency, nginx/app port match,
+etc.). Each check carries a citation back to the help-doc anchor
+(<https://help.keboola.com/data-apps/python-js/>). Run before
+`data-app create` so you don't burn a deploy cycle on a misconfigured
+repo. Public repos: drop `--git-pat-env` and use `--git-public`. Total
+GitHub call budget per run is ≤5 (1 tree + ≤4 contents) regardless of repo size, so the
+60/hour unauth limit rarely fires; pass a PAT for CI loops.
+
+### Manage app-runtime secrets (since v0.29.0)
+
+```bash
+# Set two secrets at once. Plaintext values; the CLI encrypts under
+# THIS project's KMS via the Encryption API before writing to Storage.
+kbagent --json data-app secrets-set \
+  --project prod --app-id 12345678 \
+  --secret '#ANTHROPIC_API_KEY=sk-ant-...' \
+  --secret '#my-database-url=postgres://...'
+
+# Then redeploy so the running container picks up the new env. The
+# JSON envelope from secrets-set carries a `next_step` field with the
+# exact command; suppress it with --no-hint-next for scripted callers.
+kbagent data-app deploy --project prod --app-id 12345678 --wait
+
+# Inspect what's set without echoing the encrypted ciphertext:
+kbagent data-app secrets-list --project prod --app-id 12345678
+# -> #ANTHROPIC_API_KEY -> env ANTHROPIC_API_KEY
+# -> #my-database-url  -> env MY_DATABASE_URL
+
+# Confirm presence of one key (NEVER decrypts):
+kbagent data-app secrets-get --project prod --app-id 12345678 --key '#ANTHROPIC_API_KEY'
+
+# Remove (idempotent -- absent keys exit 0 with removed=0):
+kbagent data-app secrets-remove --project prod --app-id 12345678 \
+  --key '#my-database-url' --yes
+```
+
+The runtime exposes each secret as an env var with `#` stripped, `-`
+replaced with `_`, and uppercased
+(<https://help.keboola.com/data-apps/python-js/>). `secrets-set` does
+read-modify-write at the service layer (Storage `merge=True` is
+shallow at the top level only and would clobber siblings nested under
+`parameters.dataApp.secrets`); every untouched key in the config body
+is preserved bit-identical. Encryption is per-project KMS, fail-closed:
+if the Encryption API does not return a `KBC::Project*` ciphertext,
+the command aborts with `ENCRYPTION_FAILED` and Storage is never
+written. Setting a key whose derived env-var name collides with the
+runtime-injected set (`KBC_TOKEN`, `KBC_URL` for sure; more TODO
+follow-up) emits a stderr WARN -- the platform value silently shadows
+yours at runtime.
+
 ## Gotchas encoded in the CLI (so you don't have to think about them)
 
 1. **§9 redeploy contract** — `data-app deploy` always sends the
@@ -156,15 +220,24 @@ latest.
 | Wake an auto-suspended app | `data-app start --app-id N` |
 | Pause a running app temporarily | `data-app stop --app-id N` |
 | Read the simpleAuth password | `data-app password --app-id N` (needs Manage token) |
+| Set or rotate app-runtime secrets | `data-app secrets-set --app-id N --secret '#KEY=VAL'` then `data-app deploy --wait` |
+| Inspect what secrets are set | `data-app secrets-list --app-id N` (metadata only, never decrypts) |
+| Confirm one secret is present | `data-app secrets-get --app-id N --key '#KEY'` (metadata only) |
+| Remove a secret | `data-app secrets-remove --app-id N --key '#KEY' --yes` (idempotent) |
+| Pre-flight a repo before create | `data-app validate-repo --git-repo URL` (GitHub-only, python-js for now) |
 | Tear it all down | `data-app delete --app-id N` (cascades to Storage config) |
 
 ## What this command group deliberately does NOT cover
 
 - **Reading the build / runtime log** — the Data Science API does not
-  expose Terminal Logs as JSON; only the Keboola UI ("Terminal Log" tab)
-  shows them. If `data-app deploy --wait` exits with
-  `DATA_APP_BUILD_FAILED`, the next step is to open the UI link surfaced
-  in the error message.
+  expose Terminal Logs as JSON; only the Keboola UI ("Terminal Log" tab
+  at https://help.keboola.com/data-apps/terminal-log-tab/) shows them.
+  If `data-app deploy --wait` exits with `DATA_APP_BUILD_FAILED`, the
+  next step is to open the UI link surfaced in the error message.
+  A `data-app logs` command + auto-log-dump on deploy failure are
+  tracked as a follow-up: see `padak/keboola_agent_cli`
+  [issue #240](https://github.com/padak/keboola_agent_cli/issues/240)
+  (needs platform-side API exposure first).
 - **Updating size / auto-suspend / git settings** — those live on the
   Storage config body, not the deployment record. Use
   `kbagent config update --component-id keboola.data-apps --config-id ID

@@ -8,15 +8,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import click
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from ..constants import (
+    DEFAULT_INVITE_WORKERS,
     DEFAULT_STACK_URL,
     DEFAULT_TOKEN_DESCRIPTION,
     ENV_KBC_STORAGE_API_URL,
     ENV_KBC_TOKEN,
+    PROJECT_ROLES,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
@@ -394,7 +397,9 @@ def project_refresh(
     """Refresh expired or invalid Storage API tokens.
 
     Creates new tokens via the Manage API and updates the local config.
-    Requires a Manage API token (via KBC_MANAGE_API_TOKEN env var or interactive prompt).
+    Requires a Manage API token: interactive hidden prompt by default
+    (since 0.28.0); pass top-level --allow-env-manage-token to read
+    KBC_MANAGE_API_TOKEN from env (CI/CD).
 
     \b
     Examples:
@@ -420,7 +425,7 @@ def project_refresh(
         )
         raise typer.Exit(code=2)
 
-    manage_token = resolve_manage_token()
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
 
     aliases = [project] if project else None
 
@@ -652,3 +657,495 @@ def project_description_set(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
+
+
+# ── Project members & invitations (since v0.26.1) ─────────────────────
+
+
+def _format_invite_result(console: Console, data: dict[str, Any]) -> None:
+    """Single-shot invite result."""
+    status = data.get("status", "")
+    if status == "ok":
+        console.print(
+            f"[bold green]Invited[/bold green] {data['email']} to "
+            f"[cyan]{data['alias']}[/cyan] as [yellow]{data['role']}[/yellow] "
+            f"(invitation_id={data.get('invitation_id')})."
+        )
+    elif status == "noop":
+        console.print(
+            f"[yellow]No-op[/yellow]: {data['email']} on [cyan]{data['alias']}[/cyan] "
+            f"-- {data.get('note', '')}."
+        )
+    elif status == "dry_run":
+        console.print(
+            f"[dim]Would invite[/dim] {data['email']} to [cyan]{data['alias']}[/cyan] "
+            f"as [yellow]{data['role']}[/yellow]."
+        )
+    else:
+        console.print(f"[bold red]Unexpected status[/bold red]: {data!r}")
+
+
+def _format_bulk_invite_result(console: Console, data: dict[str, Any]) -> None:
+    """Render the bulk-invite summary table."""
+    console.print(
+        f"\n[bold]Bulk invite:[/bold] total={data['total']} "
+        f"succeeded={data['succeeded']} noop={data['noop']} failed={data['failed']}"
+        + (" [dim](dry-run)[/dim]" if data.get("dry_run") else "")
+    )
+    rows = data.get("rows") or []
+    if not rows:
+        return
+    table = Table(title="Per-row results")
+    table.add_column("Status", style="bold")
+    table.add_column("Email")
+    table.add_column("Project")
+    table.add_column("Role")
+    table.add_column("Note")
+    status_style = {"ok": "green", "noop": "yellow", "failed": "red"}
+    for row in rows:
+        status = row.get("status", "")
+        style = status_style.get(status, "white")
+        table.add_row(
+            f"[{style}]{status}[/{style}]",
+            row.get("email", ""),
+            row.get("project", ""),
+            row.get("role", ""),
+            row.get("note", ""),
+        )
+    console.print(table)
+
+
+def _format_member_list(console: Console, data: dict[str, Any]) -> None:
+    members = data.get("members") or []
+    table = Table(title=f"Members of {data.get('alias')} (project_id={data.get('project_id')})")
+    table.add_column("ID", justify="right", style="dim")
+    table.add_column("Email")
+    table.add_column("Role", style="yellow")
+    table.add_column("Status")
+    table.add_column("MFA", justify="center")
+    for m in members:
+        table.add_row(
+            str(m.get("id", "")),
+            m.get("email", ""),
+            m.get("role", ""),
+            m.get("status", ""),
+            "yes" if m.get("mfa_enabled") else "no",
+        )
+    console.print(table)
+    pending = data.get("pending_invitations")
+    if pending:
+        ptable = Table(title="Pending invitations")
+        ptable.add_column("ID", justify="right", style="dim")
+        ptable.add_column("Email")
+        ptable.add_column("Role", style="yellow")
+        ptable.add_column("Reason")
+        for p in pending:
+            ptable.add_row(
+                str(p.get("id", "")),
+                p.get("user", {}).get("email", ""),
+                p.get("role", ""),
+                p.get("reason", ""),
+            )
+        console.print(ptable)
+
+
+def _format_invitation_list(console: Console, data: dict[str, Any]) -> None:
+    invitations = data.get("invitations") or []
+    if not invitations:
+        console.print(f"No pending invitations for [cyan]{data.get('alias')}[/cyan].")
+        return
+    table = Table(
+        title=f"Pending invitations for {data.get('alias')} (project_id={data.get('project_id')})"
+    )
+    table.add_column("ID", justify="right", style="dim")
+    table.add_column("Email")
+    table.add_column("Role", style="yellow")
+    table.add_column("Reason")
+    for inv in invitations:
+        table.add_row(
+            str(inv.get("id", "")),
+            inv.get("user", {}).get("email", ""),
+            inv.get("role", ""),
+            inv.get("reason", ""),
+        )
+    console.print(table)
+
+
+@project_app.command("invite")
+def project_invite(
+    ctx: typer.Context,
+    project: str | None = typer.Option(
+        None, "--project", "-p", help="Project alias to invite the user to (single-shot mode)"
+    ),
+    email: str | None = typer.Option(
+        None, "--email", "-e", help="Email address of the user to invite"
+    ),
+    role: str | None = typer.Option(
+        None,
+        "--role",
+        "-r",
+        click_type=click.Choice(list(PROJECT_ROLES)),
+        help="Role to grant: " + " | ".join(PROJECT_ROLES),
+    ),
+    reason: str | None = typer.Option(
+        None, "--reason", help="Optional human-readable reason attached to the invitation"
+    ),
+    from_csv: Path | None = typer.Option(
+        None,
+        "--from-csv",
+        help="CSV file with columns email, project (alias or numeric ID), role[, reason]",
+    ),
+    default_role: str | None = typer.Option(
+        None,
+        "--default-role",
+        click_type=click.Choice(list(PROJECT_ROLES)),
+        help="Role to apply when a CSV row has no role column",
+    ),
+    workers: int = typer.Option(
+        DEFAULT_INVITE_WORKERS,
+        "--workers",
+        min=1,
+        max=32,
+        help="Parallel workers for --from-csv (default 8)",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without sending invitations"),
+) -> None:
+    """Invite a user (or many users via CSV) to one or more projects.
+
+    \b
+    Single-shot:
+        kbagent project invite --project prod --email a@b.com --role admin
+
+    \b
+    Bulk (one row per email; CSV header required):
+        kbagent project invite --from-csv participants.csv --default-role guest
+    """
+    formatter = get_formatter(ctx)
+
+    if from_csv and (project or email):
+        formatter.error(
+            message="--from-csv is mutually exclusive with --project / --email",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+    if not from_csv and not (project and email and role):
+        formatter.error(
+            message="Provide --project, --email, and --role for single-shot invite "
+            "(or use --from-csv for bulk).",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+
+    if should_hint(ctx):
+        if from_csv:
+            formatter.error(
+                message=(
+                    "--hint is not available for `project invite --from-csv`. "
+                    "Use --hint client/service on a single-shot invite "
+                    "(--project + --email + --role) instead, or open the "
+                    "MemberService source for the bulk pattern."
+                ),
+                error_code=ErrorCode.USAGE_ERROR,
+            )
+            raise typer.Exit(code=2)
+        emit_hint(
+            ctx,
+            "project.invite",
+            project=project,
+            project_id="<resolved-from-config>",
+            email=email,
+            role=role,
+            reason=reason or "",
+        )
+        return
+
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
+    service = get_service(ctx, "member_service")
+
+    try:
+        if from_csv:
+            result = service.invite_bulk(
+                manage_token=manage_token,
+                csv_path=from_csv,
+                default_role=default_role,
+                workers=workers,
+                dry_run=dry_run,
+            )
+            payload = result.model_dump()
+            formatter.output(payload, _format_bulk_invite_result)
+            return
+
+        result = service.invite(
+            manage_token=manage_token,
+            alias=project,
+            email=email,
+            role=role,
+            reason=reason,
+            dry_run=dry_run,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
+        raise typer.Exit(code=2) from None
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+        )
+        raise typer.Exit(code=exit_code) from None
+
+    formatter.output(result, _format_invite_result)
+
+
+@project_app.command("member-list")
+def project_member_list(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", "-p", help="Project alias to list members for"),
+    include_pending: bool = typer.Option(
+        False, "--include-pending", help="Also list pending (unaccepted) invitations"
+    ),
+) -> None:
+    """List active members of a project (and optionally pending invitations)."""
+    formatter = get_formatter(ctx)
+
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "project.member-list",
+            project=project,
+            project_id="<resolved-from-config>",
+            include_pending=str(include_pending),
+        )
+        return
+
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
+    service = get_service(ctx, "member_service")
+    try:
+        result = service.list_members(
+            manage_token=manage_token,
+            alias=project,
+            include_pending=include_pending,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=exit_code) from None
+
+    formatter.output(result, _format_member_list)
+
+
+@project_app.command("invitation-list")
+def project_invitation_list(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ..., "--project", "-p", help="Project alias to list pending invitations for"
+    ),
+) -> None:
+    """List pending project invitations."""
+    formatter = get_formatter(ctx)
+
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "project.invitation-list",
+            project=project,
+            project_id="<resolved-from-config>",
+        )
+        return
+
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
+    service = get_service(ctx, "member_service")
+    try:
+        result = service.list_invitations(manage_token=manage_token, alias=project)
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=exit_code) from None
+
+    formatter.output(result, _format_invitation_list)
+
+
+@project_app.command("invitation-cancel")
+def project_invitation_cancel(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    email: str = typer.Option(
+        ...,
+        "--email",
+        "-e",
+        help="Invitee's email address (used to look up the invitation if --invitation-id is omitted)",
+    ),
+    invitation_id: int | None = typer.Option(
+        None,
+        "--invitation-id",
+        help="Numeric invitation ID; bypass the email lookup",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+) -> None:
+    """Cancel a pending invitation."""
+    formatter = get_formatter(ctx)
+
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "project.invitation-cancel",
+            project=project,
+            project_id="<resolved-from-config>",
+            email=email,
+            invitation_id=str(invitation_id) if invitation_id is not None else "None",
+        )
+        return
+
+    if (
+        not formatter.json_mode
+        and not yes
+        and not typer.confirm(f"Cancel pending invitation for {email} on {project}?")
+    ):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
+    service = get_service(ctx, "member_service")
+    try:
+        result = service.cancel_invitation(
+            manage_token=manage_token,
+            alias=project,
+            email=email,
+            invitation_id=invitation_id,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=exit_code) from None
+
+    formatter.output(
+        result,
+        lambda c, d: c.print(
+            f"[bold green]Cancelled[/bold green] invitation_id={d.get('invitation_id')} "
+            f"for {d.get('email')} on [cyan]{d.get('alias')}[/cyan]."
+        ),
+    )
+
+
+@project_app.command("member-remove")
+def project_member_remove(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    email: str = typer.Option(..., "--email", "-e", help="Email of the member to remove"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+) -> None:
+    """Remove an active member from a project (destructive)."""
+    formatter = get_formatter(ctx)
+
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "project.member-remove",
+            project=project,
+            project_id="<resolved-from-config>",
+            user_id="<resolved-from-email>",
+            email=email,
+        )
+        return
+
+    if (
+        not formatter.json_mode
+        and not yes
+        and not typer.confirm(f"Remove member {email} from project {project}? This is destructive.")
+    ):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
+    service = get_service(ctx, "member_service")
+    try:
+        result = service.remove_member(
+            manage_token=manage_token,
+            alias=project,
+            email=email,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=exit_code) from None
+
+    formatter.output(
+        result,
+        lambda c, d: c.print(
+            f"[bold red]Removed[/bold red] {d.get('email')} (user_id={d.get('user_id')}) "
+            f"from [cyan]{d.get('alias')}[/cyan]."
+        ),
+    )
+
+
+@project_app.command("member-set-role")
+def project_member_set_role(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    email: str = typer.Option(..., "--email", "-e", help="Email of the member to update"),
+    role: str = typer.Option(
+        ...,
+        "--role",
+        "-r",
+        click_type=click.Choice(list(PROJECT_ROLES)),
+        help="New role: " + " | ".join(PROJECT_ROLES),
+    ),
+) -> None:
+    """Change an existing member's role (PATCH)."""
+    formatter = get_formatter(ctx)
+
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "project.member-set-role",
+            project=project,
+            project_id="<resolved-from-config>",
+            user_id="<resolved-from-email>",
+            email=email,
+            role=role,
+        )
+        return
+
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
+    service = get_service(ctx, "member_service")
+    try:
+        result = service.set_member_role(
+            manage_token=manage_token,
+            alias=project,
+            email=email,
+            role=role,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
+        raise typer.Exit(code=2) from None
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=exit_code) from None
+
+    formatter.output(
+        result,
+        lambda c, d: c.print(
+            f"[bold green]Updated[/bold green] {d.get('email')} role on "
+            f"[cyan]{d.get('alias')}[/cyan] -> [yellow]{d.get('role')}[/yellow]."
+        ),
+    )

@@ -118,6 +118,63 @@ ALLOWED_GIT_REPO_SCHEMES: tuple[str, ...] = (
     "git://",
 )
 
+# Secret-key shape accepted under ``parameters.dataApp.secrets``. Must start
+# with ``#`` (Keboola encryption convention); the rest must form a valid
+# environment-variable identifier after the runtime translation rule
+# (uppercased, ``-`` -> ``_``, ``#`` stripped). Cap at 64 chars so the
+# derived env var stays under typical shell limits.
+SECRET_KEY_PATTERN = re.compile(r"^#[A-Za-z][A-Za-z0-9_-]{0,63}$")
+
+# Env vars the data-app runtime auto-injects. Setting a secret whose
+# derived env-var name collides with one of these is silently shadowed
+# at runtime by the platform value. See storage-access canon at
+# https://help.keboola.com/data-apps/storage-access/.
+#
+# TODO(0.28.x): verify exhaustive list against running data-app env in
+# follow-up. The runtime almost certainly injects more (BRANCH_ID,
+# QUERY_SERVICE_URL, KBC_WORKSPACE_MANIFEST_PATH appear in the
+# storage-access page; others may exist) but the canon-documented floor
+# is KBC_TOKEN + KBC_URL. Expanding this set adds WARNs that are less
+# likely to be false positives once verified live.
+RESERVED_RUNTIME_ENV_VARS: frozenset[str] = frozenset(
+    {
+        "KBC_TOKEN",
+        "KBC_URL",
+    }
+)
+
+
+def _derive_runtime_env_var_name(secret_key: str) -> str:
+    """Translate a ``#``-prefixed secret key into the runtime env-var name.
+
+    Rule from help.keboola.com/data-apps/python-js/: strip the leading
+    ``#``, replace ``-`` with ``_``, uppercase. Examples (verbatim from
+    the help canon):
+
+    - ``#KBC_TOKEN`` -> ``KBC_TOKEN``
+    - ``#my-custom-var`` -> ``MY_CUSTOM_VAR``
+    """
+    stripped = secret_key.lstrip("#")
+    return stripped.replace("-", "_").upper()
+
+
+def _secret_fingerprint(ciphertext: str) -> str:
+    """First 8 chars of the ciphertext payload after the ``KBC::*::`` prefix.
+
+    The full ciphertext is not a secret in the cryptographic sense (it
+    can only be decrypted by the project's KMS), but echoing it in full
+    invites copy-paste leakage into tickets and chat. The fingerprint is
+    enough to compare two ciphertexts without exposing the payload.
+    Returns empty string for non-ciphertext input.
+    """
+    if not isinstance(ciphertext, str):
+        return ""
+    for prefix in ENCRYPTED_PASSWORD_PREFIXES:
+        if ciphertext.startswith(prefix):
+            payload = ciphertext[len(prefix) :]
+            return payload[:8]
+    return ""
+
 
 def _build_simple_auth_block() -> dict[str, Any]:
     """Authorization block for password-gated apps (writeup §11.2)."""
@@ -136,6 +193,59 @@ def _build_simple_auth_block() -> dict[str, Any]:
     }
 
 
+def _build_public_auth_block() -> dict[str, Any]:
+    """Authorization block for publicly-accessible apps (no auth gate).
+
+    Mirrors the kbc-ui ``noneProxyAuthorization`` constant exactly.
+    Authoritative source — the public backend validator at
+    ``keboola/job-queue-job-configuration``
+    ``src/JobDefinition/Configuration/Authorization/AppProxyDefinition.php``
+    (when ``auth_required=false``, ``auth`` MUST NOT be set; see
+    https://github.com/keboola/job-queue-job-configuration). The
+    ``keboola/ui`` repo (private; Keboola org members only) corroborates:
+    its ``apps/kbc-ui/src/scripts/modules/data-apps/constants.ts``
+    exports this exact shape as ``noneProxyAuthorization`` for the
+    "None" UI option.
+
+    Without this block, ``--auth public`` shipped in 0.27.0 wrote no
+    ``authorization`` key at all -- the Keboola app-proxy refused to
+    route traffic and the UI's "Authentication Type" selector showed
+    blank. Fixed in 0.28.0.
+    """
+    return {
+        "app_proxy": {
+            "auth_providers": [],
+            "auth_rules": [
+                {
+                    "type": "pathPrefix",
+                    "value": "/",
+                    "auth_required": False,
+                }
+            ],
+        },
+    }
+
+
+def _auth_block_for(auth: str) -> dict[str, Any]:
+    """Dispatch on the validated --auth value.
+
+    The validator at :meth:`DataAppService._validate_create_inputs`
+    rejects anything other than ``password`` / ``public`` at the service
+    boundary, so this code path should only ever see those two values in
+    production. We raise loudly on an unexpected value rather than
+    silently writing no ``authorization`` block (the v0.27.0 bug this
+    helper exists to prevent — see the (since v0.28.0) gotcha entry).
+    """
+    if auth == "password":
+        return _build_simple_auth_block()
+    if auth == "public":
+        return _build_public_auth_block()
+    raise ValueError(
+        f"_auth_block_for missing dispatch for {auth!r}; "
+        "_validate_create_inputs should have rejected this upstream."
+    )
+
+
 def _redact_secret(value: Any) -> Any:
     """Replace encrypted ``#`` values with a placeholder for human output."""
     if isinstance(value, str) and value.startswith("KBC::"):
@@ -149,6 +259,18 @@ def _redact_git_block(git: dict[str, Any]) -> dict[str, Any]:
     if "#password" in redacted:
         redacted["#password"] = _redact_secret(redacted["#password"])
     return redacted
+
+
+def _redact_secrets_block(secrets: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of ``parameters.dataApp.secrets`` with each ciphertext redacted.
+
+    Used by ``get_data_app`` so the ``raw.storage_config`` echo cannot
+    leak any secret's encrypted value into ``--json`` output. Same
+    defence-in-depth rationale as :func:`_redact_git_block`.
+    """
+    if not isinstance(secrets, dict):
+        return secrets
+    return {key: _redact_secret(value) for key, value in secrets.items()}
 
 
 def _redact_storage_config(storage_config: dict[str, Any]) -> dict[str, Any]:
@@ -176,6 +298,9 @@ def _redact_storage_config(storage_config: dict[str, Any]) -> dict[str, Any]:
                 git = data_app.get("git")
                 if isinstance(git, dict):
                     data_app["git"] = _redact_git_block(git)
+                secrets = data_app.get("secrets")
+                if isinstance(secrets, dict):
+                    data_app["secrets"] = _redact_secrets_block(secrets)
                 parameters["dataApp"] = data_app
             configuration["parameters"] = parameters
         redacted["configuration"] = configuration
@@ -437,8 +562,7 @@ class DataAppService(BaseService):
                     "dataApp": {"slug": slug},
                 },
             }
-            if auth == "password":
-                initial_config["authorization"] = _build_simple_auth_block()
+            initial_config["authorization"] = _auth_block_for(auth)
 
             shell = ds_client.create_app(
                 type_=type_,
@@ -747,7 +871,8 @@ class DataAppService(BaseService):
             raise KeboolaApiError(
                 message=(
                     "Manage API token is required to read the data-app simpleAuth "
-                    "password. Set KBC_MANAGE_API_TOKEN or run interactively."
+                    "password. Run interactively (default since v0.28.0), or pass "
+                    "--allow-env-manage-token + set KBC_MANAGE_API_TOKEN for CI."
                 ),
                 status_code=0,
                 error_code=ErrorCode.INVALID_TOKEN,
@@ -773,8 +898,551 @@ class DataAppService(BaseService):
         }
 
     # ------------------------------------------------------------------
+    # Secrets lifecycle (parameters.dataApp.secrets in the Storage config)
+    # ------------------------------------------------------------------
+
+    def _load_data_app_storage_config(
+        self,
+        *,
+        ds_client: DataScienceClient,
+        storage_client: Any,
+        app_id: str,
+        branch_id: int | None,
+    ) -> tuple[str, dict[str, Any], dict[str, Any]]:
+        """Resolve ``configId`` from the Data Science app and load the Storage config.
+
+        Returns ``(config_id, storage_envelope, body)`` where ``body`` is a
+        deep-copy of ``storage_envelope.configuration`` so callers can
+        mutate it freely. Mirrors the pattern at
+        :meth:`deploy_data_app` (data_app_service.py:586-594).
+        """
+        app = ds_client.get_app(app_id)
+        config_id = str(app.get("configId") or "")
+        if not config_id:
+            raise KeboolaApiError(
+                message=f"Data app {app_id} has no associated configId",
+                status_code=500,
+                error_code=ErrorCode.API_ERROR,
+                retryable=False,
+            )
+        envelope = storage_client.get_config_detail(
+            DATA_APP_COMPONENT_ID, config_id, branch_id=branch_id
+        )
+        if not isinstance(envelope, dict):
+            envelope = {}
+        configuration = envelope.get("configuration")
+        if not isinstance(configuration, dict):
+            configuration = {}
+        # Deep-copy so caller mutations don't reach the cached upstream.
+        body = json.loads(json.dumps(configuration))
+        return config_id, envelope, body
+
+    def _read_secrets_block(self, body: dict[str, Any]) -> dict[str, str]:
+        """Return ``parameters.dataApp.secrets`` from a config body, or ``{}``."""
+        if not isinstance(body, dict):
+            return {}
+        params = body.get("parameters")
+        if not isinstance(params, dict):
+            return {}
+        data_app = params.get("dataApp")
+        if not isinstance(data_app, dict):
+            return {}
+        secrets = data_app.get("secrets")
+        return dict(secrets) if isinstance(secrets, dict) else {}
+
+    def set_data_app_secrets(
+        self,
+        *,
+        alias: str,
+        app_id: str,
+        secrets: dict[str, str],
+        branch_id: int | None = None,
+        allow_plaintext_on_encrypt_failure: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Encrypt and write ``#``-prefixed secrets to the linked Storage config.
+
+        Read-modify-write at the service layer. The Storage API's
+        ``configuration`` field is a full-document overwrite; relying on
+        Storage merge to preserve nested siblings under
+        ``parameters.dataApp.secrets`` would clobber unrelated keys (the
+        merge is shallow at the top level only). We GET the full config,
+        modify the secrets sub-dict in place, and PUT the unchanged
+        remainder + the new secrets back.
+
+        Fail-closed: any encryption failure aborts before Storage is
+        touched. ``allow_plaintext_on_encrypt_failure`` is bootstrap/debug
+        only and emits a stderr warning when used.
+        """
+        if not secrets:
+            raise KeboolaApiError(
+                message="At least one --secret '#KEY=VALUE' is required.",
+                status_code=0,
+                error_code=ErrorCode.DATA_APP_INVALID_SECRET,
+                retryable=False,
+            )
+
+        # Validate every key + value at the service boundary; we don't
+        # trust the command layer to have caught everything.
+        validated: dict[str, str] = {}
+        for key, value in secrets.items():
+            self._validate_secret_key(key)
+            if not isinstance(value, str):
+                raise KeboolaApiError(
+                    message=(f"Secret '{key}' value must be a string; got {type(value).__name__}."),
+                    status_code=0,
+                    error_code=ErrorCode.DATA_APP_INVALID_SECRET,
+                    retryable=False,
+                )
+            if value.startswith("KBC::"):
+                raise KeboolaApiError(
+                    message=(
+                        f"Secret '{key}' value starts with 'KBC::', which suggests an "
+                        "already-encrypted ciphertext. The --secret flag expects "
+                        "plaintext; pass pre-encrypted values via --secrets-file or "
+                        "re-encrypt under THIS project's KMS via "
+                        "`kbagent encrypt values --component-id keboola.data-apps`."
+                    ),
+                    status_code=0,
+                    error_code=ErrorCode.DATA_APP_INVALID_SECRET,
+                    retryable=False,
+                )
+            validated[key] = value
+
+        # Reserved-name warnings -- WARN (not BLOCKING). The platform
+        # silently shadows colliding env vars at runtime. We still write
+        # the secret so the user can recover by removing it, but we
+        # surface the collision in the response.
+        shadowed: list[str] = sorted(
+            _derive_runtime_env_var_name(key)
+            for key in validated
+            if _derive_runtime_env_var_name(key) in RESERVED_RUNTIME_ENV_VARS
+        )
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        ds_client = self._ds_client_factory(project.stack_url, project.token)
+        storage_client = self._client_factory(project.stack_url, project.token)
+
+        try:
+            config_id, envelope, current_body = self._load_data_app_storage_config(
+                ds_client=ds_client,
+                storage_client=storage_client,
+                app_id=str(app_id),
+                branch_id=branch_id,
+            )
+            existing_secrets = self._read_secrets_block(current_body)
+
+            unchanged = sorted(
+                _derive_runtime_env_var_name(k) for k in existing_secrets if k not in validated
+            )
+
+            if dry_run:
+                preview_secrets = dict(existing_secrets)
+                for key in validated:
+                    preview_secrets[key] = "<encrypted at runtime>"
+                preview_body = self._merge_secrets_into_body(current_body, preview_secrets)
+                return {
+                    "dry_run": True,
+                    "project_alias": alias,
+                    "id": str(app_id),
+                    "config_id": config_id,
+                    "secrets_set": sorted(_derive_runtime_env_var_name(k) for k in validated),
+                    "secrets_unchanged": unchanged,
+                    "shadowed_by_runtime": shadowed,
+                    "encryption_request_keys": sorted(validated.keys()),
+                    "put_storage_config_preview": _redact_storage_config(
+                        {"configuration": preview_body}
+                    ),
+                    "message": (
+                        "Dry run -- no API calls made. Inspect the encryption "
+                        "request keys and the proposed Storage PUT body above."
+                    ),
+                }
+
+            # Encrypt every plaintext value under THIS project's KMS.
+            try:
+                encrypted = self._encrypt_service.encrypt(
+                    alias=alias,
+                    component_id=DATA_APP_COMPONENT_ID,
+                    input_data=validated,
+                )
+            except ConfigError as exc:
+                raise KeboolaApiError(
+                    message=f"Failed to prepare secrets for encryption: {exc.message}",
+                    status_code=0,
+                    error_code=ErrorCode.ENCRYPTION_FAILED,
+                    retryable=False,
+                ) from exc
+
+            # Validate every returned ciphertext starts with a project-scoped
+            # prefix. Mirror the fail-closed check from _build_git_block at
+            # data_app_service.py:1000-1008.
+            problems: list[str] = []
+            for key, ciphertext in encrypted.items():
+                if not isinstance(ciphertext, str) or not any(
+                    ciphertext.startswith(p) for p in ENCRYPTED_PASSWORD_PREFIXES
+                ):
+                    problems.append(key)
+            if problems and not allow_plaintext_on_encrypt_failure:
+                raise KeboolaApiError(
+                    message=(
+                        "Encryption API did not return a project-scoped ciphertext "
+                        f"for key(s): {', '.join(sorted(problems))}. Refusing to "
+                        "write plaintext to Storage. Re-run with "
+                        "--allow-plaintext-on-encrypt-failure for bootstrap/debug ONLY."
+                    ),
+                    status_code=0,
+                    error_code=ErrorCode.ENCRYPTION_FAILED,
+                    retryable=False,
+                    details={
+                        "project_alias": alias,
+                        "failed_keys": sorted(problems),
+                    },
+                )
+            if problems:
+                logger.warning(
+                    "Encryption returned non-ciphertext for keys %s; writing anyway "
+                    "because --allow-plaintext-on-encrypt-failure was set.",
+                    sorted(problems),
+                )
+
+            # Read-modify-write: deep-copy of the body has the secrets sub-dict
+            # replaced; everything else is preserved bit-identical.
+            updated_secrets = dict(existing_secrets)
+            updated_secrets.update(encrypted)
+            new_body = self._merge_secrets_into_body(current_body, updated_secrets)
+
+            put_response = storage_client.update_config(
+                component_id=DATA_APP_COMPONENT_ID,
+                config_id=config_id,
+                configuration=new_body,
+                change_description=(
+                    f"Set {len(validated)} secret(s) via kbagent data-app secrets set"
+                ),
+                branch_id=branch_id,
+            )
+            new_version = str(put_response.get("version", "") or "")
+            old_version = str(envelope.get("version", "") or "")
+
+            secrets_set = sorted(_derive_runtime_env_var_name(k) for k in validated)
+            return {
+                "project_alias": alias,
+                "id": str(app_id),
+                "config_id": config_id,
+                "secrets_set": secrets_set,
+                "secrets_unchanged": unchanged,
+                "shadowed_by_runtime": shadowed,
+                "config_version_before": old_version,
+                "config_version_after": new_version,
+                "deploy_required": True,
+                "next_step": (
+                    f"kbagent data-app deploy --project {alias} --app-id {app_id} --wait"
+                ),
+                "message": (
+                    f"{len(secrets_set)} secret(s) encrypted and written. "
+                    "The running container keeps the old config until you redeploy."
+                ),
+            }
+        finally:
+            ds_client.close()
+            storage_client.close()
+
+    def list_data_app_secrets(
+        self,
+        *,
+        alias: str,
+        app_id: str,
+        branch_id: int | None = None,
+        show_fingerprint: bool = False,
+    ) -> dict[str, Any]:
+        """Return metadata for every ``#``-prefixed secret on the app's config.
+
+        Never returns the encrypted ciphertext in full and never attempts
+        to decrypt. The Encryption API is one-way; decryption from the CLI
+        is impossible by design.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        ds_client = self._ds_client_factory(project.stack_url, project.token)
+        storage_client = self._client_factory(project.stack_url, project.token)
+        try:
+            config_id, _envelope, body = self._load_data_app_storage_config(
+                ds_client=ds_client,
+                storage_client=storage_client,
+                app_id=str(app_id),
+                branch_id=branch_id,
+            )
+            raw_secrets = self._read_secrets_block(body)
+
+            entries: list[dict[str, Any]] = []
+            for key in sorted(raw_secrets.keys()):
+                env_var = _derive_runtime_env_var_name(key)
+                entry: dict[str, Any] = {
+                    "key": key,
+                    "env_var": env_var,
+                    "shadowed_by_runtime": env_var in RESERVED_RUNTIME_ENV_VARS,
+                }
+                if show_fingerprint:
+                    ciphertext = raw_secrets[key]
+                    entry["fingerprint"] = _secret_fingerprint(ciphertext)
+                    entry["encryption_prefix"] = self._derive_encryption_prefix(ciphertext)
+                entries.append(entry)
+
+            return {
+                "project_alias": alias,
+                "id": str(app_id),
+                "config_id": config_id,
+                "secrets": entries,
+                "count": len(entries),
+            }
+        finally:
+            ds_client.close()
+            storage_client.close()
+
+    def get_data_app_secret(
+        self,
+        *,
+        alias: str,
+        app_id: str,
+        key: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Return metadata for ONE secret. Never echoes the decrypted value.
+
+        The decrypted plaintext NEVER appears in the return dict, in stderr,
+        in the log stream, or in the change description. The Encryption API
+        does not expose a decrypt endpoint; the CLI cannot decrypt even if
+        it wanted to. The metadata-only contract is the security boundary
+        and is asserted by the test suite.
+        """
+        self._validate_secret_key(key)
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        ds_client = self._ds_client_factory(project.stack_url, project.token)
+        storage_client = self._client_factory(project.stack_url, project.token)
+        try:
+            config_id, _envelope, body = self._load_data_app_storage_config(
+                ds_client=ds_client,
+                storage_client=storage_client,
+                app_id=str(app_id),
+                branch_id=branch_id,
+            )
+            raw_secrets = self._read_secrets_block(body)
+            if key not in raw_secrets:
+                # Don't enumerate sibling keys -- avoid leaking neighbour
+                # presence to a caller who knows only this key's name.
+                raise KeboolaApiError(
+                    message=(
+                        f"Secret '{key}' not found on data app {app_id} in project '{alias}'."
+                    ),
+                    status_code=404,
+                    error_code=ErrorCode.NOT_FOUND,
+                    retryable=False,
+                )
+            ciphertext = raw_secrets[key]
+            env_var = _derive_runtime_env_var_name(key)
+            return {
+                "project_alias": alias,
+                "id": str(app_id),
+                "config_id": config_id,
+                "key": key,
+                "env_var": env_var,
+                "shadowed_by_runtime": env_var in RESERVED_RUNTIME_ENV_VARS,
+                "fingerprint": _secret_fingerprint(ciphertext),
+                "encryption_prefix": self._derive_encryption_prefix(ciphertext),
+                "present": True,
+                "message": (
+                    f"Secret '{key}' is set on data app {app_id}. "
+                    "Decrypted plaintext is NOT exposed by the CLI."
+                ),
+            }
+        finally:
+            ds_client.close()
+            storage_client.close()
+
+    def remove_data_app_secrets(
+        self,
+        *,
+        alias: str,
+        app_id: str,
+        keys: list[str],
+        branch_id: int | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Remove one or more ``#``-prefixed secrets. Idempotent."""
+        if not keys:
+            raise KeboolaApiError(
+                message="At least one --key '#KEY' is required.",
+                status_code=0,
+                error_code=ErrorCode.DATA_APP_INVALID_SECRET,
+                retryable=False,
+            )
+        for key in keys:
+            self._validate_secret_key(key)
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        ds_client = self._ds_client_factory(project.stack_url, project.token)
+        storage_client = self._client_factory(project.stack_url, project.token)
+        try:
+            config_id, envelope, body = self._load_data_app_storage_config(
+                ds_client=ds_client,
+                storage_client=storage_client,
+                app_id=str(app_id),
+                branch_id=branch_id,
+            )
+            existing_secrets = self._read_secrets_block(body)
+
+            removed = sorted(_derive_runtime_env_var_name(k) for k in keys if k in existing_secrets)
+            not_found = sorted(
+                _derive_runtime_env_var_name(k) for k in keys if k not in existing_secrets
+            )
+            current_version = str(envelope.get("version", "") or "")
+
+            if not removed:
+                # Idempotent: removing a non-existent key is success.
+                return {
+                    "project_alias": alias,
+                    "id": str(app_id),
+                    "config_id": config_id,
+                    "removed": [],
+                    "not_found": not_found,
+                    "config_version_before": current_version,
+                    "config_version_after": current_version,
+                    "deploy_required": False,
+                    "message": (
+                        f"No matching secrets to remove on data app {app_id}. "
+                        f"Keys not present: {', '.join(not_found) or '<none>'}."
+                    ),
+                }
+
+            if dry_run:
+                preview = {k: v for k, v in existing_secrets.items() if k not in keys}
+                preview_body = self._merge_secrets_into_body(body, preview)
+                return {
+                    "dry_run": True,
+                    "project_alias": alias,
+                    "id": str(app_id),
+                    "config_id": config_id,
+                    "to_remove": removed,
+                    "not_found": not_found,
+                    "put_storage_config_preview": _redact_storage_config(
+                        {"configuration": preview_body}
+                    ),
+                    "message": (
+                        f"Dry run -- would remove {len(removed)} secret(s) and PUT "
+                        "the body above. No API call made."
+                    ),
+                }
+
+            updated_secrets = {k: v for k, v in existing_secrets.items() if k not in keys}
+            new_body = self._merge_secrets_into_body(body, updated_secrets)
+
+            put_response = storage_client.update_config(
+                component_id=DATA_APP_COMPONENT_ID,
+                config_id=config_id,
+                configuration=new_body,
+                change_description=(
+                    f"Remove {len(removed)} secret(s) via kbagent data-app secrets remove"
+                ),
+                branch_id=branch_id,
+            )
+            new_version = str(put_response.get("version", "") or "")
+            return {
+                "project_alias": alias,
+                "id": str(app_id),
+                "config_id": config_id,
+                "removed": removed,
+                "not_found": not_found,
+                "config_version_before": current_version,
+                "config_version_after": new_version,
+                "deploy_required": True,
+                "next_step": (
+                    f"kbagent data-app deploy --project {alias} --app-id {app_id} --wait"
+                ),
+                "message": (
+                    f"{len(removed)} secret(s) removed. The running container keeps "
+                    "the old config until you redeploy."
+                ),
+            }
+        finally:
+            ds_client.close()
+            storage_client.close()
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _validate_secret_key(self, key: str) -> None:
+        """Reject any key that does not match SECRET_KEY_PATTERN.
+
+        The check enforces the ``#``-prefix convention AND that the rest
+        of the key forms a valid env-var identifier after the runtime
+        translation rule. Service-boundary check; the command layer also
+        validates so the error surfaces with the friendliest exit code.
+        """
+        if not isinstance(key, str) or not SECRET_KEY_PATTERN.match(key):
+            raise KeboolaApiError(
+                message=(
+                    f"Invalid secret key '{key}'. Keys must start with '#' and "
+                    "the rest must match [A-Za-z][A-Za-z0-9_-]{0,63} so the "
+                    "derived runtime env-var name (uppercase, '-' to '_') is a "
+                    "valid identifier."
+                ),
+                status_code=0,
+                error_code=ErrorCode.DATA_APP_INVALID_SECRET,
+                retryable=False,
+            )
+        if _has_control_chars(key):
+            raise KeboolaApiError(
+                message=f"Secret key '{key}' contains disallowed control characters.",
+                status_code=0,
+                error_code=ErrorCode.DATA_APP_INVALID_SECRET,
+                retryable=False,
+            )
+
+    def _merge_secrets_into_body(
+        self,
+        body: dict[str, Any],
+        secrets: dict[str, str],
+    ) -> dict[str, Any]:
+        """Return a deep-copy of ``body`` with ``parameters.dataApp.secrets`` replaced.
+
+        Every untouched sibling -- under ``parameters.dataApp.secrets``
+        (none, since the whole sub-dict is replaced), under
+        ``parameters.dataApp`` (slug, git, id, etc.), under ``parameters``
+        (everything else), and at the top level (``runtime``,
+        ``authorization``, ``storage``) -- is preserved bit-identical.
+        """
+        new_body = json.loads(json.dumps(body)) if isinstance(body, dict) else {}
+        if not isinstance(new_body, dict):
+            new_body = {}
+        params = new_body.setdefault("parameters", {})
+        if not isinstance(params, dict):
+            params = {}
+            new_body["parameters"] = params
+        data_app = params.setdefault("dataApp", {})
+        if not isinstance(data_app, dict):
+            data_app = {}
+            params["dataApp"] = data_app
+        if secrets:
+            data_app["secrets"] = dict(secrets)
+        elif "secrets" in data_app:
+            # Remove the secrets key entirely if the new map is empty so
+            # the diff reads "key dropped" rather than "key set to {}".
+            del data_app["secrets"]
+        return new_body
+
+    def _derive_encryption_prefix(self, ciphertext: str) -> str:
+        """Return the ``KBC::*`` prefix matched on this ciphertext, or '' if none."""
+        if not isinstance(ciphertext, str):
+            return ""
+        for prefix in ENCRYPTED_PASSWORD_PREFIXES:
+            if ciphertext.startswith(prefix):
+                return prefix.rstrip(":")
+        return ""
 
     def _validate_create_inputs(
         self,
@@ -1034,8 +1702,7 @@ class DataAppService(BaseService):
             },
             "runtime": {"backend": {"size": size}},
         }
-        if auth == "password":
-            body["authorization"] = _build_simple_auth_block()
+        body["authorization"] = _auth_block_for(auth)
         return body
 
     def _build_dry_run_payload(
@@ -1062,8 +1729,7 @@ class DataAppService(BaseService):
                 },
             },
         }
-        if auth == "password":
-            post_body["config"]["authorization"] = _build_simple_auth_block()
+        post_body["config"]["authorization"] = _auth_block_for(auth)
 
         # We can't know the app_id pre-create; show the placeholder.
         git_block_preview: dict[str, Any]
@@ -1090,8 +1756,7 @@ class DataAppService(BaseService):
             },
             "runtime": {"backend": {"size": size}},
         }
-        if auth == "password":
-            put_body["authorization"] = _build_simple_auth_block()
+        put_body["authorization"] = _auth_block_for(auth)
 
         patch_body: dict[str, Any] = {}
         if kwargs["deploy"]:

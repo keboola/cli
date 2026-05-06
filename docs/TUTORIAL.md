@@ -102,12 +102,19 @@ use `org setup --project-ids`. kbagent creates a Storage API token in
 each listed project and registers them all locally, in parallel.
 
 ```bash
-export KBC_MANAGE_API_TOKEN=YOUR_MANAGE_OR_PAT_TOKEN
-
+# Interactive (default since v0.29.0): kbagent prompts for the Manage API
+# token on stdin. No env var, no shell history.
 kbagent org setup \
   --project-ids 901,9621,10539 \
   --url https://connection.keboola.com \
   --dry-run                           # always dry-run first
+
+# CI / non-interactive: opt in to env-var resolution.
+export KBC_MANAGE_API_TOKEN=YOUR_MANAGE_OR_PAT_TOKEN
+kbagent --allow-env-manage-token org setup \
+  --project-ids 901,9621,10539 \
+  --url https://connection.keboola.com \
+  --dry-run
 ```
 
 The dry-run prints what would happen (create token + register alias
@@ -132,10 +139,14 @@ Flags worth knowing:
 The command is **idempotent**: running it again skips projects that
 are already registered. Safe to re-run after adding new project IDs.
 
-**Security note**: `KBC_MANAGE_API_TOKEN` is read only from env or
-from an interactive hidden prompt. kbagent never accepts it as a CLI
-argument (`--token xxx`) -- that would leak into shell history and
-process listings.
+**Security note (since v0.29.0)**: `KBC_MANAGE_API_TOKEN` is **ignored
+by default** -- the env var is read only when the top-level
+`--allow-env-manage-token` flag is passed. Without the flag, kbagent
+prompts on stdin (hidden input). kbagent never accepts the token as a
+CLI argument (`--token xxx`) -- that would leak into shell history and
+process listings. The default-deny closes an AI-exfiltration risk where
+any subprocess running as the same user (including the AI agent itself)
+inherits env vars.
 
 ---
 
@@ -145,9 +156,15 @@ If you are an org admin with a Manage API token, register **every**
 project in an organization in one shot:
 
 ```bash
-export KBC_MANAGE_API_TOKEN=YOUR_ORG_ADMIN_MANAGE_TOKEN
-
+# Interactive (default since v0.29.0):
 kbagent org setup \
+  --org-id 123 \
+  --url https://connection.keboola.com \
+  --dry-run
+
+# CI / non-interactive:
+export KBC_MANAGE_API_TOKEN=YOUR_ORG_ADMIN_MANAGE_TOKEN
+kbagent --allow-env-manage-token org setup \
   --org-id 123 \
   --url https://connection.keboola.com \
   --dry-run
@@ -859,7 +876,8 @@ kbagent --json data-app create \
 deploy. To retrieve it:
 
 ```bash
-# Requires KBC_MANAGE_API_TOKEN in env (org-scoped Manage API token).
+# Manage API token: interactive prompt by default (since v0.29.0). For CI,
+# add `--allow-env-manage-token` and set KBC_MANAGE_API_TOKEN in env.
 kbagent --json data-app password \
   --project prod --app-id 12345678 \
   | jq -r '.data.password'
@@ -949,7 +967,8 @@ shapes, and the `--hint client|service` code-generation contract, see
 | `kbagent: command not found` after `uv tool install` | Ensure `~/.local/bin` (or uv's tool dir) is on your PATH. `uv tool update-shell` can help. |
 | `kbagent doctor` reports `warn` for plugin | Run the two `/plugin` commands shown in the warning, from inside Claude Code. |
 | Plugin version != CLI version | In Claude Code: `/plugin update kbagent`. |
-| `org setup` fails with `401 Unauthorized` | Your `KBC_MANAGE_API_TOKEN` is wrong for this stack or role. Manage tokens are stack-specific and require the right scope. |
+| `org setup` exits 2 with `Warning: KBC_MANAGE_API_TOKEN found in environment but ignored` | Default-deny since v0.29.0 -- pass `--allow-env-manage-token` (top-level flag) to opt in to env resolution, or run interactively to use the prompt. |
+| `org setup` fails with `401 Unauthorized` | Your manage token is wrong for this stack or role. Manage tokens are stack-specific and require the right scope. |
 | `org setup --org-id` fails with `403` | You are not an org admin. Use `--project-ids` with a Personal Access Token instead (works for any project member). |
 | Changes from `kbagent config update` do not show in UI | You are on a dev branch. Run `kbagent branch list` and `kbagent project current` to verify the active branch; changes in a dev branch merge to production only via the UI merge step (`kbagent branch merge` returns the merge URL). |
 | The specialist subagent does not spawn when I type `/keboola X` | Plugin is not installed or is outdated. Run `kbagent doctor` and follow the reported commands. |

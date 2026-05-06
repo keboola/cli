@@ -6826,7 +6826,8 @@ class TestOrgSetup:
         assert output["data"]["projects_added"][0]["action"] == "would_add"
 
     def test_org_setup_with_env_token(self, tmp_path: Path) -> None:
-        """org setup uses KBC_MANAGE_API_TOKEN env var for authentication."""
+        """org setup uses KBC_MANAGE_API_TOKEN env var for authentication
+        when the caller opts in via --allow-env-manage-token (since 0.28.0)."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -6848,6 +6849,7 @@ class TestOrgSetup:
             result = runner.invoke(
                 app,
                 [
+                    "--allow-env-manage-token",
                     "--json",
                     "org",
                     "setup",
@@ -7259,11 +7261,16 @@ class TestResolveManageToken:
     """Tests for resolve_manage_token() in _helpers.py."""
 
     def test_token_from_env(self) -> None:
-        """resolve_manage_token returns token from KBC_MANAGE_API_TOKEN env var."""
+        """resolve_manage_token(allow_env=True) returns token from KBC_MANAGE_API_TOKEN env var.
+
+        Default-deny since 0.28.0: callers must pass allow_env=True to opt in
+        to env-var resolution. The opt-in is plumbed from the top-level
+        --allow-env-manage-token flag.
+        """
         from keboola_agent_cli.commands._helpers import resolve_manage_token
 
         with patch.dict(os.environ, {"KBC_MANAGE_API_TOKEN": "env-manage-token"}):
-            token = resolve_manage_token()
+            token = resolve_manage_token(allow_env=True)
 
         assert token == "env-manage-token"
 

@@ -31,6 +31,10 @@ description: >
   app proxy, simpleAuth, app auto-suspend, configVersion, redeploy contract,
   Data Science API, /apps endpoint, app password, KBC::Project ciphertext,
   local workspace, project directory, kbagent init.
+  local workspace, project directory, kbagent init,
+  invite user, invite member, project invitation, manage members,
+  list members, remove member, change role, project role,
+  bulk invite, invite from CSV, project access, member management.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -92,6 +96,12 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show the effective default project | `kbagent project current` |
 | Get the Keboola dashboard project description | `kbagent project description-get --project PROJECT` |
 | Set the Keboola dashboard project description (markdown) | `kbagent project description-set --project PROJECT` |
+| Invite a user (or many users via CSV) to one or more projects | `kbagent project invite` |
+| List active members of a project (and optionally pending invitations) | `kbagent project member-list --project PROJECT` |
+| List pending project invitations | `kbagent project invitation-list --project PROJECT` |
+| Cancel a pending invitation | `kbagent project invitation-cancel --project PROJECT --email EMAIL` |
+| Remove an active member from a project (destructive) | `kbagent project member-remove --project PROJECT --email EMAIL` |
+| Change an existing member's role (PATCH) | `kbagent project member-set-role --project PROJECT --email EMAIL --role ROLE` |
 | Set up projects and register them in the kbagent config | `kbagent org setup --url URL` |
 | List available components from connected projects | `kbagent component list` |
 | Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
@@ -119,6 +129,11 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Stop a running data app (preserves the URL and Storage config) | `kbagent data-app stop --project PROJECT --app-id APP-ID` |
 | Delete the deployment AND the Storage config (cascade, irreversible) | `kbagent data-app delete --project PROJECT --app-id APP-ID` |
 | Retrieve the simpleAuth password for a password-gated data app | `kbagent data-app password --project PROJECT --app-id APP-ID` |
+| Encrypt and write app-runtime secrets to the linked Storage config | `kbagent data-app secrets-set --project PROJECT --app-id APP-ID` |
+| List the keys in parameters.dataApp.secrets, with derived runtime env-var names | `kbagent data-app secrets-list --project PROJECT --app-id APP-ID` |
+| Show metadata for ONE secret key. | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |
+| Remove one or more app-runtime secrets. | `kbagent data-app secrets-remove --project PROJECT --app-id APP-ID --key KEY` |
+| Pre-flight check that a git repo follows the Keboola data-app Golden Rule | `kbagent data-app validate-repo --git-repo GIT-REPO` |
 | List jobs from connected projects | `kbagent job list` |
 | Show detailed information about a specific job | `kbagent job detail --project PROJECT --job-id JOB-ID` |
 | Run a job for a component configuration | `kbagent job run --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -247,6 +262,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Storage column types** (native types, NOT NULL, DEFAULT, branch materialize) | [storage-types-workflow](references/storage-types-workflow.md) |
 | **Typify a typeless table** (profile -> CTAS -> swap-tables -> validate -> handoff) | [typify-table-workflow](references/typify-table-workflow.md) |
 | Bucket sharing & linking | [sharing-workflow](references/sharing-workflow.md) |
+| **Project members & invitations** (single + bulk via CSV, role change, remove) | [member-workflow](references/member-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
 | Encrypting secrets for MCP tools | [encrypt-workflow](references/encrypt-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
@@ -273,8 +289,10 @@ Then add projects:
 kbagent --json project add --project prod --url https://connection.keboola.com --token YOUR_TOKEN
 
 # Or bulk-onboard from organization (org admin)
-KBC_MANAGE_API_TOKEN=xxx kbagent --json org setup --org-id 123 --url https://connection.keboola.com --yes
+# Manage token: interactive prompt by default; for CI add --allow-env-manage-token
+# alongside KBC_MANAGE_API_TOKEN (required since v0.29.0).
+KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --org-id 123 --url https://connection.keboola.com --yes
 
 # Or onboard specific projects (any project member, uses Personal Access Token)
-KBC_MANAGE_API_TOKEN=xxx kbagent --json org setup --project-ids 901,9621,10539 --url https://connection.keboola.com --yes
+KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --project-ids 901,9621,10539 --url https://connection.keboola.com --yes
 ```

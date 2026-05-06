@@ -361,3 +361,215 @@ class TestManageClientContextManager:
         with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
             result = client.list_organization_projects(1)
             assert result == []
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Project members & invitations (since v0.26.1)
+# ──────────────────────────────────────────────────────────────────────
+
+
+_INVITATION_RESPONSE = {
+    "id": 1741,
+    "created": "2026-05-01T19:04:35+0200",
+    "expires": None,
+    "reason": "v0.26.1 verification",
+    "role": "guest",
+    "user": {"id": 1325, "email": "ottomansky.max@gmail.com", "name": ""},
+    "creator": {"id": 216, "email": "max.ottomansky@keboola.com", "name": "Max"},
+}
+
+_MEMBER_LIST_RESPONSE = [
+    {
+        "id": 216,
+        "name": "Max",
+        "email": "max.ottomansky@keboola.com",
+        "role": "admin",
+        "status": "active",
+        "mfaEnabled": True,
+        "features": ["power-user"],
+        "canAccessLogs": False,
+    },
+    {
+        "id": 4241,
+        "name": "Marcel",
+        "email": "mfiser@cuestapartners.com",
+        "role": "guest",
+        "status": "active",
+        "mfaEnabled": True,
+        "features": [],
+        "canAccessLogs": False,
+    },
+]
+
+
+class TestCreateProjectInvitation:
+    def test_success(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/invitations",
+            method="POST",
+            json=_INVITATION_RESPONSE,
+            status_code=201,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            result = client.create_project_invitation(
+                project_id=5725,
+                email="ottomansky.max@gmail.com",
+                role="guest",
+                reason="v0.26.1 verification",
+            )
+        assert result["id"] == 1741
+        assert result["role"] == "guest"
+        assert result["user"]["email"] == "ottomansky.max@gmail.com"
+
+    def test_payload_contains_email_role_reason(self, httpx_mock) -> None:
+        import json as _json
+
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/invitations",
+            method="POST",
+            json=_INVITATION_RESPONSE,
+            status_code=201,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            client.create_project_invitation(
+                project_id=5725,
+                email="ottomansky.max@gmail.com",
+                role="guest",
+                reason="v0.26.1 verification",
+            )
+        body = _json.loads(httpx_mock.get_request().read())
+        assert body == {
+            "email": "ottomansky.max@gmail.com",
+            "role": "guest",
+            "reason": "v0.26.1 verification",
+        }
+
+    def test_omits_reason_when_none(self, httpx_mock) -> None:
+        import json as _json
+
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/invitations",
+            method="POST",
+            json=_INVITATION_RESPONSE,
+            status_code=201,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            client.create_project_invitation(project_id=5725, email="x@y.com", role="admin")
+        body = _json.loads(httpx_mock.get_request().read())
+        assert body == {"email": "x@y.com", "role": "admin"}
+
+    def test_400_already_invited_surfaces_message(self, httpx_mock) -> None:
+        """The 'already invited' 400 must round-trip the API's error text so
+        the service layer can match its substring marker."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/invitations",
+            method="POST",
+            json={"error": "This user has already been invited to this project."},
+            status_code=400,
+        )
+        with (
+            ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.create_project_invitation(project_id=5725, email="x@y.com", role="admin")
+        assert exc_info.value.status_code == 400
+        assert "already been invited" in exc_info.value.message
+
+
+class TestListProjectInvitations:
+    def test_returns_plain_list(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/invitations",
+            json=[_INVITATION_RESPONSE],
+            status_code=200,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            result = client.list_project_invitations(5725)
+        assert isinstance(result, list)
+        assert result[0]["user"]["email"] == "ottomansky.max@gmail.com"
+
+
+class TestCancelProjectInvitation:
+    def test_returns_none_on_204(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/invitations/1741",
+            method="DELETE",
+            status_code=204,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            assert client.cancel_project_invitation(5725, 1741) is None
+
+    def test_404_after_already_deleted(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/invitations/1741",
+            method="DELETE",
+            json={"error": "Invitation not found"},
+            status_code=404,
+        )
+        with (
+            ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.cancel_project_invitation(5725, 1741)
+        assert exc_info.value.error_code == "NOT_FOUND"
+
+
+class TestListProjectMembers:
+    def test_returns_top_level_user_dicts(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/users",
+            json=_MEMBER_LIST_RESPONSE,
+            status_code=200,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            result = client.list_project_members(5725)
+        assert len(result) == 2
+        assert result[0]["email"] == "max.ottomansky@keboola.com"
+        # Role lives at the top level (not nested under a "user" key).
+        assert result[0]["role"] == "admin"
+        assert result[1]["role"] == "guest"
+
+
+class TestRemoveProjectMember:
+    def test_returns_none_on_204(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/users/216",
+            method="DELETE",
+            status_code=204,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            assert client.remove_project_member(5725, 216) is None
+
+    def test_400_administrator_not_found(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/users/999",
+            method="DELETE",
+            json={"error": "Administrator not found"},
+            status_code=400,
+        )
+        with (
+            ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.remove_project_member(5725, 999)
+        assert exc_info.value.status_code == 400
+
+
+class TestUpdateProjectMemberRole:
+    def test_uses_PATCH_not_PUT(self, httpx_mock) -> None:
+        """Regression: PUT returns 404 even on real members; the client must
+        emit PATCH."""
+        import json as _json
+
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/users/216",
+            method="PATCH",
+            json={"id": 216, "email": "max.ottomansky@keboola.com", "role": "guest"},
+            status_code=200,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            result = client.update_project_member_role(5725, 216, "guest")
+        request = httpx_mock.get_request()
+        assert request.method == "PATCH"
+        assert _json.loads(request.read()) == {"role": "guest"}
+        assert result["role"] == "guest"

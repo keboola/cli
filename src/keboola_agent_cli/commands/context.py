@@ -35,7 +35,7 @@ observability -- all API requests will include the X-Conversation-ID header.
   kbagent --json project add --project my-project --url https://connection.keboola.com --token YOUR_TOKEN
 
   # Or bulk-onboard all projects from an organization
-  KBC_MANAGE_API_TOKEN=xxx kbagent --json org setup --org-id 123 --url https://connection.keboola.com --yes
+  KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --org-id 123 --url https://connection.keboola.com --yes
 
   # Explore
   kbagent --json project list
@@ -93,6 +93,37 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent project current
     Print the effective default project and its source (env / pin / none).
     Resolution order for single-project operations: --project > KBAGENT_PROJECT > pin.
+
+### Project Members & Invitations (since v0.29.0)
+
+  Requires KBC_MANAGE_API_TOKEN (Manage API auth). Allowed roles: admin, guest, readOnly, share.
+
+  kbagent project invite --project ALIAS --email EMAIL --role ROLE [--reason TEXT] [--dry-run]
+    Send an invitation email. Re-inviting an existing invitee or member is a no-op
+    (HTTP 400 from the Manage API; the service returns status="noop" with note
+    "already_invited" / "already_member").
+
+  kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
+    Bulk invite. CSV must have a header row with columns: email, project (alias or
+    numeric ID), role (optional if --default-role is given), reason (optional).
+    Parallelised with ThreadPoolExecutor (default 8 workers). Per-row results in
+    `rows[]` with status=ok|noop|failed; `failed_rows` ordering is not deterministic.
+
+  kbagent project member-list --project ALIAS [--include-pending]
+    List active project members. --include-pending also fetches pending invitations.
+
+  kbagent project invitation-list --project ALIAS
+    List pending (unaccepted) invitations only.
+
+  kbagent project invitation-cancel --project ALIAS --email EMAIL [--invitation-id ID] [--yes]
+    Cancel a pending invitation. Without --invitation-id, the service resolves the
+    ID by listing pending invitations and matching --email (case-insensitive).
+
+  kbagent project member-remove --project ALIAS --email EMAIL [--yes]
+    Remove an active member (destructive). Service resolves --email to user_id.
+
+  kbagent project member-set-role --project ALIAS --email EMAIL --role ROLE
+    Change an existing member's role via PATCH /manage/projects/{{id}}/users/{{userId}}.
 
 ### Component Discovery
 
@@ -419,7 +450,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent org setup --project-ids 901,9621,10539 --url URL [--dry-run] [--yes] [--refresh]
     Non-admin mode: onboard specific projects by ID. Works with Personal Access Token (PAT).
     Use --org-id OR --project-ids (at least one required).
-    Token via KBC_MANAGE_API_TOKEN env var or interactive prompt.
+    Token via interactive hidden prompt by default; pass top-level
+    --allow-env-manage-token to read KBC_MANAGE_API_TOKEN from env (CI/CD).
+    Default-deny since 0.29.0 -- closes the AI-exfiltration risk where
+    subprocesses inherit the manage token via env.
 
 ### Flows (Orchestrator + Conditional)
 
@@ -593,11 +627,55 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     URL is permanently retired. Confirmation prompt unless --yes.
 
   kbagent data-app password --project NAME --app-id ID
-    Retrieve the simpleAuth password. Requires KBC_MANAGE_API_TOKEN in
-    addition to the project's Storage token. Token is read from env or
-    interactive hidden prompt; never persisted, never logged. Password is
-    auto-generated at create time and CANNOT be rotated -- delete and
-    recreate the app to mint a new one.
+    Retrieve the simpleAuth password. Requires the Manage API token in
+    addition to the project's Storage token. Token is read from interactive
+    hidden prompt by default; pass top-level --allow-env-manage-token to
+    use KBC_MANAGE_API_TOKEN from env (default-deny since 0.29.0). Never
+    persisted, never logged. Password is auto-generated at create time
+    and CANNOT be rotated -- delete and recreate the app to mint a new one.
+
+  kbagent data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE'
+        [--secret '#KEY2=VALUE2' ...] [--secrets-file PATH] [--branch ID]
+        [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]
+    Encrypt and write '#'-prefixed secrets into parameters.dataApp.secrets.
+    Per-project KMS via the Encryption API; ciphertext does not cross
+    projects (writeup §8). Read-modify-write at the service layer to
+    preserve sibling keys; never use Storage merge=True for nested edits.
+    The runtime exposes each key as an env var with '#' stripped, '-'
+    replaced with '_', uppercased ('#my-api-key' -> 'MY_API_KEY').
+    Adding a secret bumps the Storage version; the running container
+    keeps the OLD config until the next 'kbagent data-app deploy'.
+
+  kbagent data-app secrets-list --project ALIAS --app-id ID [--branch ID]
+        [--show-fingerprint]
+    List the keys in parameters.dataApp.secrets with derived runtime
+    env-var names. Never echoes encrypted ciphertext in full and never
+    decrypts. --show-fingerprint includes a short fingerprint per key.
+
+  kbagent data-app secrets-get --project ALIAS --app-id ID --key '#KEY'
+        [--branch ID]
+    Show metadata for ONE secret. NEVER echoes the decrypted value --
+    the Encryption API has no decrypt endpoint and the CLI cannot
+    decrypt. NOT_FOUND on absent key; never enumerates sibling keys.
+
+  kbagent data-app secrets-remove --project ALIAS --app-id ID --key '#KEY'
+        [--key '#KEY2' ...] [--branch ID] [--yes] [--dry-run]
+    Remove one or more secrets. Idempotent (missing keys -> exit 0,
+    removed: 0). Destructive: a removal can break the running app at
+    next deploy if it depends on the value. Confirmation prompt unless
+    --yes or --json.
+
+  kbagent data-app validate-repo --git-repo URL [--git-branch BRANCH]
+        [--git-public/--no-git-public] [--git-pat-env VAR | --git-pat-file PATH]
+        [--type python-js] [--strict]
+    Pre-flight check that a git repo follows the Keboola data-app
+    Golden Rule (https://help.keboola.com/data-apps/python-js/). Walks
+    the repo via GitHub Contents + Trees API (<=5 calls -- 1 tree +
+    up to 4 contents -- regardless of
+    repo size); each check emits BLOCKING / WARN / OK with a help-doc
+    citation. --type currently restricted to python-js; streamlit /
+    pure-Python / R / Node-only follow-up. --strict treats WARNs as
+    failures (exit 1).
 
 ### Project Sync
 
@@ -732,7 +810,10 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
      KBAGENT_CONVERSATION_ID  Conversation/session ID (REQUIRED -- sent as X-Conversation-ID header)
      KBC_TOKEN                Storage API token (fallback for --token)
      KBC_STORAGE_API_URL      Default stack URL (fallback for --url)
-     KBC_MANAGE_API_TOKEN     Manage API token (for org setup)
+     KBC_MANAGE_API_TOKEN     Manage API token (org setup, project refresh, data-app password).
+                              Default-DENY since 0.29.0: pass --allow-env-manage-token
+                              to opt in, otherwise this var is ignored and a TTY prompt
+                              is required. Closes AI-exfiltration via subprocess env.
      KBC_MASTER_TOKEN         Master token for sharing ops (global fallback)
      KBC_MASTER_TOKEN_*       Per-project master token (e.g. KBC_MASTER_TOKEN_PROD)
      KBAGENT_CONFIG_DIR       Override config directory

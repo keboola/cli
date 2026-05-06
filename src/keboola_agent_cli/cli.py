@@ -48,8 +48,10 @@ from .services.job_service import JobService
 from .services.kai_service import KaiService
 from .services.lineage_service import LineageService
 from .services.mcp_service import McpService
+from .services.member_service import MemberService
 from .services.org_service import OrgService
 from .services.project_service import ProjectService
+from .services.repo_validate_service import RepoValidateService
 from .services.schedule_service import ScheduleService
 from .services.sharing_service import SharingService
 from .services.storage_service import StorageService
@@ -220,6 +222,14 @@ def main(
         "branch delete, etc.). Admin ops like 'project remove' and 'org setup' "
         "are NOT blocked -- use --deny-writes for the wide net.",
     ),
+    allow_env_manage_token: bool = typer.Option(
+        False,
+        "--allow-env-manage-token",
+        help="Read KBC_MANAGE_API_TOKEN from the environment. Without this "
+        "flag the env var is ignored (with a warning) and an interactive "
+        "TTY prompt is required. Default-deny since 0.28.0; closes the "
+        "AI-exfiltration risk where subprocesses inherit the manage token.",
+    ),
 ) -> None:
     """Global options applied to all commands."""
     from .auto_update import maybe_auto_update, show_post_update_changelog
@@ -294,6 +304,7 @@ def main(
     lineage_service = LineageService(config_store=config_store)
     deep_lineage_service = DeepLineageService(config_store=config_store)
     org_service = OrgService(config_store=config_store)
+    member_service = MemberService(config_store=config_store)
     mcp_service = McpService(config_store=config_store)
     branch_service = BranchService(config_store=config_store)
     sharing_service = SharingService(config_store=config_store)
@@ -305,6 +316,7 @@ def main(
     schedule_service = ScheduleService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
     data_app_service = DataAppService(config_store=config_store)
+    repo_validate_service = RepoValidateService(config_store=config_store)
     kai_service = KaiService(config_store=config_store)
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
     version_service = VersionService()
@@ -339,6 +351,7 @@ def main(
     ctx.obj["no_color"] = effective_no_color
     ctx.obj["deny_writes"] = deny_writes
     ctx.obj["deny_destructive"] = deny_destructive
+    ctx.obj["allow_env_manage_token"] = allow_env_manage_token
     ctx.obj["config_store"] = config_store
     ctx.obj["project_service"] = project_service
     ctx.obj["component_service"] = component_service
@@ -347,6 +360,7 @@ def main(
     ctx.obj["lineage_service"] = lineage_service
     ctx.obj["deep_lineage_service"] = deep_lineage_service
     ctx.obj["org_service"] = org_service
+    ctx.obj["member_service"] = member_service
     ctx.obj["mcp_service"] = mcp_service
     ctx.obj["branch_service"] = branch_service
     ctx.obj["sharing_service"] = sharing_service
@@ -358,6 +372,7 @@ def main(
     ctx.obj["schedule_service"] = schedule_service
     ctx.obj["workspace_service"] = workspace_service
     ctx.obj["data_app_service"] = data_app_service
+    ctx.obj["repo_validate_service"] = repo_validate_service
     ctx.obj["kai_service"] = kai_service
     ctx.obj["doctor_service"] = doctor_service
     ctx.obj["version_service"] = version_service

@@ -24,6 +24,12 @@ OPERATION_REGISTRY: dict[str, str] = {
     "project.description-set": "write",
     "project.use": "write",
     "project.current": "read",
+    "project.invite": "admin",
+    "project.member-list": "read",
+    "project.invitation-list": "read",
+    "project.invitation-cancel": "admin",
+    "project.member-remove": "destructive",
+    "project.member-set-role": "admin",
     # Config browsing & management
     "config.list": "read",
     "config.detail": "read",
@@ -101,6 +107,12 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.start": "write",
     "data-app.stop": "write",
     "data-app.delete": "destructive",
+    # Data apps - secrets + validate-repo (new in 0.28.0)
+    "data-app.secrets-set": "write",
+    "data-app.secrets-list": "read",
+    "data-app.secrets-get": "read",
+    "data-app.secrets-remove": "destructive",
+    "data-app.validate-repo": "read",
     # Storage browsing
     "storage.buckets": "read",
     "storage.bucket-detail": "read",

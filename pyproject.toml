@@ -1,6 +1,6 @@
 [project]
 name = "keboola-agent-cli"
-version = "0.28.0"
+version = "0.29.0"
 description = "AI-friendly CLI for managing Keboola projects"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -38,6 +38,7 @@ pythonpath = ["src", "tests"]
 markers = [
     "integration: marks tests as integration tests requiring real API credentials (deselect with '-m \"not integration\"')",
     "e2e: marks tests as end-to-end tests requiring real API credentials (deselect with '-m \"not e2e\"')",
+    "e2e_invite: project invite E2E -- requires E2E_MANAGE_TOKEN + E2E_INVITE_PROJECT_ID; opt-in via 'make test-e2e-invite'",
 ]
 
 [tool.ruff]
