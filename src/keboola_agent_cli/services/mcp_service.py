@@ -99,8 +99,12 @@ def detect_mcp_server_command() -> list[str] | None:
     3. uvx keboola_mcp_server (cached version, ~1s cached / ~4.5s uncached)
 
     Note: We intentionally do NOT use @latest with uvx because it forces
-    a PyPI check on every invocation (~25s penalty). The cached version
-    is used instead. Users can update manually with: uvx upgrade keboola_mcp_server
+    a PyPI check on every invocation (~25s penalty). The cached / pinned
+    version is used at spawn time. Freshness is maintained out-of-band by
+    the auto-update flow (`auto_update.maybe_auto_update`, since v0.30.1)
+    which runs at kbagent startup and bumps the local MCP install through
+    `uv tool upgrade` / `pip install -U` / `uvx --refresh` depending on
+    the detected install method. Manual override: `kbagent update`.
 
     Returns:
         List of command parts, or None if no method is available.

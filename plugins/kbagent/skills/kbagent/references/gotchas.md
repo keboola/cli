@@ -1,5 +1,32 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## `keboola-mcp-server` is now auto-updated on kbagent startup (since v0.30.1)
+
+- Pre-v0.30.1 trap: a user installs `keboola-mcp-server` once via
+  `uv tool install --prerelease=allow keboola-mcp-server`, then runs kbagent
+  for months while upstream MCP ships several minor versions. The cached
+  schema is missing fields (e.g. `configuration_row_ids` added in MCP v1.55.0)
+  and `kbagent --json tool list` reports the stale schema with no warning.
+  Reported in #243 -- a real user hit this with MCP v1.49.0 (six minors behind).
+- Since v0.30.1: `kbagent` startup runs a two-stage auto-update -- (1) kbagent
+  itself, (2) `keboola-mcp-server`. The MCP stage detects the install method
+  (`uv_tool` / `pip_env` / `uvx`) and runs the matching upgrade command
+  (`uv tool upgrade` / `pip install -U` / `uvx --refresh`). No re-exec needed
+  for the MCP path -- the next `tool call` spawn picks up the new version.
+- Critical invariant: **kbagent up-to-date does NOT short-circuit the MCP
+  stage**. Both stages always run, regardless of which side has updates.
+- `kbagent update` triggers the same two-stage flow explicitly. JSON output
+  contains separate `kbagent` and `mcp` blocks with per-stage `updated`,
+  `current_version`, `latest_version` fields plus a one-line `message`
+  summary.
+- Auto-install is intentionally NOT done on startup. If MCP is not installed
+  locally (`install_method == "none"`), the auto-update flow records the
+  latest version to the cache but does NOT run `uv tool install`. Use
+  `kbagent doctor --fix` for the explicit install path.
+- `kbagent version` now shows the locally installed MCP version next to the
+  latest -- previously only the latest was reported, leaving the user with
+  no signal whether their cache was stale.
+
 ## `storage swap-tables` is dev-branch only and aliases stay put (since v0.28.0)
 
 - `kbagent storage swap-tables --project P --table-id A --target-table-id B

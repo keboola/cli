@@ -1,12 +1,20 @@
 """Tests for VersionService - version detection and update checks."""
 
+import subprocess
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from keboola_agent_cli.services.version_service import (
+    MCP_BINARY_NAME,
+    MCP_PACKAGE_NAME,
     VersionService,
+    _detect_mcp_install_method,
     _fetch_mcp_latest_version,
+    _get_local_mcp_version,
     _is_up_to_date,
     _is_uvx_available,
+    _perform_mcp_update,
 )
 
 
@@ -72,6 +80,21 @@ class TestIsUpToDate:
 class TestVersionService:
     """Tests for VersionService.get_versions()."""
 
+    @pytest.fixture(autouse=True)
+    def _no_real_mcp_probe(self):
+        """Stub out the MCP detection helpers to avoid real subprocess calls."""
+        with (
+            patch(
+                "keboola_agent_cli.services.version_service._get_local_mcp_version",
+                return_value="1.46.0",
+            ),
+            patch(
+                "keboola_agent_cli.services.version_service._detect_mcp_install_method",
+                return_value="uv_tool",
+            ),
+        ):
+            yield
+
     @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
     @patch("keboola_agent_cli.services.version_service._is_uvx_available")
     def test_mcp_auto_updates(
@@ -94,6 +117,11 @@ class TestVersionService:
         assert mcp_dep["auto_updates"] is True
         assert mcp_dep["uvx_available"] is True
         assert mcp_dep["latest_version"] == "1.46.0"
+        # New fields (since v0.28.1)
+        assert mcp_dep["version"] == "1.46.0"
+        assert mcp_dep["up_to_date"] is True
+        assert mcp_dep["install_method"] == "uv_tool"
+        assert "uv tool upgrade" in mcp_dep["upgrade_command"]
 
     @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
     @patch("keboola_agent_cli.services.version_service._is_uvx_available")
@@ -126,3 +154,235 @@ class TestVersionService:
 
         mcp_dep = result["dependencies"][0]
         assert mcp_dep["latest_version"] is None
+        assert mcp_dep["up_to_date"] is None  # cannot compare without latest
+
+
+# ---------------------------------------------------------------------------
+# _get_local_mcp_version (since v0.28.1)
+# ---------------------------------------------------------------------------
+
+
+class TestGetLocalMcpVersion:
+    """Tests for the local-MCP-version detection helper."""
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    def test_binary_returns_version(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+        mock_which.return_value = f"/usr/local/bin/{MCP_BINARY_NAME}"
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="keboola_mcp_server 1.59.1\n", stderr=""
+        )
+        assert _get_local_mcp_version() == "1.59.1"
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    def test_binary_version_on_stderr(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+        """Some tools print --version output to stderr; we read both."""
+        mock_which.return_value = f"/usr/local/bin/{MCP_BINARY_NAME}"
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="version 1.49.0\n")
+        assert _get_local_mcp_version() == "1.49.0"
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which", return_value=None)
+    def test_no_binary_no_metadata_returns_none(self, mock_which: MagicMock) -> None:
+        with patch(
+            "importlib.metadata.version",
+            side_effect=__import__("importlib.metadata").metadata.PackageNotFoundError(
+                MCP_PACKAGE_NAME
+            ),
+        ):
+            assert _get_local_mcp_version() is None
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    @patch(
+        "keboola_agent_cli.services.version_service.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd="x", timeout=5),
+    )
+    def test_binary_timeout_falls_through(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+        mock_which.return_value = f"/usr/local/bin/{MCP_BINARY_NAME}"
+        with patch(
+            "importlib.metadata.version",
+            side_effect=__import__("importlib.metadata").metadata.PackageNotFoundError(
+                MCP_PACKAGE_NAME
+            ),
+        ):
+            assert _get_local_mcp_version() is None
+
+
+# ---------------------------------------------------------------------------
+# _detect_mcp_install_method (since v0.28.1)
+# ---------------------------------------------------------------------------
+
+
+class TestDetectMcpInstallMethod:
+    """Tests for the MCP-install-method detector."""
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    def test_uv_tool(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+        mock_which.side_effect = lambda c: {
+            MCP_BINARY_NAME: f"/home/user/.local/bin/{MCP_BINARY_NAME}",
+            "uv": "/usr/local/bin/uv",
+        }.get(c)
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=f"{MCP_PACKAGE_NAME} v1.59.1\n",
+            stderr="",
+        )
+        assert _detect_mcp_install_method() == "uv_tool"
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    def test_pip_env_when_binary_present_but_not_in_uv_tool(
+        self, mock_run: MagicMock, mock_which: MagicMock
+    ) -> None:
+        mock_which.side_effect = lambda c: {
+            MCP_BINARY_NAME: f"/usr/local/bin/{MCP_BINARY_NAME}",
+            "uv": "/usr/local/bin/uv",
+        }.get(c)
+        mock_run.return_value = MagicMock(returncode=0, stdout="other-tool v1.0.0\n", stderr="")
+        assert _detect_mcp_install_method() == "pip_env"
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which", return_value=None)
+    def test_uvx_fallback(self, mock_which: MagicMock) -> None:
+        # Two passes through which: fail for binary + uv, succeed for uvx.
+        mock_which.side_effect = lambda c: "/usr/local/bin/uvx" if c == "uvx" else None
+        with patch(
+            "importlib.metadata.distribution",
+            side_effect=__import__("importlib.metadata").metadata.PackageNotFoundError(
+                MCP_PACKAGE_NAME
+            ),
+        ):
+            assert _detect_mcp_install_method() == "uvx"
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which", return_value=None)
+    def test_none_when_nothing_available(self, mock_which: MagicMock) -> None:
+        with patch(
+            "importlib.metadata.distribution",
+            side_effect=__import__("importlib.metadata").metadata.PackageNotFoundError(
+                MCP_PACKAGE_NAME
+            ),
+        ):
+            assert _detect_mcp_install_method() == "none"
+
+
+# ---------------------------------------------------------------------------
+# _perform_mcp_update (since v0.28.1)
+# ---------------------------------------------------------------------------
+
+
+class TestPerformMcpUpdate:
+    """Tests for ``_perform_mcp_update``."""
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    def test_uv_tool_success(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+        mock_which.return_value = "/usr/local/bin/uv"
+        mock_run.return_value = MagicMock(returncode=0, stdout="upgraded", stderr="")
+        ok, info = _perform_mcp_update(method="uv_tool")
+        assert ok is True
+        assert "upgraded" in info
+        # Verify the command shape we are about to run.
+        cmd = mock_run.call_args.args[0]
+        assert "tool" in cmd and "upgrade" in cmd and MCP_PACKAGE_NAME in cmd
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    def test_pip_env_success(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+        mock_which.return_value = "/usr/local/bin/pip"
+        mock_run.return_value = MagicMock(returncode=0, stdout="upgraded via pip", stderr="")
+        ok, _info = _perform_mcp_update(method="pip_env")
+        assert ok is True
+        cmd = mock_run.call_args.args[0]
+        assert "install" in cmd and "--upgrade" in cmd
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    def test_uvx_uses_refresh(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+        mock_which.return_value = "/usr/local/bin/uvx"
+        mock_run.return_value = MagicMock(returncode=0, stdout="cached refreshed", stderr="")
+        ok, _info = _perform_mcp_update(method="uvx")
+        assert ok is True
+        cmd = mock_run.call_args.args[0]
+        assert "--refresh" in cmd
+
+    def test_none_returns_false(self) -> None:
+        ok, info = _perform_mcp_update(method="none")
+        assert ok is False
+        assert "not installed" in info
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    @patch(
+        "keboola_agent_cli.services.version_service.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd="x", timeout=180),
+    )
+    def test_timeout(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+        mock_which.return_value = "/usr/local/bin/uv"
+        ok, info = _perform_mcp_update(method="uv_tool", timeout=180.0)
+        assert ok is False
+        assert "timed out" in info
+
+
+# ---------------------------------------------------------------------------
+# VersionService.self_update -- two-stage upgrade (since v0.28.1)
+# ---------------------------------------------------------------------------
+
+
+class TestSelfUpdateTwoStage:
+    """Tests for the kbagent + MCP combined upgrade path."""
+
+    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
+    @patch("keboola_agent_cli.services.version_service._get_local_mcp_version")
+    @patch("keboola_agent_cli.services.version_service._detect_mcp_install_method")
+    @patch("keboola_agent_cli.services.version_service._perform_mcp_update")
+    def test_both_up_to_date_no_subprocesses(
+        self,
+        mock_perform: MagicMock,
+        mock_detect: MagicMock,
+        mock_local: MagicMock,
+        mock_mcp_latest: MagicMock,
+        mock_kbagent_latest: MagicMock,
+    ) -> None:
+        from keboola_agent_cli import __version__
+
+        mock_kbagent_latest.return_value = __version__
+        mock_mcp_latest.return_value = "1.59.1"
+        mock_local.return_value = "1.59.1"
+        mock_detect.return_value = "uv_tool"
+
+        svc = VersionService()
+        result = svc.self_update()
+
+        assert result["updated"] is False
+        assert result["kbagent"]["updated"] is False
+        assert result["mcp"]["updated"] is False
+        mock_perform.assert_not_called()
+
+    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
+    @patch("keboola_agent_cli.services.version_service._get_local_mcp_version")
+    @patch("keboola_agent_cli.services.version_service._detect_mcp_install_method")
+    @patch("keboola_agent_cli.services.version_service._perform_mcp_update")
+    def test_only_mcp_stale_kbagent_uptodate_still_runs_mcp(
+        self,
+        mock_perform: MagicMock,
+        mock_detect: MagicMock,
+        mock_local: MagicMock,
+        mock_mcp_latest: MagicMock,
+        mock_kbagent_latest: MagicMock,
+    ) -> None:
+        from keboola_agent_cli import __version__
+
+        mock_kbagent_latest.return_value = __version__  # kbagent up-to-date
+        mock_mcp_latest.return_value = "1.59.1"
+        mock_local.return_value = "1.49.0"  # MCP stale
+        mock_detect.return_value = "uv_tool"
+        mock_perform.return_value = (True, "ok")
+
+        svc = VersionService()
+        result = svc.self_update()
+
+        # Critical: kbagent up-to-date does NOT short-circuit MCP stage.
+        assert result["mcp"]["updated"] is True
+        assert result["updated"] is True
+        mock_perform.assert_called_once()
