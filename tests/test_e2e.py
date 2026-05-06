@@ -5871,6 +5871,7 @@ class TestE2EStorageNativeTypesAndBranchMaterialize:
 # ---------------------------------------------------------------------------
 
 
+@skip_without_credentials
 @pytest.mark.e2e
 class TestE2EStorageSwapTables:
     """End-to-end coverage for ``kbagent storage swap-tables``.
