@@ -2188,6 +2188,82 @@ def config_row_update(
         )
 
 
+# ── config row-delete ──────────────────────────────────────────────────────────
+
+
+@config_app.command("row-delete", rich_help_panel="Rows")
+def config_row_delete(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    component_id: str = typer.Option(..., "--component-id", help="Component ID"),
+    config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
+    row_id: str = typer.Option(..., "--row-id", help="Row ID to delete"),
+    branch: int | None = typer.Option(
+        None, "--branch", help="Delete from a specific dev branch ID (defaults to active branch)"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+) -> None:
+    """Delete a configuration row.
+
+    \b
+    Examples:
+      kbagent config row-delete --project P --component-id C --config-id ID --row-id ROW
+      kbagent config row-delete --project P --component-id C --config-id ID --row-id ROW --yes
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "config.row-delete",
+            project=project,
+            component_id=component_id,
+            config_id=config_id,
+            row_id=row_id,
+            branch=branch,
+        )
+        return
+
+    formatter = get_formatter(ctx)
+
+    if (
+        not yes
+        and not formatter.json_mode
+        and not typer.confirm(f"Delete row [{row_id}] from {component_id}/{config_id}?")
+    ):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+
+    service = get_service(ctx, "config_service")
+
+    try:
+        result = service.delete_config_row(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            row_id=row_id,
+            branch_id=branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        branch_info = ""
+        if result.get("branch_id"):
+            branch_info = f" (branch {result['branch_id']})"
+        formatter.success(
+            f"Deleted row [{row_id}] from {escape(component_id)}/{escape(config_id)}{branch_info}"
+        )
+
+
 # ── config oauth-url ───────────────────────────────────────────────────────────
 
 

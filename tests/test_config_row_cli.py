@@ -742,3 +742,136 @@ class TestOauthUrlMasterTokenGate:
         assert output["error"]["code"] == "MISSING_MASTER_TOKEN"
         # No URL should ever be minted on a non-master token.
         mock_client.get_oauth_url.assert_not_called()
+
+
+class TestConfigRowDeleteCli:
+    """CLI-level tests for `config row-delete`."""
+
+    def test_delete_with_yes_flag(self, tmp_config_dir: Path) -> None:
+        """--yes skips confirmation and deletes the row."""
+        store = setup_single_project(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.delete_config_row.return_value = None
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.config.get_service",
+                lambda ctx, name: service,
+            )
+            result = _invoke(
+                tmp_config_dir,
+                "row-delete",
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-mysql",
+                    "--config-id",
+                    "cfg-001",
+                    "--row-id",
+                    "row-001",
+                    "--yes",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["deleted"] is True
+        assert output["data"]["row_id"] == "row-001"
+        mock_client.delete_config_row.assert_called_once()
+
+    def test_delete_json_mode_skips_prompt(self, tmp_config_dir: Path) -> None:
+        """--json mode skips interactive prompt even without --yes."""
+        store = setup_single_project(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.delete_config_row.return_value = None
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.config.get_service",
+                lambda ctx, name: service,
+            )
+            # Note: _invoke already passes --json
+            result = _invoke(
+                tmp_config_dir,
+                "row-delete",
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-mysql",
+                    "--config-id",
+                    "cfg-001",
+                    "--row-id",
+                    "row-001",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        mock_client.delete_config_row.assert_called_once()
+
+    def test_delete_404_returns_nonzero_exit(self, tmp_config_dir: Path) -> None:
+        """Delete on a non-existent row -> non-zero exit, NOT_FOUND error code."""
+        store = setup_single_project(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.delete_config_row.side_effect = KeboolaApiError(
+            status_code=404, error_code="NOT_FOUND", message="Row not found"
+        )
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.config.get_service",
+                lambda ctx, name: service,
+            )
+            result = _invoke(
+                tmp_config_dir,
+                "row-delete",
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-mysql",
+                    "--config-id",
+                    "cfg-001",
+                    "--row-id",
+                    "missing",
+                    "--yes",
+                ],
+            )
+
+        assert result.exit_code != 0
+        output = json.loads(result.output)
+        assert output["error"]["code"] == "NOT_FOUND"
+
+    def test_delete_missing_row_id_exits_nonzero(self, tmp_config_dir: Path) -> None:
+        """Missing required --row-id causes non-zero exit (Typer validation)."""
+        result = runner.invoke(
+            app,
+            [
+                "--json",
+                "--config-dir",
+                str(tmp_config_dir),
+                "config",
+                "row-delete",
+                "--project",
+                "prod",
+                "--component-id",
+                "comp",
+                "--config-id",
+                "cfg",
+            ],
+        )
+        assert result.exit_code != 0

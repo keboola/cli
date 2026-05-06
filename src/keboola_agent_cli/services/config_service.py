@@ -1604,6 +1604,57 @@ class ConfigService(BaseService):
 
         return configuration if configuration is not None else current_cfg
 
+    # ── config row-delete ──────────────────────────────────────────────────────
+
+    def delete_config_row(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        row_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Delete a configuration row.
+
+        Args:
+            alias: Project alias.
+            component_id: The component ID.
+            config_id: The configuration ID the row belongs to.
+            row_id: The row ID to delete.
+            branch_id: If set, delete from a specific dev branch. Falls back
+                to the project's active branch when None.
+
+        Returns:
+            Dict with ``deleted: True`` plus identifiers (``project_alias``,
+            ``component_id``, ``config_id``, ``row_id``, ``branch_id``).
+
+        Raises:
+            ConfigError: If the alias is not found.
+            KeboolaApiError: If the API call fails (e.g. row not found = 404).
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch_id = branch_id or project.active_branch_id
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            client.delete_config_row(
+                component_id=component_id,
+                config_id=config_id,
+                row_id=row_id,
+                branch_id=effective_branch_id,
+            )
+        finally:
+            client.close()
+
+        return {
+            "deleted": True,
+            "project_alias": alias,
+            "component_id": component_id,
+            "config_id": config_id,
+            "row_id": row_id,
+            "branch_id": effective_branch_id,
+        }
+
     # ── config oauth-url ───────────────────────────────────────────────────────
 
     def get_oauth_url(

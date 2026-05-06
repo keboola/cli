@@ -634,6 +634,37 @@ class TestHintCLI:
         assert result.exit_code == 0, result.stdout
         assert "get_oauth_url" in result.stdout
 
+    def test_hint_client_config_row_delete(self, tmp_path: Path) -> None:
+        """`--hint client config row-delete` short-circuits before service call."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with patch("keboola_agent_cli.client.KeboolaClient") as MockClient:
+            result = runner.invoke(
+                app,
+                [
+                    "--config-dir",
+                    str(config_dir),
+                    "--hint",
+                    "client",
+                    "config",
+                    "row-delete",
+                    "--project",
+                    "p",
+                    "--component-id",
+                    "keboola.ex-mysql",
+                    "--config-id",
+                    "cfg-1",
+                    "--row-id",
+                    "row-1",
+                    "--yes",
+                ],
+            )
+            MockClient.assert_not_called()
+
+        assert result.exit_code == 0, result.stdout
+        assert "delete_config_row" in result.stdout
+
 
 # ── Security tests ─────────────────────────────────────────────────
 

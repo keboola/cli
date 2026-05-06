@@ -302,6 +302,66 @@ class TestUpdateConfigRow:
 
 
 # ---------------------------------------------------------------------------
+# delete_config_row tests
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteConfigRow:
+    """Tests for ConfigService.delete_config_row."""
+
+    def test_delete_calls_client(self, tmp_config_dir: Path) -> None:
+        """Service forwards row identifiers to client.delete_config_row."""
+        service, client = _make_service(tmp_config_dir)
+
+        result = service.delete_config_row(
+            alias="prod",
+            component_id="keboola.ex-mysql",
+            config_id="cfg-001",
+            row_id="row-001",
+        )
+
+        client.delete_config_row.assert_called_once_with(
+            component_id="keboola.ex-mysql",
+            config_id="cfg-001",
+            row_id="row-001",
+            branch_id=None,
+        )
+        assert result["deleted"] is True
+        assert result["project_alias"] == "prod"
+        assert result["row_id"] == "row-001"
+
+    def test_delete_with_branch(self, tmp_config_dir: Path) -> None:
+        """Branch ID is forwarded to the client."""
+        service, client = _make_service(tmp_config_dir)
+
+        service.delete_config_row(
+            alias="prod",
+            component_id="keboola.ex-mysql",
+            config_id="cfg-001",
+            row_id="row-001",
+            branch_id=42,
+        )
+
+        kwargs = client.delete_config_row.call_args.kwargs
+        assert kwargs["branch_id"] == 42
+
+    def test_delete_propagates_api_error(self, tmp_config_dir: Path) -> None:
+        """Storage API 404 (row not found) propagates as KeboolaApiError."""
+        service, client = _make_service(tmp_config_dir)
+        client.delete_config_row.side_effect = KeboolaApiError(
+            status_code=404, error_code="NOT_FOUND", message="Row not found"
+        )
+
+        with pytest.raises(KeboolaApiError, match="Row not found"):
+            service.delete_config_row(
+                alias="prod",
+                component_id="keboola.ex-mysql",
+                config_id="cfg-001",
+                row_id="missing-row",
+            )
+
+
+# ---------------------------------------------------------------------------
 # get_oauth_url tests
 # ---------------------------------------------------------------------------
 

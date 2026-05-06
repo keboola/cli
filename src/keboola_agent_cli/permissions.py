@@ -44,6 +44,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "config.set-folder": "write",
     "config.row-create": "write",
     "config.row-update": "write",
+    "config.row-delete": "destructive",
     "config.oauth-url": "read",
     # Job history
     "job.list": "read",

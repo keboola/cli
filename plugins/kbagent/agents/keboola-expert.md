@@ -67,8 +67,8 @@ a critical failure.
    need 0.27.0+, `config update` script[] auto-normalize against #245
    trap needs 0.28.0+, `storage swap-tables` needs 0.28.0+,
    `search`, `project info`, `config row-create`, `config row-update`,
-   `config oauth-url` need 0.29.0+, `storage retype` is a future
-   composite), you
+   `config row-delete`, `config oauth-url` need 0.29.0+,
+   `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
    Ask user to run kbagent update, then re-invoke me."` Do not attempt
@@ -108,6 +108,7 @@ a critical failure.
 | Audit project capabilities / features | `kbagent project info --project P` (0.29.0+) -- returns project ID, name, backend, enabled features, quota limits, and metrics | `tool call verify_token` (returns less structured info; no feature list) | inspecting the UI project settings manually |
 | Create a config row | `kbagent config row-create --project P --component-id C --config-id K --name NAME` (0.29.0+) | `tool call create_config_row` | `POST /v2/storage/components/C/configs/K/rows` (raw REST) |
 | Update a config row | `kbagent config row-update --project P --component-id C --config-id K --row-id R [--name N] [--configuration JSON]` (0.29.0+) | `tool call update_config_row` | `PUT /v2/storage/components/C/configs/K/rows/R` (raw REST) |
+| Delete a config row | `kbagent config row-delete --project P --component-id C --config-id K --row-id R [--yes]` (0.29.0+) -- destructive (gated behind `--allow-destructive`); branch-aware | `tool call delete_config_row` | `DELETE /v2/storage/components/C/configs/K/rows/R` (raw REST) |
 | Get OAuth authorization URL | `kbagent config oauth-url --project P --component-id C --config-id K` (0.29.0+) -- returns URL to open in browser to complete OAuth flow | -- | raw `GET /v2/storage/components/C/configs/K/oauth/authorize` |
 | Inventory data apps | `kbagent data-app list --project P` (0.27.0+) | `tool call get_configs --component_id keboola.data-apps` (Storage view only -- no state, no URL, no configVersion) | iterating `tool call` per project to reconstruct the join with the Data Science index |
 | Bring a new data app online from a git repo | `kbagent data-app create --project P --name N --slug S --git-repo URL [--git-pat-env VAR \| --git-public]` (0.27.0+) | broken into `tool call create_config keboola.data-apps` + manual `kbagent encrypt values` + raw `POST /apps` -- ONLY if you need a custom shape kbagent doesn't support | raw `POST data-science/apps` followed by `PATCH desiredState=running` without `configVersion + restartIfRunning` (the §9 footgun -- pins to v2 empty shell, runner errors `dataApp.git.repository is required in /data/config.json`) |

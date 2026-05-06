@@ -282,6 +282,7 @@ kbagent config delete-metadata --project NAME --component-id ID --config-id ID -
 kbagent config set-folder --project NAME --component-id ID --config-id ID --name FOLDER [--branch ID]
 kbagent config row-create --project NAME --component-id ID --config-id ID --name ROW_NAME [--description D] [--configuration JSON|@file|-] [--is-disabled] [--branch ID]
 kbagent config row-update --project NAME --component-id ID --config-id ID --row-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--is-disabled | --is-enabled] [--branch ID]
+kbagent config row-delete --project NAME --component-id ID --config-id ID --row-id ID [--branch ID] [--yes]
 kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL]
 
 kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--limit N]

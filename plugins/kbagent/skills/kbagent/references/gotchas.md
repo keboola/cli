@@ -997,9 +997,13 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
 - `search --search-type config-based` delegates to `config search` internally but exposes the unified results shape.
 - Options (`--type`, `--project`, `--limit`) must come AFTER the QUERY argument: `kbagent search "text" --type table --limit 10`.
 
-## `config row-create` / `config row-update` require `--row-id` for updates (since v0.29.0)
+## `config row-create` / `row-update` / `row-delete` lifecycle (since v0.29.0)
 
-`row-create` returns the new row object including `id`. Capture this ID for subsequent `row-update` calls. `row-update` preserves all unspecified fields — pass only the keys you want to change. `--is-disabled` and `--is-enabled` are mutually exclusive flags for toggling the row's active state.
+Full CRUD for configuration rows is exposed as a separate `Rows` command panel:
+- `row-create` returns the new row object including `id`. Capture this ID for subsequent `row-update` / `row-delete` calls.
+- `row-update` preserves all unspecified fields — pass only the keys you want to change. `--is-disabled` and `--is-enabled` are mutually exclusive flags for toggling the row's active state.
+- `row-delete` is **destructive** (gated behind `--allow-destructive` if the session firewall is on). 404 from the API on a non-existent row surfaces as `NOT_FOUND` exit 1 — deletion is **not** treated as idempotent success.
+- `--json` mode auto-skips the interactive confirmation prompt on `row-delete`; in human mode pass `--yes` to skip.
 
 ## `config oauth-url` requires a master Storage API token (since v0.29.0)
 

@@ -650,6 +650,49 @@ HintRegistry.register(
     )
 )
 
+# ── config row-delete ──────────────────────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.row-delete",
+        description="Delete a configuration row by ID",
+        steps=[
+            HintStep(
+                comment="Delete configuration row via Storage API DELETE",
+                client=ClientCall(
+                    method="delete_config_row",
+                    args={
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "row_id": "{row_id}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="_",
+                    result_hint="None",
+                ),
+                service=ServiceCall(
+                    service_class="ConfigService",
+                    service_module="config_service",
+                    method="delete_config_row",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "config_id": "{config_id}",
+                        "row_id": "{row_id}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Destructive: irreversible deletion of the row from the Storage API.",
+            "404 from API surfaces as KeboolaApiError(NOT_FOUND); deleting a "
+            "non-existent row is treated as an error, not idempotent success.",
+            "Branch-aware: pass branch_id to delete from a dev branch.",
+        ],
+    )
+)
+
 # ── config oauth-url ───────────────────────────────────────────────────────────
 
 HintRegistry.register(
