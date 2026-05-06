@@ -58,7 +58,7 @@ with:
 
 ```bash
 kbagent data-app password --project prod --app-id <ID>
-# Manage token: interactive prompt by default (since v0.28.0); for CI add
+# Manage token: interactive prompt by default (since v0.29.0); for CI add
 # --allow-env-manage-token alongside KBC_MANAGE_API_TOKEN. Storage token
 # is read from .kbagent/config.json as usual.
 ```
@@ -116,7 +116,7 @@ kbagent data-app deploy --project prod --app-id 12345678 \
 (rollback). Subsequent deploys without the flag will jump back to the
 latest.
 
-### Pre-flight repo validation (since v0.28.0)
+### Pre-flight repo validation (since v0.29.0)
 
 ```bash
 kbagent data-app validate-repo \
@@ -136,7 +136,7 @@ repo. Public repos: drop `--git-pat-env` and use `--git-public`. Total
 GitHub call budget per run is ≤5 (1 tree + ≤4 contents) regardless of repo size, so the
 60/hour unauth limit rarely fires; pass a PAT for CI loops.
 
-### Manage app-runtime secrets (since v0.28.0)
+### Manage app-runtime secrets (since v0.29.0)
 
 ```bash
 # Set two secrets at once. Plaintext values; the CLI encrypts under

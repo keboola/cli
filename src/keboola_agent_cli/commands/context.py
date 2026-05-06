@@ -94,7 +94,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     Print the effective default project and its source (env / pin / none).
     Resolution order for single-project operations: --project > KBAGENT_PROJECT > pin.
 
-### Project Members & Invitations (since v0.26.1)
+### Project Members & Invitations (since v0.29.0)
 
   Requires KBC_MANAGE_API_TOKEN (Manage API auth). Allowed roles: admin, guest, readOnly, share.
 
@@ -452,7 +452,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Use --org-id OR --project-ids (at least one required).
     Token via interactive hidden prompt by default; pass top-level
     --allow-env-manage-token to read KBC_MANAGE_API_TOKEN from env (CI/CD).
-    Default-deny since 0.28.0 -- closes the AI-exfiltration risk where
+    Default-deny since 0.29.0 -- closes the AI-exfiltration risk where
     subprocesses inherit the manage token via env.
 
 ### Flows (Orchestrator + Conditional)
@@ -630,7 +630,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Retrieve the simpleAuth password. Requires the Manage API token in
     addition to the project's Storage token. Token is read from interactive
     hidden prompt by default; pass top-level --allow-env-manage-token to
-    use KBC_MANAGE_API_TOKEN from env (default-deny since 0.28.0). Never
+    use KBC_MANAGE_API_TOKEN from env (default-deny since 0.29.0). Never
     persisted, never logged. Password is auto-generated at create time
     and CANNOT be rotated -- delete and recreate the app to mint a new one.
 
@@ -811,7 +811,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
      KBC_TOKEN                Storage API token (fallback for --token)
      KBC_STORAGE_API_URL      Default stack URL (fallback for --url)
      KBC_MANAGE_API_TOKEN     Manage API token (org setup, project refresh, data-app password).
-                              Default-DENY since 0.28.0: pass --allow-env-manage-token
+                              Default-DENY since 0.29.0: pass --allow-env-manage-token
                               to opt in, otherwise this var is ignored and a TTY prompt
                               is required. Closes AI-exfiltration via subprocess env.
      KBC_MASTER_TOKEN         Master token for sharing ops (global fallback)

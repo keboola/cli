@@ -1,4 +1,4 @@
-# Project Member & Invitation Workflow (since v0.26.1)
+# Project Member & Invitation Workflow (since v0.29.0)
 
 Closes the long-standing Manage API gap that forced every Keboola-internal
 automation (most recently the Cuesta-training orchestrator) to bypass kbagent
@@ -161,11 +161,11 @@ Permission category: `destructive` (re-adding requires sending a fresh invite).
 | HTTP 403 manage token lacks org-admin | `KeboolaApiError(ACCESS_DENIED)` | 1 |
 | HTTP 404 project / invitation not found | `KeboolaApiError(NOT_FOUND)` | 1 |
 
-## When to use the Manage API direct-add (not in v0.26.1)
+## When to use the Manage API direct-add (not in v0.29.0)
 
 The Manage API also exposes `POST /manage/projects/{id}/users` with body
 `{"email": "...", "role": "..."}`. This **directly creates a member without
 sending an email** -- useful for org-internal automation, dangerous for
-public-facing flows. v0.26.1 deliberately does NOT expose this path because
+public-facing flows. v0.29.0 deliberately does NOT expose this path because
 its semantics differ from `invite`. If you need it, talk to the maintainers
 about a future `member-add-direct` command.

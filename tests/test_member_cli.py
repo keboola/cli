@@ -60,6 +60,7 @@ class TestProjectInviteSingle:
             result = runner.invoke(
                 app,
                 [
+                    "--allow-env-manage-token",
                     "--config-dir",
                     str(config_dir),
                     "--json",
@@ -89,6 +90,7 @@ class TestProjectInviteSingle:
             result = runner.invoke(
                 app,
                 [
+                    "--allow-env-manage-token",
                     "--config-dir",
                     str(config_dir),
                     "--json",
@@ -110,6 +112,7 @@ class TestProjectInviteSingle:
             result = runner.invoke(
                 app,
                 [
+                    "--allow-env-manage-token",
                     "--config-dir",
                     str(config_dir),
                     "--json",
@@ -145,6 +148,7 @@ class TestProjectInviteSingle:
             result = runner.invoke(
                 app,
                 [
+                    "--allow-env-manage-token",
                     "--config-dir",
                     str(config_dir),
                     "--json",
@@ -181,6 +185,7 @@ class TestProjectInviteSingle:
             result = runner.invoke(
                 app,
                 [
+                    "--allow-env-manage-token",
                     "--config-dir",
                     str(config_dir),
                     "--json",
@@ -239,6 +244,7 @@ class TestProjectInviteBulk:
             result = runner.invoke(
                 app,
                 [
+                    "--allow-env-manage-token",
                     "--config-dir",
                     str(config_dir),
                     "--json",
@@ -266,6 +272,7 @@ class TestProjectInviteBulk:
             result = runner.invoke(
                 app,
                 [
+                    "--allow-env-manage-token",
                     "--config-dir",
                     str(config_dir),
                     "--json",
@@ -308,6 +315,7 @@ class TestMemberList:
             result = runner.invoke(
                 app,
                 [
+                    "--allow-env-manage-token",
                     "--config-dir",
                     str(config_dir),
                     "--json",
@@ -343,6 +351,7 @@ class TestMemberList:
             result = runner.invoke(
                 app,
                 [
+                    "--allow-env-manage-token",
                     "--config-dir",
                     str(config_dir),
                     "--json",
@@ -380,6 +389,7 @@ class TestInvitationCancel:
             result = runner.invoke(
                 app,
                 [
+                    "--allow-env-manage-token",
                     "--config-dir",
                     str(config_dir),
                     "--json",
@@ -417,6 +427,7 @@ class TestMemberRemove:
             result = runner.invoke(
                 app,
                 [
+                    "--allow-env-manage-token",
                     "--config-dir",
                     str(config_dir),
                     "--json",
@@ -455,6 +466,7 @@ class TestMemberSetRole:
             result = runner.invoke(
                 app,
                 [
+                    "--allow-env-manage-token",
                     "--config-dir",
                     str(config_dir),
                     "--json",

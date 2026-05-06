@@ -211,7 +211,7 @@ Skipped if `keboola-mcp-server` is not installed.
 
 | Command | Reason |
 |---------|--------|
-| `project refresh` | Requires Manage API token (interactive prompt by default since v0.28.0; `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for non-interactive runners) |
+| `project refresh` | Requires Manage API token (interactive prompt by default since v0.29.0; `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for non-interactive runners) |
 | `org setup` | Requires Manage API token (same prompt-or-flag as above) + destructive (registers projects in org) |
 | `sharing share/unshare` | Requires org-level permissions or second project |
 | `sharing link/unlink` | Requires shared bucket from another project |

@@ -290,7 +290,7 @@ kbagent --json project add --project prod --url https://connection.keboola.com -
 
 # Or bulk-onboard from organization (org admin)
 # Manage token: interactive prompt by default; for CI add --allow-env-manage-token
-# alongside KBC_MANAGE_API_TOKEN (required since v0.28.0).
+# alongside KBC_MANAGE_API_TOKEN (required since v0.29.0).
 KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --org-id 123 --url https://connection.keboola.com --yes
 
 # Or onboard specific projects (any project member, uses Personal Access Token)

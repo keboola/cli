@@ -859,7 +859,7 @@ def project_invite(
         )
         return
 
-    manage_token = resolve_manage_token()
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
 
     try:
@@ -922,7 +922,7 @@ def project_member_list(
         )
         return
 
-    manage_token = resolve_manage_token()
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
     try:
         result = service.list_members(
@@ -960,7 +960,7 @@ def project_invitation_list(
         )
         return
 
-    manage_token = resolve_manage_token()
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
     try:
         result = service.list_invitations(manage_token=manage_token, alias=project)
@@ -1014,7 +1014,7 @@ def project_invitation_cancel(
         formatter.console.print("Aborted.")
         raise typer.Exit(code=0)
 
-    manage_token = resolve_manage_token()
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
     try:
         result = service.cancel_invitation(
@@ -1069,7 +1069,7 @@ def project_member_remove(
         formatter.console.print("Aborted.")
         raise typer.Exit(code=0)
 
-    manage_token = resolve_manage_token()
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
     try:
         result = service.remove_member(
@@ -1122,7 +1122,7 @@ def project_member_set_role(
         )
         return
 
-    manage_token = resolve_manage_token()
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
     try:
         result = service.set_member_role(

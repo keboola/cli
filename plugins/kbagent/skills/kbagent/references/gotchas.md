@@ -17,16 +17,16 @@
   swaps it back into the original name. After merging the branch the
   original table now carries the typed schema with no downstream config
   rewrite required.
-## `data-app create --auth public` writes the canonical noneProxyAuthorization shape (since v0.28.0; fixes v0.27.0 silent HTTP 503)
+## `data-app create --auth public` writes the canonical noneProxyAuthorization shape (since v0.29.0; fixes v0.27.0 silent HTTP 503)
 
 - **What changed.** v0.27.0's `--auth public` wrote NO `authorization`
   key into the Storage config at all. The Keboola app-proxy refused to
   route to the resulting URL (HTTP 503 / "Service Unavailable") and the
   UI's "Authentication Type" selector showed blank. Operators got a
-  silently broken app. v0.28.0 fixes this: `--auth public` now writes
+  silently broken app. v0.29.0 fixes this: `--auth public` now writes
   the canonical `noneProxyAuthorization` shape that the kbc-ui exports
   for the "None" UI option.
-- **Exact shape written by 0.28.0:**
+- **Exact shape written by 0.29.0:**
   ```json
   {
     "app_proxy": {
@@ -62,7 +62,7 @@
   flag. Use the Keboola UI to configure them after `data-app create`.
   Tracked as a follow-up issue.
 
-## `data-app secrets-*` -- per-project KMS, idempotent remove, never decryptable (since v0.28.0)
+## `data-app secrets-*` -- per-project KMS, idempotent remove, never decryptable (since v0.29.0)
 
 - **Encryption is per-project KMS.** `kbagent data-app secrets-set` calls
   the project's Encryption API to wrap each plaintext value before
@@ -110,7 +110,7 @@
   field with the exact redeploy command to run; suppress it with
   `--no-hint-next` for scripted callers.
 
-## `data-app validate-repo` -- pre-flight against the Golden Rule, GitHub-only (since v0.28.0)
+## `data-app validate-repo` -- pre-flight against the Golden Rule, GitHub-only (since v0.29.0)
 
 - `kbagent data-app validate-repo --git-repo URL` walks the repo via the
   GitHub Contents + Trees API and verifies the documented "Golden Rule"
@@ -120,7 +120,7 @@
   GitHub API calls regardless of repo size (one trees-recursive + up
   to four contents fetches), so the 60/hour unauthenticated GitHub
   rate limit is no longer the common-case failure mode.
-- **`--type` is restricted to `python-js` in 0.28.0.** Streamlit /
+- **`--type` is restricted to `python-js` in 0.29.0.** Streamlit /
   pure-Python / R / Node-only repos have different layouts (Streamlit
   does not require the `keboola-config/` tree, for instance) and need
   per-type canon citations. Tracked as a follow-up.
@@ -137,12 +137,12 @@
   [issue #240](https://github.com/padak/keboola_agent_cli/issues/240)
   (needs platform-side API exposure first).
 
-## Manage token: env var is ignored without `--allow-env-manage-token` (since v0.28.0)
+## Manage token: env var is ignored without `--allow-env-manage-token` (since v0.29.0)
 
 - `KBC_MANAGE_API_TOKEN` is no longer auto-resolved on the three
   surfaces that consume it (`kbagent org setup`,
   `kbagent project refresh`, `kbagent data-app password`). Default
-  behaviour on 0.28.0+ is **default-deny**: the env var is ignored, a
+  behaviour on 0.29.0+ is **default-deny**: the env var is ignored, a
   TTY hidden-input prompt is shown instead. With no TTY (CI / cron /
   systemd / `< /dev/null`) the resolver exits **2** with the message
   `Error: No manage token available. Run interactively, or pass
@@ -223,7 +223,7 @@
   container after `autoSuspendAfterSeconds` of inactivity. Hit the URL
   to wake it (auto-restart triggers a 30-60s cold boot) or run
   `kbagent data-app start --app-id N`.
-## `project invite` "already invited / already member" returns HTTP 400, not 422 (since v0.26.1)
+## `project invite` "already invited / already member" returns HTTP 400, not 422 (since v0.29.0)
 
 - Re-inviting a user the project already knows about returns HTTP **400** with
   one of two error strings:
@@ -233,11 +233,11 @@
   `note="already_invited"` / `"already_member"` -- they are *not* exit-1
   failures. Bulk runs (`--from-csv`) count them as `noop` in the summary, not
   `failed`.
-- The 422 heuristic in pre-v0.26.1 orchestrator scripts (`invite_participants.py:25`)
+- The 422 heuristic in pre-v0.29.0 orchestrator scripts (`invite_participants.py:25`)
   is **wrong** for this API. If you write a parallel implementation, key off
   status_code 400 + the substring marker, not 422.
 
-## `project member-set-role` is PATCH, not PUT (since v0.26.1)
+## `project member-set-role` is PATCH, not PUT (since v0.29.0)
 
 - The Manage API role-change endpoint is `PATCH /manage/projects/{id}/users/{userId}`
   with body `{"role": "..."}`. **PUT returns 404** ("resource not found") even
@@ -245,7 +245,7 @@
 - The kbagent `ManageClient.update_project_member_role` method emits PATCH;
   any custom code re-implementing the call must do the same.
 
-## `project invite --from-csv` order is not deterministic (since v0.26.1)
+## `project invite --from-csv` order is not deterministic (since v0.29.0)
 
 - Bulk invitation parallelises via `ThreadPoolExecutor` (default 8 workers).
   The `rows[]` array in the result is in completion order, not CSV order.
@@ -570,7 +570,7 @@ type inventory and examples.
 
 - Tokens are always masked in output (e.g. `901-...pt0k`) -- this is normal
 - Token can be passed via `--token`, `KBC_TOKEN` env var, or interactive prompt
-- Manage API token (since v0.28.0): default-deny on env -- via interactive hidden prompt; pass top-level `--allow-env-manage-token` to opt in to `KBC_MANAGE_API_TOKEN`. Never as CLI argument. See the `(since v0.28.0)` entry at the top of this file.
+- Manage API token (since v0.29.0): default-deny on env -- via interactive hidden prompt; pass top-level `--allow-env-manage-token` to opt in to `KBC_MANAGE_API_TOKEN`. Never as CLI argument. See the `(since v0.29.0)` entry at the top of this file.
 - Master token for sharing: `KBC_MASTER_TOKEN_{ALIAS}` (e.g. `KBC_MASTER_TOKEN_PROD`) or `KBC_MASTER_TOKEN` as global fallback. Alias is uppercased, hyphens become underscores. Required for `sharing share` and `sharing unshare`; `sharing list/link/unlink` use regular project tokens.
 
 ## MCP tool call gotchas
@@ -980,7 +980,7 @@ See [docs/hint-mode.md](../../../../../docs/hint-mode.md) for full documentation
 
 - **Forgetting `--json`**: without it, output is human-formatted Rich text, not parseable
 - **Assuming `data.projects`**: `project list` returns data as a flat list
-- **Passing manage token as argument**: use the interactive prompt (default since v0.28.0), or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` env var for CI
+- **Passing manage token as argument**: use the interactive prompt (default since v0.29.0), or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` env var for CI
 - **Polling after branch create**: kbagent already waits for async completion
 - **Not saving workspace password**: only returned once on creation
 - **Putting SQL in _config.yml**: SQL transformations must use `transform.sql` with block markers (see above)
