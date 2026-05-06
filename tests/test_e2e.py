@@ -6091,7 +6091,7 @@ class TestE2EDataAppLifecycle:
 
 @skip_without_credentials
 class TestE2EConfigUpdateNormalization:
-    """End-to-end coverage for the v0.27.1 ``script[]`` auto-normalize fix.
+    """End-to-end coverage for the v0.28.0 ``script[]`` auto-normalize fix.
 
     The Storage API silently accepts a string for
     ``parameters.blocks[].codes[].script`` while the runtime validator
@@ -6406,7 +6406,7 @@ class TestE2EConfigUpdateNormalization:
             f"Job ended in unexpected state: {job_result.get('status')!r} "
             f"(error: {job_result.get('error_message')!r}). "
             "If status is 'error' with the schema-validator message, the "
-            "v0.27.1 normalize fix regressed -- script[] reached the runtime "
+            "v0.28.0 normalize fix regressed -- script[] reached the runtime "
             "as a string."
         )
         # Belt-and-braces: explicitly assert the failure-mode string is NOT

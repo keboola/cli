@@ -124,7 +124,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     nested key (e.g. parameters.db.host=new-host). --merge deep-merges into
     existing config (preserves sibling keys). --dry-run previews changes.
     Paths are always relative to the configuration root.
-    Auto-normalize (0.27.1+; #245): parameters.blocks[].codes[].script
+    Auto-normalize (0.28.0+; #245): parameters.blocks[].codes[].script
     strings are silently rewritten to arrays before pushing to Storage --
     SQL transformations split on statement boundaries (state machine
     respects 'string' / "ident" / $$..$$ / -- / # / // / /* */); Python /

@@ -526,7 +526,7 @@ CREATE TABLE foo AS
 
 See `scaffold-workflow.md` for the complete file structure reference.
 
-## `config update` auto-normalizes `script[]` from string to array (since v0.27.1)
+## `config update` auto-normalizes `script[]` from string to array (since v0.28.0)
 
 The Storage API silently accepts a string for `parameters.blocks[].codes[].script`,
 but the Keboola runtime validator rejects it with:
@@ -580,11 +580,11 @@ is composing the configuration JSON itself, prefer
 for SQL transformations -- that way the normalization fires regardless of
 upstream client behaviour.
 
-Bonus fix in 0.27.1: `kbagent sync push` previously did NOT split semicolons
+Bonus fix in 0.28.0: `kbagent sync push` previously did NOT split semicolons
 in BigQuery / DuckDB transformations because those component IDs were
 missing from `SQL_TRANSFORMATION_COMPONENTS`. Push collapsed multiple
 statements into one `script` element, mirroring closed issue #119 on a
-different backend. The 0.27.1 registry now covers BQ / DuckDB explicitly,
+different backend. The 0.28.0 registry now covers BQ / DuckDB explicitly,
 plus fragment-based fallback for future / self-hosted SQL backends.
 
 ## Snowflake: MULTI_STATEMENT_COUNT

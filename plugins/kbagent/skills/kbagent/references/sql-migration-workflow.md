@@ -123,9 +123,9 @@ failures:
 | `Actual statement count N did not match desired count 1` | Missing `ALTER SESSION SET MULTI_STATEMENT_COUNT = 0` |
 | `Database 'SAPI_226' does not exist` | Unquoted database name (Step 4d) |
 | `invalid identifier '"column"'` | Workspace table conflict (Step 5) |
-| `Expected "array", but got "string"` for `script` (runtime, not Storage write) | Pushed `parameters.blocks[].codes[].script` as a string. Storage API silently accepted it; the runtime validator rejects it. **0.27.1+ fix**: `kbagent config update` auto-normalizes string -> array before push (SQL split / Python wrap). MCP `update_sql_transformation` and raw REST do NOT auto-normalize -- prefer `kbagent config update` for SQL transformation body edits. See `gotchas.md` `script[]` entry. |
+| `Expected "array", but got "string"` for `script` (runtime, not Storage write) | Pushed `parameters.blocks[].codes[].script` as a string. Storage API silently accepted it; the runtime validator rejects it. **0.28.0+ fix**: `kbagent config update` auto-normalizes string -> array before push (SQL split / Python wrap). MCP `update_sql_transformation` and raw REST do NOT auto-normalize -- prefer `kbagent config update` for SQL transformation body edits. See `gotchas.md` `script[]` entry. |
 
-## Auto-normalization of `script[]` (since 0.27.1, #245)
+## Auto-normalization of `script[]` (since 0.28.0, #245)
 
 When pushing a SQL transformation body via `kbagent config update --configuration`,
 `--configuration-file`, or `--set parameters.blocks.0.codes.0.script=...`, the
@@ -162,5 +162,5 @@ the string lands as-is and the job crashes at runtime.
   paths. Check if the string already contains `sapi_` before replacing.
 - **Pushing `script` as a single multi-statement string**: The Storage API
   accepts it (200 OK) but the runtime validator crashes (`Expected array,
-  got string`). Use `kbagent config update` (0.27.1+ auto-normalizes) or
+  got string`). Use `kbagent config update` (0.28.0+ auto-normalizes) or
   build the array yourself if going via MCP / raw REST.
