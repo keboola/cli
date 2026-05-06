@@ -64,13 +64,13 @@ a critical failure.
    needed for the current task (e.g. `flow update` needs 0.22.0+,
    `schedule find` needs 0.23.0+, `config set-default-bucket` needs
    0.26.0+, `data-app create / deploy / start / stop / delete / password`
-<<<<<<< HEAD
    need 0.27.0+, `config update` script[] auto-normalize against #245
    trap needs 0.28.0+, `storage swap-tables` needs 0.28.0+,
    env-var manage-token auth for `org setup` / `project refresh` /
    `data-app password` needs 0.28.0+ with `--allow-env-manage-token`
    (the env var is default-deny on 0.28.0+),
-   `storage retype` is a future composite), you
+   `project invite` / `project member-*` / `project invitation-*`
+   need 0.26.1+, `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
    Ask user to run kbagent update, then re-invoke me."` Do not attempt
