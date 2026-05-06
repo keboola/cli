@@ -194,6 +194,7 @@ class TestSwapTablesService:
             target_table_id="in.c-foo.data_change_log",
             branch_id=9999,
         )
+        mock_client.close.assert_called_once()
 
     def test_dry_run_skips_client_call(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -269,6 +270,9 @@ class TestSwapTablesService:
                 target_table_id="in.c-foo.b",
                 branch_id=42,
             )
+        # Service must close the client even when the API call raises
+        # (try/finally contract -- regression guard for the lifecycle).
+        mock_client.close.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
