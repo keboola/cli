@@ -66,8 +66,14 @@ a critical failure.
    0.26.0+, `data-app create / deploy / start / stop / delete / password`
    need 0.27.0+, `config update` script[] auto-normalize against #245
    trap needs 0.28.0+, `storage swap-tables` needs 0.28.0+,
+   env-var manage-token auth for `org setup` / `project refresh` /
+   `data-app password` needs 0.29.0+ with `--allow-env-manage-token`
+   (the env var is default-deny on 0.29.0+),
+   `project invite` / `project member-*` / `project invitation-*`
+   need 0.29.0+,
+   `data-app secrets-* / validate-repo` need 0.29.0+,
    `search`, `project info`, `config row-create`, `config row-update`,
-   `config row-delete`, `config oauth-url` need 0.29.0+,
+   `config row-delete`, `config oauth-url` need 0.30.0+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
@@ -93,8 +99,8 @@ a critical failure.
 | Create Snowflake transformation | `kbagent config new --component-id keboola.snowflake-transformation` + `config update --set ...` | `tool call create_sql_transformation` (lower schema, avoids the component refusal) | `tool call create_config` (refuses keboola.snowflake-transformation) |
 | Update SQL transformation body (script[]) | `kbagent config update --project P --component-id keboola.snowflake-transformation --config-id K --configuration @body.json` (0.28.0+ auto-normalizes string `script` to array; SQL gets statement-level split, Python/R gets `[script]` wrap; envelope's `normalizations: [...]` records every change) | `kbagent --hint client config update ...` if you need to bypass the auto-normalize for some reason | `tool call update_sql_transformation` -- still vulnerable to the #245 string-vs-array runtime crash because it pushes raw to Storage API; raw `PUT /v2/storage/components/.../configs/...` -- same trap |
 | Run a job (and wait) | `kbagent job run --project P --component-id C --config-id K --wait` | `tool call run_component` | `job run` without `--wait` when user expects the result |
-| Search items by name across projects | `kbagent search QUERY [--project P] [--type table\|bucket\|config\|flow] [--limit N]` (0.29.0+) | `tool call search_tables` / `tool call search_configurations` (one resource-type per call) | chaining multiple `tool call` for different types |
-| Search config JSON bodies | `kbagent search QUERY --search-type config-based [--project P]` (0.29.0+) | `kbagent config search --query Q` (config-body only, no tables/buckets) | repeated `tool call get_config` to grep locally |
+| Search items by name across projects | `kbagent search QUERY [--project P] [--type table\|bucket\|config\|flow] [--limit N]` (0.30.0+) | `tool call search_tables` / `tool call search_configurations` (one resource-type per call) | chaining multiple `tool call` for different types |
+| Search config JSON bodies | `kbagent search QUERY --search-type config-based [--project P]` (0.30.0+) | `kbagent config search --query Q` (config-body only, no tables/buckets) | repeated `tool call get_config` to grep locally |
 | Browse configs (exploration) | `kbagent config list` / `kbagent config search --query Q` | `tool call list_configs` | full-project pull via MCP just to grep locally |
 | Fetch a specific config | `kbagent config detail --project P --component-id C --config-id K --json` | `tool call get_config` | re-using an earlier JSON dump |
 | Override the auto-derived output bucket on a config | `kbagent config set-default-bucket --bucket in.c-name` (0.26.0+) -- read-modify-write of `storage.output.default_bucket`, preserves siblings; `--clear` removes it | `kbagent config update --set 'storage.output.default_bucket=in.c-name'` (works pre-0.26.0 but not discoverable) | editing the raw JSON in the UI; full-config replace with `--configuration` (wipes other storage keys) |
@@ -105,18 +111,30 @@ a critical failure.
 | Debug a failed job | `kbagent job detail --project P --job-id J --json` + `kbagent job run ... --log-tail-lines 200` | `kbagent workspace from-transformation` for SQL repro | "I think the issue is..." without reading logs |
 | Ad-hoc SQL / row-count / type audit | `kbagent workspace create` + `kbagent workspace load` + `kbagent workspace query --sql "..."` | `kbagent workspace from-transformation` for existing transform debugging | querying Keboola Storage directly via Snowflake credentials outside the workspace abstraction |
 | Inspect dev branch | `kbagent branch list --project P`, `kbagent branch use --project P --branch ID` | `tool call get_branch` | acting on `main` when a dev branch exists |
-| Audit project capabilities / features | `kbagent project info --project P` (0.29.0+) -- returns project ID, name, backend, enabled features, quota limits, and metrics | `tool call verify_token` (returns less structured info; no feature list) | inspecting the UI project settings manually |
-| Create a config row | `kbagent config row-create --project P --component-id C --config-id K --name NAME` (0.29.0+) | `tool call create_config_row` | `POST /v2/storage/components/C/configs/K/rows` (raw REST) |
-| Update a config row | `kbagent config row-update --project P --component-id C --config-id K --row-id R [--name N] [--configuration JSON]` (0.29.0+) | `tool call update_config_row` | `PUT /v2/storage/components/C/configs/K/rows/R` (raw REST) |
-| Delete a config row | `kbagent config row-delete --project P --component-id C --config-id K --row-id R [--yes]` (0.29.0+) -- destructive (gated behind `--allow-destructive`); branch-aware | `tool call delete_config_row` | `DELETE /v2/storage/components/C/configs/K/rows/R` (raw REST) |
-| Get OAuth authorization URL | `kbagent config oauth-url --project P --component-id C --config-id K` (0.29.0+) -- returns URL to open in browser to complete OAuth flow | -- | raw `GET /v2/storage/components/C/configs/K/oauth/authorize` |
+| Audit project capabilities / features | `kbagent project info --project P` (0.30.0+) -- returns project ID, name, backend, enabled features, quota limits, and metrics | `tool call verify_token` (returns less structured info; no feature list) | inspecting the UI project settings manually |
+| Create a config row | `kbagent config row-create --project P --component-id C --config-id K --name NAME` (0.30.0+) | `tool call create_config_row` | `POST /v2/storage/components/C/configs/K/rows` (raw REST) |
+| Update a config row | `kbagent config row-update --project P --component-id C --config-id K --row-id R [--name N] [--configuration JSON]` (0.30.0+) | `tool call update_config_row` | `PUT /v2/storage/components/C/configs/K/rows/R` (raw REST) |
+| Delete a config row | `kbagent config row-delete --project P --component-id C --config-id K --row-id R [--yes]` (0.30.0+) -- destructive (gated behind `--allow-destructive`); branch-aware | `tool call delete_config_row` | `DELETE /v2/storage/components/C/configs/K/rows/R` (raw REST) |
+| Get OAuth authorization URL | `kbagent config oauth-url --project P --component-id C --config-id K` (0.30.0+) -- returns URL to open in browser to complete OAuth flow | -- | raw `GET /v2/storage/components/C/configs/K/oauth/authorize` |
 | Inventory data apps | `kbagent data-app list --project P` (0.27.0+) | `tool call get_configs --component_id keboola.data-apps` (Storage view only -- no state, no URL, no configVersion) | iterating `tool call` per project to reconstruct the join with the Data Science index |
 | Bring a new data app online from a git repo | `kbagent data-app create --project P --name N --slug S --git-repo URL [--git-pat-env VAR \| --git-public]` (0.27.0+) | broken into `tool call create_config keboola.data-apps` + manual `kbagent encrypt values` + raw `POST /apps` -- ONLY if you need a custom shape kbagent doesn't support | raw `POST data-science/apps` followed by `PATCH desiredState=running` without `configVersion + restartIfRunning` (the §9 footgun -- pins to v2 empty shell, runner errors `dataApp.git.repository is required in /data/config.json`) |
 | Roll out a new code or config version on a data app | `kbagent data-app deploy --project P --app-id N --wait` (0.27.0+) -- always sends the §9 trio | `kbagent --hint client data-app deploy ...` to inspect the generated `patch_app(desired_state=, config_version=, restart_if_running=True)` call | `tool call update_config` then `tool call run_component` (data apps are not jobs -- the queue runner does not deploy them) |
 | Wake an auto-suspended data app | `kbagent data-app start --project P --app-id N` (0.27.0+) -- does NOT bump configVersion | hitting the app's URL (auto-restart triggers a 30-60s cold boot) | `kbagent data-app deploy` (overkill -- bumps the deployed configVersion unnecessarily) |
 | Pause a running data app | `kbagent data-app stop --project P --app-id N` (0.27.0+) | -- | `kbagent data-app delete` (irreversible; cascades to Storage config) |
-| Read the simpleAuth password for a password-gated app | `kbagent data-app password --project P --app-id N` (0.27.0+) -- requires `KBC_MANAGE_API_TOKEN` | -- | trying to "rotate" the password (not supported by the API; delete + recreate to mint a new one) |
+| Read the simpleAuth password for a password-gated app | `kbagent data-app password --project P --app-id N` (0.27.0+) -- needs Manage API token (interactive prompt by default; `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.29.0+) | -- | trying to "rotate" the password (not supported by the API; delete + recreate to mint a new one) |
 | Tear down a data app | `kbagent data-app delete --project P --app-id N` (0.27.0+) -- cascades to Storage config; URL retired | -- | manually `tool call delete_config keboola.data-apps` while leaving the deployment record orphaned |
+| Invite a user to a project (single) | `kbagent project invite --project P --email E --role admin\|guest\|readOnly\|share` (0.29.0+) | raw `requests.post(/manage/projects/{id}/invitations)` only if version-gated out | `kbagent project invite` without `KBC_MANAGE_API_TOKEN` set; passing manage token via CLI flag |
+| Invite many users (bulk) | `kbagent project invite --from-csv FILE [--default-role guest] [--workers N] [--dry-run]` (0.29.0+) | `--hint client` to generate a parallel script using `ManageClient` | per-row shell loop calling the CLI -- defeats the parallelism + idempotency the service already does |
+| List active project members | `kbagent project member-list --project P [--include-pending]` (0.29.0+) | `tool call run_sync_action` against the Manage API | reading `.kbagent/config.json` to infer membership (it only stores the local user's token) |
+| List pending invitations | `kbagent project invitation-list --project P` (0.29.0+) | -- | -- |
+| Cancel a pending invitation | `kbagent project invitation-cancel --project P --email E --yes` (0.29.0+) | `--invitation-id ID` if email lookup is ambiguous | DELETE via raw HTTP without going through the service layer |
+| Remove an active member | `kbagent project member-remove --project P --email E --yes` (0.29.0+, **destructive**) | `--hint client` for a script that removes by user_id directly | calling `member-remove` without `--yes` in non-interactive contexts (it will prompt and hang) |
+| Change a member's role | `kbagent project member-set-role --project P --email E --role admin\|guest\|readOnly\|share` (0.29.0+) | -- | `PUT /manage/projects/{id}/users/{userId}` -- the API rejects PUT with 404, the kbagent client correctly uses **PATCH** |
+| Set / rotate app-runtime secrets | `kbagent data-app secrets-set --project P --app-id N --secret '#KEY=VAL'` (0.29.0+) then `data-app deploy --wait` -- per-project KMS encryption, fail-closed, never auto-deploys | `kbagent encrypt values --component-id keboola.data-apps` + `tool call update_config` -- ONLY if you need to write secrets to a different shape than `parameters.dataApp.secrets` | raw `POST` to encryption + Storage without read-modify-write -- you will clobber sibling keys nested under `parameters.dataApp.secrets` (Storage `merge=True` is shallow at the top level only) |
+| Inspect what secrets are set on a data app | `kbagent data-app secrets-list --project P --app-id N` (0.29.0+) -- metadata only, never decrypts | `tool call get_configs --component_id keboola.data-apps` then read `parameters.dataApp.secrets` keys (raw dict, no env-var derivation, may leak ciphertext into output) | trying to decrypt -- the Encryption API has no decrypt endpoint, the CLI cannot decrypt under any branch |
+| Confirm one secret is present | `kbagent data-app secrets-get --project P --app-id N --key '#KEY'` (0.29.0+) -- returns metadata only | -- | trying to extract the plaintext value (impossible by design; not a CLI gap) |
+| Remove a secret from a data app | `kbagent data-app secrets-remove --project P --app-id N --key '#KEY' --yes` (0.29.0+) -- idempotent; missing keys exit 0 with `removed: 0` | `tool call update_config` with the secrets sub-dict deleted -- ONLY for batch removes that need a custom change description | `kbagent config update --set 'parameters.dataApp.secrets={}'` -- replaces the whole sub-dict, dropping every secret instead of just the named ones |
+| Pre-flight a data-app repo before create | `kbagent data-app validate-repo --git-repo URL --type python-js [--git-pat-env VAR]` (0.29.0+) -- BLOCKING / WARN / OK with help-doc citations; ≤5 GitHub API calls regardless of repo size | git-clone the repo locally and inspect by hand | `data-app create --dry-run` (only shows the request bodies; does not validate repo structure) |
 
 If the table does not cover the user's task, **ask clarifying
 questions** instead of guessing. Returning a targeted question is a
@@ -192,6 +210,29 @@ success, not a failure.
   verification payload but do not treat it as a failure signal.
   Production writes never materialize anything.
 
+- **`project invite` "already invited / already member" is a no-op, not a failure** (0.29.0+):
+  Re-inviting a user the project already knows returns HTTP 400 from the
+  Manage API. kbagent normalises both "...already been invited..." and
+  "...already a member..." to `status="noop"` with a `note` field, exit 0.
+  **Do not retry on 400 from these commands** -- the user is already
+  on the project (or already pending). For bulk runs, `noop` rows count
+  toward `noop`, not `failed`, in the summary; surface that distinction
+  to the user when reporting bulk results.
+
+- **`project invite --from-csv` ordering is non-deterministic** (0.29.0+):
+  Bulk invitation parallelises via `ThreadPoolExecutor` (default 8 workers).
+  The `rows[]` array in the JSON result is in completion order, not CSV
+  order. When reporting per-row outcomes to the user, **match by `email`,
+  not by index**. Partial-success exits 0 with `failed > 0` reflected in
+  the JSON -- treat that as a soft failure that needs review, not a
+  catastrophe.
+
+- **`project member-set-role` uses PATCH, not PUT** (0.29.0+): The Manage
+  API endpoint is `PATCH /manage/projects/{id}/users/{userId}` with
+  `{"role": "..."}`. PUT returns 404 even on real members. kbagent's
+  `ManageClient.update_project_member_role` emits PATCH; if you write a
+  `--hint client` script that hits the endpoint directly, do the same.
+
 - **`legacy_branch_storage: true` on `--branch` writes** (0.25.2+):
   Projects without the `storage-branches` feature flag (legacy fake-branch
   projects) accept `--branch X` writes at the API level, but the
@@ -265,6 +306,44 @@ success, not a failure.
   the target project's Encryption API and refuses to write plaintext if
   the round-trip does not return a `KBC::Project*` ciphertext.
 
+- **`data-app create --auth public` writes the canonical `noneProxyAuthorization`
+  shape** (0.29.0+, fixes a v0.27.0 silent-503 bug): v0.27.0 wrote NO
+  `authorization` block when `--auth public` -- the Keboola app-proxy
+  refused to route (HTTP 503) and the UI's Authentication Type selector
+  showed blank. v0.29.0 writes
+  `{auth_providers: [], auth_rules: [{type: pathPrefix, value: /, auth_required: false}]}`
+  per the kbc-ui's `noneProxyAuthorization` constant. If a user reports a
+  v0.27.0 public app returning 503, the fix is to recreate on 0.29.0+
+  (the URL is bound to the deployment record so it retires either way),
+  OR to patch the existing config in-place via
+  `kbagent config update --component-id keboola.data-apps --config-id ID
+  --set 'authorization=...'` with the canonical shape. `--auth password`
+  behaviour is unchanged. Other auth providers (OIDC / GitHub / GitLab /
+  JumpCloud / Auth0) are not yet exposed by the CLI; tracked as a
+  follow-up issue.
+
+- **`data-app secrets-* metadata-only`** (0.29.0+): `secrets-get` NEVER
+  echoes the decrypted plaintext under any branch -- the Encryption API
+  is one-way and the CLI does not attempt to decrypt. NOT_FOUND on an
+  absent key never enumerates sibling keys (avoids leaking neighbour
+  presence). `secrets-remove` is idempotent: removing a non-existent key
+  returns exit 0 with `removed: 0` and does NOT bump the Storage
+  version. Setting a key whose derived env-var name collides with the
+  runtime-injected set (`KBC_TOKEN`, `KBC_URL` for sure; more TODO) is
+  silently shadowed by the platform; the CLI emits a stderr WARN and
+  surfaces `shadowed_by_runtime` in JSON envelope -- the WRITE still
+  happens. Read-modify-write is at the SERVICE layer (Storage `merge=True`
+  is shallow at the top level only and would clobber siblings nested in
+  `parameters.dataApp.secrets`).
+
+- **`data-app validate-repo` is GitHub-only**, `--type python-js` only
+  (0.29.0+): pre-flight Golden-Rule check via the GitHub Trees+Contents
+  API. Total <=5 calls regardless of repo size. Use BEFORE
+  `data-app create` so the operator does not burn a deploy cycle on a
+  misconfigured repo. WARNs are advisory unless `--strict` is set;
+  BLOCKINGs always fail. Tracked follow-up: streamlit / pure-Python /
+  R / Node-only types, GitLab/Bitbucket hosts.
+
 - **`storage bucket-detail` is dialect-aware** (0.25.3+): the response
   shape depends on the bucket's backend. Snowflake buckets carry
   `snowflake_database` / `snowflake_schema` and per-table
@@ -281,6 +360,20 @@ success, not a failure.
   BigQuery `databaseName` is empty on Keboola-managed BQ projects, so
   `bigquery_path` will be dataset-qualified only -- if the user needs a
   fully-qualified GCP path, ask them for the project name explicitly.
+
+- **Manage-token env-var is opt-in (since 0.28.0)**.
+  `KBC_MANAGE_API_TOKEN` is no longer auto-resolved for `org setup`,
+  `project refresh`, or `data-app password`. Default behaviour: emit a
+  warning, ignore the env var, fall through to a TTY hidden-input prompt;
+  exit 2 with no TTY. To opt in (CI/CD), pass the top-level flag:
+  `kbagent --allow-env-manage-token --json org setup ...`. The flag is
+  session-only -- not persisted, no env-var equivalent. Default-deny
+  closes the AI-exfiltration risk where a subprocess running as the same
+  user (including the agent itself) inherits the manage token. If you
+  see `Warning: KBC_MANAGE_API_TOKEN found in environment but ignored`
+  in stderr, that is the expected default; tell the user to add
+  `--allow-env-manage-token` to their invocation, never strip the
+  warning by suppressing stderr.
 
 ---
 

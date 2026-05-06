@@ -21,14 +21,27 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `project use ALIAS` -- pin `ALIAS` as the persistent default project. Stored as `default_project` in config.json. Overridden at runtime by `KBAGENT_PROJECT=ALIAS` (env, beats pin) and by `--project ALIAS` (CLI flag, beats both)
 - `project current` -- print the effective default project and its source (`env` / `pin` / `none`). Reports both the env override AND the persisted pin so misconfigurations are visible. Returns `{"alias": null, "source": "none"}` when neither is set
 
+## Project Members & Invitations (since v0.29.0)
+
+All seven commands authenticate via `KBC_MANAGE_API_TOKEN` (Manage API), not the project's Storage token. Allowed roles are exactly `admin`, `guest`, `readOnly`, `share` -- the API self-reports this list in its 400 validation error and `constants.PROJECT_ROLES` mirrors it.
+
+- `project invite --project ALIAS --email EMAIL --role admin|guest|readOnly|share [--reason TEXT] [--dry-run]` -- single-shot invitation. Returns `{"status": "ok", "invitation_id": ..., ...}`. Re-inviting an already-invited or already-member email returns `{"status": "noop", "note": "already_invited" | "already_member"}` (HTTP 400 from the Manage API, normalised to a no-op).
+- `project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]` -- bulk invitation. CSV header required; columns: `email`, `project` (alias) or `project_id` (numeric), `role` (optional with `--default-role`), `reason` (optional). Parallelised via `ThreadPoolExecutor` (default 8 workers). Single-stack-URL invariant per file: rows referencing different stacks raise `ConfigError` upfront. Result is `{"total","succeeded","noop","failed","rows":[...]}`; `rows[]` order is *not deterministic*. Exit 0 even with `failed > 0` -- inspect the JSON.
+- `project member-list --project ALIAS [--include-pending]` -- list active members. Each member dict carries `id`, `email`, `name`, `role`, `status`, `mfa_enabled`. With `--include-pending`, the response also includes `pending_invitations: [...]`.
+- `project invitation-list --project ALIAS` -- list pending (unaccepted) invitations only.
+- `project invitation-cancel --project ALIAS --email EMAIL [--invitation-id ID] [--yes]` -- cancel a pending invitation. Without `--invitation-id`, the service resolves it by listing pending invitations and matching `--email` (case-insensitive). 204 No Content on success; `KeboolaApiError(NOT_FOUND)` if the email has no pending invitation.
+- `project member-remove --project ALIAS --email EMAIL [--yes]` -- destructive: remove an active member. The service resolves `--email` to the numeric `user_id` (case-insensitive) and DELETEs `/manage/projects/{id}/users/{userId}`. Re-add the user via `project invite`.
+- `project member-set-role --project ALIAS --email EMAIL --role admin|guest|readOnly|share` -- change an existing member's role. Uses **PATCH** `/manage/projects/{id}/users/{userId}` with `{"role": "..."}`. PUT does *not* work on this endpoint -- pre-v0.29.0 implementations that tried PUT got a misleading 404.
+
 ## Permission flags (top-level, session-only)
 - `--deny-writes` -- block all write/destructive/admin operations for this single invocation. Merges with any persisted permission policy; never written to config.json. Exit code 6 (PERMISSION_DENIED) on blocked operations
 - `--deny-destructive` -- block only destructive operations (delete-table, delete-bucket, terminate-job, etc.) for this invocation. Pure-write ops like create-table stay allowed. Use this when you want to keep build-up capabilities but lock out tear-downs
-- Both flags compose: `kbagent --deny-writes --deny-destructive ...` is the safest read-only run
+- `--allow-env-manage-token` -- opt in to reading `KBC_MANAGE_API_TOKEN` from env (default-deny since v0.29.0). Without it the env var is ignored and an interactive hidden prompt is required for `org setup` / `project refresh` / `data-app password`. Closes the AI-exfiltration risk where any subprocess inherits the manage token via env. Session-only; not persisted; no env-var equivalent (intentional, would re-create the hole). REPL forwards this flag to nested invocations the same way it forwards the deny-* flags
+- All three flags compose: `kbagent --deny-writes --deny-destructive --allow-env-manage-token ...` is the safest CI-friendly invocation
 
 ## Organization
-- `org setup --org-id ID --url URL [--dry-run] [--yes]` -- bulk-onboard all projects from an org (org admin, needs `KBC_MANAGE_API_TOKEN`)
-- `org setup --project-ids 1,2,3 --url URL [--dry-run] [--yes]` -- onboard specific projects by ID (any project member, works with Personal Access Token via `KBC_MANAGE_API_TOKEN`)
+- `org setup --org-id ID --url URL [--dry-run] [--yes]` -- bulk-onboard all projects from an org (org admin; manage token via interactive prompt by default, or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.29.0+)
+- `org setup --project-ids 1,2,3 --url URL [--dry-run] [--yes]` -- onboard specific projects by ID (any project member; manage token / Personal Access Token via interactive prompt by default, or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.29.0+)
 
 ## Component Discovery
 - `component list [--project NAME] [--type TYPE] [--query "text"]` -- list/search components (AI-powered with `--query`)
@@ -133,7 +146,12 @@ Lifecycle for `keboola.data-apps`. Combines Storage API (config body, git block,
 - `data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]` -- wake an auto-suspended app at the currently-pinned version. Distinct from deploy: does NOT bump configVersion.
 - `data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]` -- stop a running app (URL and Storage config preserved).
 - `data-app delete --project NAME --app-id ID [--yes]` -- destructive, cascades to Storage config; URL retired permanently.
-- `data-app password --project NAME --app-id ID` -- read the simpleAuth password. Requires `KBC_MANAGE_API_TOKEN`. Auto-generated, not rotatable -- delete + recreate to mint a new one.
+- `data-app password --project NAME --app-id ID` -- read the simpleAuth password. Manage token via interactive prompt by default, or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.29.0+. Auto-generated, not rotatable -- delete + recreate to mint a new one.
+- `data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE' [--secret ...] [--secrets-file PATH] [--branch ID] [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]` -- encrypt and write `#`-prefixed secrets to `parameters.dataApp.secrets`. Per-project KMS encryption, fail-closed. Read-modify-write at the service layer (NOT Storage `merge=True` -- shallow). Runtime exposes each key as an env var with `#` stripped, `-` -> `_`, uppercased. Adding bumps the Storage version; the running container keeps the OLD config until the next `data-app deploy`.
+- `data-app secrets-list --project ALIAS --app-id ID [--branch ID] [--show-fingerprint]` -- list secret keys + derived runtime env-var names. Never echoes encrypted ciphertext in full. `--show-fingerprint` opt-in for a short ciphertext fingerprint.
+- `data-app secrets-get --project ALIAS --app-id ID --key '#KEY' [--branch ID]` -- show metadata for ONE secret. NEVER echoes the decrypted value (Encryption API is one-way). NOT_FOUND on absent key; never enumerates siblings.
+- `data-app secrets-remove --project ALIAS --app-id ID --key '#KEY' [--key ...] [--branch ID] [--yes] [--dry-run]` -- destructive (can break a running app at next deploy). Idempotent: missing keys exit 0 with `removed: 0`.
+- `data-app validate-repo --git-repo URL [--git-branch BRANCH] [--git-public/--no-git-public] [--git-pat-env VAR | --git-pat-file PATH] [--type python-js] [--strict]` -- pre-flight Golden-Rule check for a data-app git repo (https://help.keboola.com/data-apps/python-js/). GitHub-only; ≤5 API calls (1 tree + ≤4 contents) regardless of repo size. `--type` restricted to `python-js` in 0.28.0; streamlit / pure-Python / R / Node-only follow-up. `--strict` treats WARNs as failures.
 
 ## MCP Tools
 - `tool list [--project NAME] [--branch ID]` -- list available MCP tools (multi_project annotation)
@@ -194,7 +212,7 @@ Lifecycle for `keboola.data-apps`. Combines Storage API (config body, git block,
 |----------|---------|
 | `KBC_TOKEN` | Fallback for `--token` |
 | `KBC_STORAGE_API_URL` | Default stack URL |
-| `KBC_MANAGE_API_TOKEN` | Manage API token (org setup) |
+| `KBC_MANAGE_API_TOKEN` | Manage API token (org setup, project refresh, data-app password). Default-DENY since 0.28.0: requires top-level `--allow-env-manage-token` to opt in, otherwise ignored with a warning. |
 | `KBAGENT_CONFIG_DIR` | Override config directory |
 
 ## Exit Codes

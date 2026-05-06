@@ -24,31 +24,49 @@ from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError
 from ..output import OutputFormatter
 
 
-def resolve_manage_token() -> str:
-    """Resolve the manage token from env var or interactive prompt.
+def resolve_manage_token(*, allow_env: bool = False) -> str:
+    """Resolve the manage token from a permitted source.
 
-    Token resolution order:
-    1. KBC_MANAGE_API_TOKEN env var (for CI/CD)
-    2. Interactive prompt with hidden input (if TTY)
-    3. Error if neither available
+    Default-deny: KBC_MANAGE_API_TOKEN is ignored unless ``allow_env=True``
+    (set by the top-level ``--allow-env-manage-token`` flag). The change
+    closes the AI-exfiltration risk where any subprocess running as the
+    same user can read the env var; the new default is "human at a TTY".
+
+    Resolution order:
+    1. ``KBC_MANAGE_API_TOKEN`` env var, IF ``allow_env`` is True. Otherwise
+       a one-shot stderr warning is emitted and the env var is ignored.
+    2. Interactive prompt with hidden input (if stdin is a TTY).
+    3. Exit 2 with an actionable error naming the opt-in flag.
+
+    Args:
+        allow_env: When True, restores the legacy env-var-first behaviour
+            for the current invocation. Plumbed from the top-level
+            ``--allow-env-manage-token`` flag via ``ctx.obj``.
 
     Returns:
         The manage API token.
 
     Raises:
-        typer.Exit: If no token can be resolved.
+        typer.Exit: If no token can be resolved (exit code 2).
     """
     env_token = os.environ.get(ENV_KBC_MANAGE_API_TOKEN)
     if env_token:
-        return env_token
+        if allow_env:
+            return env_token
+        typer.echo(
+            f"Warning: {ENV_KBC_MANAGE_API_TOKEN} found in environment "
+            "but ignored. Pass --allow-env-manage-token to opt in.",
+            err=True,
+        )
 
     is_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
     if is_tty:
         return typer.prompt("Manage API token", hide_input=True)
 
     typer.echo(
-        f"Error: No manage token available. Set {ENV_KBC_MANAGE_API_TOKEN} env var "
-        "or run interactively.",
+        "Error: No manage token available. Run interactively, or pass "
+        f"--allow-env-manage-token to read {ENV_KBC_MANAGE_API_TOKEN} "
+        "from env.",
         err=True,
     )
     raise typer.Exit(code=2)

@@ -202,8 +202,10 @@ def org_setup(
     Creates Storage API tokens and registers projects. Safe to re-run --
     already registered projects are skipped.
 
-    The token is read from KBC_MANAGE_API_TOKEN env var or prompted
-    interactively (never passed as a CLI argument for security).
+    The Manage API token is read from an interactive hidden prompt by
+    default (since 0.28.0). Pass the top-level --allow-env-manage-token
+    flag to read KBC_MANAGE_API_TOKEN from env (CI/CD). Never passed as
+    a CLI argument.
     """
     if should_hint(ctx):
         emit_hint(ctx, "org.setup", org_id=org_id, url=url, dry_run=dry_run)
@@ -220,7 +222,7 @@ def org_setup(
         )
         raise typer.Exit(code=2)
 
-    manage_token = resolve_manage_token()
+    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
 
     # Build kwargs shared by preview and real call
     setup_kwargs: dict = {

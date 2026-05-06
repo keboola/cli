@@ -195,7 +195,7 @@ All three inherit from `BaseHttpClient` (`http_base.py`) which provides shared r
 
 11. **Error accumulation**: multi-project operations collect per-project errors without stopping. One project failing doesn't block others (see `lineage_service.py`, `org_service.py`).
 
-12. **Manage token security**: never persisted, never passed as CLI argument, never logged. Only via `KBC_MANAGE_API_TOKEN` env var or interactive hidden prompt.
+12. **Manage token security**: never persisted, never passed as CLI argument, never logged. Default-deny since 0.29.0: only via interactive hidden prompt; the `KBC_MANAGE_API_TOKEN` env var is **ignored** unless the top-level `--allow-env-manage-token` flag is passed. Default-deny closes the AI-exfiltration risk where any subprocess (including the AI agent itself) inherits the manage token via env. CI/CD callers must opt in explicitly.
 
 13. **Idempotency**: `org setup` skips already-registered projects by matching `project_id`. Safe to re-run.
 
@@ -251,7 +251,7 @@ plugins/kbagent/
 > "Plugin synchronization map" for the full list.
 
 ```
-# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service, --deny-writes, --deny-destructive
+# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service, --deny-writes, --deny-destructive, --allow-env-manage-token
 
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list
@@ -265,6 +265,13 @@ kbagent project description-set --project NAME [--text STR | --file PATH | --std
 kbagent project use ALIAS
 kbagent project current
 kbagent project info --project NAME
+kbagent project invite --project ALIAS --email EMAIL --role admin|guest|readOnly|share [--reason TEXT] [--dry-run]
+kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
+kbagent project member-list --project ALIAS [--include-pending]
+kbagent project invitation-list --project ALIAS
+kbagent project invitation-cancel --project ALIAS --email EMAIL [--invitation-id ID] [--yes]
+kbagent project member-remove --project ALIAS --email EMAIL [--yes]
+kbagent project member-set-role --project ALIAS --email EMAIL --role admin|guest|readOnly|share
 
 kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID] [--include-rows]
 kbagent config detail --project NAME [--project NAME ...] --component-id ID [--config-id ID] [--branch ID] [--with-state]
@@ -365,6 +372,11 @@ kbagent data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app delete --project NAME --app-id ID [--yes]
 kbagent data-app password --project NAME --app-id ID
+kbagent data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE' [--secret ...] [--secrets-file PATH] [--branch ID] [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]
+kbagent data-app secrets-list --project ALIAS --app-id ID [--branch ID] [--show-fingerprint]
+kbagent data-app secrets-get --project ALIAS --app-id ID --key '#KEY' [--branch ID]
+kbagent data-app secrets-remove --project ALIAS --app-id ID --key '#KEY' [--key ...] [--branch ID] [--yes] [--dry-run]
+kbagent data-app validate-repo --git-repo URL [--git-branch BRANCH] [--git-public/--no-git-public] [--git-pat-env VAR | --git-pat-file PATH] [--type python-js] [--strict]
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]

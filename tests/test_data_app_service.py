@@ -12,7 +12,7 @@ test_data_science_client.py / test_e2e.py).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -259,6 +259,116 @@ class TestDataAppCreateValidation:
 # ---------------------------------------------------------------------------
 # Create flow
 # ---------------------------------------------------------------------------
+
+
+class TestDataAppCreateAuthBlock:
+    """The authorization block written into the Storage config must match the
+    canonical shapes the platform's app-proxy expects.
+
+    Source of truth: the public backend validator at
+    keboola/job-queue-job-configuration
+    ``src/JobDefinition/Configuration/Authorization/AppProxyDefinition.php``
+    (when ``auth_required=false``, ``auth`` MUST NOT be set). The private
+    keboola/ui repo's
+    ``apps/kbc-ui/src/scripts/modules/data-apps/constants.ts``
+    corroborates: it exports this exact shape as
+    ``noneProxyAuthorization``.
+    """
+
+    PASSWORD_BLOCK: ClassVar[dict[str, Any]] = {
+        "app_proxy": {
+            "auth_providers": [{"id": "simpleAuth", "type": "password"}],
+            "auth_rules": [
+                {
+                    "type": "pathPrefix",
+                    "value": "/",
+                    "auth_required": True,
+                    "auth": ["simpleAuth"],
+                }
+            ],
+        },
+    }
+    PUBLIC_BLOCK: ClassVar[dict[str, Any]] = {
+        "app_proxy": {
+            "auth_providers": [],
+            "auth_rules": [{"type": "pathPrefix", "value": "/", "auth_required": False}],
+        },
+    }
+
+    def _create_kwargs(self, **overrides: Any) -> dict[str, Any]:
+        return {
+            "alias": "prod",
+            "name": "Public App",
+            "description": "",
+            "slug": "public-app",
+            "git_repo": "https://github.com/o/r",
+            "git_public": True,
+            "auth": "public",
+            "size": "tiny",
+            "auto_suspend_after_seconds": 900,
+            "type_": "python-js",
+            "deploy": False,
+            "wait": False,
+            **overrides,
+        }
+
+    def test_auth_public_writes_canonical_none_block(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _ = _make_service(store)
+        ds_mock.create_app.return_value = {"id": "10", "configId": "01CFG"}
+        storage_mock.update_config.return_value = {"version": "2"}
+
+        service.create_data_app(**self._create_kwargs(auth="public"))
+
+        # Step 1 -- POST /apps shell config: authorization should be the
+        # public block (no longer absent as in v0.27.0).
+        post_call = ds_mock.create_app.call_args
+        post_config = post_call.kwargs["config"]
+        assert post_config["authorization"] == self.PUBLIC_BLOCK
+
+        # Step 4 -- PUT Storage config: same public block.
+        put_call = storage_mock.update_config.call_args
+        put_body = put_call.kwargs["configuration"]
+        assert put_body["authorization"] == self.PUBLIC_BLOCK
+
+    def test_auth_password_unchanged(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _ = _make_service(store)
+        ds_mock.create_app.return_value = {"id": "10", "configId": "01CFG"}
+        storage_mock.update_config.return_value = {"version": "2"}
+
+        service.create_data_app(
+            **self._create_kwargs(
+                auth="password",
+                git_public=False,
+                git_username="user",
+                git_pat_plaintext="ghp_xxxxxxxxxxxxxxxxxxxx",
+            )
+        )
+
+        post_call = ds_mock.create_app.call_args
+        assert post_call.kwargs["config"]["authorization"] == self.PASSWORD_BLOCK
+        put_call = storage_mock.update_config.call_args
+        assert put_call.kwargs["configuration"]["authorization"] == self.PASSWORD_BLOCK
+
+    def test_dry_run_renders_public_block(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, *_ = _make_service(store)
+        result = service.create_data_app(**self._create_kwargs(auth="public", dry_run=True))
+        post = result["requests"]["post_apps"]
+        put = result["requests"]["put_storage_config"]
+        assert post["config"]["authorization"] == self.PUBLIC_BLOCK
+        assert put["authorization"] == self.PUBLIC_BLOCK
+
+    def test_invalid_auth_value_rejected(self, tmp_path: Path) -> None:
+        # Use a clearly-invalid sentinel (NOT a future-supported provider
+        # like 'oidc' / 'github' / 'gitlab' / 'jumpcloud') so this test
+        # stays valid when those modes are added in a follow-up PR.
+        store = _make_store(tmp_path)
+        service, *_ = _make_service(store)
+        with pytest.raises(KeboolaApiError) as exc:
+            service.create_data_app(**self._create_kwargs(auth="banana", dry_run=True))
+        assert exc.value.error_code == ErrorCode.VALIDATION_ERROR
 
 
 class TestDataAppCreate:

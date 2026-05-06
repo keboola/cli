@@ -99,6 +99,11 @@ class ErrorCode(StrEnum):
     DATA_APP_DEPLOY_TIMEOUT = "DATA_APP_DEPLOY_TIMEOUT"
     DATA_APP_INVALID_GIT = "DATA_APP_INVALID_GIT"
 
+    # Data apps - secrets + validate-repo (new in 0.28.0)
+    DATA_APP_INVALID_SECRET = "DATA_APP_INVALID_SECRET"
+    DATA_APP_INVALID_REPO = "DATA_APP_INVALID_REPO"
+    DATA_APP_REPO_VALIDATION_BLOCKING = "DATA_APP_REPO_VALIDATION_BLOCKING"
+
 
 def mask_token(token: str) -> str:
     """Mask a Keboola Storage API token for safe display.
