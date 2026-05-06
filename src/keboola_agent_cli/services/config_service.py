@@ -16,6 +16,7 @@ from typing import Any
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..json_utils import compute_diff, deep_merge, set_nested_value
 from ..models import ProjectConfig
+from ..sync.code_extraction import normalize_blocks_codes_script
 from ..sync.manifest import Manifest, load_manifest, save_manifest
 from ..sync.naming import sanitize_name
 from .base import BaseService, sanitize_unexpected_error
@@ -567,6 +568,7 @@ class ConfigService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             final_config: dict[str, Any] | None = None
+            normalizations: list[dict[str, Any]] = []
 
             if has_content:
                 final_config = self._resolve_configuration(
@@ -577,6 +579,14 @@ class ConfigService(BaseService):
                     set_paths=set_paths,
                     merge=merge,
                     branch_id=effective_branch_id,
+                )
+                # Defense-in-depth: Storage API silently accepts a string
+                # for parameters.blocks[].codes[].script but the runtime
+                # validator rejects it ("Expected array, got string"),
+                # turning the broken push into a delayed, hard-to-attribute
+                # job-time crash. See issue #245.
+                final_config, normalizations = normalize_blocks_codes_script(
+                    component_id, final_config
                 )
 
             if dry_run:
@@ -595,6 +605,7 @@ class ConfigService(BaseService):
                     "changes": changes,
                     "old_configuration": old_cfg,
                     "new_configuration": new_cfg,
+                    "normalizations": normalizations,
                 }
 
             change_parts = []
@@ -618,6 +629,7 @@ class ConfigService(BaseService):
 
         result["project_alias"] = alias
         result["branch_id"] = effective_branch_id
+        result["normalizations"] = normalizations
         return result
 
     def _resolve_configuration(
