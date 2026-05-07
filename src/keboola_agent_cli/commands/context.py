@@ -807,7 +807,10 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Remove all restrictions.
 
   kbagent permissions check OPERATION
-    Check if operation is allowed. Exit 0=allowed, 6=denied.
+    Check if operation is allowed. Exit 0=allowed, 6=denied. Reflects the
+    EFFECTIVE policy: persisted policy MERGED with --deny-writes /
+    --deny-destructive session flags (since 0.30.5; pre-0.30.5 consulted
+    only the persisted policy and could mislead self-introspection).
 
 ## Tips for AI Agents
 
