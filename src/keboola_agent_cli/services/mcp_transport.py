@@ -14,6 +14,7 @@ One server serves ALL projects - just different headers per request.
 import atexit
 import contextlib
 import logging
+import os
 import socket
 import subprocess
 import time
@@ -26,6 +27,45 @@ from ..constants import (
 from .mcp_service import detect_mcp_server_command
 
 logger = logging.getLogger(__name__)
+
+# Env vars the MCP subprocess needs (PATH for binary discovery, HOME for
+# uv/pip caches, locale vars for Unicode handling, etc.). KBC_* tokens
+# are intentionally NOT inherited — they would expose master/manage tokens
+# to the MCP subprocess (issue #269 sec-02 / sec-08). Per-project
+# Storage tokens are passed via per-request HTTP headers, not env.
+_MCP_ENV_ALLOWLIST: tuple[str, ...] = (
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "TERM",
+    "SHELL",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "VIRTUAL_ENV",
+    # uv-specific cache locations so "uv tool run" picks up the right venv
+    "UV_CACHE_DIR",
+    "UV_PYTHON",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME",
+)
+
+
+def _build_minimal_env() -> dict[str, str]:
+    """Build an env dict for MCP subprocess containing only allow-listed keys.
+
+    Strips ``KBC_MASTER_TOKEN*``, ``KBC_MANAGE_API_TOKEN``, ``KBC_TOKEN``,
+    and any other ``KBC_*`` variable so the MCP server does not inherit
+    secrets that belong to other auth scopes (issue #269 sec-02 / sec-08).
+    """
+    return {key: os.environ[key] for key in _MCP_ENV_ALLOWLIST if key in os.environ}
 
 
 def _find_free_port() -> int:
@@ -116,6 +156,7 @@ class McpServerManager:
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=_build_minimal_env(),
         )
         self._port = port
         self._base_url = f"http://127.0.0.1:{port}"

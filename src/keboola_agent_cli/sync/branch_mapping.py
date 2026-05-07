@@ -19,10 +19,23 @@ def _coerce_keboola_id(raw: Any) -> int | None:
     Older kbagent versions (<= 0.30.3) wrote branch IDs as strings (e.g.
     ``"99999"``) due to issue #267. ``None`` means production. Empty
     string is also treated as production for legacy tolerance.
+
+    Raises ``ValueError`` with a descriptive message if *raw* is neither
+    None, empty, nor parseable as an int (e.g. a hand-edited
+    ``branch-mapping.json`` containing ``"id": "not-a-number"``). The
+    caller (typically ``BranchMapping.from_dict``) should let this
+    bubble up to ``load_branch_mapping`` which converts it to a
+    ConfigError surface (issue #269 sec-20).
     """
     if raw is None or raw == "":
         return None
-    return int(raw)
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Invalid branch ID in branch-mapping.json: {raw!r}. "
+            f"Expected null or an integer; got {type(raw).__name__}."
+        ) from exc
 
 
 class BranchMappingEntry:
@@ -77,12 +90,24 @@ class BranchMapping:
 
 
 def load_branch_mapping(project_root: Path) -> BranchMapping:
-    """Load .keboola/branch-mapping.json."""
+    """Load .keboola/branch-mapping.json.
+
+    Raises:
+        FileNotFoundError: If the mapping file does not exist.
+        ValueError: If the JSON cannot be parsed or contains a malformed
+            branch ID. The descriptive message names the offending file
+            so the user can find and fix it (issue #269 sec-20).
+    """
     path = project_root / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME
     if not path.exists():
         raise FileNotFoundError(f"Branch mapping not found at {path}")
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return BranchMapping.from_dict(data)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return BranchMapping.from_dict(data)
+    except ValueError as exc:
+        # _coerce_keboola_id raises ValueError on malformed IDs; wrap with
+        # path context so the user knows which file to fix.
+        raise ValueError(f"Failed to parse {path}: {exc}") from exc
 
 
 def save_branch_mapping(project_root: Path, mapping: BranchMapping) -> None:

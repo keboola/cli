@@ -1,10 +1,19 @@
 """Tests for the interactive REPL module."""
 
+import os
+import stat
+from pathlib import Path
 from unittest.mock import MagicMock
 
+import platformdirs
+import pytest
 import typer.main
 
-from keboola_agent_cli.commands.repl import KbagentCompleter, _build_command_tree
+from keboola_agent_cli.commands.repl import (
+    KbagentCompleter,
+    _build_command_tree,
+    _get_history_path,
+)
 
 
 class TestBuildCommandTree:
@@ -249,3 +258,32 @@ class TestReplFirewallPropagation:
         assert argv.count("--deny-writes") == 1, (
             f"REPL duplicated --deny-writes when user also typed it: {argv}"
         )
+
+
+class TestHistoryPathPermissions:
+    """Issue #269 sec-04 -- REPL history file must be 0600 to avoid token leaks."""
+
+    def test_creates_history_file_with_0600(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fresh history file is created with mode 0600."""
+        monkeypatch.setattr(platformdirs, "user_config_dir", lambda *_a, **_kw: str(tmp_path))
+        history = _get_history_path()
+        assert history.exists()
+        mode = stat.S_IMODE(history.stat().st_mode)
+        assert mode == 0o600, f"expected 0600, got {oct(mode)}"
+
+    def test_tightens_permissive_existing_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A pre-existing world-readable history file is chmod'd to 0600."""
+        monkeypatch.setattr(platformdirs, "user_config_dir", lambda *_a, **_kw: str(tmp_path))
+        history = tmp_path / "repl_history"
+        history.write_text("legacy entry\n")
+        os.chmod(history, 0o644)
+        assert stat.S_IMODE(history.stat().st_mode) == 0o644
+
+        result = _get_history_path()
+        assert result == history
+        mode = stat.S_IMODE(history.stat().st_mode)
+        assert mode == 0o600

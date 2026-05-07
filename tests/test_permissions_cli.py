@@ -354,6 +354,37 @@ class TestPermissionsCheck:
         data = json.loads(result.output)["data"]
         assert data["allowed"] is True
 
+    def test_check_reflects_session_deny_writes(self, tmp_path: Path) -> None:
+        """Issue #269 sec-19: ``permissions check`` must apply --deny-writes
+        the same way ``permissions list`` does. Pre-fix it consulted only the
+        persisted policy, so an AI agent inspecting its own session firewall
+        got a misleading 'allowed' answer for write ops."""
+        store = _make_store(tmp_path)  # no persisted policy
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = store
+            result = runner.invoke(
+                app,
+                ["--deny-writes", "--json", "permissions", "check", "branch.create"],
+            )
+        assert result.exit_code == EXIT_PERMISSION_DENIED, (
+            f"permissions check ignored --deny-writes: {result.output}"
+        )
+        data = json.loads(result.output)["data"]
+        assert data["allowed"] is False
+
+    def test_check_reflects_session_deny_destructive(self, tmp_path: Path) -> None:
+        """``--deny-destructive`` is also picked up by ``permissions check``."""
+        store = _make_store(tmp_path)
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = store
+            result = runner.invoke(
+                app,
+                ["--deny-destructive", "--json", "permissions", "check", "branch.delete"],
+            )
+        assert result.exit_code == EXIT_PERMISSION_DENIED
+        data = json.loads(result.output)["data"]
+        assert data["allowed"] is False
+
 
 class TestPermissionsEnforcement:
     """Tests for permission enforcement on CLI commands."""
