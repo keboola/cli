@@ -1600,7 +1600,7 @@ class TestBranchLink:
 
         assert result["status"] == "linked"
         assert result["git_branch"] == "feature/auth"
-        assert result["keboola_branch_id"] == "99999"
+        assert result["keboola_branch_id"] == 99999
         assert result["keboola_branch_name"] == "feature/auth"
         link_client.create_dev_branch.assert_called_once_with(name="feature/auth")
 
@@ -1610,7 +1610,7 @@ class TestBranchLink:
         mapping = load_branch_mapping(project_root)
         entry = mapping.get("feature/auth")
         assert entry is not None
-        assert entry.keboola_id == "99999"
+        assert entry.keboola_id == 99999
 
     def test_branch_link_finds_existing_branch(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_link links to an existing Keboola branch that matches the name."""
@@ -1639,7 +1639,7 @@ class TestBranchLink:
 
         assert result["status"] == "linked"
         assert result["git_branch"] == "feature-x"
-        assert result["keboola_branch_id"] == "99999"
+        assert result["keboola_branch_id"] == 99999
         # Should not have created a new branch
         link_client.create_dev_branch.assert_not_called()
 
@@ -1719,7 +1719,7 @@ class TestBranchLink:
 
         assert result["status"] == "already_linked"
         assert result["git_branch"] == "feature-x"
-        assert result["keboola_branch_id"] == "99999"
+        assert result["keboola_branch_id"] == 99999
 
     def test_branch_link_with_branch_id(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """branch_link with --branch-id links to a specific existing branch."""
@@ -1748,7 +1748,7 @@ class TestBranchLink:
             )
 
         assert result["status"] == "linked"
-        assert result["keboola_branch_id"] == "99999"
+        assert result["keboola_branch_id"] == 99999
         assert result["keboola_branch_name"] == "feature-x"
 
     def test_branch_link_with_branch_name_creates(
@@ -1781,7 +1781,7 @@ class TestBranchLink:
             )
 
         assert result["status"] == "linked"
-        assert result["keboola_branch_id"] == "77777"
+        assert result["keboola_branch_id"] == 77777
         assert result["keboola_branch_name"] == "custom-name"
         link_client.create_dev_branch.assert_called_once_with(name="custom-name")
 
@@ -1858,7 +1858,7 @@ class TestBranchUnlink:
 
         assert result["status"] == "unlinked"
         assert result["git_branch"] == "feature-x"
-        assert result["keboola_branch_id"] == "99999"
+        assert result["keboola_branch_id"] == 99999
         assert result["keboola_branch_name"] == "feature-x"
 
         # Verify mapping was removed from disk
@@ -1976,7 +1976,7 @@ class TestBranchStatus:
         assert result["git_branching"] is True
         assert result["git_branch"] == "feature-x"
         assert result["linked"] is True
-        assert result["keboola_branch_id"] == "99999"
+        assert result["keboola_branch_id"] == 99999
         assert result["keboola_branch_name"] == "feature-x"
         assert result["is_production"] is False
 
@@ -2375,3 +2375,360 @@ class TestAdoptExistingManifest:
         assert result2["status"] == "adopted"
         # Both calls return the same project data
         assert result1["project_id"] == result2["project_id"]
+
+
+# ===================================================================
+# Issue #267 regression tests
+# ===================================================================
+
+
+class TestIssue267Regressions:
+    """Regression coverage for the chained sync git-branching bugs (issue #267).
+
+    Each test would have failed against ``main`` before the fix:
+
+    * Bug A — branch_id type confusion (str in branch-mapping.json, int in
+      manifest) caused ``branch.id == branch_id`` cross-type compares to
+      always be False, misrouting pulls to ``main/`` and inflating
+      ``manifest.branches[]`` on every call.
+    * Bug B — ``_find_untracked_configs`` walker scope was scoped to
+      branches with already-tracked configs, blocking the documented
+      "scaffold locally then push" flow when ``configurations: []``.
+    * Bug E — ``_resolve_branch_id`` raised ``ConfigError`` for the
+      default git branch when ``branch-mapping.json`` was missing,
+      leaving users with no recovery path.
+    """
+
+    def _init_git_branching_project(
+        self,
+        tmp_config_dir: Path,
+        project_root: Path,
+    ) -> ConfigStore:
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        with (
+            patch(
+                "keboola_agent_cli.services.sync_service.is_git_repo",
+                return_value=True,
+            ),
+            patch(
+                "keboola_agent_cli.services.sync_service.get_default_branch",
+                return_value="main",
+            ),
+        ):
+            init_svc.init_sync(
+                alias="prod",
+                project_root=project_root,
+                git_branching=True,
+            )
+        return store
+
+    # ------------------------------------------------------------------
+    # Bug A
+    # ------------------------------------------------------------------
+
+    def test_branch_link_persists_keboola_id_as_int(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """branch-mapping.json on disk stores ``id`` as int, never str."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        link_client = _make_sync_mock_client(branches_response=SAMPLE_BRANCHES_WITH_DEV)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: link_client,
+        )
+
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="feature-x",
+        ):
+            svc.branch_link(
+                alias="prod",
+                project_root=project_root,
+                branch_id=99999,
+            )
+
+        # Read the file directly: persisted JSON must have id as a JSON number.
+        raw = json.loads((project_root / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME).read_text())
+        assert raw["mappings"]["feature-x"]["id"] == 99999
+        assert isinstance(raw["mappings"]["feature-x"]["id"], int)
+
+    def test_repeated_pulls_do_not_grow_manifest_branches(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """Running ``sync pull`` N times against a linked dev branch must not
+        append duplicate entries to ``manifest.branches`` (Bug A symptom)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        # Link feature-x -> 99999
+        link_client = _make_sync_mock_client(branches_response=SAMPLE_BRANCHES_WITH_DEV)
+        link_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: link_client,
+        )
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="feature-x",
+        ):
+            link_svc.branch_link(
+                alias="prod",
+                project_root=project_root,
+                branch_id=99999,
+            )
+
+            # Pull three times against the same linked branch
+            pull_client = _make_sync_mock_client(
+                components_response=[],
+                branches_response=SAMPLE_BRANCHES_WITH_DEV,
+            )
+            pull_client.list_buckets_with_metadata.return_value = []
+            pull_client.list_tables_with_metadata.return_value = []
+            pull_client.list_jobs_grouped.return_value = []
+            pull_svc = SyncService(
+                config_store=store,
+                client_factory=lambda url, token: pull_client,
+            )
+            for _ in range(3):
+                pull_svc.pull(
+                    alias="prod",
+                    project_root=project_root,
+                    no_storage=True,
+                    no_jobs=True,
+                )
+
+        manifest = load_manifest(project_root)
+        # Default branch + linked dev branch -- nothing more.
+        assert len(manifest.branches) == 2
+        ids = sorted(b.id for b in manifest.branches)
+        assert ids == [12345, 99999]
+        # The dev branch path is the API-provided name (sanitized), not a
+        # numeric fallback. Bug A's type confusion previously prevented the
+        # name lookup from succeeding, leaving us with ``branch-99999``.
+        paths = sorted(b.path for b in manifest.branches)
+        assert paths == ["feature-x", "main"]
+
+    def test_pull_response_routes_to_linked_branch_dir(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """``sync pull`` against a linked dev branch reports ``branch_dir`` as
+        the linked branch path, not ``main`` (Bug A misroute)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        link_client = _make_sync_mock_client(branches_response=SAMPLE_BRANCHES_WITH_DEV)
+        link_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: link_client,
+        )
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="feature-x",
+        ):
+            link_svc.branch_link(
+                alias="prod",
+                project_root=project_root,
+                branch_id=99999,
+            )
+
+            pull_client = _make_sync_mock_client(
+                components_response=[],
+                branches_response=SAMPLE_BRANCHES_WITH_DEV,
+            )
+            pull_client.list_buckets_with_metadata.return_value = []
+            pull_client.list_tables_with_metadata.return_value = []
+            pull_client.list_jobs_grouped.return_value = []
+            pull_svc = SyncService(
+                config_store=store,
+                client_factory=lambda url, token: pull_client,
+            )
+            result = pull_svc.pull(
+                alias="prod",
+                project_root=project_root,
+                no_storage=True,
+                no_jobs=True,
+            )
+
+        # branch_id in the response is an int (issue #267) and branch_dir
+        # is the linked branch's path, never "main".
+        assert result["branch_id"] == 99999
+        assert result["branch_dir"] != "main"
+
+    # ------------------------------------------------------------------
+    # Bug B
+    # ------------------------------------------------------------------
+
+    def test_walker_finds_untracked_with_empty_configurations(self, tmp_path: Path) -> None:
+        """``_find_untracked_configs`` surfaces a scaffold under a non-default
+        branch even when ``manifest.configurations: []``, given that the
+        branch is the resolved one for this op (Bug B fix)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        # Build a manifest by hand with main + a linked dev branch and no
+        # tracked configs -- the exact pre-condition Bug B blocks on.
+        keboola_dir = project_root / KEBOOLA_DIR_NAME
+        keboola_dir.mkdir()
+        (keboola_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "version": MANIFEST_VERSION,
+                    "project": {"id": 258, "apiHost": "connection.keboola.com"},
+                    "allowTargetEnv": True,
+                    "gitBranching": {"enabled": True, "defaultBranch": "main"},
+                    "sortBy": "id",
+                    "naming": {
+                        "branch": "{branch_name}",
+                        "config": "{component_type}/{component_id}/{config_name}",
+                        "configRow": "rows/{config_row_name}",
+                        "schedulerConfig": "schedules/{config_name}",
+                        "sharedCodeConfig": "_shared/{target_component_id}",
+                        "sharedCodeConfigRow": "codes/{config_row_name}",
+                        "variablesConfig": "variables",
+                        "variablesValuesRow": "values/{config_row_name}",
+                        "dataAppConfig": "app/{component_id}/{config_name}",
+                    },
+                    "allowedBranches": [],
+                    "ignoredComponents": [],
+                    "branches": [
+                        {"id": 12345, "path": "main", "metadata": {}},
+                        {"id": 99999, "path": "branch-99999", "metadata": {}},
+                    ],
+                    "configurations": [],
+                }
+            )
+        )
+
+        # Drop a scaffold under branch-99999/
+        scaffold = (
+            project_root / "branch-99999" / "application" / "test-component" / "my-test-config"
+        )
+        scaffold.mkdir(parents=True)
+        (scaffold / CONFIG_FILENAME).write_text(yaml.safe_dump({"name": "my-test-config"}))
+
+        manifest = load_manifest(project_root)
+        svc = SyncService(config_store=MagicMock())
+        added = svc._find_untracked_configs(
+            project_root,
+            manifest,
+            resolved_branch_id=99999,
+        )
+
+        assert len(added) == 1
+        assert added[0]["path"].endswith("my-test-config")
+
+    def test_walker_skips_orphaned_branch_dirs(self, tmp_path: Path) -> None:
+        """Phantom-add protection still holds: a directory under a branch
+        whose id is neither tracked, default, nor explicitly resolved is
+        ignored. Guards against regression of Bug B in the wrong direction."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        keboola_dir = project_root / KEBOOLA_DIR_NAME
+        keboola_dir.mkdir()
+        (keboola_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "version": MANIFEST_VERSION,
+                    "project": {"id": 258, "apiHost": "connection.keboola.com"},
+                    "allowTargetEnv": True,
+                    "gitBranching": {"enabled": True, "defaultBranch": "main"},
+                    "sortBy": "id",
+                    "naming": {
+                        "branch": "{branch_name}",
+                        "config": "{component_type}/{component_id}/{config_name}",
+                        "configRow": "rows/{config_row_name}",
+                        "schedulerConfig": "schedules/{config_name}",
+                        "sharedCodeConfig": "_shared/{target_component_id}",
+                        "sharedCodeConfigRow": "codes/{config_row_name}",
+                        "variablesConfig": "variables",
+                        "variablesValuesRow": "values/{config_row_name}",
+                        "dataAppConfig": "app/{component_id}/{config_name}",
+                    },
+                    "allowedBranches": [],
+                    "ignoredComponents": [],
+                    "branches": [
+                        {"id": 12345, "path": "main", "metadata": {}},
+                        {"id": 88888, "path": "branch-orphan", "metadata": {}},
+                    ],
+                    "configurations": [],
+                }
+            )
+        )
+
+        # Drop a scaffold under branch-orphan/ -- should be ignored because
+        # we resolve to branch 99999 (a different one).
+        scaffold = (
+            project_root / "branch-orphan" / "application" / "test-component" / "ignored-config"
+        )
+        scaffold.mkdir(parents=True)
+        (scaffold / CONFIG_FILENAME).write_text(yaml.safe_dump({"name": "ignored-config"}))
+
+        manifest = load_manifest(project_root)
+        svc = SyncService(config_store=MagicMock())
+        added = svc._find_untracked_configs(
+            project_root,
+            manifest,
+            resolved_branch_id=99999,  # nothing on disk under this branch
+        )
+        assert added == []
+
+    # ------------------------------------------------------------------
+    # Bug E
+    # ------------------------------------------------------------------
+
+    def test_resolve_branch_id_default_branch_without_mapping(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """When on the default git branch, ``_resolve_branch_id`` returns
+        ``None`` (production) even if ``branch-mapping.json`` is missing
+        entirely. There is always a recovery path to production."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        # Delete branch-mapping.json after init -- simulates accidental loss.
+        (project_root / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME).unlink()
+
+        manifest = load_manifest(project_root)
+        project = store.get_project("prod")
+        with patch(
+            "keboola_agent_cli.sync.git_utils.get_current_branch",
+            return_value="main",
+        ):
+            resolved = SyncService._resolve_branch_id(project, manifest, project_root)
+        assert resolved is None
+
+    def test_resolve_branch_id_dev_branch_without_mapping_still_errors(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """The recovery path is intentionally narrow: only the default branch
+        gets the silent fall-through. A non-default branch with no mapping
+        still raises ``ConfigError`` so the user is told to link it."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_git_branching_project(tmp_config_dir, project_root)
+
+        (project_root / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME).unlink()
+
+        manifest = load_manifest(project_root)
+        project = store.get_project("prod")
+        with (
+            patch(
+                "keboola_agent_cli.sync.git_utils.get_current_branch",
+                return_value="feature-x",
+            ),
+            pytest.raises(ConfigError, match="not linked"),
+        ):
+            SyncService._resolve_branch_id(project, manifest, project_root)

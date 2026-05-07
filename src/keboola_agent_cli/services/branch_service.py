@@ -255,6 +255,11 @@ class BranchService(BaseService):
     def delete_branch(self, alias: str, branch_id: int) -> dict[str, Any]:
         """Delete a development branch via API. Auto-resets if it was active.
 
+        Also cleans up any matching entry in the nearest enclosing sync
+        workspace's ``branch-mapping.json`` (issue #267, Bug D), so the
+        user is not left with a stale mapping pointing at a deleted
+        branch.
+
         Args:
             alias: Project alias.
             branch_id: Branch ID to delete.
@@ -266,6 +271,8 @@ class BranchService(BaseService):
             ConfigError: If the project alias is not found.
             KeboolaApiError: If the API call fails.
         """
+        from ..sync.branch_mapping import cleanup_branch_id_from_mapping
+
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -280,15 +287,24 @@ class BranchService(BaseService):
         if was_active:
             self._config_store.set_project_branch(alias, None)
 
-        return {
+        cleanup = cleanup_branch_id_from_mapping(branch_id)
+
+        message_parts = [f"Branch ID {branch_id} deleted from project '{alias}'."]
+        if was_active:
+            message_parts.append("Active branch reset to main.")
+        if cleanup:
+            unlinked = ", ".join(cleanup["git_branches_unlinked"])
+            message_parts.append(f"Unlinked git branch(es): {unlinked}.")
+
+        result: dict[str, Any] = {
             "project_alias": alias,
             "branch_id": branch_id,
             "was_active": was_active,
-            "message": (
-                f"Branch ID {branch_id} deleted from project '{alias}'."
-                + (" Active branch reset to main." if was_active else "")
-            ),
+            "message": " ".join(message_parts),
         }
+        if cleanup:
+            result["mapping_cleanup"] = cleanup
+        return result
 
     def get_merge_url(self, alias: str, branch_id: int | None = None) -> dict[str, Any]:
         """Generate KBC UI merge URL for a development branch.
@@ -332,7 +348,13 @@ class BranchService(BaseService):
         # Reset active branch to main after generating merge URL
         self._config_store.set_project_branch(alias, None)
 
-        return {
+        # Best-effort cleanup of any matching sync-workspace mapping so the
+        # user is not left referencing a soon-to-be-merged branch (Bug D).
+        from ..sync.branch_mapping import cleanup_branch_id_from_mapping
+
+        cleanup = cleanup_branch_id_from_mapping(effective_branch_id)
+
+        result: dict[str, Any] = {
             "project_alias": alias,
             "branch_id": effective_branch_id,
             "url": merge_url,
@@ -341,6 +363,11 @@ class BranchService(BaseService):
                 f"in project '{alias}'. Active branch has been reset to main."
             ),
         }
+        if cleanup:
+            unlinked = ", ".join(cleanup["git_branches_unlinked"])
+            result["message"] += f" Unlinked git branch(es): {unlinked}."
+            result["mapping_cleanup"] = cleanup
+        return result
 
     # ── Branch metadata ────────────────────────────────────────────────
 
