@@ -504,6 +504,7 @@ One project failing does not block others. Check the `errors` array:
 - Classes: `--deny-writes` blocks `cli:write` + `tool:write` (covers write+destructive+admin). `--deny-destructive` is narrower -- blocks only `cli:destructive` + `tool:destructive`; pure write ops like `storage create-bucket` stay allowed.
 - Blocked operation exits **6** with `error.code = PERMISSION_DENIED`. Read commands stay unaffected.
 - Safe to run under either flag without mutating the saved policy -- useful when your agent needs a one-shot read-only run on a machine with a write-enabled config.
+- `permissions check OPERATION` reflects the EFFECTIVE policy (persisted policy MERGED with session flags) **(since v0.30.5)**. Pre-0.30.5 it consulted only the persisted policy, so an agent doing self-introspection (`kbagent --deny-writes permissions check branch.create`) got `allowed: true` despite the session flag denying that op at execution time. If your agent uses `permissions check` to gate destructive actions and may run against pre-0.30.5 installs, also re-check at execution-time exit codes (6 = denied) rather than trusting the dry probe alone.
 
 ## `storage create-table` native types + dev-branch materialize (since 0.25.0)
 

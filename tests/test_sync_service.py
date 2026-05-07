@@ -2732,3 +2732,68 @@ class TestIssue267Regressions:
             pytest.raises(ConfigError, match="not linked"),
         ):
             SyncService._resolve_branch_id(project, manifest, project_root)
+
+
+# ---------------------------------------------------------------------------
+# Issue #269 sec-01 -- defense-in-depth path-confinement guard
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureWithinBranch:
+    """Direct unit tests for ``_ensure_within_branch`` defensive guard.
+
+    The primary defense is ``naming.sanitize_path_segment()`` (covered in
+    test_sync_naming.py). This guard is belt-and-suspenders for the case
+    where the sanitizer regresses or a future code path bypasses it.
+    """
+
+    def test_passes_for_path_within_branch(self, tmp_path: Path) -> None:
+        """A normal config_dir under branch_dir does not raise."""
+        from keboola_agent_cli.services.sync_service import _ensure_within_branch
+
+        branch_dir = tmp_path / "main"
+        branch_dir.mkdir()
+        config_dir = branch_dir / "extractor" / "keboola.ex-http" / "my-config"
+
+        # Should not raise
+        _ensure_within_branch(branch_dir, config_dir, "keboola.ex-http", "12345")
+
+    def test_raises_for_path_escape_via_dotdot(self, tmp_path: Path) -> None:
+        """A config_dir that resolves outside branch_dir raises ConfigError."""
+        from keboola_agent_cli.errors import ConfigError
+        from keboola_agent_cli.services.sync_service import _ensure_within_branch
+
+        branch_dir = tmp_path / "main"
+        branch_dir.mkdir()
+        # Synthesize the misuse the sanitizer is supposed to prevent.
+        # The guard should fire even when the sanitizer didn't.
+        attacker_dir = branch_dir / ".." / "outside-workspace" / "config"
+
+        with pytest.raises(ConfigError, match="escapes sync workspace"):
+            _ensure_within_branch(branch_dir, attacker_dir, "evil-component", "cfg-id")
+
+    def test_raises_with_component_id_in_message(self, tmp_path: Path) -> None:
+        """Error message names the offending component / config so operators
+        can locate the bad API response."""
+        from keboola_agent_cli.errors import ConfigError
+        from keboola_agent_cli.services.sync_service import _ensure_within_branch
+
+        branch_dir = tmp_path / "main"
+        branch_dir.mkdir()
+        attacker_dir = branch_dir / ".." / "tmp"
+
+        with pytest.raises(ConfigError) as excinfo:
+            _ensure_within_branch(branch_dir, attacker_dir, "k.ex-bad", "01abc")
+        assert "k.ex-bad" in str(excinfo.value)
+        assert "01abc" in str(excinfo.value)
+
+    def test_passes_for_absolute_path_inside_branch(self, tmp_path: Path) -> None:
+        """An absolute path that happens to be inside branch_dir resolves OK."""
+        from keboola_agent_cli.services.sync_service import _ensure_within_branch
+
+        branch_dir = tmp_path / "main"
+        branch_dir.mkdir()
+        config_dir = branch_dir / "x" / "y"
+
+        # Resolve and then re-pass: should still pass
+        _ensure_within_branch(branch_dir, config_dir.resolve(), "comp", "id")
