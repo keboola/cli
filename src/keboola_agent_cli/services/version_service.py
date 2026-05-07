@@ -293,18 +293,18 @@ def _perform_mcp_update(
             return False, "pip not found on PATH"
         cmd = [pip_path, "install", "--upgrade", MCP_PACKAGE_NAME]
     elif method == "uvx":
-        uvx_path = shutil.which("uvx")
-        if uvx_path is None:
-            return False, "uvx not found on PATH"
-        # `uvx --refresh` re-downloads even cached packages.
-        cmd = [
-            uvx_path,
-            "--refresh",
-            "--from",
-            MCP_PACKAGE_NAME,
-            MCP_BINARY_NAME,
-            "--version",
-        ]
+        # Promote uvx-cache install to a persistent `uv tool install`.
+        # The previous strategy (`uvx --refresh ... <bin> --version`) was
+        # broken: the upstream MCP binary does NOT honour --version (it
+        # rejects the arg and exits non-zero), so the upgrade banner
+        # always reported failure even when the cache refresh itself
+        # worked. `uv tool install --upgrade` does the equivalent
+        # refresh AND moves the binary to PATH so subsequent runs use the
+        # faster `uv_tool` detection path. Bug B fix from issue #263.
+        uv_path = shutil.which("uv")
+        if uv_path is None:
+            return False, "uv not found on PATH (needed to promote uvx cache to uv tool)"
+        cmd = [uv_path, "tool", "install", "--upgrade", MCP_PACKAGE_NAME]
     elif method == "none":
         return False, "keboola-mcp-server is not installed"
     else:

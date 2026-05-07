@@ -487,13 +487,38 @@ class TestPerformMcpUpdate:
 
     @patch("keboola_agent_cli.services.version_service.shutil.which")
     @patch("keboola_agent_cli.services.version_service.subprocess.run")
-    def test_uvx_uses_refresh(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
-        mock_which.return_value = "/usr/local/bin/uvx"
-        mock_run.return_value = MagicMock(returncode=0, stdout="cached refreshed", stderr="")
+    def test_uvx_promotes_to_uv_tool_install(
+        self, mock_run: MagicMock, mock_which: MagicMock
+    ) -> None:
+        """Bug B fix from issue #263: uvx-cache install is promoted to a
+        persistent ``uv tool install --upgrade``.
+
+        Pre-fix: command was ``uvx --refresh --from <pkg> <bin> --version``,
+        which failed because the upstream MCP binary does not honour
+        ``--version``. The cache refresh succeeded but the trailing
+        --version probe exited non-zero, so the upgrade banner reported
+        failure even though the refresh worked.
+
+        Post-fix: command is ``uv tool install --upgrade <pkg>``, which
+        equivalent-refreshes AND moves the binary to PATH so subsequent
+        runs use the faster ``uv_tool`` detection path.
+        """
+        mock_which.return_value = "/usr/local/bin/uv"
+        mock_run.return_value = MagicMock(returncode=0, stdout="installed", stderr="")
         ok, _info = _perform_mcp_update(method="uvx")
         assert ok is True
         cmd = mock_run.call_args.args[0]
-        assert "--refresh" in cmd
+        assert "tool" in cmd and "install" in cmd and "--upgrade" in cmd
+        assert MCP_PACKAGE_NAME in cmd
+        # The broken --version arg must be GONE from the uvx upgrade path.
+        assert "--version" not in cmd
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which", return_value=None)
+    def test_uvx_promotion_requires_uv(self, mock_which: MagicMock) -> None:
+        """If the uvx promotion needs `uv` and `uv` is missing, fail clearly."""
+        ok, info = _perform_mcp_update(method="uvx")
+        assert ok is False
+        assert "uv not found" in info
 
     def test_none_returns_false(self) -> None:
         ok, info = _perform_mcp_update(method="none")
