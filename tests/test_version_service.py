@@ -16,6 +16,7 @@ from keboola_agent_cli.services.version_service import (
     _is_up_to_date,
     _is_uvx_available,
     _perform_mcp_update,
+    _uv_tool_list_get_mcp_version,
     _uv_tool_list_has_mcp,
 )
 
@@ -165,27 +166,38 @@ class TestVersionService:
 
 
 class TestGetLocalMcpVersion:
-    """Tests for the local-MCP-version detection helper."""
+    """Tests for the local-MCP-version detection helper.
+
+    Since v0.30.2 the resolution order is ``uv tool list`` -> importlib.metadata
+    -> ``keboola_mcp_server --version`` (best-effort future fallback). The
+    upstream binary today does NOT honour ``--version`` and instead prints
+    its usage block; the path therefore yields no match by design.
+    """
 
     @patch("keboola_agent_cli.services.version_service.shutil.which")
     @patch("keboola_agent_cli.services.version_service.subprocess.run")
-    def test_binary_returns_version(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
-        mock_which.return_value = f"/usr/local/bin/{MCP_BINARY_NAME}"
+    def test_uv_tool_list_returns_version(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+        """Preferred path: read version straight from `uv tool list` output.
+
+        This is the v0.30.2 fix path -- the previous --version probe
+        returned None because the upstream binary has no --version flag.
+        """
+        mock_which.side_effect = lambda c: "/usr/local/bin/uv" if c == "uv" else None
         mock_run.return_value = MagicMock(
-            returncode=0, stdout="keboola_mcp_server 1.59.1\n", stderr=""
+            returncode=0,
+            stdout=(
+                "keboola-agent-cli v0.30.1\n"
+                "- kbagent\n"
+                f"{MCP_PACKAGE_NAME} v1.59.1\n"
+                f"- {MCP_BINARY_NAME}\n"
+            ),
+            stderr="",
         )
         assert _get_local_mcp_version() == "1.59.1"
 
-    @patch("keboola_agent_cli.services.version_service.shutil.which")
-    @patch("keboola_agent_cli.services.version_service.subprocess.run")
-    def test_binary_version_on_stderr(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
-        """Some tools print --version output to stderr; we read both."""
-        mock_which.return_value = f"/usr/local/bin/{MCP_BINARY_NAME}"
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="version 1.49.0\n")
-        assert _get_local_mcp_version() == "1.49.0"
-
     @patch("keboola_agent_cli.services.version_service.shutil.which", return_value=None)
-    def test_no_binary_no_metadata_returns_none(self, mock_which: MagicMock) -> None:
+    def test_no_uv_no_binary_no_metadata_returns_none(self, mock_which: MagicMock) -> None:
+        """All three resolution paths fail -> None."""
         with patch(
             "importlib.metadata.version",
             side_effect=__import__("importlib.metadata").metadata.PackageNotFoundError(
@@ -199,8 +211,11 @@ class TestGetLocalMcpVersion:
         "keboola_agent_cli.services.version_service.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd="x", timeout=5),
     )
-    def test_binary_timeout_falls_through(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
-        mock_which.return_value = f"/usr/local/bin/{MCP_BINARY_NAME}"
+    def test_uv_tool_list_timeout_falls_through(
+        self, mock_run: MagicMock, mock_which: MagicMock
+    ) -> None:
+        """`uv tool list` timeout does not crash; falls through to next path."""
+        mock_which.return_value = "/usr/local/bin/uv"
         with patch(
             "importlib.metadata.version",
             side_effect=__import__("importlib.metadata").metadata.PackageNotFoundError(
@@ -208,6 +223,123 @@ class TestGetLocalMcpVersion:
             ),
         ):
             assert _get_local_mcp_version() is None
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    def test_real_world_no_version_flag_returns_none(
+        self, mock_run: MagicMock, mock_which: MagicMock
+    ) -> None:
+        """Regression: keboola_mcp_server --version prints USAGE help, not a version.
+
+        Pre-v0.30.2 the --version path picked the python3 minor (e.g. 3.12)
+        out of the usage line and returned the wrong value, OR returned None
+        when the regex required X.Y.Z. Lock the contract: the binary's
+        usage-help output must NOT yield a spurious version match.
+        """
+        # Use the actual upstream output verbatim (verified locally on v1.59.1).
+        usage_output = (
+            "usage: python -m keboola-mcp-server [-h]\n"
+            "                                    [--transport {stdio,streamable-http,http-compat}]\n"
+            "                                    [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]\n"
+        )
+        # uv unavailable so we land on the binary path.
+        mock_which.side_effect = lambda c: (
+            f"/usr/local/bin/{MCP_BINARY_NAME}" if c == MCP_BINARY_NAME else None
+        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=usage_output, stderr="")
+
+        with patch(
+            "importlib.metadata.version",
+            side_effect=__import__("importlib.metadata").metadata.PackageNotFoundError(
+                MCP_PACKAGE_NAME
+            ),
+        ):
+            # The 3.12 in "python3.12" inside a usage line must NOT be returned.
+            # Since v0.30.2 the cleaned-output filter strips usage: lines.
+            assert _get_local_mcp_version() is None
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    def test_future_binary_with_version_flag(
+        self, mock_run: MagicMock, mock_which: MagicMock
+    ) -> None:
+        """Forward-compat: when a future MCP server adds --version, we read it.
+
+        Locks the fallback path so we do not silently lose this capability
+        once the upstream binary catches up.
+        """
+        mock_which.side_effect = lambda c: (
+            f"/usr/local/bin/{MCP_BINARY_NAME}" if c == MCP_BINARY_NAME else None
+        )
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="keboola_mcp_server 2.0.0\n", stderr=""
+        )
+        with patch(
+            "importlib.metadata.version",
+            side_effect=__import__("importlib.metadata").metadata.PackageNotFoundError(
+                MCP_PACKAGE_NAME
+            ),
+        ):
+            assert _get_local_mcp_version() == "2.0.0"
+
+
+# ---------------------------------------------------------------------------
+# _uv_tool_list_get_mcp_version -- version extractor (since v0.30.2)
+# ---------------------------------------------------------------------------
+
+
+class TestUvToolListGetMcpVersion:
+    """Tests for the version extractor pulled out of `uv tool list` output."""
+
+    def test_exact_match_returns_version(self) -> None:
+        stdout = f"{MCP_PACKAGE_NAME} v1.59.1\n- {MCP_BINARY_NAME}\n"
+        assert _uv_tool_list_get_mcp_version(stdout) == "1.59.1"
+
+    def test_real_world_uv_tool_list_output(self) -> None:
+        """Regression: the exact format `uv tool list` emits (multi-tool case)."""
+        stdout = (
+            "agnes-the-ai-analyst v2.1.0\n"
+            "- da\n"
+            "juncture v0.41.3\n"
+            "- juncture\n"
+            "keboola-agent-cli v0.30.1\n"
+            "- kbagent\n"
+            f"{MCP_PACKAGE_NAME} v1.59.1\n"
+            f"- {MCP_BINARY_NAME}\n"
+        )
+        assert _uv_tool_list_get_mcp_version(stdout) == "1.59.1"
+
+    def test_not_listed_returns_none(self) -> None:
+        stdout = "keboola-agent-cli v0.30.1\n- kbagent\n"
+        assert _uv_tool_list_get_mcp_version(stdout) is None
+
+    def test_similar_named_package_rejected(self) -> None:
+        """`keboola-mcp-server-foo` is NOT the package; reject."""
+        stdout = "keboola-mcp-server-foo v0.1.0\n- foo-bin\n"
+        assert _uv_tool_list_get_mcp_version(stdout) is None
+
+    def test_indented_binary_line_ignored(self) -> None:
+        """Indented `- keboola-mcp-server` under another tool must NOT match."""
+        stdout = "some-other-tool v1.0.0\n    - keboola-mcp-server-helper\n"
+        assert _uv_tool_list_get_mcp_version(stdout) is None
+
+    def test_malformed_version_token_rejected(self) -> None:
+        """Second token must look like vX.Y.Z; otherwise None."""
+        stdout = f"{MCP_PACKAGE_NAME} not-a-version\n- {MCP_BINARY_NAME}\n"
+        assert _uv_tool_list_get_mcp_version(stdout) is None
+
+    def test_strips_leading_v(self) -> None:
+        stdout = f"{MCP_PACKAGE_NAME} v2.0.0\n- {MCP_BINARY_NAME}\n"
+        assert _uv_tool_list_get_mcp_version(stdout) == "2.0.0"
+
+    def test_pre_release_version(self) -> None:
+        """Tolerate suffixes like `v1.59.1.dev0` (uv may include pre-release tags)."""
+        stdout = f"{MCP_PACKAGE_NAME} v1.59.1.dev0\n- {MCP_BINARY_NAME}\n"
+        # Returns the X.Y.Z prefix; suffix is ignored by the regex anchor.
+        assert _uv_tool_list_get_mcp_version(stdout) == "1.59.1.dev0"
+
+    def test_empty_input(self) -> None:
+        assert _uv_tool_list_get_mcp_version("") is None
 
 
 # ---------------------------------------------------------------------------

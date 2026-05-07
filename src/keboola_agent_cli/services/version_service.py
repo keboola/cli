@@ -43,20 +43,63 @@ def _get_local_mcp_version(timeout: float = MCP_PROBE_TIMEOUT) -> str | None:
 
     Resolution order:
 
-    1. ``keboola_mcp_server --version`` subprocess (works for both a direct
-       binary install and ``uv tool install`` -- they both publish a
-       ``keboola_mcp_server`` script on PATH).
+    1. ``uv tool list`` (the canonical source for ``uv tool install``-managed
+       binaries -- which is how kbagent's `doctor --fix` installs MCP). The
+       output line ``keboola-mcp-server v1.59.1`` carries the exact version.
+       This is the path the v0.30.2 fix relies on.
     2. ``importlib.metadata.version("keboola-mcp-server")`` (works when the
-       package is pip-installed in the active Python environment).
-    3. None when neither works (typically: uvx cache; we cannot cleanly
-       inspect uvx-cached-only installs without forcing a download).
+       package is pip-installed in the **same** Python environment as
+       kbagent -- rare in production because kbagent itself is usually
+       installed via ``uv tool install`` into a sibling venv).
+    3. ``keboola_mcp_server --version`` subprocess. **Best-effort fallback**
+       reserved for a future MCP server that adds a real ``--version`` CLI.
+       Today the upstream binary does NOT honour ``--version`` and instead
+       prints the usage block with returncode 0; the regex therefore finds
+       no match and we move on cleanly.
+    4. None when none of the above yields a version (typically: uvx cache;
+       we cannot cleanly inspect uvx-cached-only installs without forcing
+       a re-download).
 
     Args:
-        timeout: Subprocess timeout in seconds for the binary --version probe.
+        timeout: Subprocess timeout in seconds for each subprocess probe.
 
     Returns:
         Version string like ``"1.59.1"``, or None when undetectable.
     """
+    # 1. Preferred: read from `uv tool list` (works for `uv tool install`
+    #    binaries, which is the kbagent doctor --fix install path).
+    uv_path = shutil.which("uv")
+    if uv_path:
+        try:
+            result = subprocess.run(
+                [uv_path, "tool", "list"],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            if result.returncode == 0:
+                version = _uv_tool_list_get_mcp_version(result.stdout)
+                if version:
+                    return version
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    # 2. Fallback: try importlib.metadata in the current Python environment.
+    try:
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as _pkg_version
+
+        try:
+            return _pkg_version(MCP_PACKAGE_NAME)
+        except PackageNotFoundError:
+            pass
+    except ImportError:
+        pass
+
+    # 3. Best-effort fallback: `keboola_mcp_server --version`. Currently a
+    #    no-op against the upstream binary (no --version flag) but kept so
+    #    a future release that adds the flag works without a kbagent
+    #    re-roll.
     binary = shutil.which(MCP_BINARY_NAME)
     if binary:
         try:
@@ -67,25 +110,66 @@ def _get_local_mcp_version(timeout: float = MCP_PROBE_TIMEOUT) -> str | None:
                 timeout=timeout,
             )
             if result.returncode == 0:
-                # Combined stdout + stderr -- some tools print version to stderr.
                 output = (result.stdout or "") + (result.stderr or "")
-                m = re.search(r"(\d+\.\d+\.\d+)", output)
+                # Heuristic: the upstream binary's --version-less help text
+                # contains its own header with a path; reject any match
+                # found inside a "usage:" line so we do not mistake a path
+                # number (e.g. "/home/user/python3.12.9/...") for a version.
+                cleaned = "\n".join(
+                    line
+                    for line in output.splitlines()
+                    if not line.lstrip().lower().startswith("usage:")
+                )
+                m = re.search(r"\b(\d+\.\d+\.\d+)\b", cleaned)
                 if m:
                     return m.group(1)
         except (subprocess.TimeoutExpired, OSError):
             pass
 
-    # Fallback: try importlib.metadata in the current Python environment.
-    try:
-        from importlib.metadata import PackageNotFoundError
-        from importlib.metadata import version as _pkg_version
+    return None
 
-        try:
-            return _pkg_version(MCP_PACKAGE_NAME)
-        except PackageNotFoundError:
-            return None
-    except ImportError:
-        return None
+
+def _uv_tool_list_get_mcp_version(stdout: str) -> str | None:
+    """Extract the keboola-mcp-server version from ``uv tool list`` output.
+
+    Output format (one tool per block):
+
+    .. code-block:: text
+
+        keboola-mcp-server v1.59.1
+        - keboola-mcp-server
+
+    Robust against the same false-positive classes as
+    :func:`_uv_tool_list_has_mcp` (similarly-named packages, indented
+    binary lines, accidental stderr text) and rejects malformed lines
+    where the second whitespace-separated token does not look like a
+    semver-ish ``vX.Y.Z`` token.
+
+    Args:
+        stdout: Captured stdout of ``uv tool list``.
+
+    Returns:
+        Version string like ``"1.59.1"`` (the leading ``v`` stripped),
+        or None if the package is not listed or the version token is
+        missing / unparseable.
+    """
+    for line in stdout.splitlines():
+        # Skip indented continuation lines (binary listings under a tool).
+        if line.startswith((" ", "\t")):
+            continue
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parts = stripped.split()
+        # First token must be exact package name; second must look like
+        # ``vX.Y.Z`` (uv emits the leading "v"; tolerate the rare case
+        # where it might not in some future version).
+        if len(parts) < 2 or parts[0] != MCP_PACKAGE_NAME:
+            continue
+        version_token = parts[1].lstrip("v")
+        if re.match(r"^\d+\.\d+\.\d+", version_token):
+            return version_token
+    return None
 
 
 def _uv_tool_list_has_mcp(stdout: str) -> bool:
