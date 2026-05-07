@@ -994,6 +994,14 @@ def sync_branch_status(
     except FileNotFoundError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
         raise typer.Exit(code=1) from None
+    except ConfigError as exc:
+        # Corrupted .keboola/branch-mapping.json -- surface as clean
+        # exit-5 envelope so the user sees the descriptive message
+        # ("Failed to parse ...: Invalid branch ID ...") instead of a
+        # Python traceback. Mirrors the handler other sync commands
+        # already have (issue #269 sec-20 follow-up).
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
         formatter.output(result)

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from keboola_agent_cli.constants import BRANCH_MAPPING_FILENAME, KEBOOLA_DIR_NAME
+from keboola_agent_cli.errors import ConfigError
 from keboola_agent_cli.sync.branch_mapping import (
     BranchMapping,
     BranchMappingEntry,
@@ -175,8 +176,11 @@ class TestBranchMapping:
         with pytest.raises(ValueError, match="Invalid branch ID"):
             BranchMapping.from_dict(data)
 
-    def test_load_branch_mapping_invalid_id_includes_path(self, tmp_path: Path) -> None:
-        """``load_branch_mapping`` wraps the descriptive error with the file path."""
+    def test_load_branch_mapping_invalid_id_raises_config_error(self, tmp_path: Path) -> None:
+        """``load_branch_mapping`` wraps the descriptive error with the file
+        path AND raises ConfigError so CLI commands surface a clean exit-5
+        envelope instead of a Python traceback (issue #269 sec-20 follow-up).
+        """
         keboola_dir = tmp_path / KEBOOLA_DIR_NAME
         keboola_dir.mkdir()
         (keboola_dir / BRANCH_MAPPING_FILENAME).write_text(
@@ -189,7 +193,7 @@ class TestBranchMapping:
                 }
             )
         )
-        with pytest.raises(ValueError, match=r"Failed to parse .*branch-mapping\.json"):
+        with pytest.raises(ConfigError, match=r"Failed to parse .*branch-mapping\.json"):
             load_branch_mapping(tmp_path)
 
 

@@ -1563,6 +1563,47 @@ class TestSyncBranchStatusCli:
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         assert "not enabled" in result.output
 
+    def test_sync_branch_status_corrupted_mapping_clean_envelope(self, tmp_path: Path) -> None:
+        """A corrupted .keboola/branch-mapping.json must produce a clean
+        JSON error envelope (exit 5, CONFIG_ERROR), not a Python traceback
+        (issue #269 sec-20 follow-up + #273 reviewer feedback)."""
+        from keboola_agent_cli.errors import ConfigError
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_sync = _make_sync_service_mock()
+        # Service raises ConfigError as load_branch_mapping now does for
+        # malformed mappings. CLI must catch it.
+        mock_sync.branch_status.side_effect = ConfigError(
+            "Failed to parse /tmp/.keboola/branch-mapping.json: "
+            "Invalid branch ID in branch-mapping.json: 'not-a-number'. "
+            "Expected null or an integer; got str."
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                ["--json", "sync", "branch-status", "--directory", str(tmp_path)],
+            )
+
+        assert result.exit_code == 5, f"expected exit 5, got {result.exit_code}: {result.output}"
+        assert "Traceback" not in result.output
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+        assert data["error"]["code"] == "CONFIG_ERROR"
+        assert "Invalid branch ID" in data["error"]["message"]
+
 
 class TestSyncInitAdoptExistingCli:
     """Tests for `kbagent sync init --adopt-existing`."""
