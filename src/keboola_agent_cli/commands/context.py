@@ -780,10 +780,15 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Health checks. --fix auto-installs MCP server binary.
 
   kbagent version
-    Version info, update check for kbagent and MCP server.
+    Version info for kbagent + keboola-mcp-server. Reports both the locally
+    installed version and the latest available; flags any staleness.
 
   kbagent update
-    Self-update kbagent to latest version (via uv tool install --upgrade).
+    Two-stage upgrade (since 0.30.1): kbagent itself AND keboola-mcp-server.
+    The MCP server is detected (uv tool / pip env / uvx) and bumped via the
+    matching command. Both stages always run, regardless of whether kbagent
+    itself needed an upgrade. The same flow runs automatically on every
+    kbagent startup -- the explicit `update` command forces a fresh check.
 
   kbagent changelog [--limit N]
     Show recent changelog (what changed in each version). Default: last 5 versions.

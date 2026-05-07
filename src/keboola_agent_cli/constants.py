@@ -154,6 +154,17 @@ MCP_PYPI_URL: str = "https://pypi.org/pypi/keboola-mcp-server/json"
 KBAGENT_GITHUB_REPO: str = "padak/keboola_agent_cli"
 KBAGENT_INSTALL_SOURCE: str = "git+https://github.com/padak/keboola_agent_cli"
 
+# --- MCP self-upgrade (since v0.30.1) ---
+# Subprocess timeout for the `keboola_mcp_server --version` probe and the
+# `uv tool list` install-method probe. These are local subprocess calls,
+# so 5s leaves plenty of headroom for cold-start CPython without slowing
+# kbagent startup observably.
+MCP_PROBE_TIMEOUT: float = 5.0
+# Subprocess timeout for the actual upgrade command (`uv tool upgrade` /
+# `pip install -U` / `uvx --refresh`). Network bound; 180s tolerates a
+# slow PyPI link plus the worst-case dependency-resolution cost.
+MCP_UPGRADE_TIMEOUT: float = 180.0
+
 # --- Auto-Update ---
 ENV_AUTO_UPDATE: str = "KBAGENT_AUTO_UPDATE"
 ENV_SKIP_UPDATE: str = "KBAGENT_SKIP_UPDATE"
