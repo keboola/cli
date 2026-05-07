@@ -324,3 +324,33 @@ class ConfigStore:
                 setattr(project, key, value)
         config.projects[alias] = project
         self.save(config)
+
+    def rename_project(self, old_alias: str, new_alias: str) -> None:
+        """Rename a project alias in the persisted config.
+
+        Pops ``old_alias`` from the projects dict and re-inserts the same
+        ``ProjectConfig`` under ``new_alias``. If ``default_project`` was
+        set to ``old_alias``, it is updated to ``new_alias`` so the pin
+        survives the rename. Both mutations are applied to the same
+        in-memory ``AppConfig`` and saved as one transaction.
+
+        Args:
+            old_alias: The current alias to rename from.
+            new_alias: The target alias to rename to.
+
+        Raises:
+            ConfigError: If ``old_alias`` does not exist or ``new_alias``
+                is already in use by another project.
+        """
+        config = self.load()
+        if old_alias not in config.projects:
+            raise ConfigError(f"Project '{old_alias}' not found.")
+        if new_alias in config.projects:
+            raise ConfigError(
+                f"Cannot rename '{old_alias}' to '{new_alias}': "
+                f"alias '{new_alias}' is already in use."
+            )
+        config.projects[new_alias] = config.projects.pop(old_alias)
+        if config.default_project == old_alias:
+            config.default_project = new_alias
+        self.save(config)

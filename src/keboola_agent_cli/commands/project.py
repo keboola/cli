@@ -227,22 +227,78 @@ def project_edit(
         None,
         help="New Storage API token",
     ),
+    new_alias: str | None = typer.Option(
+        None,
+        "--new-alias",
+        help=(
+            "Rename the project alias. Updates the config.json projects key "
+            "AND the default_project field if it matched. Renames the nested "
+            "sync directory <cwd>/<old-alias>/ when present (with -2-suffix "
+            "collision handling). Lineage cache (if any) is NOT auto-updated; "
+            "rebuild with 'kbagent lineage build' after the rename."
+        ),
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help=(
+            "Preview the edit without mutating state. Validates --new-alias, "
+            "detects collision against existing projects, predicts the disk-"
+            "rename method (git_mv vs shutil_move), and surfaces the lineage-"
+            "cache warning if any -- all read-only. Errors (collision, "
+            "invalid format) raise the same exit codes as the live path. No "
+            "API call is made for --token in dry-run mode."
+        ),
+    ),
 ) -> None:
     """Edit an existing Keboola project connection.
 
     If --token is provided, the token is re-verified against the API.
+    Combined with --new-alias, the rename is applied first and any
+    --url / --token mutation lands on the new alias key. Pass --dry-run
+    to preview without mutating state.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "project_service")
 
     try:
-        result = service.edit_project(alias=alias, stack_url=url, token=token)
-        formatter.output(
-            result,
-            lambda c, d: c.print(
-                f"[bold green]Success:[/bold green] Project [bold]{d['alias']}[/bold] updated."
-            ),
+        result = service.edit_project(
+            alias=alias,
+            stack_url=url,
+            token=token,
+            new_alias=new_alias,
+            dry_run=dry_run,
         )
+
+        def _human(c: Console, d: dict) -> None:
+            if d.get("dry_run"):
+                planned = d.get("planned", {})
+                p_new = planned.get("new_alias")
+                if p_new:
+                    c.print(
+                        f"[bold yellow]DRY RUN:[/bold yellow] Project "
+                        f"[bold]{d['alias']}[/bold] would be renamed to "
+                        f"[bold]{p_new}[/bold]. No state mutated."
+                    )
+                else:
+                    c.print(
+                        f"[bold yellow]DRY RUN:[/bold yellow] Project "
+                        f"[bold]{d['alias']}[/bold] would be updated. "
+                        "No state mutated."
+                    )
+                return
+            if "old_alias" in d:
+                c.print(
+                    f"[bold green]Success:[/bold green] Project "
+                    f"[bold]{d['old_alias']}[/bold] renamed to "
+                    f"[bold]{d['alias']}[/bold]."
+                )
+            else:
+                c.print(
+                    f"[bold green]Success:[/bold green] Project [bold]{d['alias']}[/bold] updated."
+                )
+
+        formatter.output(result, _human)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
         formatter.error(

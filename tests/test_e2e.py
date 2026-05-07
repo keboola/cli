@@ -2834,7 +2834,40 @@ class TestFullE2E:
         assert col_descs.get("id") == "Batch column id desc"
 
     def _test_project_edit_and_remove(self) -> None:
-        """Edit project URL, then remove it."""
+        """Edit project URL, rename round-trip + dry-run preview, then remove."""
+        # --new-alias dry-run preview: predicts the rename without mutating.
+        # Pinned by PR #266 review (Padak): exercise the dry-run pre-flight
+        # against a real config dir so the planned-block shape is verified.
+        new_alias = f"{self.alias}-renamed"
+        data = self._run_ok(
+            "project",
+            "edit",
+            "--project",
+            self.alias,
+            "--new-alias",
+            new_alias,
+            "--dry-run",
+        )
+        assert data["data"]["dry_run"] is True
+        assert data["data"]["alias"] == self.alias  # unchanged in dry-run
+        assert data["data"]["planned"]["new_alias"] == new_alias
+        # Verify nothing actually moved.
+        data = self._run_ok("project", "list")
+        aliases = [p["alias"] for p in data["data"]]
+        assert self.alias in aliases
+        assert new_alias not in aliases
+
+        # --new-alias live rename round-trip -- exercise the cascading rename
+        # against a real config dir (Padak's BLOCKING from PR #266 review).
+        data = self._run_ok("project", "edit", "--project", self.alias, "--new-alias", new_alias)
+        assert data["data"]["old_alias"] == self.alias
+        assert data["data"]["alias"] == new_alias
+        assert data["data"]["rename"]["new_alias"] == new_alias
+        # Rename back so subsequent steps keep using self.alias unchanged.
+        data = self._run_ok("project", "edit", "--project", new_alias, "--new-alias", self.alias)
+        assert data["data"]["alias"] == self.alias
+        assert data["data"]["old_alias"] == new_alias
+
         # project edit -- change URL back to same (just verify command works)
         data = self._run_ok(
             "project",

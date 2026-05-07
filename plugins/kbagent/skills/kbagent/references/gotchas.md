@@ -1,5 +1,30 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## `project edit --new-alias` does NOT rewrite lineage caches (since v0.30.7)
+
+- `kbagent project edit --project OLD --new-alias NEW` cascades the rename
+  through `config.json` (`projects` dict key + `default_project` field if it
+  matched OLD) and renames the nested-layout sync directory at
+  `<cwd>/<old-alias>/.keboola/manifest.json` to `<cwd>/<new-alias>/`.
+  Collision handling appends a `-2` numeric suffix (mirrors `config rename`).
+- Lineage caches (`*.lineage.json` files produced by `kbagent lineage build
+  --output FILE`) embed the alias inside FQN strings (`<alias>:<table_id>`)
+  and are **NOT** auto-updated by the rename. The CLI emits a stderr warning
+  when it detects a cache file in the workspace.
+- After a rename: rebuild any cached `.lineage.json` with
+  `kbagent lineage build --output PATH`. Otherwise downstream lineage queries
+  silently reference the old alias.
+- Why we don't auto-rewrite: lineage caches can live anywhere on disk
+  (committed to git, in a sibling repo, used by external tooling). A partial
+  rewrite is worse than no rewrite -- callers must opt in by re-running
+  `lineage build`.
+- Combined invocations are atomic in the obvious order: `--new-alias` is
+  applied first, then `--url` / `--token` mutations target the new alias key.
+  So `kbagent project edit --project foo --new-alias bar --token NEW` does
+  the rename, then writes the new token under `bar`. If `--new-alias` is
+  identical to the current alias, it's a no-op (matches "rename to same name"
+  idempotency).
+
 ## `keboola-mcp-server` is now auto-updated on kbagent startup (since v0.30.1)
 
 - Pre-v0.30.1 trap: a user installs `keboola-mcp-server` once via
