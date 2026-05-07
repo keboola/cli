@@ -633,18 +633,42 @@ class VersionService:
         success, output = _perform_mcp_update(method=method, timeout=MCP_UPGRADE_TIMEOUT)
         post_version = _get_local_mcp_version() if success else local_version
 
+        # Bug E fix from issue #263: subprocess returncode == 0 is NOT
+        # enough to claim the upgrade happened. `uv tool upgrade` exits 0
+        # even when its resolver backtracks to the previously installed
+        # version (e.g. a transitive-dep constraint blocks the latest).
+        # `updated` reflects the actual version delta, not just exit code.
+        actually_updated = bool(
+            success and post_version and local_version and post_version != local_version
+        )
+
+        if not success:
+            message = f"keboola-mcp-server upgrade failed: {output}"
+        elif actually_updated:
+            message = (
+                f"Upgraded keboola-mcp-server "
+                f"({local_version or 'unknown'} -> {post_version}) via {method}."
+            )
+        elif post_version is None:
+            message = (
+                f"keboola-mcp-server upgrade ran via {method}; post-upgrade probe failed "
+                f"(latest on PyPI: v{latest_version})."
+            )
+        else:
+            # Subprocess exit 0 but local version unchanged.
+            message = (
+                f"keboola-mcp-server upgrade exit 0 but local version still "
+                f"v{local_version} (latest: v{latest_version}). Possible Python or "
+                f"dependency-version mismatch -- run `uv tool install --reinstall "
+                f"{MCP_PACKAGE_NAME}` to diagnose."
+            )
+
         return {
-            "updated": bool(success),
+            "updated": actually_updated,
             "current_version": local_version,
             "latest_version": latest_version,
             "post_upgrade_version": post_version,
             "install_method": method,
-            "message": (
-                f"Upgraded keboola-mcp-server "
-                f"({local_version or 'unknown'} -> {post_version or latest_version or '?'}) "
-                f"via {method}."
-                if success
-                else f"keboola-mcp-server upgrade failed: {output}"
-            ),
+            "message": message,
             "output": output,
         }

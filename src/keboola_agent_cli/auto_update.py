@@ -346,10 +346,34 @@ def _maybe_update_mcp(cache: dict | None, fetched_now: bool) -> str | None:
         f"Updating keboola-mcp-server v{local_version or 'unknown'} -> v{mcp_latest}"
         f" (via {method})...\n"
     )
+    pre_version = local_version
     success, info = _perform_mcp_update(method=method, timeout=MCP_UPGRADE_TIMEOUT)
     if success:
-        post_version = _get_local_mcp_version() or mcp_latest
-        sys.stderr.write(f"Updated keboola-mcp-server to v{post_version}.\n")
+        # Bug E fix from issue #263: subprocess returncode == 0 is NOT
+        # enough to claim the upgrade actually happened. `uv tool upgrade`
+        # exits 0 even when its resolver backtracks to the previously
+        # installed version (a real-world reproducer: keboola-mcp-server
+        # v1.59.1 declares fastmcp==3.2.0 strict equality, the existing
+        # venv has fastmcp==2.13.0.2, uv resolves back to v1.32.0 and
+        # exits clean). Compare pre and post versions and tell the truth.
+        post_version = _get_local_mcp_version()
+        if post_version and pre_version and post_version != pre_version:
+            sys.stderr.write(f"Updated keboola-mcp-server to v{post_version}.\n")
+        elif post_version is None:
+            # Probe failed post-upgrade; cannot verify -- assume latest.
+            sys.stderr.write(
+                f"Updated keboola-mcp-server (probe failed; latest on PyPI: v{mcp_latest}).\n"
+            )
+        else:
+            # Subprocess exit 0 but local version unchanged. Most common
+            # cause: dependency-resolver backtrack (Python or transitive-
+            # dep constraint cannot satisfy the latest). Surface a
+            # diagnostic instead of silently lying.
+            sys.stderr.write(
+                f"keboola-mcp-server upgrade exit 0 but local version still v{pre_version} "
+                f"(latest: v{mcp_latest}). Possible Python or dependency-version mismatch -- "
+                f"run `uv tool install --reinstall keboola-mcp-server` to diagnose.\n"
+            )
     else:
         sys.stderr.write(
             f"keboola-mcp-server upgrade skipped: {info}; continuing with current version.\n"

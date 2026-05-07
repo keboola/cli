@@ -590,7 +590,10 @@ class TestSelfUpdateTwoStage:
 
         mock_kbagent_latest.return_value = __version__  # kbagent up-to-date
         mock_mcp_latest.return_value = "1.59.1"
-        mock_local.return_value = "1.49.0"  # MCP stale
+        # Bug E fix: pre-upgrade returns 1.49.0; post-upgrade returns 1.59.1.
+        # The version delta is what flips `updated` to True (not just the
+        # subprocess exit code). Side-effect list models the two calls.
+        mock_local.side_effect = ["1.49.0", "1.59.1"]
         mock_detect.return_value = "uv_tool"
         mock_perform.return_value = (True, "ok")
 
@@ -601,3 +604,51 @@ class TestSelfUpdateTwoStage:
         assert result["mcp"]["updated"] is True
         assert result["updated"] is True
         mock_perform.assert_called_once()
+
+    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
+    @patch("keboola_agent_cli.services.version_service._get_local_mcp_version")
+    @patch("keboola_agent_cli.services.version_service._detect_mcp_install_method")
+    @patch("keboola_agent_cli.services.version_service._perform_mcp_update")
+    def test_subprocess_succeeds_but_version_unchanged_reports_not_updated(
+        self,
+        mock_perform: MagicMock,
+        mock_detect: MagicMock,
+        mock_local: MagicMock,
+        mock_mcp_latest: MagicMock,
+        mock_kbagent_latest: MagicMock,
+    ) -> None:
+        """Bug E regression from issue #263.
+
+        Real reproducer (from @ottomansky's trace on v0.30.2):
+        ``uv tool upgrade keboola-mcp-server`` exits 0, but uv's
+        resolver backtracked to the previously installed v1.32.0
+        because v1.59.1 declares a fastmcp constraint the venv cannot
+        satisfy. Pre-fix: kbagent reported success and the message
+        said "Upgraded keboola-mcp-server (1.32.0 -> 1.32.0)". Post-fix:
+        ``updated`` is False, message contains a diagnostic pointing to
+        ``uv tool install --reinstall`` with no false-success claim.
+        """
+        from keboola_agent_cli import __version__
+
+        mock_kbagent_latest.return_value = __version__
+        mock_mcp_latest.return_value = "1.59.1"
+        # Both pre and post probes return v1.32.0 -- subprocess "succeeded"
+        # but the version did not change.
+        mock_local.side_effect = ["1.32.0", "1.32.0"]
+        mock_detect.return_value = "uv_tool"
+        mock_perform.return_value = (True, "no upgrade needed")
+
+        svc = VersionService()
+        result = svc.self_update()
+
+        # The lie -- "subprocess exit 0 = upgrade happened" -- is the bug.
+        # Truth: pre and post versions are identical, so updated == False.
+        assert result["mcp"]["updated"] is False
+        # Diagnostic message points the user at `uv tool install --reinstall`
+        # so they can investigate the underlying packaging conflict.
+        assert "still v1.32.0" in result["mcp"]["message"]
+        assert "uv tool install --reinstall" in result["mcp"]["message"]
+        # The overall `updated` flag also reflects no change (kbagent itself
+        # was up-to-date in this scenario).
+        assert result["updated"] is False
