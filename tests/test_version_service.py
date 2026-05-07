@@ -15,6 +15,7 @@ from keboola_agent_cli.services.version_service import (
     _is_up_to_date,
     _is_uvx_available,
     _perform_mcp_update,
+    _uv_tool_list_has_mcp,
 )
 
 
@@ -117,7 +118,7 @@ class TestVersionService:
         assert mcp_dep["auto_updates"] is True
         assert mcp_dep["uvx_available"] is True
         assert mcp_dep["latest_version"] == "1.46.0"
-        # New fields (since v0.28.1)
+        # New fields (since v0.30.1)
         assert mcp_dep["version"] == "1.46.0"
         assert mcp_dep["up_to_date"] is True
         assert mcp_dep["install_method"] == "uv_tool"
@@ -158,7 +159,7 @@ class TestVersionService:
 
 
 # ---------------------------------------------------------------------------
-# _get_local_mcp_version (since v0.28.1)
+# _get_local_mcp_version (since v0.30.1)
 # ---------------------------------------------------------------------------
 
 
@@ -209,7 +210,63 @@ class TestGetLocalMcpVersion:
 
 
 # ---------------------------------------------------------------------------
-# _detect_mcp_install_method (since v0.28.1)
+# _uv_tool_list_has_mcp -- robust parser (B-2 fix, since v0.30.1)
+# ---------------------------------------------------------------------------
+
+
+class TestUvToolListHasMcp:
+    """Tests for the robust ``uv tool list`` parser.
+
+    Pre-fix: ``MCP_PACKAGE_NAME in stdout`` would substring-match
+    similarly-named tools, indented binary listings, and even hint /
+    warning text. The new parser does per-line, exact first-token
+    equality.
+    """
+
+    def test_exact_package_match(self) -> None:
+        stdout = f"{MCP_PACKAGE_NAME} v1.59.1\n- {MCP_BINARY_NAME}\n"
+        assert _uv_tool_list_has_mcp(stdout) is True
+
+    def test_no_match_when_only_indented_binary_line(self) -> None:
+        """Pre-fix `keboola-mcp-server` substring would also live in the
+        binary line `- keboola_mcp_server` (different tool's listing).
+        After the fix, indented lines are skipped.
+        """
+        stdout = "some-other-tool v1.0.0\n    - keboola_mcp_server_helper\n"
+        assert _uv_tool_list_has_mcp(stdout) is False
+
+    def test_no_match_for_similar_named_package(self) -> None:
+        """A hypothetical `keboola-mcp-server-foo` would substring-match
+        but is NOT the same tool. Exact first-token equality rejects it.
+        """
+        stdout = "keboola-mcp-server-foo v0.1.0\n- foo-bin\n"
+        assert _uv_tool_list_has_mcp(stdout) is False
+
+    def test_match_with_other_tools_listed(self) -> None:
+        """The package is found alongside other unrelated tools."""
+        stdout = (
+            "keboola-agent-cli v0.30.0\n"
+            "- kbagent\n"
+            f"{MCP_PACKAGE_NAME} v1.59.1\n"
+            f"- {MCP_BINARY_NAME}\n"
+            "ruff v0.1.0\n"
+            "- ruff\n"
+        )
+        assert _uv_tool_list_has_mcp(stdout) is True
+
+    def test_empty_input(self) -> None:
+        assert _uv_tool_list_has_mcp("") is False
+
+    def test_blank_lines_only(self) -> None:
+        assert _uv_tool_list_has_mcp("\n\n   \n\t\n") is False
+
+    def test_trailing_whitespace_does_not_break_match(self) -> None:
+        stdout = f"{MCP_PACKAGE_NAME}   v1.59.1   \n"
+        assert _uv_tool_list_has_mcp(stdout) is True
+
+
+# ---------------------------------------------------------------------------
+# _detect_mcp_install_method (since v0.30.1)
 # ---------------------------------------------------------------------------
 
 
@@ -266,7 +323,7 @@ class TestDetectMcpInstallMethod:
 
 
 # ---------------------------------------------------------------------------
-# _perform_mcp_update (since v0.28.1)
+# _perform_mcp_update (since v0.30.1)
 # ---------------------------------------------------------------------------
 
 
@@ -323,7 +380,7 @@ class TestPerformMcpUpdate:
 
 
 # ---------------------------------------------------------------------------
-# VersionService.self_update -- two-stage upgrade (since v0.28.1)
+# VersionService.self_update -- two-stage upgrade (since v0.30.1)
 # ---------------------------------------------------------------------------
 
 

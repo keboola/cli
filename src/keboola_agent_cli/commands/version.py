@@ -41,24 +41,45 @@ def _format_dep_standard(text: Text, dep: dict) -> None:
 
 
 def _format_dep_auto_update(text: Text, dep: dict) -> None:
-    """Format an auto-updating dependency (runs via uvx @latest)."""
+    """Format an auto-updating dependency.
+
+    Since v0.30.1: dependencies are auto-updated by ``auto_update.py`` on
+    kbagent startup (and explicitly by ``kbagent update``). The renderer
+    surfaces the locally installed version + up-to-date status so a user
+    in the terminal sees the staleness signal immediately, not just in
+    JSON mode.
+    """
     name = dep["name"]
     desc = dep["description"]
+    local = dep.get("version")
     latest = dep.get("latest_version")
-    uvx_available = dep.get("uvx_available", False)
+    up_to_date = dep.get("up_to_date")
+    install_method = dep.get("install_method", "?")
+    upgrade_cmd = dep.get("upgrade_command", "")
 
     label = f"{name} ({desc})"
     text.append(f"  {label:<28}")
 
-    if not uvx_available:
-        text.append("uvx not found", style="red")
-        text.append(" (install: brew install uv)", style="dim")
-    elif latest:
-        text.append(f"v{latest}", style="green")
-        text.append("    auto-updates", style="dim")
+    if local is None:
+        if install_method == "none":
+            text.append("not installed", style="yellow")
+            if upgrade_cmd:
+                text.append(f" ({upgrade_cmd})", style="dim")
+        else:
+            text.append("local version unknown", style="dim")
+            if latest:
+                text.append(f"    (latest on PyPI: v{latest})", style="dim")
+        text.append("\n")
+        return
+
+    text.append(f"v{local}")
+
+    if up_to_date is False and latest is not None:
+        text.append(f"    -> v{latest} (auto-updates on next startup)", style="yellow")
+    elif up_to_date is True:
+        text.append("    auto-updates (up to date)", style="green")
     else:
-        text.append("available", style="green")
-        text.append("    (version check failed)", style="dim")
+        text.append("    (update check failed)", style="dim")
 
     text.append("\n")
 
@@ -95,10 +116,20 @@ def version_command(ctx: typer.Context) -> None:
 
 
 def update_command(ctx: typer.Context) -> None:
-    """Update kbagent to the latest version.
+    """Update kbagent + keboola-mcp-server to the latest versions.
 
-    Uses 'uv tool install --upgrade' (preferred) or 'pip install --upgrade'
-    to install the latest version from the GitHub repository.
+    Two-stage upgrade (since v0.30.1):
+
+    1. **kbagent** -- ``uv tool install --upgrade`` (preferred) or
+       ``pip install --upgrade`` from the GitHub repository.
+    2. **keboola-mcp-server** -- detects install method and runs the
+       matching upgrade command (``uv tool upgrade`` / ``pip install -U``
+       / ``uvx --refresh``). Always runs, regardless of whether kbagent
+       itself needed an upgrade.
+
+    JSON output reports both stages independently. Human mode prints a
+    one-line summary such as
+    ``kbagent v0.30.0 -> v0.30.1 | keboola-mcp-server v1.49.0 -> v1.59.1``.
     """
     formatter = get_formatter(ctx)
     version_service = get_service(ctx, "version_service")

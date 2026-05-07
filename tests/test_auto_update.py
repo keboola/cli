@@ -291,6 +291,10 @@ class TestMaybeAutoUpdate:
         this fixture they would either issue real subprocess /
         importlib.metadata lookups or trigger network round-trips to
         PyPI. Each MCP test below opts in by re-patching as needed.
+
+        Also defaults the per-stage skip helpers (since v0.30.1) to False
+        so existing tests that only patch the legacy ``_should_skip``
+        alias still drive the orchestrator down the active path.
         """
         with (
             patch(
@@ -301,14 +305,31 @@ class TestMaybeAutoUpdate:
                 "keboola_agent_cli.auto_update._detect_mcp_install_method",
                 return_value="none",
             ),
+            patch(
+                "keboola_agent_cli.auto_update._should_skip_all",
+                return_value=False,
+            ),
+            patch(
+                "keboola_agent_cli.auto_update._should_skip_kbagent_stage",
+                return_value=False,
+            ),
         ):
             yield
 
-    @patch("keboola_agent_cli.auto_update._should_skip", return_value=True)
-    def test_skip_conditions_respected(self, mock_skip):
-        # Should return immediately without doing anything
-        maybe_auto_update()
-        mock_skip.assert_called_once()
+    def test_skip_conditions_respected(self):
+        """When the wide skip gate (`_should_skip_all`) is True, neither
+        stage runs.
+        """
+        with (
+            patch(
+                "keboola_agent_cli.auto_update._should_skip_all",
+                return_value=True,
+            ) as mock_skip_all,
+            patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version") as mock_fetch,
+        ):
+            maybe_auto_update()
+        mock_skip_all.assert_called_once()
+        mock_fetch.assert_not_called()
 
     @patch("keboola_agent_cli.auto_update._should_skip", return_value=False)
     @patch("keboola_agent_cli.auto_update._read_cache")
@@ -332,9 +353,11 @@ class TestMaybeAutoUpdate:
         mock_fetch.assert_called_once()
         # Cache write now bundles the kbagent latest with the MCP latest +
         # install method (both may be None when MCP helpers are no-op'ed).
+        # Since v0.30.1 maybe_auto_update calls _write_cache with all
+        # kwargs (no positional args) so the test inspects call_args.kwargs.
         mock_write.assert_called_once()
         kwargs = mock_write.call_args.kwargs
-        assert mock_write.call_args.args[0] == "2.0.0"
+        assert kwargs.get("latest_version") == "2.0.0"
         assert "mcp_latest_version" in kwargs
         assert "mcp_install_method" in kwargs
 
@@ -478,7 +501,7 @@ class TestChangelogCommandConsumesWhatsNewTrigger:
 
 
 # ---------------------------------------------------------------------------
-# _maybe_update_mcp -- MCP-server side of the auto-update flow (since v0.28.1)
+# _maybe_update_mcp -- MCP-server side of the auto-update flow (since v0.30.1)
 # ---------------------------------------------------------------------------
 
 
@@ -567,12 +590,33 @@ class TestMaybeUpdateMcp:
 
 
 # ---------------------------------------------------------------------------
-# maybe_auto_update -- end-to-end MCP integration (since v0.28.1)
+# maybe_auto_update -- end-to-end MCP integration (since v0.30.1)
 # ---------------------------------------------------------------------------
 
 
 class TestMaybeAutoUpdateMcpIntegration:
     """End-to-end tests for the MCP stage inside maybe_auto_update."""
+
+    @pytest.fixture(autouse=True)
+    def _force_active_skip_gates(self):
+        """Default per-stage skip helpers to False (since v0.30.1).
+
+        Each test below verifies an MCP-stage path; the skip gates must be
+        out of the way for those paths to run. Individual tests still
+        re-patch ``_should_skip_kbagent_stage`` when they exercise the
+        re-exec scenario explicitly.
+        """
+        with (
+            patch(
+                "keboola_agent_cli.auto_update._should_skip_all",
+                return_value=False,
+            ),
+            patch(
+                "keboola_agent_cli.auto_update._should_skip_kbagent_stage",
+                return_value=False,
+            ),
+        ):
+            yield
 
     @patch("keboola_agent_cli.auto_update._should_skip", return_value=False)
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
@@ -633,3 +677,86 @@ class TestMaybeAutoUpdateMcpIntegration:
         ):
             # MUST NOT raise.
             maybe_auto_update()
+
+
+# ---------------------------------------------------------------------------
+# B-1 regression: re-exec'd process must still run the MCP stage
+# (PR #257 review carry-over, addressed in v0.30.1)
+# ---------------------------------------------------------------------------
+
+
+class TestReExecPathStillRunsMcp:
+    """Pin the B-1 contract: ``KBAGENT_SKIP_UPDATE=1`` skips ONLY Stage 1.
+
+    Pre-fix bug: ``_should_skip()`` returned True when the re-exec guard env
+    var was set, so ``maybe_auto_update()`` returned before the MCP stage
+    even when MCP was stale. After a kbagent self-upgrade the re-exec'd
+    process therefore left MCP behind for one extra invocation, breaking
+    the "both stages always run" promise that the PR description asserted.
+
+    Fix: split the gate into ``_should_skip_kbagent_stage`` (re-exec only)
+    and ``_should_skip_all`` (dev install / opt-out / update|version
+    commands). The orchestrator consults each at the matching stage so the
+    MCP work proceeds even when Stage 1 is skipped.
+    """
+
+    @patch("keboola_agent_cli.auto_update._is_dev_install", return_value=False)
+    def test_re_exec_skips_kbagent_but_runs_mcp(self, _mock_dev):
+        """With KBAGENT_SKIP_UPDATE=1 set, MCP stage MUST still run."""
+        env = {k: v for k, v in os.environ.items() if k not in (ENV_AUTO_UPDATE,)}
+        env[ENV_SKIP_UPDATE] = "1"
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("sys.argv", ["kbagent", "config", "list"]),
+            patch(
+                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version"
+            ) as mock_fetch_kbagent,
+            patch("keboola_agent_cli.auto_update._maybe_update_mcp") as mock_mcp,
+            patch(
+                "keboola_agent_cli.auto_update._detect_mcp_install_method",
+                return_value="uv_tool",
+            ),
+            patch("keboola_agent_cli.auto_update._read_cache", return_value=None),
+            patch("keboola_agent_cli.auto_update._write_cache"),
+        ):
+            maybe_auto_update()
+
+        # Stage 1 (kbagent) skipped -- the GitHub fetch never fired.
+        mock_fetch_kbagent.assert_not_called()
+        # Stage 2 (MCP) ran exactly once -- this is the contract.
+        mock_mcp.assert_called_once()
+
+    @patch("keboola_agent_cli.auto_update._is_dev_install", return_value=False)
+    def test_kbagent_command_update_skips_both(self, _mock_dev):
+        """`kbagent update` argv still skips both stages (handled separately)."""
+        env = {k: v for k, v in os.environ.items() if k not in (ENV_AUTO_UPDATE, ENV_SKIP_UPDATE)}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("sys.argv", ["kbagent", "update"]),
+            patch(
+                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version"
+            ) as mock_fetch_kbagent,
+            patch("keboola_agent_cli.auto_update._maybe_update_mcp") as mock_mcp,
+        ):
+            maybe_auto_update()
+
+        mock_fetch_kbagent.assert_not_called()
+        mock_mcp.assert_not_called()
+
+    @patch("keboola_agent_cli.auto_update._is_dev_install", return_value=False)
+    def test_user_opt_out_skips_both(self, _mock_dev):
+        """KBAGENT_AUTO_UPDATE=false skips both stages (no auto-update at all)."""
+        env = {k: v for k, v in os.environ.items() if k not in (ENV_SKIP_UPDATE,)}
+        env[ENV_AUTO_UPDATE] = "false"
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("sys.argv", ["kbagent", "config", "list"]),
+            patch(
+                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version"
+            ) as mock_fetch_kbagent,
+            patch("keboola_agent_cli.auto_update._maybe_update_mcp") as mock_mcp,
+        ):
+            maybe_auto_update()
+
+        mock_fetch_kbagent.assert_not_called()
+        mock_mcp.assert_not_called()

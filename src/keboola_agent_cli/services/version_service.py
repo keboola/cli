@@ -20,7 +20,9 @@ from .. import __version__
 from ..constants import (
     KBAGENT_GITHUB_REPO,
     KBAGENT_INSTALL_SOURCE,
+    MCP_PROBE_TIMEOUT,
     MCP_PYPI_URL,
+    MCP_UPGRADE_TIMEOUT,
     VERSION_CHECK_TIMEOUT,
 )
 
@@ -36,7 +38,7 @@ def _is_uvx_available() -> bool:
     return shutil.which("uvx") is not None
 
 
-def _get_local_mcp_version(timeout: float = 5.0) -> str | None:
+def _get_local_mcp_version(timeout: float = MCP_PROBE_TIMEOUT) -> str | None:
     """Detect the locally installed keboola-mcp-server version.
 
     Resolution order:
@@ -86,6 +88,43 @@ def _get_local_mcp_version(timeout: float = 5.0) -> str | None:
         return None
 
 
+def _uv_tool_list_has_mcp(stdout: str) -> bool:
+    """Detect whether ``uv tool list`` output contains ``keboola-mcp-server``.
+
+    Robust against three classes of false-positive that a naive substring
+    match (``MCP_PACKAGE_NAME in stdout``) would suffer:
+
+    * **Similarly-named packages** -- e.g. a hypothetical
+      ``keboola-mcp-server-foo`` would substring-match but is NOT the same
+      tool; we want exact equality on the first whitespace-separated token.
+    * **Indented binary listings** -- ``uv tool list`` shows each tool's
+      published scripts on indented continuation lines (``    - <script>``),
+      which can include ``keboola_mcp_server`` (the binary name) for tools
+      that are NOT this package.
+    * **Hint / warning text in stderr-merged buffers** -- callers should
+      only ever feed `result.stdout` here, but per-line parsing also
+      tolerates accidental stderr injection.
+
+    Args:
+        stdout: Captured stdout of ``uv tool list``.
+
+    Returns:
+        True iff a non-indented, non-blank line's first token is exactly
+        ``keboola-mcp-server``.
+    """
+    for line in stdout.splitlines():
+        # Skip indented continuation lines (binary listings under a tool).
+        if line.startswith((" ", "\t")):
+            continue
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # First whitespace-separated token == package name (exact match).
+        if stripped.split(maxsplit=1)[0] == MCP_PACKAGE_NAME:
+            return True
+    return False
+
+
 def _detect_mcp_install_method() -> str:
     """Detect how keboola-mcp-server is installed locally.
 
@@ -112,9 +151,9 @@ def _detect_mcp_install_method() -> str:
                     [uv_path, "tool", "list"],
                     capture_output=True,
                     text=True,
-                    timeout=5,
+                    timeout=MCP_PROBE_TIMEOUT,
                 )
-                if result.returncode == 0 and MCP_PACKAGE_NAME in result.stdout:
+                if result.returncode == 0 and _uv_tool_list_has_mcp(result.stdout):
                     return "uv_tool"
             except (subprocess.TimeoutExpired, OSError):
                 pass
@@ -143,7 +182,7 @@ def _detect_mcp_install_method() -> str:
 
 def _perform_mcp_update(
     method: str | None = None,
-    timeout: float = 180.0,
+    timeout: float = MCP_UPGRADE_TIMEOUT,
 ) -> tuple[bool, str]:
     """Run the appropriate upgrade command for keboola-mcp-server.
 
@@ -507,7 +546,7 @@ class VersionService:
             }
 
         # Run the upgrade.
-        success, output = _perform_mcp_update(method=method, timeout=180.0)
+        success, output = _perform_mcp_update(method=method, timeout=MCP_UPGRADE_TIMEOUT)
         post_version = _get_local_mcp_version() if success else local_version
 
         return {

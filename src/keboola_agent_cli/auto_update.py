@@ -27,6 +27,7 @@ from .constants import (
     ENV_AUTO_UPDATE,
     ENV_SKIP_UPDATE,
     KBAGENT_INSTALL_SOURCE,
+    MCP_UPGRADE_TIMEOUT,
     VERSION_CACHE_FILENAME,
     VERSION_CHECK_TIMEOUT,
 )
@@ -74,17 +75,24 @@ def _read_cache() -> dict | None:
 
 
 def _write_cache(
-    latest_version: str,
+    latest_version: str | None,
     mcp_latest_version: str | None = None,
     mcp_install_method: str | None = None,
 ) -> None:
     """Write the version cache file.
 
     Args:
-        latest_version: kbagent latest version (required).
+        latest_version: kbagent latest version. Falls back to the running
+            interpreter's ``__version__`` when None -- caller is in a
+            re-exec'd process where Stage 1 was skipped and we still want
+            to persist the MCP-side fields without losing the kbagent key.
         mcp_latest_version: keboola-mcp-server latest version from PyPI.
         mcp_install_method: Detected MCP install method (drives upgrade cmd).
     """
+    if latest_version is None:
+        # Re-exec path: persist the running version so cache_is_fresh
+        # logic on the NEXT run still has a kbagent-side anchor.
+        latest_version = __version__
     cache_path = _get_cache_path()
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -141,19 +149,32 @@ def _is_dev_install() -> bool:
     return False
 
 
-def _should_skip() -> bool:
-    """Determine whether the auto-update check should be skipped.
+def _should_skip_kbagent_stage() -> bool:
+    """Whether the kbagent self-upgrade stage should be skipped.
 
-    Skip conditions:
-    - KBAGENT_SKIP_UPDATE=1 (set by re-exec to prevent loops)
-    - KBAGENT_AUTO_UPDATE in {false, 0, no} (user opt-out)
-    - Development/editable install
-    - Current command is 'update' or 'version' (handled separately)
+    Re-exec guard (``KBAGENT_SKIP_UPDATE=1``) skips ONLY the kbagent stage.
+    The MCP stage in the re-exec'd process is intentionally allowed to
+    proceed -- otherwise a freshly-upgraded kbagent on a stale MCP would
+    require a second invocation to refresh MCP. See
+    :func:`_should_skip_all` for the wider conditions that gate both stages.
     """
-    # Re-exec guard
-    if os.environ.get(ENV_SKIP_UPDATE) == "1":
-        return True
+    return os.environ.get(ENV_SKIP_UPDATE) == "1"
 
+
+def _should_skip_all() -> bool:
+    """Whether the entire auto-update flow should be skipped.
+
+    Skip conditions (apply to BOTH kbagent and MCP stages):
+
+    - ``KBAGENT_AUTO_UPDATE`` in ``{false, 0, no}`` (user opt-out).
+    - Development / editable install (we never auto-upgrade a dev tree).
+    - Current command is ``update`` / ``version`` (those commands handle
+      versioning themselves and would loop if auto-update fired here too).
+
+    Notably **does NOT include** the re-exec guard
+    ``KBAGENT_SKIP_UPDATE=1`` -- that is per-stage and only skips the
+    kbagent stage. See :func:`_should_skip_kbagent_stage`.
+    """
     # User opt-out
     auto_update_val = os.environ.get(ENV_AUTO_UPDATE, "").lower().strip()
     if auto_update_val in ("false", "0", "no"):
@@ -171,6 +192,17 @@ def _should_skip() -> bool:
             return True
 
     return False
+
+
+def _should_skip() -> bool:
+    """Backwards-compatible alias for the old gate-everything check.
+
+    Pre-v0.30.1 callers (and our own tests) treated this as a single skip
+    decision for the whole flow. Today it is the OR of the kbagent-stage
+    re-exec guard and the wider dev/opt-out gate -- the call sites in
+    :func:`maybe_auto_update` now consult the two helpers separately.
+    """
+    return _should_skip_kbagent_stage() or _should_skip_all()
 
 
 def _perform_update(latest_version: str) -> bool:
@@ -287,7 +319,7 @@ def _maybe_update_mcp(cache: dict | None, fetched_now: bool) -> str | None:
         f"Updating keboola-mcp-server v{local_version or 'unknown'} -> v{mcp_latest}"
         f" (via {method})...\n"
     )
-    success, info = _perform_mcp_update(method=method, timeout=180.0)
+    success, info = _perform_mcp_update(method=method, timeout=MCP_UPGRADE_TIMEOUT)
     if success:
         post_version = _get_local_mcp_version() or mcp_latest
         sys.stderr.write(f"Updated keboola-mcp-server to v{post_version}.\n")
@@ -303,7 +335,7 @@ def maybe_auto_update() -> None:
     """Main entry point for the auto-update flow.
 
     Called from ``cli.py`` at the very top of ``main()``. Orchestrates two
-    sequential stages:
+    sequential stages with **independent skip gating** (since v0.30.1):
 
     1. **kbagent self-update** -- if the installed version is behind the
        latest GitHub release, download the upgrade and ``execvpe`` the new
@@ -315,6 +347,13 @@ def maybe_auto_update() -> None:
        No re-exec is needed: the MCP server is spawned by ``tool call``
        commands and the next spawn picks up the new version.
 
+    Critical invariant: **the re-exec'd process (KBAGENT_SKIP_UPDATE=1)
+    skips ONLY Stage 1**. Stage 2 always runs, so a kbagent self-upgrade
+    on startup leaves the user with both kbagent AND MCP refreshed in
+    a single boot, not two. This was the B-1 finding in the PR #257
+    review -- gating the MCP stage on the same flag broke the
+    "both stages always run" promise after a kbagent self-upgrade.
+
     Cache discipline: a single cache file at
     ``~/.config/keboola-agent-cli/version_cache.json`` stores both
     ``latest_version`` (kbagent) and ``mcp_latest_version`` so we make at
@@ -324,44 +363,60 @@ def maybe_auto_update() -> None:
     debug level so the CLI always proceeds normally.
     """
     try:
-        if _should_skip():
+        # Wide gates (dev install / opt-out / update|version commands)
+        # skip BOTH stages -- there is nothing reasonable to do.
+        if _should_skip_all():
             return
 
         cache = _read_cache()
         cache_is_fresh = bool(cache and _is_cache_fresh(cache, AUTO_UPDATE_CHECK_INTERVAL))
+        latest_version: str | None = None
 
-        # Stage 1: kbagent self-update.
-        if cache_is_fresh:
-            latest_version: str | None = cache.get("latest_version")  # type: ignore[union-attr]
-        else:
-            latest_version = _fetch_kbagent_latest_version(timeout=VERSION_CHECK_TIMEOUT)
+        # ----- Stage 1: kbagent self-update --------------------------------
+        # The re-exec guard skips ONLY this stage (so a freshly upgraded
+        # kbagent in the re-exec'd process does NOT double-upgrade itself
+        # but still proceeds to Stage 2 below).
+        if not _should_skip_kbagent_stage():
+            if cache_is_fresh:
+                latest_version = cache.get("latest_version")  # type: ignore[union-attr]
+            else:
+                latest_version = _fetch_kbagent_latest_version(timeout=VERSION_CHECK_TIMEOUT)
 
-        if latest_version is not None:
-            up_to_date = _is_up_to_date(__version__, latest_version)
-            if up_to_date is False:
-                sys.stderr.write(f"Updating kbagent v{__version__} -> v{latest_version}...\n")
-                if _perform_update(latest_version):
-                    sys.stderr.write(f"Updated to v{latest_version}. Re-launching...\n")
-                    # Persist cache before re-exec so the new process does
-                    # not refetch immediately.
-                    _write_cache(
-                        latest_version,
-                        mcp_latest_version=cache.get("mcp_latest_version") if cache else None,
-                        mcp_install_method=cache.get("mcp_install_method") if cache else None,
-                    )
-                    os.environ[ENV_UPDATED_FROM] = __version__
-                    _re_exec()
-                    return  # Defensive: _re_exec replaces the process.
-                sys.stderr.write("Auto-update failed; continuing with current version.\n")
+            if latest_version is not None:
+                up_to_date = _is_up_to_date(__version__, latest_version)
+                if up_to_date is False:
+                    sys.stderr.write(f"Updating kbagent v{__version__} -> v{latest_version}...\n")
+                    if _perform_update(latest_version):
+                        sys.stderr.write(f"Updated to v{latest_version}. Re-launching...\n")
+                        # Persist cache before re-exec so the new process does
+                        # not refetch immediately. The re-exec'd process will
+                        # skip Stage 1 (KBAGENT_SKIP_UPDATE=1) and run Stage 2
+                        # against the just-refreshed cache.
+                        _write_cache(
+                            latest_version,
+                            mcp_latest_version=cache.get("mcp_latest_version") if cache else None,
+                            mcp_install_method=cache.get("mcp_install_method") if cache else None,
+                        )
+                        os.environ[ENV_UPDATED_FROM] = __version__
+                        _re_exec()
+                        return  # Defensive: _re_exec replaces the process.
+                    sys.stderr.write("Auto-update failed; continuing with current version.\n")
 
-        # Stage 2: keboola-mcp-server update.
+        # ----- Stage 2: keboola-mcp-server update --------------------------
+        # Always runs (subject only to _should_skip_all above). After a
+        # kbagent self-upgrade, this is the re-exec'd process executing
+        # Stage 2 for the first time -- exactly the path B-1 broke before.
         mcp_latest = _maybe_update_mcp(cache, fetched_now=not cache_is_fresh)
         mcp_install_method = _detect_mcp_install_method()
 
         # Persist combined cache (kbagent + MCP) when we did any fresh fetch.
-        if not cache_is_fresh and latest_version is not None:
+        # Note: in the re-exec'd path, latest_version stays None (Stage 1
+        # was skipped); _write_cache handles that by falling back to the
+        # running __version__, so we still persist the MCP-side fields and
+        # don't break the next run's cache TTL check.
+        if not cache_is_fresh:
             _write_cache(
-                latest_version,
+                latest_version=latest_version or (cache.get("latest_version") if cache else None),
                 mcp_latest_version=mcp_latest,
                 mcp_install_method=mcp_install_method,
             )
