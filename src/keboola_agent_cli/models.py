@@ -75,6 +75,7 @@ class AppConfig(BaseModel):
     default_project: str = Field(default="", description="Alias of the default project")
     max_parallel_workers: int = Field(
         default=10,
+        ge=1,
         le=100,
         description="Max concurrent threads for multi-project operations (env: KBAGENT_MAX_PARALLEL_WORKERS)",
     )

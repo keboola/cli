@@ -858,3 +858,84 @@ class TestLineageBuildCli:
         assert len(data["warnings"]) == 1
         assert "No synced projects found" in data["warnings"][0]
         assert cache_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Issue #269 sec-05: HTML/Mermaid output XSS regression
+# ---------------------------------------------------------------------------
+
+
+class TestRenderErDiagramXssRegression:
+    """Issue #269 sec-05 -- entity / config names from the API must not be
+    embeddable as HTML in the lineage HTML output."""
+
+    def _make_graph(self, table_name: str, config_name: str) -> tuple[LineageGraph, list[dict]]:
+        graph = LineageGraph()
+        table_fqn = f"prod:in.c-bucket.{table_name}"
+        config_fqn = "prod:keboola.snowflake-transformation/cfg-1"
+        graph.tables[table_fqn] = Table(
+            table_id=f"in.c-bucket.{table_name}",
+            project_alias="prod",
+            project_id=1,
+            bucket_id="in.c-bucket",
+            name=table_name,
+            primary_key=[],
+            columns=["id", "value"],
+            rows_count=100,
+        )
+        graph.configurations[config_fqn] = Configuration(
+            config_id="cfg-1",
+            config_name=config_name,
+            component_id="keboola.snowflake-transformation",
+            component_type="transformation",
+            project_alias="prod",
+            project_id=1,
+            path="transformation/keboola.snowflake-transformation/cfg-1",
+        )
+        edges = [
+            {
+                "source": table_fqn,
+                "target": config_fqn,
+                "edge_type": "input_mapping",
+                "column_mapping": {},
+            },
+            {
+                "source": config_fqn,
+                "target": table_fqn,
+                "edge_type": "output_mapping",
+                "column_mapping": {},
+            },
+        ]
+        return graph, edges
+
+    def test_table_name_with_html_is_escaped(self) -> None:
+        """A Keboola table named with </div><script> survives sanitization
+        without injecting raw HTML into the diagram body."""
+        graph, edges = self._make_graph(
+            table_name="</div><script>alert(1)</script>",
+            config_name="ok",
+        )
+        rendered = DeepLineageService.render_er_diagram(
+            edges=edges,
+            graph=graph,
+            node_fqn=next(iter(graph.tables)),
+            show_columns=False,
+        )
+        assert "<script>" not in rendered
+        assert "</div>" not in rendered
+        assert "&lt;script&gt;" in rendered or "&lt;/script&gt;" in rendered
+
+    def test_config_name_with_html_is_escaped(self) -> None:
+        """A Keboola config_name with </div><img> is also escaped."""
+        graph, edges = self._make_graph(
+            table_name="users",
+            config_name="</div><img src=x onerror=alert(1)>",
+        )
+        rendered = DeepLineageService.render_er_diagram(
+            edges=edges,
+            graph=graph,
+            node_fqn=next(iter(graph.tables)),
+            show_columns=False,
+        )
+        assert "<img" not in rendered
+        assert "&lt;img" in rendered

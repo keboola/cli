@@ -2,7 +2,12 @@
 
 import pytest
 
-from keboola_agent_cli.sync.naming import config_path, config_row_path, sanitize_name
+from keboola_agent_cli.sync.naming import (
+    config_path,
+    config_row_path,
+    sanitize_name,
+    sanitize_path_segment,
+)
 
 
 class TestConfigPath:
@@ -80,3 +85,74 @@ class TestSanitizeName:
     def test_sanitize_name_various(self, name: str, expected: str) -> None:
         """Various input patterns are sanitized correctly."""
         assert sanitize_name(name) == expected
+
+
+class TestSanitizePathSegment:
+    """Tests for sanitize_path_segment() -- issue #269 sec-01/sec-07."""
+
+    def test_preserves_legitimate_component_id(self) -> None:
+        """Realistic component IDs with dots and hyphens pass through."""
+        assert sanitize_path_segment("keboola.ex-db-mysql") == "keboola.ex-db-mysql"
+        assert sanitize_path_segment("kds-team.app-custom-python") == "kds-team.app-custom-python"
+        assert (
+            sanitize_path_segment("keboola.python-transformation-v2")
+            == "keboola.python-transformation-v2"
+        )
+
+    def test_preserves_simple_component_type(self) -> None:
+        """Plain component_type values pass through unchanged."""
+        assert sanitize_path_segment("extractor") == "extractor"
+        assert sanitize_path_segment("transformation") == "transformation"
+        assert sanitize_path_segment("application") == "application"
+
+    @pytest.mark.parametrize(
+        "evil",
+        [
+            "../../etc",
+            "..",
+            "../",
+            "foo/../bar",
+            "foo/bar",
+            "foo\\bar",
+            "/etc/passwd",
+            ".",
+            "./relative",
+            "..//..//etc",
+            "../../../tmp/foo",
+            "with spaces",
+        ],
+    )
+    def test_neutralizes_traversal(self, evil: str) -> None:
+        """Path-traversal payloads are neutralized -- the resulting segment
+        contains no slash, backslash, or ``..`` parent reference."""
+        result = sanitize_path_segment(evil)
+        assert "/" not in result
+        assert "\\" not in result
+        assert ".." not in result
+        assert result, f"sanitize_path_segment({evil!r}) returned empty"
+
+    def test_empty_input_returns_underscore(self) -> None:
+        """Empty input returns ``_`` so the path always has a non-empty segment."""
+        assert sanitize_path_segment("") == "_"
+        assert sanitize_path_segment("/") == "_"
+        assert sanitize_path_segment("...") == "_"
+
+
+class TestConfigPathTraversalRegression:
+    """Issue #269 sec-01/sec-07 regression tests for config_path()."""
+
+    def test_path_traversal_in_component_id_neutralized(self) -> None:
+        """API-controlled component_id with ``../`` cannot escape the template."""
+        template = "{component_type}/{component_id}/{config_name}"
+        result = config_path(template, "other", "../../../etc", "passwd")
+        assert "/.." not in result
+        assert ".." not in result.split("/")[1]  # the component_id segment
+
+    def test_path_traversal_in_component_type_neutralized(self) -> None:
+        """component_type with ``../`` is also sanitized (sec-07)."""
+        template = "{component_type}/{component_id}/{config_name}"
+        result = config_path(template, "other/../../../tmp", "keboola.ex", "test")
+        # sanitize_path_segment turns the slashes into hyphens -> single segment
+        first_segment = result.split("/")[0]
+        assert ".." not in first_segment
+        assert "/" not in first_segment

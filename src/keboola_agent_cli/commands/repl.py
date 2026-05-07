@@ -5,6 +5,8 @@ can run kbagent commands without restarting the process. Supports tab
 completion, persistent history, and colored output.
 """
 
+import contextlib
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -61,10 +63,28 @@ class KbagentCompleter(Completer):
 
 
 def _get_history_path() -> Path:
-    """Return path for persistent REPL history file."""
+    """Return path for persistent REPL history file.
+
+    Ensures the file exists with 0600 permissions before returning so
+    ``prompt_toolkit.FileHistory`` does not create it world-readable
+    under a permissive umask. REPL command lines may include
+    ``project add --token TOKEN``, so the history must not leak to
+    group/other (issue #269 sec-04).
+    """
     config_dir = Path(platformdirs.user_config_dir("keboola-agent-cli"))
     config_dir.mkdir(parents=True, exist_ok=True)
-    return config_dir / "repl_history"
+    history_path = config_dir / "repl_history"
+    if not history_path.exists():
+        # Atomic create with 0600 so FileHistory.append never widens perms.
+        fd = os.open(str(history_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(fd)
+    else:
+        # Pre-existing file might have been created by an older kbagent
+        # under a permissive umask -- tighten perms in place. Filesystems
+        # that do not support chmod (e.g. some network mounts) silently no-op.
+        with contextlib.suppress(OSError):
+            history_path.chmod(0o600)
+    return history_path
 
 
 def _run_repl(

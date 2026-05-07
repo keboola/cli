@@ -7,6 +7,7 @@ import pytest
 
 from keboola_agent_cli.services.mcp_transport import (
     McpServerManager,
+    _build_minimal_env,
     _find_free_port,
     get_server_manager,
 )
@@ -287,3 +288,47 @@ class TestMcpServiceTransportSelection:
             return_value=mock_manager,
         ):
             assert svc._get_server_url() is None
+
+
+class TestBuildMinimalEnv:
+    """Issue #269 sec-02 / sec-08 regression tests for env scrubbing."""
+
+    def test_strips_master_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """KBC_MASTER_TOKEN never reaches the MCP subprocess."""
+        monkeypatch.setenv("KBC_MASTER_TOKEN", "super-secret")
+        env = _build_minimal_env()
+        assert "KBC_MASTER_TOKEN" not in env
+
+    def test_strips_per_alias_master_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """KBC_MASTER_TOKEN_<ALIAS> is also stripped."""
+        monkeypatch.setenv("KBC_MASTER_TOKEN_PROD", "alias-secret")
+        env = _build_minimal_env()
+        assert "KBC_MASTER_TOKEN_PROD" not in env
+
+    def test_strips_manage_api_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """KBC_MANAGE_API_TOKEN never reaches the MCP subprocess even when
+        --allow-env-manage-token was set in the parent."""
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "manage-secret")
+        env = _build_minimal_env()
+        assert "KBC_MANAGE_API_TOKEN" not in env
+
+    def test_strips_storage_token_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The Storage API token env var is also not inherited (per-request
+        headers carry the right token)."""
+        monkeypatch.setenv("KBC_TOKEN", "storage-secret")
+        env = _build_minimal_env()
+        assert "KBC_TOKEN" not in env
+
+    def test_preserves_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PATH is preserved so the MCP binary can be found."""
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+        env = _build_minimal_env()
+        assert env.get("PATH") == "/usr/bin:/bin"
+
+    def test_preserves_locale(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Locale vars survive so non-ASCII output works."""
+        monkeypatch.setenv("LANG", "en_US.UTF-8")
+        monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+        env = _build_minimal_env()
+        assert env.get("LANG") == "en_US.UTF-8"
+        assert env.get("LC_ALL") == "en_US.UTF-8"

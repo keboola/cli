@@ -94,7 +94,11 @@ class BaseService:
         """Resolve max parallel workers: env var > config.json > default (10).
 
         Returns:
-            Positive integer for ThreadPoolExecutor max_workers.
+            Positive integer for ThreadPoolExecutor max_workers. Always >= 1
+            so a legacy config.json with ``max_parallel_workers: 0`` does not
+            crash multi-project ops with ``ValueError`` from the executor
+            (issue #269 sec-11). New configs are validated at the Pydantic
+            layer (``ge=1``); this clamp guards loaded-from-disk values.
         """
         env_val = os.environ.get(ENV_MAX_PARALLEL_WORKERS)
         if env_val is not None:
@@ -106,7 +110,7 @@ class BaseService:
                 pass
 
         config = self._config_store.load()
-        return config.max_parallel_workers
+        return max(config.max_parallel_workers, 1)
 
     def _run_parallel(
         self,

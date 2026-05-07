@@ -378,6 +378,20 @@ class TestMaxParallelWorkersValidation:
         config = AppConfig(max_parallel_workers=1)
         assert config.max_parallel_workers == 1
 
+    def test_max_workers_zero_rejected(self) -> None:
+        """max_parallel_workers = 0 raises ValidationError (issue #269 sec-11).
+
+        Pre-fix this passed Pydantic validation, then ThreadPoolExecutor
+        crashed with ``ValueError: max_workers must be greater than 0`` on
+        every multi-project operation."""
+        with pytest.raises(ValidationError, match="greater than or equal to 1"):
+            AppConfig(max_parallel_workers=0)
+
+    def test_max_workers_negative_rejected(self) -> None:
+        """max_parallel_workers < 0 raises ValidationError."""
+        with pytest.raises(ValidationError, match="greater than or equal to 1"):
+            AppConfig(max_parallel_workers=-5)
+
 
 class TestProjectConfigBackwardCompat:
     """Tests for backward compatibility of ProjectConfig with active_branch_id."""
