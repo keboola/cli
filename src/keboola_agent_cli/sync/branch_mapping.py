@@ -13,10 +13,22 @@ from typing import Any
 from ..constants import BRANCH_MAPPING_FILENAME, KEBOOLA_DIR_NAME
 
 
+def _coerce_keboola_id(raw: Any) -> int | None:
+    """Coerce a raw ``id`` field from JSON to ``int | None``.
+
+    Older kbagent versions (<= 0.30.3) wrote branch IDs as strings (e.g.
+    ``"99999"``) due to issue #267. ``None`` means production. Empty
+    string is also treated as production for legacy tolerance.
+    """
+    if raw is None or raw == "":
+        return None
+    return int(raw)
+
+
 class BranchMappingEntry:
     """A single git branch -> Keboola branch mapping."""
 
-    def __init__(self, keboola_id: str | None, name: str):
+    def __init__(self, keboola_id: int | None, name: str):
         self.keboola_id = keboola_id  # None = production
         self.name = name
 
@@ -37,7 +49,7 @@ class BranchMapping:
     def get(self, git_branch: str) -> BranchMappingEntry | None:
         return self.mappings.get(git_branch)
 
-    def set(self, git_branch: str, keboola_id: str | None, name: str) -> None:
+    def set(self, git_branch: str, keboola_id: int | None, name: str) -> None:
         self.mappings[git_branch] = BranchMappingEntry(keboola_id, name)
 
     def remove(self, git_branch: str) -> bool:
@@ -58,7 +70,7 @@ class BranchMapping:
         mapping.version = data.get("version", 1)
         for git_branch, entry in data.get("mappings", {}).items():
             mapping.mappings[git_branch] = BranchMappingEntry(
-                keboola_id=entry.get("id"),
+                keboola_id=_coerce_keboola_id(entry.get("id")),
                 name=entry.get("name", ""),
             )
         return mapping
@@ -81,3 +93,48 @@ def save_branch_mapping(project_root: Path, mapping: BranchMapping) -> None:
         json.dumps(mapping.to_dict(), indent=4, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+
+
+def find_sync_workspace(start: Path | None = None) -> Path | None:
+    """Locate the nearest enclosing sync workspace.
+
+    Walks up from *start* (or the current working directory) and returns
+    the first directory that contains a ``.keboola/branch-mapping.json``
+    file, or ``None`` if none is found before the filesystem root.
+    """
+    cursor = (start or Path.cwd()).resolve()
+    for candidate in [cursor, *cursor.parents]:
+        if (candidate / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME).exists():
+            return candidate
+    return None
+
+
+def cleanup_branch_id_from_mapping(branch_id: int) -> dict[str, Any] | None:
+    """Remove every git-branch entry that maps to *branch_id* from the
+    nearest enclosing sync workspace, if one exists.
+
+    Designed to be a best-effort cleanup hook for ``branch delete`` and
+    ``branch merge``: locates ``.keboola/branch-mapping.json`` via
+    :func:`find_sync_workspace`, removes any entries whose ``keboola_id``
+    equals *branch_id*, and persists the change. Returns a dict
+    describing what was unlinked, or ``None`` if no workspace was found
+    or no entry referenced the branch (no-op).
+    """
+    project_root = find_sync_workspace()
+    if project_root is None:
+        return None
+    try:
+        mapping = load_branch_mapping(project_root)
+    except (FileNotFoundError, ValueError):
+        return None
+
+    removed: list[str] = []
+    for git_branch, entry in list(mapping.mappings.items()):
+        if entry.keboola_id == branch_id:
+            mapping.remove(git_branch)
+            removed.append(git_branch)
+
+    if not removed:
+        return None
+    save_branch_mapping(project_root, mapping)
+    return {"project_root": str(project_root), "git_branches_unlinked": removed}

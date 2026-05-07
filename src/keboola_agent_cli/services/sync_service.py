@@ -902,7 +902,7 @@ class SyncService(BaseService):
             )
 
         # Also add untracked local configs (new files)
-        for added_cfg in self._find_untracked_configs(project_root, manifest):
+        for added_cfg in self._find_untracked_configs(project_root, manifest, branch_id):
             branch_path = self._find_branch_path(manifest, branch_id)
             config_dir = project_root / branch_path / added_cfg["path"]
             local_data = self._read_config_file(config_dir)
@@ -1954,7 +1954,7 @@ class SyncService(BaseService):
                 )
                 if branch_info is None:
                     raise ConfigError(f"Keboola branch {branch_id} not found.")
-                kbc_branch_id = str(branch_info["id"])
+                kbc_branch_id = int(branch_info["id"])
                 kbc_branch_name = branch_info.get("name", "")
             elif branch_name:
                 # Search by name or create
@@ -1964,11 +1964,11 @@ class SyncService(BaseService):
                     None,
                 )
                 if branch_info:
-                    kbc_branch_id = str(branch_info["id"])
+                    kbc_branch_id = int(branch_info["id"])
                     kbc_branch_name = branch_info.get("name", "")
                 else:
                     result = client.create_dev_branch(name=branch_name)
-                    kbc_branch_id = str(result["id"])
+                    kbc_branch_id = int(result["id"])
                     kbc_branch_name = branch_name
             else:
                 # Default: use git branch name to search/create
@@ -1978,11 +1978,11 @@ class SyncService(BaseService):
                     None,
                 )
                 if branch_info:
-                    kbc_branch_id = str(branch_info["id"])
+                    kbc_branch_id = int(branch_info["id"])
                     kbc_branch_name = branch_info.get("name", "")
                 else:
                     result = client.create_dev_branch(name=git_branch)
-                    kbc_branch_id = str(result["id"])
+                    kbc_branch_id = int(result["id"])
                     kbc_branch_name = git_branch
 
         mapping.set(git_branch, kbc_branch_id, kbc_branch_name)
@@ -2095,7 +2095,12 @@ class SyncService(BaseService):
         3. First branch in manifest (production fallback)
 
         Raises ``ConfigError`` if git-branching is enabled but the current
-        branch is not linked (prevents accidental production writes).
+        branch is not the default and is not linked.
+
+        The default git branch always resolves to ``None`` (production), even
+        if ``branch-mapping.json`` is missing or has no entry for it. This
+        guarantees there is always a recovery path when the mapping file is
+        lost (issue #267, Bug E).
         """
         from ..sync.branch_mapping import load_branch_mapping
         from ..sync.git_utils import get_current_branch
@@ -2103,22 +2108,34 @@ class SyncService(BaseService):
         if manifest.git_branching.enabled:
             git_branch = get_current_branch(project_root)
             if git_branch:
+                default_branch = manifest.git_branching.default_branch
+                is_default = git_branch == default_branch
                 try:
                     mapping = load_branch_mapping(project_root)
-                    entry = mapping.get(git_branch)
-                    if entry is not None:
-                        # entry.keboola_id is None for production (default branch)
-                        return entry.keboola_id
                 except FileNotFoundError:
-                    pass
-                # Branch not linked -- block operation
+                    # Mapping missing -- auto-recover for the default branch
+                    # so the user is never locked out of production.
+                    if is_default:
+                        return None
+                    raise ConfigError(
+                        f"Git branch '{git_branch}' is not linked to a Keboola "
+                        f"branch (branch-mapping.json missing). "
+                        f"Run 'kbagent sync branch-link --project ALIAS' first."
+                    ) from None
+                entry = mapping.get(git_branch)
+                if entry is not None:
+                    # entry.keboola_id is None for production (default branch)
+                    return entry.keboola_id
+                # No entry for current branch -- default branch is always production
+                if is_default:
+                    return None
                 raise ConfigError(
                     f"Git branch '{git_branch}' is not linked to a Keboola branch. "
                     f"Run 'kbagent sync branch-link --project ALIAS' first."
                 )
 
         # Non git-branching: use active_branch_id or manifest fallback
-        branch_id = project.active_branch_id
+        branch_id = project.active_branch_id if project is not None else None
         if not branch_id and manifest.branches:
             branch_id = manifest.branches[0].id
         return branch_id
@@ -2610,26 +2627,44 @@ class SyncService(BaseService):
         return manifest.branches[0].path if manifest.branches else "main"
 
     def _find_untracked_configs(
-        self, project_root: Path, manifest: Manifest
+        self,
+        project_root: Path,
+        manifest: Manifest,
+        resolved_branch_id: int | None = None,
     ) -> list[dict[str, str]]:
         """Scan for _config.yml files that are not tracked in the manifest.
 
-        Only scans branch directories that have at least one tracked
-        configuration. This prevents phantom "added" configs from
-        inactive/old branch directories left over from a previous pull.
+        Scans branch directories that the user is actively working with:
+        branches that already have tracked configs, the default branch
+        (production), and the branch the caller resolved for the current
+        operation (when provided). This supports the documented
+        "scaffold locally then push" workflow on git-branching workspaces
+        with empty ``manifest.configurations`` (issue #267, Bug B).
+
+        Branches outside this scope are skipped to avoid phantom "added"
+        configs from orphaned dev-branch directories left over from
+        previous work.
         """
         tracked_paths: set[str] = set()
-        active_branch_ids: set[int] = set()
+        in_scope_branch_ids: set[int] = set()
         for cfg in manifest.configurations:
             branch_path = self._find_branch_path(manifest, cfg.branch_id)
             tracked_paths.add(str(project_root / branch_path / cfg.path))
-            active_branch_ids.add(cfg.branch_id)
+            in_scope_branch_ids.add(cfg.branch_id)
+
+        # Default branch is always in scope -- pushing a brand-new config
+        # against production with empty configurations[] is a legitimate flow.
+        if manifest.branches:
+            in_scope_branch_ids.add(manifest.branches[0].id)
+
+        # The branch the caller resolved is in scope (linked feature branch
+        # the user explicitly switched to via git checkout + branch-link).
+        if resolved_branch_id is not None:
+            in_scope_branch_ids.add(resolved_branch_id)
 
         added: list[dict[str, str]] = []
         for branch in manifest.branches:
-            # Only scan branches that have tracked configs — skip inactive
-            # branch directories to avoid phantom "added" configs.
-            if branch.id not in active_branch_ids:
+            if branch.id not in in_scope_branch_ids:
                 continue
             branch_dir = project_root / branch.path
             if not branch_dir.exists():
