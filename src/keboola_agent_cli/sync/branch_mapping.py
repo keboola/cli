@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import BRANCH_MAPPING_FILENAME, KEBOOLA_DIR_NAME
+from ..errors import ConfigError
 
 
 def _coerce_keboola_id(raw: Any) -> int | None:
@@ -94,9 +95,13 @@ def load_branch_mapping(project_root: Path) -> BranchMapping:
 
     Raises:
         FileNotFoundError: If the mapping file does not exist.
-        ValueError: If the JSON cannot be parsed or contains a malformed
+        ConfigError: If the JSON cannot be parsed or contains a malformed
             branch ID. The descriptive message names the offending file
-            so the user can find and fix it (issue #269 sec-20).
+            so the user can find and fix it. Surfacing this as ConfigError
+            (rather than raw ValueError) lets CLI commands catch it via
+            the existing ``except ConfigError`` handler and emit a clean
+            JSON error envelope with exit code 5 instead of a Python
+            traceback (issue #269 sec-20 + smoke-test follow-up).
     """
     path = project_root / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME
     if not path.exists():
@@ -105,9 +110,10 @@ def load_branch_mapping(project_root: Path) -> BranchMapping:
         data = json.loads(path.read_text(encoding="utf-8"))
         return BranchMapping.from_dict(data)
     except ValueError as exc:
-        # _coerce_keboola_id raises ValueError on malformed IDs; wrap with
-        # path context so the user knows which file to fix.
-        raise ValueError(f"Failed to parse {path}: {exc}") from exc
+        # _coerce_keboola_id and json.loads both raise ValueError on
+        # malformed input; wrap with path context and convert to
+        # ConfigError so the CLI surfaces a clean error envelope.
+        raise ConfigError(f"Failed to parse {path}: {exc}") from exc
 
 
 def save_branch_mapping(project_root: Path, mapping: BranchMapping) -> None:
@@ -150,7 +156,10 @@ def cleanup_branch_id_from_mapping(branch_id: int) -> dict[str, Any] | None:
         return None
     try:
         mapping = load_branch_mapping(project_root)
-    except (FileNotFoundError, ValueError):
+    except (FileNotFoundError, ConfigError, ValueError):
+        # ValueError preserved for backward compat with callers that may
+        # still trigger it via custom paths; ConfigError is the new shape
+        # raised by load_branch_mapping itself.
         return None
 
     removed: list[str] = []
