@@ -5,6 +5,7 @@ No business logic belongs here.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -104,8 +105,21 @@ def encrypt_values(
         raise typer.Exit(code=exit_code) from None
 
     if output_file:
-        output_file.write_text(json.dumps(result, indent=2), encoding="utf-8")
-        output_file.chmod(0o600)
+        # Atomic create with 0600 -- avoids the race window between
+        # write_text() (which uses the user's umask, often 0644) and a
+        # subsequent chmod (issue #269 sec-06). On the chmod-after-write
+        # pattern, another local user could read the encrypted secrets in
+        # the brief window before the chmod ran.
+        payload = json.dumps(result, indent=2).encode("utf-8")
+        fd = os.open(
+            str(output_file),
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o600,
+        )
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
         if not formatter.json_mode:
             formatter.console.print(f"Encrypted values written to {output_file}")
 

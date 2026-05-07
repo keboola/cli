@@ -62,6 +62,33 @@ from .base import BaseService
 logger = logging.getLogger(__name__)
 
 
+def _ensure_within_branch(
+    branch_dir: Path,
+    config_dir: Path,
+    component_id: str,
+    config_id: str,
+) -> None:
+    """Reject paths that escape the branch directory (issue #269 sec-01).
+
+    Resolves both paths and checks that *config_dir* is contained in
+    *branch_dir*. Raises ConfigError if not. Defense-in-depth on top of
+    ``naming.sanitize_path_segment()`` so a regression in either layer
+    cannot turn into a path-traversal write.
+    """
+    try:
+        branch_resolved = branch_dir.resolve()
+        config_resolved = config_dir.resolve()
+    except OSError as exc:
+        raise ConfigError(f"Cannot resolve sync path: {exc}") from exc
+    if not config_resolved.is_relative_to(branch_resolved):
+        raise ConfigError(
+            f"Config path escapes sync workspace (component='{component_id}', "
+            f"config_id='{config_id}'). Refusing to write outside "
+            f"'{branch_resolved}'. This indicates a malformed API response "
+            f"or a regression in path sanitization."
+        )
+
+
 class SyncService(BaseService):
     """Business logic for project sync operations (init, pull, status).
 
@@ -432,6 +459,11 @@ class SyncService(BaseService):
                     rel_path = f"{rel_path}-{suffix}"
                 used_paths.add(rel_path)
                 config_dir = branch_dir / rel_path
+                # Defense-in-depth: refuse to write outside the branch dir
+                # (issue #269 sec-01). naming.sanitize_path_segment() should
+                # already neutralize traversal; this check guards against any
+                # future regression in the sanitizer or template parsing.
+                _ensure_within_branch(branch_dir, config_dir, component_id, config_id)
 
                 # Convert API format to local _config.yml
                 local_data = api_config_to_local(component_id, cfg, config_id)

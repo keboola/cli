@@ -8,6 +8,7 @@ Architecture: reads from disk only, no API calls. Requires sync'd data.
 """
 
 import hashlib
+import html
 import json
 import logging
 import re
@@ -1153,7 +1154,11 @@ class DeepLineageService:
             if not t:
                 continue
             entity_name = f"{t.project_alias}:{t.name}"
-            safe_name = entity_name.replace('"', "'")
+            # html.escape covers <>&" so an API-supplied table or config
+            # name like </div><script>...</script> cannot inject HTML into
+            # the generated lineage page (issue #269 sec-05). Mermaid
+            # renders HTML entities back to their characters in SVG text.
+            safe_name = html.escape(entity_name, quote=True)
 
             if not show_columns:
                 # Compact: just entity name with row count as single attribute
@@ -1174,7 +1179,7 @@ class DeepLineageService:
                         if src_expr.endswith(f".{col}") and fqn in src_expr.replace(f".{col}", ""):
                             cfg = graph.configurations.get(cfg_fqn)
                             cfg_label = cfg.config_name if cfg else cfg_fqn.split("/")[-1]
-                            safe_label = cfg_label.replace('"', "'")
+                            safe_label = html.escape(cfg_label, quote=True)
                             comment = f' "to {out_col} via {safe_label}"'
                             break
                         if out_col == col:
@@ -1201,7 +1206,7 @@ class DeepLineageService:
         for cfg_fqn in config_fqns:
             cfg = graph.configurations.get(cfg_fqn)
             cfg_label = cfg.config_name if cfg else cfg_fqn.split("/")[-1]
-            safe_label = cfg_label.replace('"', "'")
+            safe_label = html.escape(cfg_label, quote=True)
             inputs = input_of.get(cfg_fqn, [])
             outputs = output_of.get(cfg_fqn, [])
             for inp_fqn in inputs:
@@ -1214,8 +1219,8 @@ class DeepLineageService:
                     if key in seen_rels:
                         continue
                     seen_rels.add(key)
-                    inp_name = f"{inp_t.project_alias}:{inp_t.name}".replace('"', "'")
-                    out_name = f"{out_t.project_alias}:{out_t.name}".replace('"', "'")
+                    inp_name = html.escape(f"{inp_t.project_alias}:{inp_t.name}", quote=True)
+                    out_name = html.escape(f"{out_t.project_alias}:{out_t.name}", quote=True)
                     lines.append(f'    "{inp_name}" ||--o{{ "{out_name}" : "{safe_label}"')
 
             # If config has only inputs and no outputs (writer), show as relationship to config
@@ -1224,7 +1229,7 @@ class DeepLineageService:
                     inp_t = graph.tables.get(inp_fqn)
                     if not inp_t:
                         continue
-                    inp_name = f"{inp_t.project_alias}:{inp_t.name}".replace('"', "'")
+                    inp_name = html.escape(f"{inp_t.project_alias}:{inp_t.name}", quote=True)
                     lines.append(f'    "{inp_name}" }}o--|| "{safe_label}" : "writes"')
 
         return "\n".join(lines)

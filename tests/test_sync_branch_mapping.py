@@ -162,6 +162,36 @@ class TestBranchMapping:
         mapping = BranchMapping.from_dict(data)
         assert mapping.get("main").keboola_id is None
 
+    def test_branch_mapping_from_dict_invalid_id_descriptive_error(self) -> None:
+        """Issue #269 sec-20: hand-edited mapping with non-numeric id raises a
+        descriptive ValueError, not a raw ``invalid literal for int()``."""
+        data = {
+            "version": 1,
+            "mappings": {
+                "main": {"id": None, "name": "Main"},
+                "feature/x": {"id": "not-a-number", "name": "feature/x"},
+            },
+        }
+        with pytest.raises(ValueError, match="Invalid branch ID"):
+            BranchMapping.from_dict(data)
+
+    def test_load_branch_mapping_invalid_id_includes_path(self, tmp_path: Path) -> None:
+        """``load_branch_mapping`` wraps the descriptive error with the file path."""
+        keboola_dir = tmp_path / KEBOOLA_DIR_NAME
+        keboola_dir.mkdir()
+        (keboola_dir / BRANCH_MAPPING_FILENAME).write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "mappings": {
+                        "feature/x": {"id": "abc", "name": "feature/x"},
+                    },
+                }
+            )
+        )
+        with pytest.raises(ValueError, match=r"Failed to parse .*branch-mapping\.json"):
+            load_branch_mapping(tmp_path)
+
 
 class TestBranchMappingIO:
     """Tests for load/save filesystem operations."""

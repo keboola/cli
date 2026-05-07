@@ -358,13 +358,29 @@ def permissions_check(
 ) -> None:
     """Check if a specific operation is allowed.
 
+    Reflects the EFFECTIVE policy for this invocation: the persisted
+    policy merged with any top-level session flags like ``--deny-writes``
+    or ``--deny-destructive`` (issue #269 sec-19). Pre-fix, ``permissions
+    check`` only consulted the persisted policy, so an AI agent reading
+    its own self-imposed firewall flag would get a misleading answer.
+
     Exit code 0 = allowed, 6 = denied.
     """
+    from ..cli import apply_firewall_flags
+
     formatter = get_formatter(ctx)
     config_store: ConfigStore = get_service(ctx, "config_store")
     config = config_store.load()
 
-    engine = PermissionEngine(config.permissions)
+    deny_writes = bool(ctx.obj.get("deny_writes")) if ctx.obj else False
+    deny_destructive = bool(ctx.obj.get("deny_destructive")) if ctx.obj else False
+    effective_policy = apply_firewall_flags(
+        config.permissions,
+        deny_writes=deny_writes,
+        deny_destructive=deny_destructive,
+    )
+
+    engine = PermissionEngine(effective_policy)
     allowed = engine.is_allowed(operation)
 
     if formatter.json_mode:
