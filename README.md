@@ -12,13 +12,13 @@ No more switching between the UI, old CLI, MCP server, and raw API calls. `kbage
 uv tool install git+https://github.com/padak/keboola_agent_cli
 ```
 
-Auto-updates on every launch. Run `kbagent changelog` to see what changed.
+Auto-updates kbagent **and** its `keboola-mcp-server` dependency on every launch (since 0.30.1) -- no more silently running on a six-month-old MCP server. Run `kbagent changelog` to see what changed.
 
 ## For AI agents
 
 This CLI is built AI-first. Every command outputs structured JSON (`--json`), errors include machine-readable codes, and the permission firewall enforces safety at the code level -- not via prompt instructions.
 
-**Claude Code plugin** (agent learns all 80 commands + gets a specialist subagent for writes):
+**Claude Code plugin** (agent learns all 100+ commands + gets a specialist subagent for writes):
 
 ```
 /plugin marketplace add padak/keboola_agent_cli
@@ -56,12 +56,15 @@ Three protection layers (kbagent policy + filesystem chmod + Claude Code deny ru
 kbagent project add --project prod \
   --url https://connection.keboola.com --token YOUR_TOKEN
 
-# Search across ALL projects for a table reference
+# Find anything (table / config / flow / data app) across ALL projects in one call
+kbagent search "customer_id"
+
+# Or scan inside config bodies (slower, deeper)
 kbagent config search --query "customer_id"
 
-# Run a job and wait for it to finish
+# Run a job and wait for it to finish (with log tail on failure)
 kbagent job run --project prod --component-id keboola.ex-db-snowflake \
-  --config-id 456 --wait
+  --config-id 456 --wait --log-tail-lines 200
 
 # Debug a failing SQL transformation with real data (no full job needed)
 kbagent workspace from-transformation --project prod \
@@ -75,21 +78,23 @@ kbagent workspace query --project prod --workspace-id WS_ID \
 | Area | What you get |
 |------|-------------|
 | **Multi-project** | All read commands query every connected project in parallel. One command, all projects. |
-| **Configurations** | List, search, inspect, scaffold, update, delete configs. Full-text search across all config bodies (incl. rows). Metadata CRUD + folder grouping. |
-| **Jobs** | List, inspect, run with `--wait` polling (exponential curve), `--timeout` auto-kill, log tail on failure. Row-level execution for multi-row configs. |
+| **Search** | `kbagent search "QUERY"` -- find tables, configs, flows, data apps across every connected project in one call (since 0.30.0). Backed by Storage `global-search`; falls back to per-project body scan with `--search-type config-based`. |
+| **Configurations** | List, search, inspect, scaffold, update, delete configs. Full-text search across all config bodies (incl. rows). Row CRUD (`row-create / row-update / row-delete`) with `--merge`, `--set`, `--dry-run`, `--is-disabled / --is-enabled` (since 0.30.0). OAuth wizard URL minting with short-lived child tokens (`config oauth-url`, since 0.30.0). Variables management (`variables-set / -get / -clear`). Metadata CRUD + folder grouping. Output-bucket override (`set-default-bucket`). String-script auto-normalize for SQL transformations (closes the silent runtime crash from #245, since 0.28.0). |
+| **Jobs** | List, inspect, run with `--wait` polling (exponential curve), `--timeout` auto-kill, log tail on failure. Row-level execution for multi-row configs. Bulk terminate by ID list or filter (`job terminate --status processing` -- since 0.20.2). |
 | **Flows** | Create, update, delete orchestrator/flow configs with phase/task DAG validation. Attach cron schedules (timezone + enabled/disabled state). |
-| **Storage** | Buckets, tables, files -- full CRUD. Upload CSV (auto-creates bucket+table). Download by file ID or by tag. Descriptions on buckets/tables/columns (batch-applicable from YAML). Native column types (`VARCHAR(40)`, `NUMBER(18,2)`, `TIMESTAMP_TZ`, `VARIANT`, ...) with per-column `--not-null` and `--default` flags; dev branches auto-materialize target buckets on first write. |
+| **Storage** | Buckets, tables, files -- full CRUD. Upload CSV (auto-creates bucket+table). Download by file ID or by tag. Descriptions on buckets/tables/columns (batch-applicable from YAML). Native column types (`VARCHAR(40)`, `NUMBER(18,2)`, `TIMESTAMP_TZ`, `VARIANT`, ...) with per-column `--not-null` and `--default` flags; dev branches auto-materialize target buckets on first write. **`storage swap-tables`** -- atomically swap a typed rebuild back into the original table name in a dev branch without touching downstream config references (since 0.28.0; closes the typify migration footgun). Streamed downloads cap memory at ~1 MiB regardless of table size. Parquet export via `unload-table --file-type parquet`. BigQuery dialect-aware paths in `bucket-detail`. |
 | **Dev branches** | Create a branch, activate it, and every command auto-targets it. Storage writes, MCP, sync -- everything follows. Storage reads default to production (safer). |
 | **Sync & GitOps** | Pull configs as YAML, edit in IDE, push back. SQL/Python extracted as real files. Diff and status tracking. Adopt existing kbc Go CLI checkouts (`sync init --adopt-existing`). |
-| **MCP tools** | Call `keboola-mcp-server` tools with auto-expand, multi-project fan-out, branch propagation, schema validation. |
+| **MCP tools** | Call `keboola-mcp-server` tools with auto-expand, multi-project fan-out, branch propagation, schema validation. **MCP server itself is also auto-updated on every kbagent startup** (since 0.30.1) -- no more "the AI agent recommends a feature my MCP install does not support." |
 | **Workspaces** | Create Snowflake/BQ workspace, load tables, run SQL. Create from transformation config for instant debugging. Orphan detection + garbage collection. |
 | **Sharing** | Cross-project bucket sharing with org/project/user access control. Share, link, unlink. |
-| **Data apps** | First-class lifecycle for Streamlit / Flask / Node deployments (`keboola.data-apps`). Create, deploy, start, stop, password, delete. Hides the redeploy contract and per-project KMS encryption of git PATs. |
+| **Data apps** | First-class lifecycle for Streamlit / Flask / Node deployments (`keboola.data-apps`). `create / deploy / start / stop / password / delete` (since 0.27.0); `secrets-set / -list / -get / -remove` for `#`-prefixed runtime secrets with per-project KMS encryption (since 0.29.0); `validate-repo` pre-flight Golden Rule check that catches misconfigured git repos before a deploy (since 0.29.0). Hides the redeploy contract and per-project KMS encryption of git PATs. |
+| **Project members & invitations** | `project invite` (single or `--from-csv` bulk with parallel workers), `project member-list / member-remove / member-set-role`, `project invitation-list / invitation-cancel`. Role whitelist enforced at the CLI layer; Manage API "already invited" treated as `noop` not error (since 0.29.0). |
 | **Lineage** | Column-level dependency analysis across projects. SQL/Python parsing, AI-enhanced detection, interactive web browser, Mermaid/HTML/ER export. |
 | **Kai (AI Assistant)** | Ask Keboola's built-in AI questions about your project. One-shot or chat sessions with full MCP context. |
 | **Encryption** | Encrypt secrets (`#password`, `#api_token`) via Keboola Encryption API. Works with sync push and MCP. |
 | **Permissions** | Firewall for AI agents: read-only, deny-writes, deny-destructive (session-only flags or persisted policy). Project pin + `KBAGENT_PROJECT` env override. Code-level enforcement, stable `ErrorCode` enum, not prompt tricks. |
-| **Auto-update** | Self-updates on startup. "What's new" after each update. Full changelog via `kbagent changelog`. |
+| **Auto-update** | Self-updates kbagent + `keboola-mcp-server` on every startup (since 0.30.1). "What's new" after each update. Full changelog via `kbagent changelog`. |
 
 ## Setup options
 
@@ -130,21 +135,30 @@ Run `kbagent doctor` to verify setup (token validity, CLI version, MCP server, C
 Full command reference with flags: [SKILL.md](plugins/kbagent/skills/kbagent/SKILL.md)
 
 ```
-kbagent project     add | list | remove | edit | status | refresh | use | current
+kbagent search      QUERY [--type table|bucket|config|flow|data-app|transformation]   # cross-project search (0.30.0)
+kbagent project     add | list | remove | edit | status | refresh | info | use | current
+                    description-get | description-set
+                    invite | member-list | member-remove | member-set-role
+                    invitation-list | invitation-cancel
 kbagent org         setup
 kbagent component   list | detail
 kbagent config      list | detail | search | update | set-default-bucket | rename | delete | new
                     metadata-list | get-metadata | set-metadata | delete-metadata | set-folder
                     variables-set | variables-get | variables-clear
+                    row-create | row-update | row-delete
+                    oauth-url
 kbagent job         list | detail | run | terminate
 kbagent flow        list | detail | schema | new | update | delete | schedule | schedule-remove
 kbagent storage     buckets | bucket-detail | create-bucket | delete-bucket
-                    tables | table-detail | create-table | upload-table | download-table | delete-table | delete-column
+                    tables | table-detail | create-table | upload-table | download-table
+                    delete-table | delete-column | swap-tables
                     describe-bucket | describe-table | describe-column | describe-batch
                     files | file-detail | file-upload | file-download | file-tag | file-delete
                     load-file | unload-table
 kbagent sharing     list | share | unshare | link | unlink | edges
 kbagent data-app    list | detail | create | deploy | start | stop | delete | password
+                    secrets-set | secrets-list | secrets-get | secrets-remove
+                    validate-repo
 kbagent lineage     build | show | info | server
 kbagent branch      list | create | use | reset | delete | merge
                     metadata-list | metadata-get | metadata-set | metadata-delete
@@ -158,6 +172,7 @@ kbagent             init | context | doctor | version | update | changelog
 
 # Global flags: --json, --verbose, --no-color, --config-dir, --hint client|service
 #               --deny-writes, --deny-destructive (session-only firewall)
+#               --allow-env-manage-token (CI opt-in for KBC_MANAGE_API_TOKEN; default-deny since 0.29.0)
 ```
 
 ## Documentation
