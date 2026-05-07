@@ -293,18 +293,18 @@ def _perform_mcp_update(
             return False, "pip not found on PATH"
         cmd = [pip_path, "install", "--upgrade", MCP_PACKAGE_NAME]
     elif method == "uvx":
-        uvx_path = shutil.which("uvx")
-        if uvx_path is None:
-            return False, "uvx not found on PATH"
-        # `uvx --refresh` re-downloads even cached packages.
-        cmd = [
-            uvx_path,
-            "--refresh",
-            "--from",
-            MCP_PACKAGE_NAME,
-            MCP_BINARY_NAME,
-            "--version",
-        ]
+        # Promote uvx-cache install to a persistent `uv tool install`.
+        # The previous strategy (`uvx --refresh ... <bin> --version`) was
+        # broken: the upstream MCP binary does NOT honour --version (it
+        # rejects the arg and exits non-zero), so the upgrade banner
+        # always reported failure even when the cache refresh itself
+        # worked. `uv tool install --upgrade` does the equivalent
+        # refresh AND moves the binary to PATH so subsequent runs use the
+        # faster `uv_tool` detection path. Bug B fix from issue #263.
+        uv_path = shutil.which("uv")
+        if uv_path is None:
+            return False, "uv not found on PATH (needed to promote uvx cache to uv tool)"
+        cmd = [uv_path, "tool", "install", "--upgrade", MCP_PACKAGE_NAME]
     elif method == "none":
         return False, "keboola-mcp-server is not installed"
     else:
@@ -430,11 +430,16 @@ class VersionService:
         mcp_up_to_date = _is_up_to_date(mcp_local, mcp_latest)
         mcp_method = _detect_mcp_install_method()
 
-        # Map install method to the upgrade command shown to users.
+        # Map install method to the upgrade command shown to users. Must
+        # match what `_perform_mcp_update` actually runs internally -- since
+        # v0.30.3 the uvx path promotes to `uv tool install --upgrade`
+        # (Bug B fix from issue #263), so the user-facing recommendation
+        # must reflect that, not the broken `uvx --refresh ... --version`
+        # chain the v0.30.1 logic used.
         mcp_upgrade_cmd_by_method = {
             "uv_tool": f"uv tool upgrade {MCP_PACKAGE_NAME}",
             "pip_env": f"pip install --upgrade {MCP_PACKAGE_NAME}",
-            "uvx": f"uvx --refresh --from {MCP_PACKAGE_NAME} {MCP_BINARY_NAME} --version",
+            "uvx": f"uv tool install --upgrade {MCP_PACKAGE_NAME}",
             "none": f"uv tool install {MCP_PACKAGE_NAME}",
         }
 
@@ -633,18 +638,47 @@ class VersionService:
         success, output = _perform_mcp_update(method=method, timeout=MCP_UPGRADE_TIMEOUT)
         post_version = _get_local_mcp_version() if success else local_version
 
+        # Bug E fix from issue #263: subprocess returncode == 0 is NOT
+        # enough to claim the upgrade happened. `uv tool upgrade` exits 0
+        # even when its resolver backtracks to the previously installed
+        # version (e.g. a transitive-dep constraint blocks the latest).
+        # `updated` reflects the actual version delta, not just exit code.
+        # The four success-branch cases:
+        #   1. pre is None, post is set     -> fresh install; updated=True
+        #   2. pre is set,  post is set, !=  -> normal upgrade; updated=True
+        #   3. pre is set,  post is set, ==  -> Bug E no-op; updated=False
+        #   4. pre / post unknown            -> probe failure; updated=False
+        actually_updated = bool(
+            success and post_version and (local_version is None or post_version != local_version)
+        )
+
+        if not success:
+            message = f"keboola-mcp-server upgrade failed: {output}"
+        elif actually_updated:
+            message = (
+                f"Upgraded keboola-mcp-server "
+                f"({local_version or 'unknown'} -> {post_version}) via {method}."
+            )
+        elif post_version is None:
+            message = (
+                f"keboola-mcp-server upgrade ran via {method}; post-upgrade probe failed "
+                f"(latest on PyPI: v{latest_version})."
+            )
+        else:
+            # Subprocess exit 0 but local version unchanged.
+            message = (
+                f"keboola-mcp-server upgrade exit 0 but local version still "
+                f"v{local_version} (latest: v{latest_version}). Possible Python or "
+                f"dependency-version mismatch -- run `uv tool install --reinstall "
+                f"{MCP_PACKAGE_NAME}` to diagnose."
+            )
+
         return {
-            "updated": bool(success),
+            "updated": actually_updated,
             "current_version": local_version,
             "latest_version": latest_version,
             "post_upgrade_version": post_version,
             "install_method": method,
-            "message": (
-                f"Upgraded keboola-mcp-server "
-                f"({local_version or 'unknown'} -> {post_version or latest_version or '?'}) "
-                f"via {method}."
-                if success
-                else f"keboola-mcp-server upgrade failed: {output}"
-            ),
+            "message": message,
             "output": output,
         }

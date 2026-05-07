@@ -43,6 +43,22 @@ from .services.version_service import (
 logger = logging.getLogger(__name__)
 
 
+# Process-level sentinel for the auto-update flow.
+#
+# Bug D fix from issue #263: ``kbagent repl`` re-enters the entire CLI
+# (and therefore ``main()`` -> ``maybe_auto_update()``) on every prompt
+# iteration. Pre-fix, the auto-update banner re-fired once per command
+# typed at the prompt -- one fetch, one (potentially failing) upgrade
+# attempt, one stderr write. The sentinel short-circuits subsequent
+# in-process invocations after the first.
+#
+# Re-exec'd processes (kbagent self-upgrade -> ``execvpe`` to new binary)
+# start with a fresh sentinel because the module is reloaded into a new
+# Python interpreter, so the kbagent-self-upgrade -> re-exec -> MCP-stage
+# chain from PR #257 is preserved.
+_AUTO_UPDATE_RAN: bool = False
+
+
 def _get_cache_path() -> Path:
     """Return path to the version cache file.
 
@@ -306,6 +322,17 @@ def _maybe_update_mcp(cache: dict | None, fetched_now: bool) -> str | None:
         return cached_latest  # nothing to do; preserve any prior cache
 
     local_version = _get_local_mcp_version()
+    if local_version is None:
+        # Bug C fix from issue #263: when local-version detection fails,
+        # do NOT fall through to the upgrade attempt. The previous behaviour
+        # printed an "Updating ... vunknown -> v1.59.1" banner and ran the
+        # upgrade subprocess every TTL window because `up_to_date` was None
+        # (not True), which bypassed the short-circuit below. The fix opts
+        # out of the upgrade for this TTL window and lets the next fresh-
+        # cache pass retry detection. The cache write below records the
+        # latest version regardless so the cache TTL still ticks.
+        return mcp_latest
+
     up_to_date = _is_up_to_date(local_version, mcp_latest)
     if up_to_date is True:
         return mcp_latest
@@ -319,10 +346,34 @@ def _maybe_update_mcp(cache: dict | None, fetched_now: bool) -> str | None:
         f"Updating keboola-mcp-server v{local_version or 'unknown'} -> v{mcp_latest}"
         f" (via {method})...\n"
     )
+    pre_version = local_version
     success, info = _perform_mcp_update(method=method, timeout=MCP_UPGRADE_TIMEOUT)
     if success:
-        post_version = _get_local_mcp_version() or mcp_latest
-        sys.stderr.write(f"Updated keboola-mcp-server to v{post_version}.\n")
+        # Bug E fix from issue #263: subprocess returncode == 0 is NOT
+        # enough to claim the upgrade actually happened. `uv tool upgrade`
+        # exits 0 even when its resolver backtracks to the previously
+        # installed version (a real-world reproducer: keboola-mcp-server
+        # v1.59.1 declares fastmcp==3.2.0 strict equality, the existing
+        # venv has fastmcp==2.13.0.2, uv resolves back to v1.32.0 and
+        # exits clean). Compare pre and post versions and tell the truth.
+        post_version = _get_local_mcp_version()
+        if post_version and pre_version and post_version != pre_version:
+            sys.stderr.write(f"Updated keboola-mcp-server to v{post_version}.\n")
+        elif post_version is None:
+            # Probe failed post-upgrade; cannot verify -- assume latest.
+            sys.stderr.write(
+                f"Updated keboola-mcp-server (probe failed; latest on PyPI: v{mcp_latest}).\n"
+            )
+        else:
+            # Subprocess exit 0 but local version unchanged. Most common
+            # cause: dependency-resolver backtrack (Python or transitive-
+            # dep constraint cannot satisfy the latest). Surface a
+            # diagnostic instead of silently lying.
+            sys.stderr.write(
+                f"keboola-mcp-server upgrade exit 0 but local version still v{pre_version} "
+                f"(latest: v{mcp_latest}). Possible Python or dependency-version mismatch -- "
+                f"run `uv tool install --reinstall keboola-mcp-server` to diagnose.\n"
+            )
     else:
         sys.stderr.write(
             f"keboola-mcp-server upgrade skipped: {info}; continuing with current version.\n"
@@ -362,7 +413,17 @@ def maybe_auto_update() -> None:
     This function NEVER raises. All exceptions are caught and logged at
     debug level so the CLI always proceeds normally.
     """
+    global _AUTO_UPDATE_RAN
     try:
+        # Bug D fix from issue #263: per-process sentinel. ``kbagent repl``
+        # re-enters main() on every prompt; without this gate the auto-
+        # update flow fired (and printed banners) once per command typed.
+        # Set BEFORE any work so a crash mid-flow still gates subsequent
+        # in-process re-entries.
+        if _AUTO_UPDATE_RAN:
+            return
+        _AUTO_UPDATE_RAN = True
+
         # Wide gates (dev install / opt-out / update|version commands)
         # skip BOTH stages -- there is nothing reasonable to do.
         if _should_skip_all():

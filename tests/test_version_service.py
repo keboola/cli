@@ -128,6 +128,38 @@ class TestVersionService:
 
     @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
     @patch("keboola_agent_cli.services.version_service._is_uvx_available")
+    @patch("keboola_agent_cli.services.version_service._get_local_mcp_version")
+    @patch("keboola_agent_cli.services.version_service._detect_mcp_install_method")
+    def test_uvx_user_facing_command_uses_uv_tool_install(
+        self,
+        mock_detect: MagicMock,
+        mock_local: MagicMock,
+        mock_uvx: MagicMock,
+        mock_mcp_latest: MagicMock,
+    ) -> None:
+        """B-1 regression: when install_method=='uvx', the user-facing
+        upgrade_command must NOT recommend the broken `uvx --refresh ...
+        <bin> --version` chain (which Bug B removed from the upgrade
+        logic). It must point at the same `uv tool install --upgrade`
+        the production code now runs internally.
+        """
+        mock_uvx.return_value = True
+        mock_mcp_latest.return_value = "1.59.1"
+        mock_local.return_value = "1.49.0"
+        mock_detect.return_value = "uvx"
+
+        svc = VersionService()
+        result = svc.get_versions()
+
+        mcp_dep = result["dependencies"][0]
+        assert mcp_dep["install_method"] == "uvx"
+        # The user-facing recommendation must match the runtime upgrade.
+        assert "uv tool install --upgrade" in mcp_dep["upgrade_command"]
+        # The pre-fix broken arg must NOT appear -- it does not work.
+        assert "--version" not in mcp_dep["upgrade_command"]
+
+    @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
+    @patch("keboola_agent_cli.services.version_service._is_uvx_available")
     def test_uvx_not_available(
         self,
         mock_uvx: MagicMock,
@@ -487,13 +519,38 @@ class TestPerformMcpUpdate:
 
     @patch("keboola_agent_cli.services.version_service.shutil.which")
     @patch("keboola_agent_cli.services.version_service.subprocess.run")
-    def test_uvx_uses_refresh(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
-        mock_which.return_value = "/usr/local/bin/uvx"
-        mock_run.return_value = MagicMock(returncode=0, stdout="cached refreshed", stderr="")
+    def test_uvx_promotes_to_uv_tool_install(
+        self, mock_run: MagicMock, mock_which: MagicMock
+    ) -> None:
+        """Bug B fix from issue #263: uvx-cache install is promoted to a
+        persistent ``uv tool install --upgrade``.
+
+        Pre-fix: command was ``uvx --refresh --from <pkg> <bin> --version``,
+        which failed because the upstream MCP binary does not honour
+        ``--version``. The cache refresh succeeded but the trailing
+        --version probe exited non-zero, so the upgrade banner reported
+        failure even though the refresh worked.
+
+        Post-fix: command is ``uv tool install --upgrade <pkg>``, which
+        equivalent-refreshes AND moves the binary to PATH so subsequent
+        runs use the faster ``uv_tool`` detection path.
+        """
+        mock_which.return_value = "/usr/local/bin/uv"
+        mock_run.return_value = MagicMock(returncode=0, stdout="installed", stderr="")
         ok, _info = _perform_mcp_update(method="uvx")
         assert ok is True
         cmd = mock_run.call_args.args[0]
-        assert "--refresh" in cmd
+        assert "tool" in cmd and "install" in cmd and "--upgrade" in cmd
+        assert MCP_PACKAGE_NAME in cmd
+        # The broken --version arg must be GONE from the uvx upgrade path.
+        assert "--version" not in cmd
+
+    @patch("keboola_agent_cli.services.version_service.shutil.which", return_value=None)
+    def test_uvx_promotion_requires_uv(self, mock_which: MagicMock) -> None:
+        """If the uvx promotion needs `uv` and `uv` is missing, fail clearly."""
+        ok, info = _perform_mcp_update(method="uvx")
+        assert ok is False
+        assert "uv not found" in info
 
     def test_none_returns_false(self) -> None:
         ok, info = _perform_mcp_update(method="none")
@@ -565,7 +622,10 @@ class TestSelfUpdateTwoStage:
 
         mock_kbagent_latest.return_value = __version__  # kbagent up-to-date
         mock_mcp_latest.return_value = "1.59.1"
-        mock_local.return_value = "1.49.0"  # MCP stale
+        # Bug E fix: pre-upgrade returns 1.49.0; post-upgrade returns 1.59.1.
+        # The version delta is what flips `updated` to True (not just the
+        # subprocess exit code). Side-effect list models the two calls.
+        mock_local.side_effect = ["1.49.0", "1.59.1"]
         mock_detect.return_value = "uv_tool"
         mock_perform.return_value = (True, "ok")
 
@@ -576,3 +636,102 @@ class TestSelfUpdateTwoStage:
         assert result["mcp"]["updated"] is True
         assert result["updated"] is True
         mock_perform.assert_called_once()
+
+    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
+    @patch("keboola_agent_cli.services.version_service._get_local_mcp_version")
+    @patch("keboola_agent_cli.services.version_service._detect_mcp_install_method")
+    @patch("keboola_agent_cli.services.version_service._perform_mcp_update")
+    def test_subprocess_succeeds_but_version_unchanged_reports_not_updated(
+        self,
+        mock_perform: MagicMock,
+        mock_detect: MagicMock,
+        mock_local: MagicMock,
+        mock_mcp_latest: MagicMock,
+        mock_kbagent_latest: MagicMock,
+    ) -> None:
+        """Bug E regression from issue #263.
+
+        Real reproducer (from @ottomansky's trace on v0.30.2):
+        ``uv tool upgrade keboola-mcp-server`` exits 0, but uv's
+        resolver backtracked to the previously installed v1.32.0
+        because v1.59.1 declares a fastmcp constraint the venv cannot
+        satisfy. Pre-fix: kbagent reported success and the message
+        said "Upgraded keboola-mcp-server (1.32.0 -> 1.32.0)". Post-fix:
+        ``updated`` is False, message contains a diagnostic pointing to
+        ``uv tool install --reinstall`` with no false-success claim.
+        """
+        from keboola_agent_cli import __version__
+
+        mock_kbagent_latest.return_value = __version__
+        mock_mcp_latest.return_value = "1.59.1"
+        # Both pre and post probes return v1.32.0 -- subprocess "succeeded"
+        # but the version did not change.
+        mock_local.side_effect = ["1.32.0", "1.32.0"]
+        mock_detect.return_value = "uv_tool"
+        mock_perform.return_value = (True, "no upgrade needed")
+
+        svc = VersionService()
+        result = svc.self_update()
+
+        # The lie -- "subprocess exit 0 = upgrade happened" -- is the bug.
+        # Truth: pre and post versions are identical, so updated == False.
+        assert result["mcp"]["updated"] is False
+        # Diagnostic message points the user at `uv tool install --reinstall`
+        # so they can investigate the underlying packaging conflict.
+        assert "still v1.32.0" in result["mcp"]["message"]
+        assert "uv tool install --reinstall" in result["mcp"]["message"]
+        # The overall `updated` flag also reflects no change (kbagent itself
+        # was up-to-date in this scenario).
+        assert result["updated"] is False
+
+    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
+    @patch("keboola_agent_cli.services.version_service._get_local_mcp_version")
+    @patch("keboola_agent_cli.services.version_service._detect_mcp_install_method")
+    @patch("keboola_agent_cli.services.version_service._perform_mcp_update")
+    def test_fresh_install_pre_none_post_set_reports_updated(
+        self,
+        mock_perform: MagicMock,
+        mock_detect: MagicMock,
+        mock_local: MagicMock,
+        mock_mcp_latest: MagicMock,
+        mock_kbagent_latest: MagicMock,
+    ) -> None:
+        """B-2 regression: explicit `kbagent update` on a host that has
+        no MCP installed yet (`local_version=None`). Pre-fix, the Bug E
+        guard's `local_version and ...` short-circuited on the falsy
+        local_version, so a successful fresh install was reported as
+        ``updated: False`` with a "still vNone" diagnostic message.
+
+        Post-fix, the guard treats `local_version=None and post_version
+        is set` as a fresh install -> `actually_updated=True`. The
+        message reads "(unknown -> 1.59.1)" which is correct.
+
+        The auto-update startup path (`_maybe_update_mcp`) does NOT hit
+        this case because Bug C's `if local_version is None: return`
+        gate intentionally skips fresh installs on startup -- the user
+        must run `kbagent update` (or `kbagent doctor --fix`) explicitly.
+        """
+        from keboola_agent_cli import __version__
+
+        mock_kbagent_latest.return_value = __version__
+        mock_mcp_latest.return_value = "1.59.1"
+        # Pre: not installed (None). Post: installed (1.59.1). The
+        # explicit update worked.
+        mock_local.side_effect = [None, "1.59.1"]
+        mock_detect.return_value = "uv_tool"
+        mock_perform.return_value = (True, "installed")
+
+        svc = VersionService()
+        result = svc.self_update()
+
+        # The legitimate fresh-install case: updated must be True.
+        assert result["mcp"]["updated"] is True
+        assert result["mcp"]["current_version"] is None
+        assert result["mcp"]["post_upgrade_version"] == "1.59.1"
+        # Message must not say "still vNone" (the pre-fix lie).
+        assert "still v" not in result["mcp"]["message"]
+        assert "vNone" not in result["mcp"]["message"]
+        # Overall flag flips to True too.
+        assert result["updated"] is True

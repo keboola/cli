@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import keboola_agent_cli.auto_update as auto_update_module
 from keboola_agent_cli.auto_update import (
     _get_cache_path,
     _is_cache_fresh,
@@ -294,8 +295,12 @@ class TestMaybeAutoUpdate:
 
         Also defaults the per-stage skip helpers (since v0.30.1) to False
         so existing tests that only patch the legacy ``_should_skip``
-        alias still drive the orchestrator down the active path.
+        alias still drive the orchestrator down the active path. Resets
+        the per-process auto-update sentinel (since v0.30.3) so each test
+        starts from a fresh state -- otherwise the Bug D fix would gate
+        the second test in the class.
         """
+        auto_update_module._AUTO_UPDATE_RAN = False
         with (
             patch(
                 "keboola_agent_cli.auto_update._maybe_update_mcp",
@@ -600,8 +605,10 @@ class TestMaybeAutoUpdateMcpIntegration:
         Each test below verifies an MCP-stage path; the skip gates must be
         out of the way for those paths to run. Individual tests still
         re-patch ``_should_skip_kbagent_stage`` when they exercise the
-        re-exec scenario explicitly.
+        re-exec scenario explicitly. Resets the per-process auto-update
+        sentinel (since v0.30.3) so each test starts from a fresh state.
         """
+        auto_update_module._AUTO_UPDATE_RAN = False
         with (
             patch(
                 "keboola_agent_cli.auto_update._should_skip_all",
@@ -691,6 +698,13 @@ class TestReExecPathStillRunsMcp:
     MCP work proceeds even when Stage 1 is skipped.
     """
 
+    @pytest.fixture(autouse=True)
+    def _reset_sentinel(self):
+        """Reset per-process sentinel between tests (since v0.30.3)."""
+        auto_update_module._AUTO_UPDATE_RAN = False
+        yield
+        auto_update_module._AUTO_UPDATE_RAN = False
+
     @patch("keboola_agent_cli.auto_update._is_dev_install", return_value=False)
     def test_re_exec_skips_kbagent_but_runs_mcp(self, _mock_dev):
         """With KBAGENT_SKIP_UPDATE=1 set, MCP stage MUST still run."""
@@ -751,3 +765,111 @@ class TestReExecPathStillRunsMcp:
 
         mock_fetch_kbagent.assert_not_called()
         mock_mcp.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Bug C regression: probe-None must NOT fall through to upgrade attempt
+# (issue #263, addressed in v0.30.3)
+# ---------------------------------------------------------------------------
+
+
+class TestProbeNoneSkipsUpgrade:
+    """Pin the Bug C contract: when local-version detection fails,
+    ``_maybe_update_mcp`` must NOT call ``_perform_mcp_update``.
+
+    Pre-fix: detection returning None left ``up_to_date == None`` (not
+    True), the short-circuit was bypassed, the function fell through to
+    a broken upgrade subprocess, and the user saw an
+    "Updating ... vunknown -> v1.59.1" banner every TTL window.
+
+    Post-fix: probe-None opts out of the upgrade for this TTL window;
+    the next fresh-cache pass will retry detection.
+    """
+
+    @patch("keboola_agent_cli.auto_update._fetch_mcp_latest_version", return_value="1.59.1")
+    @patch("keboola_agent_cli.auto_update._get_local_mcp_version", return_value=None)
+    @patch("keboola_agent_cli.auto_update._detect_mcp_install_method", return_value="uv_tool")
+    @patch("keboola_agent_cli.auto_update._perform_mcp_update")
+    def test_local_version_none_skips_upgrade(
+        self, mock_perform, mock_detect, mock_local, mock_fetch
+    ) -> None:
+        """The acceptance criterion from #263: mock probe -> None;
+        assert _perform_mcp_update is NOT called.
+        """
+        result = _maybe_update_mcp(cache=None, fetched_now=True)
+        assert result == "1.59.1"
+        mock_perform.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Bug D regression: process-level sentinel for repeated maybe_auto_update calls
+# (issue #263, addressed in v0.30.3)
+# ---------------------------------------------------------------------------
+
+
+class TestProcessLevelSentinel:
+    """Pin the Bug D contract: ``maybe_auto_update`` runs the body at most
+    once per process.
+
+    Pre-fix: ``kbagent repl`` re-entered ``main()`` -> ``maybe_auto_update``
+    on every prompt, so the auto-update banner re-fired once per command
+    typed at the prompt. Post-fix: a module-level ``_AUTO_UPDATE_RAN``
+    flag short-circuits subsequent in-process invocations.
+
+    Re-exec'd processes (kbagent self-upgrade -> ``execvpe``) start with
+    a fresh sentinel because the module is reloaded into a new
+    interpreter -- the kbagent-self-upgrade -> re-exec -> MCP-stage chain
+    from PR #257 is preserved.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_sentinel(self):
+        """Tests assume a fresh sentinel per test (each simulates a new process)."""
+        auto_update_module._AUTO_UPDATE_RAN = False
+        yield
+        auto_update_module._AUTO_UPDATE_RAN = False
+
+    @patch("keboola_agent_cli.auto_update._should_skip_all", return_value=False)
+    @patch("keboola_agent_cli.auto_update._should_skip_kbagent_stage", return_value=False)
+    @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
+    @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="1.0.0")
+    @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=True)
+    @patch("keboola_agent_cli.auto_update._maybe_update_mcp")
+    @patch("keboola_agent_cli.auto_update._detect_mcp_install_method", return_value="uv_tool")
+    @patch("keboola_agent_cli.auto_update._write_cache")
+    def test_second_call_short_circuits(
+        self,
+        mock_write,
+        mock_detect,
+        mock_mcp,
+        mock_up_to_date,
+        mock_fetch,
+        mock_cache,
+        mock_skip_kb,
+        mock_skip_all,
+    ):
+        """Acceptance criterion from #263: second invocation in the same
+        REPL session must NOT re-trigger maybe_auto_update's body.
+        Verified by counting MCP-stage invocations: 1 after multiple
+        calls, not N.
+        """
+        maybe_auto_update()  # first call: runs the body
+        maybe_auto_update()  # second call: should short-circuit
+        maybe_auto_update()  # third call: still short-circuited
+
+        # MCP stage was reached exactly once across the three calls.
+        mock_mcp.assert_called_once()
+
+    def test_sentinel_is_set_even_when_body_raises(self):
+        """Bug D corner case: the sentinel must flip to True BEFORE any
+        work, so a crash mid-flow still gates subsequent in-process
+        re-entries. Otherwise a flaky upstream PyPI fetch could re-fire
+        the banner per prompt.
+        """
+        with patch(
+            "keboola_agent_cli.auto_update._should_skip_all",
+            side_effect=RuntimeError("kaboom"),
+        ):
+            maybe_auto_update()  # blanket try/except swallows the RuntimeError
+        # Sentinel was flipped before the crash.
+        assert auto_update_module._AUTO_UPDATE_RAN is True
