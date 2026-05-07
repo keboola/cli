@@ -19,7 +19,7 @@ from keboola_agent_cli.auto_update import (
     _write_cache,
     maybe_auto_update,
 )
-from keboola_agent_cli.constants import ENV_AUTO_UPDATE, ENV_SKIP_UPDATE
+from keboola_agent_cli.constants import ENV_AUTO_UPDATE, ENV_SKIP_UPDATE, MCP_UPGRADE_TIMEOUT
 
 
 # ---------------------------------------------------------------------------
@@ -331,24 +331,20 @@ class TestMaybeAutoUpdate:
         mock_skip_all.assert_called_once()
         mock_fetch.assert_not_called()
 
-    @patch("keboola_agent_cli.auto_update._should_skip", return_value=False)
     @patch("keboola_agent_cli.auto_update._read_cache")
     @patch("keboola_agent_cli.auto_update._is_cache_fresh", return_value=True)
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=True)
-    def test_cache_fresh_no_fetch(self, mock_up_to_date, mock_fresh, mock_cache, mock_skip):
+    def test_cache_fresh_no_fetch(self, mock_up_to_date, mock_fresh, mock_cache):
         mock_cache.return_value = {"last_check": time.time(), "latest_version": "1.0.0"}
         with patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version") as mock_fetch:
             maybe_auto_update()
             mock_fetch.assert_not_called()
 
-    @patch("keboola_agent_cli.auto_update._should_skip", return_value=False)
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=True)
-    def test_cache_stale_fetches(
-        self, mock_up_to_date, mock_write, mock_fetch, mock_cache, mock_skip
-    ):
+    def test_cache_stale_fetches(self, mock_up_to_date, mock_write, mock_fetch, mock_cache):
         maybe_auto_update()
         mock_fetch.assert_called_once()
         # Cache write now bundles the kbagent latest with the MCP latest +
@@ -361,19 +357,17 @@ class TestMaybeAutoUpdate:
         assert "mcp_latest_version" in kwargs
         assert "mcp_install_method" in kwargs
 
-    @patch("keboola_agent_cli.auto_update._should_skip", return_value=False)
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="1.0.0")
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=True)
     @patch("keboola_agent_cli.auto_update._perform_update")
     def test_up_to_date_no_update(
-        self, mock_update, mock_up_to_date, mock_write, mock_fetch, mock_cache, mock_skip
+        self, mock_update, mock_up_to_date, mock_write, mock_fetch, mock_cache
     ):
         maybe_auto_update()
         mock_update.assert_not_called()
 
-    @patch("keboola_agent_cli.auto_update._should_skip", return_value=False)
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
     @patch("keboola_agent_cli.auto_update._write_cache")
@@ -389,13 +383,11 @@ class TestMaybeAutoUpdate:
         mock_write,
         mock_fetch,
         mock_cache,
-        mock_skip,
     ):
         maybe_auto_update()
         mock_update.assert_called_once_with("2.0.0")
         mock_reexec.assert_called_once()
 
-    @patch("keboola_agent_cli.auto_update._should_skip", return_value=False)
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
     @patch("keboola_agent_cli.auto_update._write_cache")
@@ -411,38 +403,42 @@ class TestMaybeAutoUpdate:
         mock_write,
         mock_fetch,
         mock_cache,
-        mock_skip,
     ):
         """If _perform_update returns False, re-exec should NOT be called."""
         maybe_auto_update()
         mock_update.assert_called_once()
         mock_reexec.assert_not_called()
 
-    @patch("keboola_agent_cli.auto_update._should_skip", return_value=False)
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value=None)
     @patch("keboola_agent_cli.auto_update._perform_update")
-    def test_fetch_failure_continues(self, mock_update, mock_fetch, mock_cache, mock_skip):
+    def test_fetch_failure_continues(self, mock_update, mock_fetch, mock_cache):
         """If fetch returns None, should continue without updating."""
         maybe_auto_update()
         mock_update.assert_not_called()
 
-    @patch(
-        "keboola_agent_cli.auto_update._should_skip",
-        side_effect=RuntimeError("kaboom"),
-    )
-    def test_exception_never_crashes(self, mock_skip):
-        """Any exception inside maybe_auto_update must be swallowed."""
-        # Should NOT raise
-        maybe_auto_update()
+    def test_exception_never_crashes(self):
+        """Any exception inside maybe_auto_update must be swallowed.
 
-    @patch("keboola_agent_cli.auto_update._should_skip", return_value=False)
+        Targets ``_should_skip_all`` -- the gate the orchestrator actually
+        consults today. The legacy ``_should_skip`` alias is no longer
+        called by ``maybe_auto_update``, so patching it would not exercise
+        the blanket try/except (false-confidence regression caught in
+        review iteration 3).
+        """
+        with patch(
+            "keboola_agent_cli.auto_update._should_skip_all",
+            side_effect=RuntimeError("kaboom"),
+        ):
+            # Must NOT raise.
+            maybe_auto_update()
+
     @patch("keboola_agent_cli.auto_update._read_cache")
     @patch("keboola_agent_cli.auto_update._is_cache_fresh", return_value=True)
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=None)
     @patch("keboola_agent_cli.auto_update._perform_update")
     def test_version_comparison_none_no_update(
-        self, mock_update, mock_up_to_date, mock_fresh, mock_cache, mock_skip
+        self, mock_update, mock_up_to_date, mock_fresh, mock_cache
     ):
         """If _is_up_to_date returns None (can't compare), no update."""
         mock_cache.return_value = {"last_check": time.time(), "latest_version": "1.0.0"}
@@ -535,7 +531,7 @@ class TestMaybeUpdateMcp:
         """Local behind PyPI -> upgrade subprocess invoked."""
         result = _maybe_update_mcp(cache=None, fetched_now=True)
         assert result == "1.59.1"
-        mock_perform.assert_called_once_with(method="uv_tool", timeout=180.0)
+        mock_perform.assert_called_once_with(method="uv_tool", timeout=MCP_UPGRADE_TIMEOUT)
 
     @patch("keboola_agent_cli.auto_update._fetch_mcp_latest_version", return_value="1.59.1")
     @patch("keboola_agent_cli.auto_update._get_local_mcp_version", return_value=None)
@@ -618,7 +614,6 @@ class TestMaybeAutoUpdateMcpIntegration:
         ):
             yield
 
-    @patch("keboola_agent_cli.auto_update._should_skip", return_value=False)
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="1.0.0")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=True)
@@ -633,13 +628,11 @@ class TestMaybeAutoUpdateMcpIntegration:
         mock_up_to_date,
         mock_fetch,
         mock_cache,
-        mock_skip,
     ):
         """Even when kbagent is up-to-date, the MCP stage MUST run."""
         maybe_auto_update()
         mock_mcp.assert_called_once()
 
-    @patch("keboola_agent_cli.auto_update._should_skip", return_value=False)
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
@@ -656,14 +649,12 @@ class TestMaybeAutoUpdateMcpIntegration:
         mock_up_to_date,
         mock_fetch,
         mock_cache,
-        mock_skip,
     ):
         """If kbagent upgrade fails (no re-exec), still try MCP upgrade."""
         maybe_auto_update()
         mock_mcp.assert_called_once()
 
-    @patch("keboola_agent_cli.auto_update._should_skip", return_value=False)
-    def test_exception_in_mcp_stage_does_not_crash(self, mock_skip):
+    def test_exception_in_mcp_stage_does_not_crash(self):
         """A blowup in the MCP stage MUST be caught by the blanket try/except."""
         cache = {"last_check": time.time(), "latest_version": "1.0.0"}
         with (

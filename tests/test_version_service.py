@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from keboola_agent_cli.constants import MCP_UPGRADE_TIMEOUT
 from keboola_agent_cli.services.version_service import (
     MCP_BINARY_NAME,
     MCP_PACKAGE_NAME,
@@ -370,11 +371,11 @@ class TestPerformMcpUpdate:
     @patch("keboola_agent_cli.services.version_service.shutil.which")
     @patch(
         "keboola_agent_cli.services.version_service.subprocess.run",
-        side_effect=subprocess.TimeoutExpired(cmd="x", timeout=180),
+        side_effect=subprocess.TimeoutExpired(cmd="x", timeout=MCP_UPGRADE_TIMEOUT),
     )
     def test_timeout(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
         mock_which.return_value = "/usr/local/bin/uv"
-        ok, info = _perform_mcp_update(method="uv_tool", timeout=180.0)
+        ok, info = _perform_mcp_update(method="uv_tool", timeout=MCP_UPGRADE_TIMEOUT)
         assert ok is False
         assert "timed out" in info
 
