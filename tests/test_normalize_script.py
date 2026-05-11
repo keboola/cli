@@ -1,10 +1,17 @@
-"""Tests for ``parameters.blocks[].codes[].script`` normalization (issue #245).
+"""Tests for ``parameters.blocks[].codes[].script`` normalization (issues #245, #274).
 
-The Storage API silently accepts a string for ``script`` while the runtime
-validator requires an array. Issue #245 closes the gap on the kbagent
-write side: SQL transformations get statement-level split via the existing
-:func:`split_statements` state machine; Python / R / custom-Python apps
-get a single-element wrap.
+The Storage API silently accepts shapes that crash at job runtime. This
+helper closes two gaps on the kbagent write side:
+
+- Issue #245: ``str -> array``. SQL transformations get statement-level
+  split via :func:`split_statements`; Python / R / custom-Python apps
+  get a single-element wrap.
+- Issue #274: per-element re-split for SQL. When ``script`` is already
+  a list but an element packs multiple ``;``-separated statements, the
+  ODBC layer crashes with ``Actual statement count N did not match the
+  desired statement count 1`` (SQL state ``0A000``). Each SQL-
+  transformation element is run back through ``split_statements`` and
+  replaced inline when it yields more than one statement.
 
 Covers:
 - helper function ``normalize_blocks_codes_script`` directly
@@ -301,6 +308,271 @@ class TestNormalizeBlocksCodesScript:
 
 
 # ---------------------------------------------------------------------------
+# Issue #274: per-element re-split when script is already a list
+# ---------------------------------------------------------------------------
+
+
+class TestSqlResplitListElements:
+    """Element-level re-split for SQL transformations (issue #274).
+
+    The runtime requires one statement per ``script[]`` element. The
+    Storage API only verifies the array shape, so a list whose elements
+    pack multiple ``;``-terminated statements passes 200 OK but crashes
+    at ``odbc_prepare``. These tests verify the kbagent write-side fix.
+    """
+
+    def test_create_plus_alter_session_resplit_in_place(self) -> None:
+        """Canonical bug from issue #274: CREATE + ALTER SESSION in one element."""
+        cfg = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "B",
+                        "codes": [
+                            {
+                                "name": "c",
+                                "script": [
+                                    'CREATE OR REPLACE TABLE "out_x" AS SELECT 1 AS x; '
+                                    "alter session unset week_of_year_policy, week_start;"
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        out, norms = normalize_blocks_codes_script(
+            "keboola.snowflake-transformation", copy.deepcopy(cfg)
+        )
+        scripts = out["parameters"]["blocks"][0]["codes"][0]["script"]
+        assert len(scripts) == 2
+        assert scripts[0].startswith("CREATE")
+        assert "alter session" in scripts[1]
+        assert len(norms) == 1
+        assert norms[0]["action"] == "sql_resplit"
+        assert norms[0]["path"] == "parameters.blocks[0].codes[0].script[0]"
+        assert norms[0]["before_length"] == 1
+        assert norms[0]["after_length"] == 2
+
+    def test_create_plus_select_resplit(self) -> None:
+        """Second failure mode from issue #274 follow-up: CREATE + SELECT."""
+        cfg = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "B",
+                        "codes": [
+                            {
+                                "name": "c",
+                                "script": [
+                                    'CREATE OR REPLACE TABLE "out_y" AS SELECT a, b FROM x;\n'
+                                    "SELECT count(*) FROM users_2;"
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        out, norms = normalize_blocks_codes_script(
+            "keboola.snowflake-transformation", copy.deepcopy(cfg)
+        )
+        assert len(out["parameters"]["blocks"][0]["codes"][0]["script"]) == 2
+        assert norms[0]["action"] == "sql_resplit"
+        assert norms[0]["after_length"] == 2
+
+    def test_well_formed_list_is_noop(self) -> None:
+        """Each element is already one statement -- nothing to do."""
+        cfg = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "B",
+                        "codes": [{"name": "c", "script": ["SELECT 1;", "SELECT 2;"]}],
+                    }
+                ]
+            }
+        }
+        before = copy.deepcopy(cfg)
+        out, norms = normalize_blocks_codes_script("keboola.snowflake-transformation", cfg)
+        assert out == before
+        assert norms == []
+
+    def test_mixed_list_only_bad_element_recorded(self) -> None:
+        """Re-split touches only the malformed element and reports its original index."""
+        cfg = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "B",
+                        "codes": [
+                            {
+                                "name": "c",
+                                "script": [
+                                    "SELECT 1;",
+                                    "SELECT 2; SELECT 3;",  # the bad element
+                                    "SELECT 4;",
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        out, norms = normalize_blocks_codes_script(
+            "keboola.snowflake-transformation", copy.deepcopy(cfg)
+        )
+        # 1 + 2 + 1 = 4 elements after split
+        result = out["parameters"]["blocks"][0]["codes"][0]["script"]
+        assert result == ["SELECT 1;", "SELECT 2;", "SELECT 3;", "SELECT 4;"]
+        assert len(norms) == 1
+        assert norms[0]["path"] == "parameters.blocks[0].codes[0].script[1]"
+        assert norms[0]["before_length"] == 1
+        assert norms[0]["after_length"] == 2
+
+    def test_multiple_bad_elements_each_recorded(self) -> None:
+        """Each malformed element gets its own normalization entry with original index."""
+        cfg = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "B",
+                        "codes": [
+                            {
+                                "name": "c",
+                                "script": [
+                                    "SELECT 1; SELECT 2;",  # idx 0 -> 2
+                                    "SELECT 3;",  # idx 1 -> 1 (unchanged)
+                                    "SELECT 4; SELECT 5; SELECT 6;",  # idx 2 -> 3
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        out, norms = normalize_blocks_codes_script(
+            "keboola.snowflake-transformation", copy.deepcopy(cfg)
+        )
+        scripts = out["parameters"]["blocks"][0]["codes"][0]["script"]
+        assert len(scripts) == 6
+        assert len(norms) == 2
+        # Verify original-index reporting (post-split positions would be different).
+        paths = {n["path"]: n["after_length"] for n in norms}
+        assert paths == {
+            "parameters.blocks[0].codes[0].script[0]": 2,
+            "parameters.blocks[0].codes[0].script[2]": 3,
+        }
+
+    def test_semicolon_inside_block_comment_is_not_a_separator(self) -> None:
+        """The state machine must skip ``;`` inside ``/* ... */``."""
+        cfg = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "B",
+                        "codes": [
+                            {
+                                "name": "c",
+                                "script": [
+                                    "/* CREATE OR REPLACE TABLE x AS SELECT 1; */ SELECT 2;",
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        out, norms = normalize_blocks_codes_script(
+            "keboola.snowflake-transformation", copy.deepcopy(cfg)
+        )
+        # Only the real `;` after the comment terminates the statement.
+        scripts = out["parameters"]["blocks"][0]["codes"][0]["script"]
+        assert len(scripts) == 1  # the input was already one logical statement
+        assert norms == []
+
+    def test_semicolon_inside_string_literal_is_not_a_separator(self) -> None:
+        cfg = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "B",
+                        "codes": [
+                            {
+                                "name": "c",
+                                "script": ["SELECT 'a;b' AS x WHERE y = 'p;q';"],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        out, norms = normalize_blocks_codes_script(
+            "keboola.snowflake-transformation", copy.deepcopy(cfg)
+        )
+        scripts = out["parameters"]["blocks"][0]["codes"][0]["script"]
+        assert len(scripts) == 1
+        assert norms == []
+
+    def test_python_list_with_semicolons_is_passthrough(self) -> None:
+        """Python (and any non-SQL) transformations never re-split list elements."""
+        cfg = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "B",
+                        "codes": [
+                            {
+                                "name": "c",
+                                "script": ["print('hi'); print('bye')"],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        before = copy.deepcopy(cfg)
+        out, norms = normalize_blocks_codes_script("keboola.python-transformation-v2", cfg)
+        assert out == before
+        assert norms == []
+
+    def test_bigquery_list_resplit(self) -> None:
+        """SQL re-split applies to all SQL backends, not just Snowflake."""
+        cfg = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "B",
+                        "codes": [{"name": "c", "script": ["SELECT 1; SELECT 2;"]}],
+                    }
+                ]
+            }
+        }
+        out, norms = normalize_blocks_codes_script(
+            "keboola.google-bigquery-transformation", copy.deepcopy(cfg)
+        )
+        assert len(out["parameters"]["blocks"][0]["codes"][0]["script"]) == 2
+        assert norms[0]["action"] == "sql_resplit"
+
+    def test_non_string_element_left_alone(self) -> None:
+        """A bizarre non-string element survives untouched (no exception, no resplit)."""
+        cfg = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "B",
+                        "codes": [{"name": "c", "script": ["SELECT 1;", None, "SELECT 2;"]}],
+                    }
+                ]
+            }
+        }
+        before = copy.deepcopy(cfg)
+        out, norms = normalize_blocks_codes_script("keboola.snowflake-transformation", cfg)
+        assert out == before
+        assert norms == []
+
+
+# ---------------------------------------------------------------------------
 # ConfigService integration
 # ---------------------------------------------------------------------------
 
@@ -457,6 +729,43 @@ class TestConfigServiceUpdateNormalizes:
         sent = client.update_config.call_args.kwargs["configuration"]
         assert sent == new_cfg
         assert result["normalizations"] == []
+
+    def test_sql_list_element_resplit_before_push(self, tmp_config_dir: Path) -> None:
+        """Issue #274: a list with a multi-statement element is re-split before write."""
+        service, client = _make_service(tmp_config_dir, current_cfg={})
+        new_cfg = {
+            "parameters": {
+                "blocks": [
+                    {
+                        "name": "B",
+                        "codes": [
+                            {
+                                "name": "c",
+                                "script": [
+                                    'CREATE OR REPLACE TABLE "out_x" AS SELECT 1; '
+                                    "alter session unset week_start;",
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+
+        result = service.update_config(
+            alias="prod",
+            component_id="keboola.snowflake-transformation",
+            config_id="cfg-001",
+            configuration=new_cfg,
+        )
+
+        sent = client.update_config.call_args.kwargs["configuration"]
+        scripts = sent["parameters"]["blocks"][0]["codes"][0]["script"]
+        assert len(scripts) == 2, "multi-statement element must be re-split before push"
+        assert scripts[0].startswith("CREATE")
+        assert "alter session" in scripts[1]
+        assert len(result["normalizations"]) == 1
+        assert result["normalizations"][0]["action"] == "sql_resplit"
 
 
 # ---------------------------------------------------------------------------

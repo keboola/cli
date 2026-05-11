@@ -107,39 +107,65 @@ def normalize_blocks_codes_script(
     component_id: str,
     config: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Normalize ``parameters.blocks[].codes[].script`` string -> array.
+    """Normalize ``parameters.blocks[].codes[].script`` for runtime safety.
 
-    The Keboola runtime schema validator requires ``script`` to be an
-    array. The Storage API silently accepts a string and the runtime
-    crashes at job execution with::
+    Closes two gaps between the Storage API (lax shape validator) and the
+    runtime (strict per-element semantics):
 
-        Invalid type for path "root.parameters.blocks.0.codes.X.script".
-        Expected "array", but got "string"
+    1. **String -> array** (since 0.28.0). The Keboola runtime schema
+       validator requires ``script`` to be an array. The Storage API
+       silently accepts a string and the runtime crashes at job
+       execution with::
 
-    This helper closes the gap on the kbagent write side. For SQL
-    transformations the string is split on statement boundaries via
-    :func:`split_statements` (state machine respecting comments and
-    string literals); for Python / R / custom-Python apps and other
-    components with the same shape, the string is wrapped as a
-    single-element array. Components that already have ``script`` as a
-    list are passed through unchanged.
+            Invalid type for path "root.parameters.blocks.0.codes.X.script".
+            Expected "array", but got "string"
+
+       For SQL transformations the string is split on statement
+       boundaries via :func:`split_statements` (state machine respecting
+       comments and string literals); for Python / R / custom-Python
+       apps and other components with the same schema, the string is
+       wrapped as a single-element array.
+
+    2. **Per-element re-split for SQL** (since 0.30.8, closes issue
+       #274). When ``script`` is already a list but an element packs
+       multiple ``;``-separated statements, the Snowflake/BigQuery/etc.
+       runtime crashes at ``odbc_prepare`` with ``Actual statement
+       count N did not match the desired statement count 1`` (SQL
+       state ``0A000``). Storage API accepts this shape silently
+       because it only checks "list of strings". This pass re-splits
+       each SQL-transformation element through :func:`split_statements`
+       and replaces in place when the element produces more than one
+       statement.
+
+    Components that don't match either case are passed through
+    unchanged.
 
     Args:
         component_id: The configuration's component ID. Used to choose
-            split-vs-wrap and to passthrough components that don't have
-            this schema at all.
+            split-vs-wrap-vs-resplit and to passthrough components that
+            don't have this schema at all.
         config: The configuration dict to normalize. Mutated in place.
 
     Returns:
         ``(config, normalizations)``. ``normalizations`` is a list of
         per-element change records of shape::
 
+            # case 1 (string -> array):
             {
                 "path": "parameters.blocks[0].codes[1].script",
                 "action": "sql_split" | "wrap_array",
                 "before_type": "str",
                 "after_type": "list",
                 "after_length": 3,
+            }
+            # case 2 (list element -> multiple list elements):
+            {
+                "path": "parameters.blocks[0].codes[1].script[2]",
+                "action": "sql_resplit",
+                "before_type": "str",
+                "after_type": "list",
+                "before_length": 1,
+                "after_length": 2,
             }
 
         Empty when nothing was normalized (already-valid input).
@@ -170,28 +196,54 @@ def normalize_blocks_codes_script(
             if not isinstance(code, dict):
                 continue
             script = code.get("script")
-            if not isinstance(script, str):
-                continue
-            if is_sql:
-                new_script = split_statements(script)
-                action = "sql_split"
-            else:
-                # Single-element wrap for Python / R / custom-Python apps
-                # and any unknown component sharing the schema. Empty
-                # strings collapse to ``[]`` -- the runtime treats both
-                # as no-op.
-                new_script = [script] if script.strip() else []
-                action = "wrap_array"
-            code["script"] = new_script
-            normalizations.append(
-                {
-                    "path": f"parameters.blocks[{block_idx}].codes[{code_idx}].script",
-                    "action": action,
-                    "before_type": "str",
-                    "after_type": "list",
-                    "after_length": len(new_script),
-                }
-            )
+            if isinstance(script, str):
+                if is_sql:
+                    new_script = split_statements(script)
+                    action = "sql_split"
+                else:
+                    # Single-element wrap for Python / R / custom-Python
+                    # apps and any unknown component sharing the schema.
+                    # Empty strings collapse to ``[]`` -- the runtime
+                    # treats both as no-op.
+                    new_script = [script] if script.strip() else []
+                    action = "wrap_array"
+                code["script"] = new_script
+                normalizations.append(
+                    {
+                        "path": f"parameters.blocks[{block_idx}].codes[{code_idx}].script",
+                        "action": action,
+                        "before_type": "str",
+                        "after_type": "list",
+                        "after_length": len(new_script),
+                    }
+                )
+            elif is_sql and isinstance(script, list):
+                rebuilt: list[Any] = []
+                resplits: list[tuple[int, int]] = []
+                for el_idx, element in enumerate(script):
+                    if isinstance(element, str):
+                        parts = split_statements(element)
+                        if len(parts) > 1:
+                            rebuilt.extend(parts)
+                            resplits.append((el_idx, len(parts)))
+                            continue
+                    rebuilt.append(element)
+                if resplits:
+                    code["script"] = rebuilt
+                    for el_idx, after_count in resplits:
+                        normalizations.append(
+                            {
+                                "path": (
+                                    f"parameters.blocks[{block_idx}]"
+                                    f".codes[{code_idx}].script[{el_idx}]"
+                                ),
+                                "action": "sql_resplit",
+                                "before_type": "str",
+                                "after_type": "list",
+                                "before_length": 1,
+                                "after_length": after_count,
+                            }
+                        )
 
     return config, normalizations
 
