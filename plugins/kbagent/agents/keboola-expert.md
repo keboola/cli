@@ -64,8 +64,10 @@ a critical failure.
    needed for the current task (e.g. `flow update` needs 0.22.0+,
    `schedule find` needs 0.23.0+, `config set-default-bucket` needs
    0.26.0+, `data-app create / deploy / start / stop / delete / password`
-   need 0.27.0+, `config update` script[] auto-normalize against #245
-   trap needs 0.28.0+, `storage swap-tables` needs 0.28.0+,
+   need 0.27.0+, `config update` script[] string-to-array auto-normalize
+   against #245 trap needs 0.28.0+, list-element re-split against
+   the #274 ODBC `Actual statement count N != desired 1` crash needs
+   0.30.8+, `storage swap-tables` needs 0.28.0+,
    env-var manage-token auth for `org setup` / `project refresh` /
    `data-app password` needs 0.29.0+ with `--allow-env-manage-token`
    (the env var is default-deny on 0.29.0+),
@@ -99,7 +101,7 @@ a critical failure.
 | Update flow (rename, description, phases) | `kbagent flow update` (partial, no `--file`) | `--file` after fetching current phases, merging locally, passing full YAML | `tool call update_flow` (strips `behavior.onError` pre-MCP v1.60); partial `--file` that drops fields |
 | Schedule flow | `kbagent flow schedule --cron ... [--timezone]` | `tool call create_flow_schedule` | raw REST to `/storage/configurations/keboola.scheduler` |
 | Create Snowflake transformation | `kbagent config new --component-id keboola.snowflake-transformation` + `config update --set ...` | `tool call create_sql_transformation` (lower schema, avoids the component refusal) | `tool call create_config` (refuses keboola.snowflake-transformation) |
-| Update SQL transformation body (script[]) | `kbagent config update --project P --component-id keboola.snowflake-transformation --config-id K --configuration @body.json` (0.28.0+ auto-normalizes string `script` to array; SQL gets statement-level split, Python/R gets `[script]` wrap; envelope's `normalizations: [...]` records every change) | `kbagent --hint client config update ...` if you need to bypass the auto-normalize for some reason | `tool call update_sql_transformation` -- still vulnerable to the #245 string-vs-array runtime crash because it pushes raw to Storage API; raw `PUT /v2/storage/components/.../configs/...` -- same trap |
+| Update SQL transformation body (script[]) | `kbagent config update --project P --component-id keboola.snowflake-transformation --config-id K --configuration @body.json` (0.28.0+ auto-normalizes string `script` to array; SQL gets statement-level split, Python/R gets `[script]` wrap; envelope's `normalizations: [...]` records every change. 0.30.8+ also re-splits multi-statement LIST elements -- closes the #274 ODBC `statement count 2 vs desired 1` crash that survives the 0.28.0 string fix) | `kbagent --hint client config update ...` if you need to bypass the auto-normalize for some reason | `tool call update_sql_transformation` -- still vulnerable to BOTH the #245 string-vs-array AND #274 list-element runtime crashes because it pushes raw to Storage API; raw `PUT /v2/storage/components/.../configs/...` -- same trap |
 | Run a job (and wait) | `kbagent job run --project P --component-id C --config-id K --wait` | `tool call run_component` | `job run` without `--wait` when user expects the result |
 | Search items by name across projects | `kbagent search QUERY [--project P] [--type table\|bucket\|config\|flow] [--limit N]` (0.30.0+) | `tool call search_tables` / `tool call search_configurations` (one resource-type per call) | chaining multiple `tool call` for different types |
 | Search config JSON bodies | `kbagent search QUERY --search-type config-based [--project P]` (0.30.0+) | `kbagent config search --query Q` (config-body only, no tables/buckets) | repeated `tool call get_config` to grep locally |
@@ -176,6 +178,23 @@ success, not a failure.
   `PUT /v2/storage/components/.../configs/...` calls do NOT inherit the
   normalization (as of MCP v1.59.x). For SQL transformation body
   updates, prefer `kbagent config update` over MCP/REST.
+
+- **`script[]` list-element-with-multiple-statements ODBC crash**
+  (0.30.8+ auto-fix; #274): the 0.28.0 fix above closes the
+  string-vs-array gap but NOT the case where `script` is already a
+  list and one element packs multiple `;`-separated statements --
+  e.g. `script: ["CREATE TABLE x ...; alter session unset
+  week_start;"]`. Storage API accepts the shape (it's a list of
+  strings), the runtime rejects it at ODBC with `Actual statement
+  count 2 did not match the desired statement count 1, SQL state
+  0A000`. Reported in #274 from a Slovak->Czech config migration.
+  Since 0.30.8, every SQL-transformation list element is re-run
+  through `split_statements()` and replaced inline when it yields
+  more than one statement -- emitted as a separate `sql_resplit`
+  entry in `normalizations` with `path: parameters.blocks[B].codes[C].script[E]`
+  (E is the original element index on input). Non-SQL components
+  (Python `;` is a valid intra-statement separator) skip this pass.
+  Same MCP / REST bypass caveat as #245 applies.
 
 - **Primary keys on new output tables**: Keboola creates columns as
   nullable by default on first insert. A PK on a nullable column

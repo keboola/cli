@@ -777,21 +777,40 @@ CREATE TABLE foo AS
 
 See `scaffold-workflow.md` for the complete file structure reference.
 
-## `config update` auto-normalizes `script[]` from string to array (since v0.28.0)
+## `config update` auto-normalizes `script[]` (since v0.28.0, expanded v0.30.8)
 
-The Storage API silently accepts a string for `parameters.blocks[].codes[].script`,
-but the Keboola runtime validator rejects it with:
+The Storage API silently accepts shapes for `parameters.blocks[].codes[].script`
+that crash at job runtime. Two distinct traps, each with the same observable
+signature (200 OK on PUT, version increments, UI looks fine, crash only at
+scheduler-time with no attribution back to the offending write).
+
+**Trap 1 -- string vs array (since v0.28.0; #245)**. The runtime
+validator rejects:
 
 ```
 Invalid type for path "root.parameters.blocks.0.codes.X.script".
 Expected "array", but got "string"
 ```
 
-The trap: the failed PUT returns 200, the version increments, the UI looks
-fine -- the crash happens only when the job runs (often hours later, e.g. by
-the scheduler), with no attribution back to the offending write. Reported in
-issue #245 after a programmatic refactor of 3 production Snowflake
+Reported in #245 after a programmatic refactor of 3 production Snowflake
 transformations.
+
+**Trap 2 -- list element packs multiple statements (since v0.30.8; #274)**.
+The runtime requires exactly one statement per `script[i]` element. A
+list like `["CREATE TABLE x AS ...; alter session unset week_start;"]`
+(1 element, 2 statements) passes the array-shape validator but crashes
+ODBC with:
+
+```
+odbc_prepare(): SQL error: Actual statement count 2 did not match the
+desired statement count 1, SQL state 0A000 in SQLPrepare
+```
+
+Reported in #274 after a Slovak->Czech config migration where text-only
+replacements left existing list elements untouched but already-packed
+elements survived the round-trip. Live-reproduced against project 901
+(`padak`) config `01km0sd189fdrcnjwk89cd1fkc` -- job 1307622107 crashed
+with the exact ODBC message above.
 
 `kbagent config update` (and any wrapper that takes a full configuration --
 `--configuration`, `--configuration-file`, `--set parameters.blocks.0.codes.0.script=...`,
@@ -804,21 +823,37 @@ Storage API touch:
   boundaries via the existing `split_statements()` state machine that
   already powers `kbagent sync push`. The splitter respects `'...'` /
   `"..."` / `$$...$$` / `--` / `#` / `//` / `/* ... */`, so semicolons
-  inside string literals and block comments do NOT cause splits.
+  inside string literals and block comments do NOT cause splits. Since
+  v0.30.8, every **list element** is also passed through the same
+  splitter -- multi-statement entries are replaced inline so the
+  list-of-1-with-2-statements ODBC trap (#274) cannot survive the write.
 - **Python / R / `kds-team.app-custom-python`** and any other component
   sharing the `parameters.blocks[].codes[].script` shape: the string is
   wrapped as a single-element array `[script]`. Statement-level split
   does not apply -- the runtime treats the script as one code chunk.
-- **Already-array `script` values pass through unchanged.**
+  Non-SQL list elements are never re-split (Python `;` is a valid
+  intra-statement separator: `print('a'); print('b')`).
+- **Already-correct list values pass through unchanged** (one statement
+  per element).
 
 Observability: every normalization is surfaced.
-- JSON mode: the result envelope gains
-  `"normalizations": [{"path": "parameters.blocks[0].codes[0].script",
-  "action": "sql_split", "before_type": "str", "after_type": "list",
-  "after_length": 3}]`. Empty list when nothing was normalized.
+- JSON mode: the result envelope gains a `normalizations` array.
+  Two record shapes:
+  - **String -> array** (#245): `{"path": "parameters.blocks[0].codes[0].script",
+    "action": "sql_split" | "wrap_array", "before_type": "str",
+    "after_type": "list", "after_length": 3}` -- path points at the
+    whole `script` field.
+  - **List element re-split** (#274; since v0.30.8):
+    `{"path": "parameters.blocks[0].codes[0].script[2]", "action":
+    "sql_resplit", "before_type": "str", "after_type": "list",
+    "before_length": 1, "after_length": 2}` -- path points at the
+    **original** element index on input (not the post-split position;
+    that's the only useful number for mapping the warning back to your
+    source payload). Empty array when nothing was normalized.
 - Human mode: a yellow `Auto-normalized N script field(s) to array
   (string -> list). See --json for details.` warning followed by a
-  per-element trace.
+  per-element trace. The warning line is action-agnostic so it fires
+  for `sql_split`, `wrap_array`, AND `sql_resplit`.
 - `--dry-run`: the `new_configuration` field already reflects the
   post-normalize shape, so the preview matches what would actually land.
 
