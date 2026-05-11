@@ -1112,6 +1112,103 @@ class StorageService(BaseService):
             "project_alias": alias,
         }
 
+    def truncate_tables(
+        self,
+        alias: str,
+        table_ids: list[str],
+        dry_run: bool = False,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Truncate one or more storage tables (delete all rows; preserve schema).
+
+        Batch-tolerant: per-table errors accumulate; one missing table does
+        not abort the batch. ``rows_before`` is captured from
+        ``get_table_detail`` so callers can confirm the operation had a
+        non-trivial effect. The table definition (columns, types, primary
+        key, descriptions, sharing edges, dependents) is preserved.
+
+        Args:
+            alias: Project alias.
+            table_ids: List of table IDs to truncate.
+            dry_run: If True, capture rows_before but do NOT truncate.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Dict with 'truncated', 'failed', 'dry_run', 'project_alias',
+            and (when dry_run) 'would_truncate'. Each ``truncated[]`` entry
+            carries ``{table_id, rows_before, rows_after, branch_id}``.
+            The Storage API truncate endpoint is uniformly async-via-job
+            on every branch (verified live 2026-05-11 on
+            connection.europe-west3.gcp.keboola.com); the client polls
+            the queued job to completion before returning, so
+            ``rows_after`` is always 0 on success.
+        """
+        from ..errors import KeboolaApiError
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        truncated: list[dict[str, Any]] = []
+        failed: list[dict[str, str]] = []
+        would_truncate: list[dict[str, Any]] = []
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            for tid in table_ids:
+                try:
+                    table = client.get_table_detail(tid, branch_id=branch_id)
+                except KeboolaApiError as exc:
+                    failed.append({"id": tid, "error": exc.message})
+                    continue
+
+                # rowsCount is a Storage API integer field but the API does
+                # not guarantee it is always present or coercible (legacy
+                # tables, alias views over recently-truncated sources).
+                # Treat any non-int as 0 rather than letting ValueError tear
+                # down the whole batch.
+                raw_rows = table.get("rowsCount")
+                try:
+                    rows_before = int(raw_rows) if raw_rows is not None else 0
+                except (ValueError, TypeError):
+                    rows_before = 0
+
+                if dry_run:
+                    would_truncate.append(
+                        {
+                            "table_id": tid,
+                            "rows_before": rows_before,
+                            "branch_id": branch_id,
+                        }
+                    )
+                    continue
+
+                try:
+                    client.truncate_table(tid, branch_id=branch_id)
+                except KeboolaApiError as exc:
+                    failed.append({"id": tid, "error": exc.message})
+                    continue
+
+                truncated.append(
+                    {
+                        "table_id": tid,
+                        "rows_before": rows_before,
+                        "rows_after": 0,
+                        "branch_id": branch_id,
+                    }
+                )
+        finally:
+            client.close()
+
+        result: dict[str, Any] = {
+            "truncated": truncated,
+            "failed": failed,
+            "dry_run": dry_run,
+            "project_alias": alias,
+        }
+        if dry_run:
+            result["would_truncate"] = would_truncate
+        return result
+
     def delete_columns(
         self,
         alias: str,

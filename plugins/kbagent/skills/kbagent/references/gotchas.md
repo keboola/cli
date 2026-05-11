@@ -69,6 +69,49 @@
   swaps it back into the original name. After merging the branch the
   original table now carries the typed schema with no downstream config
   rewrite required.
+
+## `storage truncate-table` preserves schema; endpoint is uniformly async-via-job (since v0.32.0)
+
+- `kbagent storage truncate-table --project P --table-id T [--branch ID]
+  [--dry-run] [--yes]` calls
+  `DELETE /v2/storage/[branch/{id}/]tables/{id}/rows?allowTruncate=1`
+  on the Storage API. The `allowTruncate=1` flag is a safety opt-in
+  the API requires whenever no row filter is sent -- omitting it
+  returns HTTP 400. kbagent always passes it; do the same in any
+  `--hint client` script.
+- **Do NOT pass `async=true` on this endpoint.** Sibling destructive
+  endpoints (`delete_table`, `delete_bucket`) require `async=true`,
+  but the row-delete endpoint **rejects** it with HTTP 400
+  (`"async: This field was not expected."` -- verified live
+  2026-05-11 on connection.europe-west3.gcp.keboola.com). The endpoint
+  is inherently async on every branch: it always returns HTTP 202
+  with a queued storage job (`operationName: tableRowsDelete`) that
+  the client polls via `_wait_for_storage_job` -- same machinery as
+  `delete_table`, just without the `async=true` query param.
+- **Sub-second on production, longer on dev branches.** Same poll
+  loop in both cases; only wall-clock latency differs. From the
+  caller's perspective the call always blocks until rows_after=0
+  is authoritative on return.
+- **Idempotent.** Truncating an empty table is a no-op success
+  (`rows_before=0`, `rows_after=0`, `failed=[]`). Safe to retry; safe
+  to run as a pre-load step that may or may not have data to clear.
+- **What survives:** column definitions, types, primary key,
+  descriptions, sharing edges, and every downstream config reference
+  (aliases, input/output mappings, transformation refs). What does
+  not survive: the rows. Pick `truncate-table` whenever the schema
+  contract must hold; pick `delete-table` only when retiring the
+  table itself.
+- **Propagation.** The Storage API removes the rows immediately on
+  the warehouse side -- consumers of an aliased / shared bucket see
+  zero rows on the next query, no quiesce window. A downstream
+  transformation that started reading the table *just before*
+  truncate may see partial state mid-job. Plan re-seed steps so the
+  truncate completes before any downstream job picks it up.
+- **Permission classification.** `storage.truncate-table` is
+  `destructive` -- alongside `delete-table`, `delete-column`,
+  `delete-bucket`, `swap-tables`. Schema preservation does not
+  downgrade the row-data destruction.
+
 ## `data-app create --auth public` writes the canonical noneProxyAuthorization shape (since v0.29.0; fixes v0.27.0 silent HTTP 503)
 
 - **What changed.** v0.27.0's `--auth public` wrote NO `authorization`

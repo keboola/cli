@@ -1019,6 +1019,123 @@ def storage_delete_table(
         raise typer.Exit(code=1)
 
 
+@storage_app.command("truncate-table", rich_help_panel=_TABLES)
+def storage_truncate_table(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    table_id: list[str] = typer.Option(
+        ...,
+        "--table-id",
+        help="Table ID to truncate (e.g. 'in.c-bucket.table'). Can be repeated.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be truncated without executing",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompt",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
+) -> None:
+    """Truncate (delete all rows from) one or more storage tables.
+
+    Preserves the table definition: columns, types, primary key,
+    descriptions, sharing edges, and dependents are unaffected -- only
+    rows are removed. Idempotent (truncating an empty table is a no-op).
+
+    The Storage API truncate endpoint is asynchronous: it returns a
+    queued storage job which the client polls to completion before
+    surfacing the result. Both production and dev branches behave the
+    same way; the only difference is wall-clock latency (sub-second
+    on production, longer on busy dev branches).
+
+    Use this when re-seeding a table without losing the schema contract.
+    To destroy the table itself, use ``storage delete-table``.
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "storage.truncate-table",
+            project=project,
+            table_id=table_id,
+            dry_run=dry_run,
+            branch=branch,
+        )
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    if dry_run:
+        try:
+            result = service.truncate_tables(
+                alias=project,
+                table_ids=table_id,
+                dry_run=True,
+                branch_id=effective_branch,
+            )
+        except ConfigError as exc:
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+            raise typer.Exit(code=5) from None
+
+        if formatter.json_mode:
+            formatter.output(result)
+        else:
+            for entry in result.get("would_truncate", []):
+                formatter.console.print(
+                    f"[bold blue]Would truncate:[/bold blue] {entry['table_id']} "
+                    f"(rows_before={entry['rows_before']})"
+                )
+        return
+
+    confirm_msg = (
+        f"Truncate {len(table_id)} table(s) in project '{project}'? "
+        "All rows will be deleted; schema and dependents are preserved."
+    )
+    if not yes and not formatter.json_mode and not typer.confirm(confirm_msg):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+
+    try:
+        result = service.truncate_tables(
+            alias=project,
+            table_ids=table_id,
+            branch_id=effective_branch,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        for entry in result["truncated"]:
+            formatter.console.print(
+                f"[bold green]Truncated:[/bold green] {entry['table_id']} "
+                f"({entry['rows_before']} -> 0 rows)"
+            )
+        for f_item in result["failed"]:
+            formatter.console.print(
+                f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
+            )
+
+    if result["failed"]:
+        raise typer.Exit(code=1)
+
+
 @storage_app.command("delete-column", rich_help_panel=_TABLES)
 def storage_delete_column(
     ctx: typer.Context,

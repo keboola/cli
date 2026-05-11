@@ -78,6 +78,7 @@ a critical failure.
    `config row-delete`, `config oauth-url` need 0.30.0+,
    `project edit --new-alias` (cascading rename across config.json +
    nested sync dir; warns on lineage cache rebuild) needs 0.31.0+,
+   `storage truncate-table` needs 0.32.0+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
@@ -112,6 +113,7 @@ a critical failure.
 | Retype table columns | fetch types via `workspace query`, draft types YAML, write new transformation that produces typed output table, then `kbagent storage swap-tables` (0.28.0+) to flip the typed copy into the original name in a dev branch | `kbagent --hint client create_table_definition` if the future `storage retype` composite (§14.3) is not yet present | `POST /v2/storage/buckets/.../tables-definition` (REST) followed by manual config rewrites |
 | Create typed table with native types | `kbagent storage create-table --column pk:VARCHAR(40) --column amount:NUMBER(18,2) --not-null pk --default amount=0` (0.25.0+) | `tool call create_table` (accepts the same `definition.length` shape via MCP) | re-creating via raw REST to `/v2/storage/...tables-definition` |
 | Promote typed rebuild back into the original name | `kbagent storage swap-tables --project P --table-id in.c-foo.data --target-table-id in.c-foo.data_change_log --branch <ID> --yes` (0.28.0+) -- async storage job (`tableSwap`); client polls to completion before returning. Service refuses without a branch | -- | renaming or deleting + re-uploading (loses history; downstream configs need to be rewritten) |
+| Re-seed a table without losing its schema / PK / dependents | `kbagent storage truncate-table --project P --table-id in.c-foo.data [--branch ID] [--dry-run] [--yes]` (0.32.0+) -- DELETE `/tables/{id}/rows?allowTruncate=1`; endpoint is uniformly async on every branch (returns a queued `tableRowsDelete` job; client polls via `_wait_for_storage_job`). Do NOT pass `async=true` -- the API rejects it. Batch via repeated `--table-id`. Returns `{truncated[], failed[], dry_run, project_alias}` with `truncated[]` entries carrying `{table_id, rows_before, rows_after, branch_id}`. Permission class: `destructive` | `tool call delete_table_rows` if the upstream MCP exposes it | drop + recreate the table (loses descriptions, PK, sharing edges, and breaks every downstream config reference); deleting rows via raw SQL in a workspace (bypasses the Storage API audit trail) |
 | Debug a failed job | `kbagent job detail --project P --job-id J --json` + `kbagent job run ... --log-tail-lines 200` | `kbagent workspace from-transformation` for SQL repro | "I think the issue is..." without reading logs |
 | Ad-hoc SQL / row-count / type audit | `kbagent workspace create` + `kbagent workspace load` + `kbagent workspace query --sql "..."` | `kbagent workspace from-transformation` for existing transform debugging | querying Keboola Storage directly via Snowflake credentials outside the workspace abstraction |
 | Inspect dev branch | `kbagent branch list --project P`, `kbagent branch use --project P --branch ID` | `tool call get_branch` | acting on `main` when a dev branch exists |
@@ -231,6 +233,24 @@ success, not a failure.
   informational, not an error -- surface it to the user in a write
   verification payload but do not treat it as a failure signal.
   Production writes never materialize anything.
+
+- **`storage truncate-table` is row-only; schema and dependents are
+  preserved** (0.32.0+): the underlying call is
+  `DELETE /v2/storage/[branch/{id}/]tables/{id}/rows?allowTruncate=1`.
+  The endpoint is **uniformly async** on every branch -- it returns
+  HTTP 202 with a queued storage job (`operationName: tableRowsDelete`)
+  that the client polls to completion via `_wait_for_storage_job`,
+  same machinery as `delete_table`. Production branches finish the
+  job in under a second; dev branches may take longer. **Do not pass
+  `async=true`** -- the Storage API rejects it with HTTP 400
+  ("async: This field was not expected.") for this endpoint, even
+  though sibling destructive endpoints (`delete_table`, `delete_bucket`)
+  require it. Aliases, sharing edges, primary keys, descriptions, and
+  downstream config references all survive -- only the rows are
+  removed. The Storage API requires the `allowTruncate=1` opt-in
+  whenever no row filter is sent; kbagent always passes it. Prefer
+  this over `delete-table` for any "re-seed" pattern; reach for
+  `delete-table` only when the table itself is being retired.
 
 - **`project invite` "already invited / already member" is a no-op, not a failure** (0.29.0+):
   Re-inviting a user the project already knows returns HTTP 400 from the
