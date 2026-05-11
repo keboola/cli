@@ -67,7 +67,7 @@ a critical failure.
    need 0.27.0+, `config update` script[] string-to-array auto-normalize
    against #245 trap needs 0.28.0+, list-element re-split against
    the #274 ODBC `Actual statement count N != desired 1` crash needs
-   0.30.8+, `storage swap-tables` needs 0.28.0+,
+   0.31.0+, `storage swap-tables` needs 0.28.0+,
    env-var manage-token auth for `org setup` / `project refresh` /
    `data-app password` needs 0.29.0+ with `--allow-env-manage-token`
    (the env var is default-deny on 0.29.0+),
@@ -77,7 +77,7 @@ a critical failure.
    `search`, `project info`, `config row-create`, `config row-update`,
    `config row-delete`, `config oauth-url` need 0.30.0+,
    `project edit --new-alias` (cascading rename across config.json +
-   nested sync dir; warns on lineage cache rebuild) needs 0.30.7+,
+   nested sync dir; warns on lineage cache rebuild) needs 0.31.0+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
@@ -101,7 +101,7 @@ a critical failure.
 | Update flow (rename, description, phases) | `kbagent flow update` (partial, no `--file`) | `--file` after fetching current phases, merging locally, passing full YAML | `tool call update_flow` (strips `behavior.onError` pre-MCP v1.60); partial `--file` that drops fields |
 | Schedule flow | `kbagent flow schedule --cron ... [--timezone]` | `tool call create_flow_schedule` | raw REST to `/storage/configurations/keboola.scheduler` |
 | Create Snowflake transformation | `kbagent config new --component-id keboola.snowflake-transformation` + `config update --set ...` | `tool call create_sql_transformation` (lower schema, avoids the component refusal) | `tool call create_config` (refuses keboola.snowflake-transformation) |
-| Update SQL transformation body (script[]) | `kbagent config update --project P --component-id keboola.snowflake-transformation --config-id K --configuration @body.json` (0.28.0+ auto-normalizes string `script` to array; SQL gets statement-level split, Python/R gets `[script]` wrap; envelope's `normalizations: [...]` records every change. 0.30.8+ also re-splits multi-statement LIST elements -- closes the #274 ODBC `statement count 2 vs desired 1` crash that survives the 0.28.0 string fix) | `kbagent --hint client config update ...` if you need to bypass the auto-normalize for some reason | `tool call update_sql_transformation` -- still vulnerable to BOTH the #245 string-vs-array AND #274 list-element runtime crashes because it pushes raw to Storage API; raw `PUT /v2/storage/components/.../configs/...` -- same trap |
+| Update SQL transformation body (script[]) | `kbagent config update --project P --component-id keboola.snowflake-transformation --config-id K --configuration @body.json` (0.28.0+ auto-normalizes string `script` to array; SQL gets statement-level split, Python/R gets `[script]` wrap; envelope's `normalizations: [...]` records every change. 0.31.0+ also re-splits multi-statement LIST elements -- closes the #274 ODBC `statement count 2 vs desired 1` crash that survives the 0.28.0 string fix) | `kbagent --hint client config update ...` if you need to bypass the auto-normalize for some reason | `tool call update_sql_transformation` -- still vulnerable to BOTH the #245 string-vs-array AND #274 list-element runtime crashes because it pushes raw to Storage API; raw `PUT /v2/storage/components/.../configs/...` -- same trap |
 | Run a job (and wait) | `kbagent job run --project P --component-id C --config-id K --wait` | `tool call run_component` | `job run` without `--wait` when user expects the result |
 | Search items by name across projects | `kbagent search QUERY [--project P] [--type table\|bucket\|config\|flow] [--limit N]` (0.30.0+) | `tool call search_tables` / `tool call search_configurations` (one resource-type per call) | chaining multiple `tool call` for different types |
 | Search config JSON bodies | `kbagent search QUERY --search-type config-based [--project P]` (0.30.0+) | `kbagent config search --query Q` (config-body only, no tables/buckets) | repeated `tool call get_config` to grep locally |
@@ -139,7 +139,7 @@ a critical failure.
 | Confirm one secret is present | `kbagent data-app secrets-get --project P --app-id N --key '#KEY'` (0.29.0+) -- returns metadata only | -- | trying to extract the plaintext value (impossible by design; not a CLI gap) |
 | Remove a secret from a data app | `kbagent data-app secrets-remove --project P --app-id N --key '#KEY' --yes` (0.29.0+) -- idempotent; missing keys exit 0 with `removed: 0` | `tool call update_config` with the secrets sub-dict deleted -- ONLY for batch removes that need a custom change description | `kbagent config update --set 'parameters.dataApp.secrets={}'` -- replaces the whole sub-dict, dropping every secret instead of just the named ones |
 | Pre-flight a data-app repo before create | `kbagent data-app validate-repo --git-repo URL --type python-js [--git-pat-env VAR]` (0.29.0+) -- BLOCKING / WARN / OK with help-doc citations; ≤5 GitHub API calls regardless of repo size | git-clone the repo locally and inspect by hand | `data-app create --dry-run` (only shows the request bodies; does not validate repo structure) |
-| Rename a project alias | `kbagent project edit --project OLD --new-alias NEW [--dry-run]` (0.30.7+) -- cascades through `config.json` (`projects` key + `default_project`) and the nested-sync directory `<cwd>/<old-alias>/`. Combined with `--url`/`--token` in one call, those mutations target the new alias post-rename. `--dry-run` previews collision detection, planned disk-rename method, and the lineage-cache warning without mutating state. **Lineage cache (if any) is NOT auto-updated**: rebuild via `kbagent lineage build` after the rename | `kbagent project remove` + `kbagent project add` (re-enters the token; loses any nested sync workspace) | hand-editing `~/.config/keboola-agent-cli/config.json` (no validation, easy to miss `default_project` cascade) |
+| Rename a project alias | `kbagent project edit --project OLD --new-alias NEW [--dry-run]` (0.31.0+) -- cascades through `config.json` (`projects` key + `default_project`) and the nested-sync directory `<cwd>/<old-alias>/`. Combined with `--url`/`--token` in one call, those mutations target the new alias post-rename. `--dry-run` previews collision detection, planned disk-rename method, and the lineage-cache warning without mutating state. **Lineage cache (if any) is NOT auto-updated**: rebuild via `kbagent lineage build` after the rename | `kbagent project remove` + `kbagent project add` (re-enters the token; loses any nested sync workspace) | hand-editing `~/.config/keboola-agent-cli/config.json` (no validation, easy to miss `default_project` cascade) |
 
 If the table does not cover the user's task, **ask clarifying
 questions** instead of guessing. Returning a targeted question is a
@@ -180,7 +180,7 @@ success, not a failure.
   updates, prefer `kbagent config update` over MCP/REST.
 
 - **`script[]` list-element-with-multiple-statements ODBC crash**
-  (0.30.8+ auto-fix; #274): the 0.28.0 fix above closes the
+  (0.31.0+ auto-fix; #274): the 0.28.0 fix above closes the
   string-vs-array gap but NOT the case where `script` is already a
   list and one element packs multiple `;`-separated statements --
   e.g. `script: ["CREATE TABLE x ...; alter session unset
@@ -188,7 +188,7 @@ success, not a failure.
   strings), the runtime rejects it at ODBC with `Actual statement
   count 2 did not match the desired statement count 1, SQL state
   0A000`. Reported in #274 from a Slovak->Czech config migration.
-  Since 0.30.8, every SQL-transformation list element is re-run
+  Since 0.31.0, every SQL-transformation list element is re-run
   through `split_statements()` and replaced inline when it yields
   more than one statement -- emitted as a separate `sql_resplit`
   entry in `normalizations` with `path: parameters.blocks[B].codes[C].script[E]`

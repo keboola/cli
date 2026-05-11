@@ -1,6 +1,6 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
-## `project edit --new-alias` does NOT rewrite lineage caches (since v0.30.7)
+## `project edit --new-alias` does NOT rewrite lineage caches (since v0.31.0)
 
 - `kbagent project edit --project OLD --new-alias NEW` cascades the rename
   through `config.json` (`projects` dict key + `default_project` field if it
@@ -777,7 +777,7 @@ CREATE TABLE foo AS
 
 See `scaffold-workflow.md` for the complete file structure reference.
 
-## `config update` auto-normalizes `script[]` (since v0.28.0, expanded v0.30.8)
+## `config update` auto-normalizes `script[]` (since v0.28.0, expanded v0.31.0)
 
 The Storage API silently accepts shapes for `parameters.blocks[].codes[].script`
 that crash at job runtime. Two distinct traps, each with the same observable
@@ -795,7 +795,7 @@ Expected "array", but got "string"
 Reported in #245 after a programmatic refactor of 3 production Snowflake
 transformations.
 
-**Trap 2 -- list element packs multiple statements (since v0.30.8; #274)**.
+**Trap 2 -- list element packs multiple statements (since v0.31.0; #274)**.
 The runtime requires exactly one statement per `script[i]` element. A
 list like `["CREATE TABLE x AS ...; alter session unset week_start;"]`
 (1 element, 2 statements) passes the array-shape validator but crashes
@@ -824,7 +824,7 @@ Storage API touch:
   already powers `kbagent sync push`. The splitter respects `'...'` /
   `"..."` / `$$...$$` / `--` / `#` / `//` / `/* ... */`, so semicolons
   inside string literals and block comments do NOT cause splits. Since
-  v0.30.8, every **list element** is also passed through the same
+  v0.31.0, every **list element** is also passed through the same
   splitter -- multi-statement entries are replaced inline so the
   list-of-1-with-2-statements ODBC trap (#274) cannot survive the write.
 - **Python / R / `kds-team.app-custom-python`** and any other component
@@ -843,7 +843,7 @@ Observability: every normalization is surfaced.
     "action": "sql_split" | "wrap_array", "before_type": "str",
     "after_type": "list", "after_length": 3}` -- path points at the
     whole `script` field.
-  - **List element re-split** (#274; since v0.30.8):
+  - **List element re-split** (#274; since v0.31.0):
     `{"path": "parameters.blocks[0].codes[0].script[2]", "action":
     "sql_resplit", "before_type": "str", "after_type": "list",
     "before_length": 1, "after_length": 2}` -- path points at the
