@@ -66,8 +66,11 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent project remove --project NAME
     Remove a project connection.
 
-  kbagent project edit --project NAME [--url URL] [--token TOKEN]
-    Edit project connection. Re-verifies token if changed.
+  kbagent project edit --project NAME [--url URL] [--token TOKEN] [--new-alias NEW]
+    Edit project connection. Re-verifies token if changed. --new-alias renames
+    the alias and cascades the rename through config.json and the nested sync
+    directory at <cwd>/<old-alias>/. Lineage cache embeds the alias in FQNs
+    and is NOT auto-updated; rebuild via `kbagent lineage build` after rename.
 
   kbagent project status [--project NAME]
     Test connectivity. Shows OK/ERROR with response time.

@@ -74,6 +74,8 @@ a critical failure.
    `data-app secrets-* / validate-repo` need 0.29.0+,
    `search`, `project info`, `config row-create`, `config row-update`,
    `config row-delete`, `config oauth-url` need 0.30.0+,
+   `project edit --new-alias` (cascading rename across config.json +
+   nested sync dir; warns on lineage cache rebuild) needs 0.30.7+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
@@ -135,6 +137,7 @@ a critical failure.
 | Confirm one secret is present | `kbagent data-app secrets-get --project P --app-id N --key '#KEY'` (0.29.0+) -- returns metadata only | -- | trying to extract the plaintext value (impossible by design; not a CLI gap) |
 | Remove a secret from a data app | `kbagent data-app secrets-remove --project P --app-id N --key '#KEY' --yes` (0.29.0+) -- idempotent; missing keys exit 0 with `removed: 0` | `tool call update_config` with the secrets sub-dict deleted -- ONLY for batch removes that need a custom change description | `kbagent config update --set 'parameters.dataApp.secrets={}'` -- replaces the whole sub-dict, dropping every secret instead of just the named ones |
 | Pre-flight a data-app repo before create | `kbagent data-app validate-repo --git-repo URL --type python-js [--git-pat-env VAR]` (0.29.0+) -- BLOCKING / WARN / OK with help-doc citations; ≤5 GitHub API calls regardless of repo size | git-clone the repo locally and inspect by hand | `data-app create --dry-run` (only shows the request bodies; does not validate repo structure) |
+| Rename a project alias | `kbagent project edit --project OLD --new-alias NEW [--dry-run]` (0.30.7+) -- cascades through `config.json` (`projects` key + `default_project`) and the nested-sync directory `<cwd>/<old-alias>/`. Combined with `--url`/`--token` in one call, those mutations target the new alias post-rename. `--dry-run` previews collision detection, planned disk-rename method, and the lineage-cache warning without mutating state. **Lineage cache (if any) is NOT auto-updated**: rebuild via `kbagent lineage build` after the rename | `kbagent project remove` + `kbagent project add` (re-enters the token; loses any nested sync workspace) | hand-editing `~/.config/keboola-agent-cli/config.json` (no validation, easy to miss `default_project` cascade) |
 
 If the table does not cover the user's task, **ask clarifying
 questions** instead of guessing. Returning a targeted question is a

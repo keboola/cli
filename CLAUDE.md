@@ -256,7 +256,7 @@ plugins/kbagent/
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list
 kbagent project remove --project NAME
-kbagent project edit --project NAME [--url URL] [--token TOKEN]
+kbagent project edit --project NAME [--url URL] [--token TOKEN] [--new-alias NEW]
 kbagent project status [--project NAME]
 kbagent project refresh --project ALIAS [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
 kbagent project refresh --all [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]

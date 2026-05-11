@@ -14,7 +14,7 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `project add --project NAME --url URL --token TOKEN` -- connect a project (token verified via API)
 - `project list` -- list all connected projects (tokens masked)
 - `project remove --project NAME` -- disconnect a project
-- `project edit --project NAME [--url URL] [--token TOKEN]` -- update connection details
+- `project edit --project NAME [--url URL] [--token TOKEN] [--new-alias NEW] [--dry-run]` -- update connection details and/or rename the alias. `--new-alias` cascades through config.json (`projects` key + `default_project` if matched) and the nested sync directory `<cwd>/<old-alias>/` when present (-2 collision suffix, git-mv with shutil fallback). Lineage cache rebuild is manual (see gotchas, since v0.30.7). Combined with `--url` / `--token` in one call, those mutations target the new alias post-rename. `--dry-run` previews everything (collision check, planned disk-rename method, lineage-cache warning) without mutating state -- same exit codes as live for validation errors
 - `project status [--project NAME]` -- test connectivity and response time
 - `project description-get --project NAME` -- read the dashboard project description (KBC.projectDescription on the default branch). Returns `{"description": ""}` if not set, not an error
 - `project description-set --project NAME [--text STR | --file PATH | --stdin]` -- set the dashboard project description (markdown). Pass exactly one of `--text`, `--file`, or `--stdin`. Writes to `KBC.projectDescription` on the default branch -- always the main branch, regardless of any active dev branch
