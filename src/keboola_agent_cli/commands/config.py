@@ -1330,8 +1330,15 @@ def config_new(
 
         # When --push is set AND --output-dir is given, ALSO write the scaffold
         # to disk in addition to the POST (the "scaffold + push" combo).
+        # ``silent=True``: the push-result envelope below is the authoritative
+        # output for this path. In JSON mode emitting the scaffold envelope
+        # too would produce two concatenated JSON documents on stdout (breaks
+        # ``jq``); in human mode the dim banner adds noise above the "Created
+        # config ..." line that already lists the same path.
         if output_dir and scaffold is not None:
-            _write_scaffold_to_disk(formatter, scaffold, output_dir, json_mode=formatter.json_mode)
+            _write_scaffold_to_disk(
+                formatter, scaffold, output_dir, json_mode=formatter.json_mode, silent=True
+            )
 
         if formatter.json_mode:
             formatter.output(push_result)
@@ -1375,14 +1382,22 @@ def _write_scaffold_to_disk(
     scaffold: dict[str, Any],
     output_dir: str,
     json_mode: bool,
+    silent: bool = False,
 ) -> None:
     """Shared helper: write the generated scaffold files under ``output_dir``.
 
     Detects an enclosing ``main/`` branch prefix the same way the pre-push
     path does, so the layout matches what ``kbagent sync push`` would expect.
-    Emits a success line (or a JSON envelope) when invoked from scaffold-only
-    mode; in scaffold+push mode the caller suppresses that human banner so the
-    final "Created config ..." line dominates the output.
+
+    Output rules:
+    - ``silent=True``: write files only; emit no banner and no JSON envelope.
+      Used by the ``--push --output-dir`` path, where the push-result envelope
+      (single JSON in JSON mode; the "Created config ..." line in human mode)
+      is the authoritative output and the scaffold-banner side-channel would
+      either duplicate JSON (breaking ``jq`` pipes) or distract in human mode.
+    - ``silent=False`` (default; scaffold-only mode): emit a JSON envelope
+      ``{directory, files_written}`` when ``json_mode`` is set, otherwise a
+      dim-formatted "Scaffold written to ..." banner.
     """
     branch_prefix = _detect_branch_prefix(Path(output_dir))
     if branch_prefix:
@@ -1397,6 +1412,9 @@ def _write_scaffold_to_disk(
         file_path = base_path / file_entry["path"]
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(file_entry["content"], encoding="utf-8")
+
+    if silent:
+        return
 
     if json_mode:
         formatter.output(
