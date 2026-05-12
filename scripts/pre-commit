@@ -23,6 +23,18 @@ if [ -n "$STAGED" ]; then
         echo "Format check failed. Run 'make format' to fix, then re-stage."
         exit 1
     fi
+
+    # Type check (ty -- warnings only, does NOT block commits while migrating)
+    # Switch this to a hard `exit 1` once the codebase is clean.
+    if command -v uv >/dev/null 2>&1; then
+        TY_OUTPUT="$(uv run --quiet ty check $STAGED 2>&1 || true)"
+        if echo "$TY_OUTPUT" | grep -qiE "^(error|warning)"; then
+            echo ""
+            echo "pre-commit: ty type-check reported issues (warnings, not blocking):"
+            echo "$TY_OUTPUT" | tail -20
+            echo "Run 'make typecheck' for full output."
+        fi
+    fi
 fi
 
 # Auto-regenerate SKILL.md if CLI commands changed

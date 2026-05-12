@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-mcp sync test test-unit test-integration test-e2e test-e2e-invite test-file lint lint-fix format format-check skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes check clean hooks
+.PHONY: help install install-mcp sync test test-unit test-integration test-e2e test-e2e-invite test-file lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes check clean hooks
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -43,6 +43,12 @@ format: ## Format code with ruff
 
 format-check: ## Check code formatting (no changes)
 	uv run ruff format . --check
+
+typecheck: ## Run ty type-checker (Astral). Fails on any error.
+	uv run ty check
+
+typecheck-warn: ## Run ty in warning-only mode (always exits 0; used by hooks)
+	@uv run ty check || true
 
 skill-gen: ## Regenerate SKILL.md from CLI command tree
 	uv run python scripts/generate_skill.py

@@ -112,6 +112,146 @@ time.sleep(POLL_INTERVAL)
 if retries > MAX_RETRIES:
 ```
 
+## Code Quality Patterns
+
+These are the *signal* patterns that distinguish hand-written quality code
+from LLM-generated boilerplate. Every PR -- human or AI -- must adhere.
+The `/kbagent:review` agent checks for these; the post-edit hooks in
+`.claude/settings.json` run `ruff` + `ty` after every file write so drift is
+caught immediately.
+
+### Return values -- name them with dataclasses, not tuples
+
+**Single value**: name the function after what it returns (`get_user_id`, `count_active_jobs`).
+
+**Multiple values**: return a `@dataclass` (or `NamedTuple`/`BaseModel`) -- never a bare tuple beyond two values, and even two-element tuples should use a dataclass when the values are semantically distinct. Docstrings rot; dataclass field names do not.
+
+```python
+# BAD -- caller has to remember positional meaning
+def resolve_project(alias: str | None) -> tuple[str, ProjectConfig]:
+    ...
+
+resolved_alias, project = resolve_project(alias)  # which is which?
+
+# GOOD -- self-documenting at every call site
+@dataclass(frozen=True)
+class ResolvedProject:
+    alias: str
+    config: ProjectConfig
+
+def resolve_project(alias: str | None) -> ResolvedProject:
+    ...
+
+resolved = resolve_project(alias)
+resolved.alias, resolved.config  # unambiguous
+```
+
+Migration note: existing `tuple[...]` returns in services are grandfathered, but **do not add new ones**. When you touch one for an unrelated reason and the surface is small, convert it.
+
+### Argument order -- stable first, variable last
+
+Put **categorical / constant** arguments (error code, type, mode flag) BEFORE **dynamic / contextual** arguments (message text, payload). This matches the convention LLMs are trained on (most Python stdlib follows it: `logging.log(level, msg)`, `raise SomeError(code, message)`), so models will get the call sites right by default.
+
+```python
+# BAD -- LLMs will guess the order wrong
+formatter.error(message="Bucket not found", error_code=ErrorCode.NOT_FOUND)
+
+# GOOD -- category first, then the variable part
+formatter.error(error_code=ErrorCode.NOT_FOUND, message="Bucket not found")
+
+def log_failure(error_code: ErrorCode, message: str) -> None: ...
+def raise_api_error(error_code: ErrorCode, *, message: str, status: int) -> None: ...
+```
+
+Required positional ordering ONLY when callers will pass positionally; otherwise keyword-only via `*,` and the order is moot at call sites but still matters in the signature for readability.
+
+### Error codes -- enum only, never raw strings
+
+All error codes go through `ErrorCode` (`src/keboola_agent_cli/errors.py`). Raw string literals like `"bucket_not_found"` or `"invalid_token"` are forbidden in `raise`, `formatter.error(error_code=...)`, and anywhere they cross a layer boundary. `make check-error-codes` rejects raw `error_code="..."` literals at CI time.
+
+```python
+# BAD
+raise KeboolaApiError(message="...", error_code="not_found")
+
+# GOOD
+from .errors import ErrorCode
+raise KeboolaApiError(error_code=ErrorCode.NOT_FOUND, message="...")
+```
+
+If a new category appears, **add it to `ErrorCode`** and `_ERROR_CODE_TO_TYPE` in the same PR. Do not introduce ad-hoc strings.
+
+### File-size budgets -- split when concerns drift
+
+Hard ceiling per file:
+
+| Layer | Soft ceiling | Hard ceiling |
+|-------|--------------|--------------|
+| `commands/*.py` | 800 LOC | 1200 LOC |
+| `services/*.py` | 1000 LOC | 1500 LOC |
+| `client.py` / `manage_client.py` | 1500 LOC | 2000 LOC |
+
+When a file crosses the **soft** ceiling, the next PR that adds material to it should split first. When a file crosses the **hard** ceiling, splitting is required before merging more functionality into it.
+
+How to split:
+- `client.py` mixing multiple Keboola subsystems (Storage, Queue, Sandboxes, Manage proxy, AI, encryption, ...) → split by **endpoint family**, e.g. `client/storage.py`, `client/queue.py`, `client/sandboxes.py`. Keep `BaseHttpClient` shared.
+- A service crossing the ceiling almost always mixes orchestration with parsing/transformation → extract pure helpers into a sibling `_helpers.py` or `_transformers.py`.
+
+This is a guideline driven by review feedback (kbagent 0.31.0: `client.py` ≈3000 LOC, `storage_service.py` ≈2180 LOC, `sync_service.py` ≈2765 LOC); the soft ceilings exist so the situation does not get worse before it gets better.
+
+### Resource management -- `with` over lambdas
+
+LLM-generated code routinely wraps `open()`/`httpx.Client()`/temp-file/lock creation in a lambda or a "create-and-forget" call, leaking file descriptors or connections. **Use a context manager every time the resource has `__enter__`/`__exit__`.**
+
+```python
+# BAD -- descriptor leaks if anything raises
+opener = lambda: open(path, "r")  # noqa: avoid-lambda-as-resource
+content = opener().read()
+
+# BAD -- httpx client not closed on exception
+client = httpx.Client()
+response = client.get(url)
+
+# GOOD
+with open(path) as f:
+    content = f.read()
+
+with httpx.Client() as client:
+    response = client.get(url)
+```
+
+### Named functions over throwaway lambdas
+
+Single-expression `sort` keys and `filter` predicates are fine as lambdas. Anything else -- assigned to a variable, used multiple times, doing branching, or carrying domain meaning -- gets a named `def`. Names are the cheapest documentation in the codebase.
+
+```python
+# BAD
+parse_row = lambda r: {"id": r[0], "name": r[1], "active": r[2] == "Y"}
+rows = [parse_row(r) for r in raw]
+
+# GOOD
+def _parse_storage_row(raw: tuple[str, str, str]) -> dict[str, Any]:
+    return {"id": raw[0], "name": raw[1], "active": raw[2] == "Y"}
+
+rows = [_parse_storage_row(r) for r in raw]
+
+# FINE -- single expression, throwaway, no domain meaning
+items.sort(key=lambda x: x.priority)
+```
+
+### Type checking -- `ty` is mandatory (warnings) for new code
+
+We use Astral's [`ty`](https://github.com/astral-sh/ty) (same vendor as `uv` and `ruff`). It is fast (Rust), installs in <1s, and runs on every edit via the post-edit hook in `.claude/settings.json`. It also runs in the pre-commit hook in warning mode (does not block commits) and is exposed via `make typecheck`.
+
+Rules:
+- **New code** -- must pass `make typecheck` clean. Adding any `# type: ignore` requires a one-line comment explaining why.
+- **Existing code** -- grandfathered; do not regress existing warnings, but cleanups outside the PR's scope are not required.
+- Type-hint every function signature (already a rule in "Python conventions" above); `ty` enforces that the hints are *correct*, not just present.
+
+```bash
+make typecheck         # full check, exit code reflects pass/fail
+make typecheck-warn    # same, but always exit 0 (used by hooks)
+```
+
 ## Keboola API Best Practices
 
 ### Reference implementation
@@ -239,6 +379,10 @@ before the PR is mergeable.
 - [ ] **CLI-layer tests** -- use `CliRunner`, test JSON output, error exit codes
 - [ ] **E2E tests** -- add a test in `tests/test_e2e.py` that exercises the command against a real Keboola project (requires `E2E_API_TOKEN` + `E2E_URL`). Run `make test-e2e` to verify. Every CLI command must have E2E coverage
 - [ ] **Run `make check`** before committing (lint + format + full test suite)
+- [ ] **Run `make typecheck`** -- `ty` must pass for any new code (existing warnings grandfathered)
+- [ ] **No new `tuple[...]` returns** -- multi-value returns use a `@dataclass` ([Code Quality Patterns](#code-quality-patterns))
+- [ ] **No raw error-code strings** -- `make check-error-codes` enforces `ErrorCode` enum usage
+- [ ] **File-size budgets respected** -- see the table in [Code Quality Patterns](#code-quality-patterns); split before crossing the hard ceiling
 
 ### UX considerations
 
