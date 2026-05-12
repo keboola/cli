@@ -79,6 +79,9 @@ a critical failure.
    `project edit --new-alias` (cascading rename across config.json +
    nested sync dir; warns on lineage cache rebuild) needs 0.31.0+,
    `storage truncate-table` needs 0.32.0+,
+   `data-app *` JSON output uses key `app_id` (was bare `id`) on 0.33.0+
+   -- pipe with `jq -r '.apps[].app_id'`, not `'.id'`,
+   `config new --push` (one-shot remote create) needs 0.33.0+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.

@@ -50,7 +50,7 @@ def _print_data_app_table(formatter, result: dict) -> None:
         return
     for app in apps:
         formatter.console.print(
-            f"  [bold]{app['id']}[/bold] "
+            f"  [bold]{app['app_id']}[/bold] "
             f"[cyan]{app.get('name', '')}[/cyan] "
             f"({app.get('type', '?')}) "
             f"state=[yellow]{app.get('state', '?')}[/yellow] "
@@ -167,7 +167,7 @@ def data_app_detail(
     formatter.output(
         result,
         lambda c, d: (
-            c.print(f"\n[bold]Data app:[/bold] {d.get('name', '')} ({d['id']})"),
+            c.print(f"\n[bold]Data app:[/bold] {d.get('name', '')} ({d['app_id']})"),
             c.print(f"  [bold]Project:[/bold] {d['project_alias']}"),
             c.print(f"  [bold]Slug:[/bold] {d.get('slug', '')}"),
             c.print(f"  [bold]Type:[/bold] {d.get('type', '')}"),
@@ -405,7 +405,7 @@ def data_app_create(
             formatter.console.print(
                 f"[bold green]Success:[/bold green] {result.get('message', '')}"
             )
-            formatter.console.print(f"  [bold]App ID:[/bold] {result['id']}")
+            formatter.console.print(f"  [bold]App ID:[/bold] {result['app_id']}")
             formatter.console.print(f"  [bold]Config ID:[/bold] {result['config_id']}")
             if result.get("url"):
                 formatter.console.print(f"  [bold]URL:[/bold] {result['url']}")
@@ -926,7 +926,7 @@ def data_app_secrets_list(
         return
     formatter.console.print(
         f"\n[bold]{result['count']} secret(s)[/bold] on data app "
-        f"[cyan]{result['id']}[/cyan] in [magenta]{result['project_alias']}[/magenta]:"
+        f"[cyan]{result['app_id']}[/cyan] in [magenta]{result['project_alias']}[/magenta]:"
     )
     for entry in result["secrets"]:
         marker = (

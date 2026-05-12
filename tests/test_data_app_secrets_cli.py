@@ -135,7 +135,7 @@ class TestSecretsSetCli:
         mock = MagicMock()
         mock.set_data_app_secrets.return_value = {
             "project_alias": "prod",
-            "id": "12345",
+            "app_id": "12345",
             "config_id": "01ABC",
             "secrets_set": ["API_KEY"],
             "secrets_unchanged": [],
@@ -208,7 +208,7 @@ class TestSecretsListCli:
         mock = MagicMock()
         mock.list_data_app_secrets.return_value = {
             "project_alias": "prod",
-            "id": "12345",
+            "app_id": "12345",
             "config_id": "01ABC",
             "secrets": [],
             "count": 0,
@@ -246,7 +246,7 @@ class TestSecretsGetCli:
         # Service returns metadata only -- the public contract.
         mock.get_data_app_secret.return_value = {
             "project_alias": "prod",
-            "id": "12345",
+            "app_id": "12345",
             "config_id": "01ABC",
             "key": "#API_KEY",
             "env_var": "API_KEY",
@@ -298,7 +298,7 @@ class TestSecretsGetCli:
         # appear in result.output -- the assertion is a regression guard.
         mock.get_data_app_secret.return_value = {
             "project_alias": "prod",
-            "id": "12345",
+            "app_id": "12345",
             "config_id": "01ABC",
             "key": "#API_KEY",
             "env_var": "API_KEY",
@@ -376,7 +376,7 @@ class TestSecretsRemoveCli:
         mock = MagicMock()
         mock.remove_data_app_secrets.return_value = {
             "project_alias": "prod",
-            "id": "12345",
+            "app_id": "12345",
             "config_id": "01ABC",
             "removed": [],
             "not_found": ["MISSING"],
