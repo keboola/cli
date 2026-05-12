@@ -792,6 +792,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent context
     Show this reference text.
 
+  kbagent serve [--host HOST] [--port PORT] [--reload] [--config-dir DIR]
+    Launch the FastAPI HTTP server that backs the web UI (web/backend +
+    web/frontend). Prints a bearer token on startup. Requires the optional
+    'server' extra: `uv pip install -e ".[server]"`.
+
   kbagent doctor [--fix]
     Health checks. --fix auto-installs MCP server binary.
 

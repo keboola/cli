@@ -181,6 +181,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "changelog": "read",
     "context": "read",
     "repl": "read",
+    "serve": "admin",
     # Permissions (always allowed -- listed for completeness)
     "permissions.list": "read",
     "permissions.show": "read",

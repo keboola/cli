@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  body {
+    background: radial-gradient(at 0% 0%, #0a0a14 0%, #050508 100%);
+  }
+}
+
+@layer components {
+  .nerd-card {
+    @apply rounded-md border border-zinc-800 bg-zinc-900/40 backdrop-blur p-4;
+  }
+  .nerd-btn {
+    @apply px-3 py-1.5 rounded border border-zinc-700 hover:border-keboola hover:text-keboola transition-colors text-sm;
+  }
+  .nerd-input {
+    @apply px-3 py-1.5 rounded border border-zinc-800 bg-zinc-950 text-sm focus:outline-none focus:border-keboola;
+  }
+  .nerd-code {
+    @apply font-mono text-xs text-zinc-300 bg-zinc-950 border border-zinc-800 rounded p-3 overflow-auto;
+  }
+  .nerd-pill {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border border-zinc-700 text-zinc-400;
+  }
+  .nerd-pill-green {
+    @apply nerd-pill border-keboola/40 text-keboola;
+  }
+  .nerd-pill-amber {
+    @apply nerd-pill border-neon-amber/40 text-neon-amber;
+  }
+  .nerd-pill-red {
+    @apply nerd-pill border-red-700/40 text-red-400;
+  }
+}

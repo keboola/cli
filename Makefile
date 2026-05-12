@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-mcp sync test test-unit test-integration test-e2e test-e2e-invite test-file lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes check clean hooks
+.PHONY: help install install-mcp install-server sync test test-unit test-integration test-e2e test-e2e-invite test-file lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -10,6 +10,9 @@ install: ## Install in development mode (editable)
 
 install-mcp: ## Install Keboola MCP server (required for 'tool' commands)
 	uv pip install keboola-mcp-server
+
+install-server: ## Install FastAPI/uvicorn for `kbagent serve` (web UI backend)
+	uv pip install -e ".[server]"
 
 sync: ## Sync dependencies from lockfile
 	uv sync
@@ -98,3 +101,22 @@ clean: ## Remove build artifacts and caches
 	find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .ruff_cache -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+
+# ── Web UI (web/backend Node BFF + web/frontend React) ─────────────
+
+web-install: ## Install web/backend + web/frontend npm dependencies
+	cd web/backend && npm install
+	cd web/frontend && npm install
+
+web-dev-backend: ## Run the Node BFF in watch mode (needs KBAGENT_SERVE_TOKEN env)
+	cd web/backend && npm run dev
+
+web-dev-frontend: ## Run the Vite dev server (proxies /api -> BFF on :8000)
+	cd web/frontend && npm run dev
+
+web-build: ## Build the React app into web/frontend/dist
+	cd web/frontend && npm run build
+
+web-clean: ## Remove web/* build artifacts and node_modules
+	rm -rf web/frontend/dist web/frontend/node_modules
+	rm -rf web/backend/dist web/backend/node_modules

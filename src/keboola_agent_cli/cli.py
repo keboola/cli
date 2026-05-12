@@ -25,6 +25,7 @@ from .commands.project import project_app
 from .commands.repl import repl_command
 from .commands.schedule import schedule_app
 from .commands.search import search_command
+from .commands.serve import serve_command
 from .commands.sharing import sharing_app
 from .commands.storage import storage_app
 from .commands.sync import sync_app
@@ -77,6 +78,7 @@ app.command("update", rich_help_panel=_SETUP)(update_command)
 app.command("changelog", rich_help_panel=_SETUP)(changelog_command)
 app.command("context", rich_help_panel=_SETUP)(context_command)
 app.command("repl", rich_help_panel=_SETUP)(repl_command)
+app.command("serve", rich_help_panel=_SETUP)(serve_command)
 app.add_typer(permissions_app, name="permissions", rich_help_panel=_SETUP)
 
 # -- Project Management --
@@ -410,7 +412,16 @@ def main(
             pass  # Don't let warning check crash the CLI
 
     # Enforce permissions for top-level commands (sub-app commands use callbacks)
-    _top_level_commands = {"init", "doctor", "version", "update", "changelog", "context", "repl"}
+    _top_level_commands = {
+        "init",
+        "doctor",
+        "version",
+        "update",
+        "changelog",
+        "context",
+        "repl",
+        "serve",
+    }
     _is_help = "--help" in sys.argv or "-h" in sys.argv
 
     # Hint mode on top-level commands — these are all local, no hints available

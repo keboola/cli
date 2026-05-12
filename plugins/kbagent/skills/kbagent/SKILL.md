@@ -85,6 +85,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 |------|---------|
 | Update kbagent + keboola-mcp-server to the latest versions | `kbagent update` |
 | Show recent changelog (what changed in each version) | `kbagent changelog` |
+| Launch the kbagent HTTP API server | `kbagent serve` |
 | Search for items (tables, buckets, configs, flows, …) by name or content | `kbagent search <QUERY>` |
 | List all operations with their risk category and current allowed/denied status | `kbagent permissions list` |
 | Show the current active permission policy | `kbagent permissions show` |

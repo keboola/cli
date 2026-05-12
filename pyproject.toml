@@ -22,6 +22,14 @@ dependencies = [
     "kai-client>=0.11.0",
 ]
 
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sse-starlette>=2.1",
+    "python-multipart>=0.0.9",
+]
+
 [project.scripts]
 kbagent = "keboola_agent_cli.cli:app"
 

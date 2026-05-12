@@ -53,3 +53,13 @@ docs/AGENT-REPORTS/
 Thumbs.db
 .kbagent/
 tmp/
+
+# web/ Node + React build artifacts
+web/backend/node_modules/
+web/backend/dist/
+web/frontend/node_modules/
+web/frontend/dist/
+web/**/.vite/
+web/**/.cache/
+web/**/npm-debug.log*
+web/frontend/tsconfig.tsbuildinfo
