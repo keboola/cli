@@ -173,6 +173,8 @@ All three inherit from `BaseHttpClient` (`http_base.py`) which provides shared r
 
 ## Coding Conventions
 
+> **0. (BINDING) Follow [CONTRIBUTING.md](CONTRIBUTING.md) in full.** Every code change -- human or AI agent -- must satisfy the rules in `CONTRIBUTING.md`. Specifically, the "Code Quality Patterns" section is non-negotiable: dataclasses (not bare tuples) for multi-value returns; categorical arguments before variable ones; `ErrorCode` enum (never raw strings); file-size budgets; context managers over lambdas; named functions over assigned anonymous functions; `ty` clean for new code. The `.claude/settings.json` post-edit hooks run `ruff check --fix`, `ruff format`, and `ty check` after every edit -- when an AI agent edits a file in this repo, those checks fire automatically and any failure must be addressed before continuing. If a rule conflicts with an existing pattern in legacy code, **fix it in the PR you are touching** or open a follow-up issue; do not propagate the pattern.
+
 1. **Typer commands** are thin - they parse arguments, call a service, and format output. No business logic in commands.
 
 2. **Services** receive `ConfigStore` and a `client_factory` callable via dependency injection. This enables easy testing with mocks.
