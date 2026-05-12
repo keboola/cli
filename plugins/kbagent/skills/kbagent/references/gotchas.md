@@ -2,12 +2,12 @@
 
 ## `kbagent config new --push` is one-shot remote create; default is scaffold-only (since v0.33.0)
 
-- **Pre-v0.31.1**, `kbagent config new` was scaffold-only -- it wrote
+- **Pre-v0.33.0**, `kbagent config new` was scaffold-only -- it wrote
   boilerplate files to `--output-dir` (or stdout) and made **zero API calls**.
   The intended flow was scaffold → edit → `kbagent sync push`. The agent docs
   in `keboola-expert.md` and SKILL.md conflated this with "create config"
   intent, which was wrong if the goal was an API mutation.
-- **Since v0.31.1**, `--push` adds a one-shot remote create:
+- **Since v0.33.0**, `--push` adds a one-shot remote create:
   `kbagent config new --component-id C --name N --project P --push` calls
   `POST /v2/storage/components/C/configs` after the scaffold step. Returns
   the new config ID immediately. `--no-files` skips the filesystem step
@@ -49,14 +49,14 @@
 ## `data-app` JSON output: key for the app's own id is `app_id` (since v0.33.0)
 
 - Every `kbagent --json data-app <subcommand>` envelope emits the
-  data-app's own identifier under the key `app_id`. Prior to v0.31.1 the
+  data-app's own identifier under the key `app_id`. Prior to v0.33.0 the
   same key was named bare `id`, which did not match the `--app-id` input
   flag. Affects `data-app list / detail / create / deploy / start / stop /
   delete / password / secrets-set / secrets-list / secrets-get /
   secrets-remove`. The companion `config_id` key is unchanged.
-- Pipe-friendly chain that v0.31.1 enables:
+- Pipe-friendly chain that v0.33.0 enables:
   `kbagent --json data-app list | jq -r '.apps[].app_id' | xargs -I{} kbagent data-app deploy --project P --app-id {}`.
-  On pre-v0.31.1 you had to read `.apps[].id` (mismatched the input flag,
+  On pre-v0.33.0 you had to read `.apps[].id` (mismatched the input flag,
   surprised AI agents that templated `.app_id`).
 - **What is NOT renamed:** the Storage config back-pointer at
   `parameters.id` inside the configuration body sent TO Storage (writeup

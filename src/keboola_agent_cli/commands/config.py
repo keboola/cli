@@ -1331,7 +1331,7 @@ def config_new(
         # When --push is set AND --output-dir is given, ALSO write the scaffold
         # to disk in addition to the POST (the "scaffold + push" combo).
         if output_dir and scaffold is not None:
-            _write_scaffold_to_disk(formatter, scaffold, output_dir, json_mode=False)
+            _write_scaffold_to_disk(formatter, scaffold, output_dir, json_mode=formatter.json_mode)
 
         if formatter.json_mode:
             formatter.output(push_result)

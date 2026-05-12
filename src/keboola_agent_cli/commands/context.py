@@ -189,7 +189,7 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR]
                      [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run]
     Default: generate boilerplate config from component schema (scaffold to --output-dir or stdout).
-    With --push (0.31.1+): also create the config remotely via Storage API in one shot.
+    With --push (0.33.0+): also create the config remotely via Storage API in one shot.
     --push requires --project AND a non-empty --name. --no-files skips the filesystem step
     entirely for FIIA-style one-shot creates. Schema validation runs by default when an explicit
     --configuration body is given (fail-closed; --no-validate opts out). Default body is {{}}

@@ -353,6 +353,10 @@ class TestConfigNewPushHappyPath:
         # The scaffold file should have been written.
         written = scaffold_dir / "extractor/keboola.ex-http/test-config/_config.yml"
         assert written.exists(), f"Scaffold file not written at {written}"
+        # JSON mode must emit a SINGLE valid JSON document on stdout; the
+        # scaffold "Written ..." dim line must not leak above it (B-2 regression
+        # fix: _write_scaffold_to_disk now honors formatter.json_mode).
+        json.loads(result.output)
 
     def test_push_with_configuration_inline(self, tmp_path: Path) -> None:
         svc_config = MagicMock()
