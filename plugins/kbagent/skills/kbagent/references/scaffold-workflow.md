@@ -1,10 +1,22 @@
 # Creating New Configurations (Scaffold Workflow)
 
+> **Two modes, one command (since v0.31.1):**
+> - `kbagent config new --output-dir DIR` (this workflow) -- generate
+>   scaffold files to disk, edit them, then push later with
+>   `kbagent sync push`. The "GitOps for configs" path.
+> - `kbagent config new --push --no-files --project P --name N` -- one-shot
+>   remote create via Storage API, no filesystem step. The FIIA "empty
+>   shell, then patch via `config update --set ...`" path. See
+>   `gotchas.md` "`kbagent config new --push` is one-shot remote create"
+>   for the full side-by-side and the schema-validation behavior.
+
 ## When to use
 
 - User wants to create a new extractor, writer, transformation, or application
 - User asks "how do I set up a new Snowflake extractor" or similar
-- User wants to scaffold config files for a component
+- User wants to scaffold config files for a component (default mode), OR
+  wants a single CLI call that posts to the Storage API and returns the new
+  config ID (use `--push --no-files`)
 
 ## Step-by-step workflow
 
@@ -34,6 +46,14 @@ kbagent --json config new --component-id COMPONENT_ID --project ALIAS --name "Co
 
 # To disk (auto-detects kbc project structure, writes under main/ if applicable)
 kbagent config new --component-id COMPONENT_ID --project ALIAS --name "Config Name" --output-dir .
+
+# One-shot remote create (since 0.31.1) -- no filesystem, just POST + return ID
+kbagent --json config new --component-id COMPONENT_ID --project ALIAS --name "Config Name" \
+  --push --no-files
+
+# Scaffold AND remote create in one step (writes files AND POSTs)
+kbagent config new --component-id COMPONENT_ID --project ALIAS --name "Config Name" \
+  --output-dir . --push
 ```
 
 Generated files by component type:

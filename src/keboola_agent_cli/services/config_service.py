@@ -10,16 +10,27 @@ import logging
 import re
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ..ai_client import AiServiceClient
+from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..json_utils import compute_diff, deep_merge, set_nested_value
-from ..models import ProjectConfig
+from ..models import ComponentDetail, ProjectConfig
 from ..sync.code_extraction import normalize_blocks_codes_script
 from ..sync.manifest import Manifest, load_manifest, save_manifest
 from ..sync.naming import sanitize_name
-from .base import BaseService, sanitize_unexpected_error
+from .base import BaseService, ClientFactory, sanitize_unexpected_error
+
+AiClientFactory = Callable[[str, str], AiServiceClient]
+
+
+def _default_ai_client_factory(stack_url: str, token: str) -> AiServiceClient:
+    """Default factory: build an ``AiServiceClient`` for the given project."""
+    return AiServiceClient(stack_url=stack_url, token=token)
+
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +96,19 @@ class ConfigService(BaseService):
     using ThreadPoolExecutor, collects results, and reports per-project errors
     without stopping others.
 
-    Uses dependency injection for config_store and client_factory.
+    Uses dependency injection for config_store, client_factory, and
+    ai_client_factory (the last one is only exercised by ``create_config``
+    when the AI Service component-schema lookup runs).
     """
+
+    def __init__(
+        self,
+        config_store: ConfigStore,
+        client_factory: ClientFactory | None = None,
+        ai_client_factory: AiClientFactory | None = None,
+    ) -> None:
+        super().__init__(config_store=config_store, client_factory=client_factory)
+        self._ai_client_factory = ai_client_factory or _default_ai_client_factory
 
     def _fetch_project_configs(
         self,
@@ -1435,6 +1457,181 @@ class ConfigService(BaseService):
         result["project_alias"] = alias
         result["branch_id"] = effective_branch_id
         return result
+
+    # ── config create (one-shot remote create via `config new --push`) ─────────
+
+    def create_config(
+        self,
+        alias: str,
+        component_id: str,
+        name: str,
+        description: str = "",
+        configuration: dict[str, Any] | None = None,
+        branch_id: int | None = None,
+        dry_run: bool = False,
+        validate: bool = True,
+    ) -> dict[str, Any]:
+        """Create a new configuration via the Storage API (one-shot remote).
+
+        Backs the ``kbagent config new --push`` lifecycle path. When a body is
+        passed explicitly (via ``configuration``), the body is validated
+        against the component's AI Service JSON schema before POSTing (unless
+        ``validate=False``); on validation failure raises ``ConfigError``.
+        When no body is passed (default = ``{}``), validation is auto-skipped
+        because empty shells almost always fail component schemas that require
+        parameters -- this is FIIA's "empty shell, patch later" pattern.
+
+        Args:
+            alias: Project alias.
+            component_id: The component ID.
+            name: Configuration name (required by Storage API).
+            description: Optional description.
+            configuration: Configuration body dict. ``None`` => default empty
+                shell ``{}`` and auto-skipped validation.
+            branch_id: If set, create in a specific dev branch. Falls back to
+                the project's active branch when None.
+            dry_run: If True, return the planned POST envelope (including
+                validation result) without calling the Storage API.
+            validate: If True (default), validate ``configuration`` against
+                the component schema when a body is explicitly provided.
+
+        Returns:
+            The created configuration dict from the API (includes the new
+            ``id``) annotated with ``project_alias``, ``branch_id``, and
+            ``validation_status``. When ``dry_run`` the dict contains
+            ``dry_run: True`` plus the planned POST fields and validation
+            envelope, with no API call.
+
+        Raises:
+            ConfigError: If the alias is not found, or if validation runs
+                and fails on a real (non-dry-run) create.
+            KeboolaApiError: If the Storage API call fails.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch_id = branch_id or project.active_branch_id
+
+        body_was_explicit = configuration is not None
+        effective_config: dict[str, Any] = configuration if body_was_explicit else {}
+
+        # Validation only runs when the caller passed an explicit body (i.e.
+        # ``configuration`` is not ``None``). When no body is passed at all,
+        # the effective body defaults to ``{}`` and validation auto-skips --
+        # most component schemas require parameters and would reject ``{}``,
+        # which would block FIIA's "empty shell, then patch via
+        # ``config update``" pattern. An *explicit* ``configuration={}`` IS
+        # validated (and typically fails for the same reason) -- pass
+        # ``--no-validate`` or omit ``--configuration`` to skip.
+        if validate and body_was_explicit:
+            validation_status, validation_errors = self._validate_config_body(
+                project, component_id, effective_config
+            )
+        else:
+            validation_status = "skipped"
+            validation_errors = []
+
+        if validation_status == "failed" and not dry_run:
+            joined = "\n  - ".join(validation_errors)
+            raise ConfigError(
+                f"Configuration body failed schema validation for '{component_id}':\n  - {joined}"
+            )
+
+        if dry_run:
+            return {
+                "dry_run": True,
+                "project_alias": alias,
+                "component_id": component_id,
+                "name": name,
+                "description": description,
+                "configuration": effective_config,
+                "branch_id": effective_branch_id,
+                "validation_status": validation_status,
+                "validation_errors": validation_errors,
+            }
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            result = client.create_config(
+                component_id=component_id,
+                name=name,
+                configuration=effective_config,
+                description=description,
+                branch_id=effective_branch_id,
+            )
+        finally:
+            client.close()
+
+        result["project_alias"] = alias
+        result["branch_id"] = effective_branch_id
+        result["validation_status"] = validation_status
+        # Symmetric with the dry-run envelope. On a successful real create
+        # ``validation_status`` is always "ok" or "skipped" so the list is
+        # empty -- but we annotate it anyway so JSON consumers can rely on
+        # the key being present.
+        result["validation_errors"] = validation_errors
+        return result
+
+    def _validate_config_body(
+        self,
+        project: ProjectConfig,
+        component_id: str,
+        body: dict[str, Any],
+    ) -> tuple[str, list[str]]:
+        """Validate a configuration body against the component's JSON schema.
+
+        Returns:
+            ``("ok", [])`` when the body matches the schema.
+            ``("failed", [errors])`` when validation reports issues.
+            ``("skipped", [])`` when the AI Service has no schema for this
+            component or the lookup itself fails (graceful fallback so a
+            missing schema does not block a create).
+        """
+        # Local import to keep ``jsonschema`` out of the cold-start path of
+        # commands that never call ``create_config``.
+        import jsonschema
+
+        ai_client = self._ai_client_factory(project.stack_url, project.token)
+        try:
+            try:
+                raw = ai_client.get_component_detail(component_id)
+            except KeboolaApiError:
+                return ("skipped", [])
+        finally:
+            ai_client.close()
+
+        try:
+            detail = ComponentDetail(**raw)
+        except (TypeError, ValueError):
+            return ("skipped", [])
+
+        schema = detail.configuration_schema
+        if not schema:
+            return ("skipped", [])
+
+        try:
+            validator = jsonschema.Draft7Validator(schema)
+            errors: list[str] = []
+            for err in validator.iter_errors(body):
+                path = ".".join(str(p) for p in err.absolute_path) or "<root>"
+                errors.append(f"{path}: {err.message}")
+        except jsonschema.SchemaError:
+            # Component schema itself is malformed -- don't block the create.
+            return ("skipped", [])
+        except Exception:
+            # iter_errors() can also raise late (e.g. ``UnknownType`` for an
+            # unknown ``type`` keyword) when the schema is invalid in a way
+            # the constructor accepted. Treat that as "skipped" too -- a
+            # broken component schema must not block a real create.
+            logger.warning(
+                "Schema validation for component %s raised during iter_errors; treating as skipped",
+                component_id,
+                exc_info=True,
+            )
+            return ("skipped", [])
+
+        if errors:
+            return ("failed", errors)
+        return ("ok", [])
 
     # ── config row-update ──────────────────────────────────────────────────────
 
