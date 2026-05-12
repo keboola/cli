@@ -390,6 +390,13 @@ class TestFullE2E:
         )
         self._test_upload_incremental(table_id)
 
+        _step(
+            11.1,
+            "storage truncate-table",
+            "drop all rows, verify schema preserved, restore data",
+        )
+        self._test_truncate_table_roundtrip(table_id)
+
         _step(12, "storage tables + table-detail")
         self._test_table_listing(bucket_id, table_id)
 
@@ -783,6 +790,121 @@ class TestFullE2E:
             reader = csv.DictReader(f)
             rows = list(reader)
         assert len(rows) == 8, f"Expected 8 rows after incremental upload, got {len(rows)}"
+
+    def _test_truncate_table_roundtrip(self, table_id: str) -> None:
+        """Drop all rows, verify schema and downstream invariants, then restore.
+
+        Asserts the contract that distinguishes ``truncate-table`` from
+        ``delete-table``: column definitions, primary key, and table identity
+        survive; only the rows go to zero. After verification, re-uploads the
+        same 5+3 CSV pair so the table returns to its prior 8-row state for
+        downstream test hops.
+        """
+        # Snapshot the pre-truncate schema for the post-truncate diff.
+        before = self._run_ok(
+            "storage",
+            "table-detail",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )["data"]
+        assert before["rows_count"] > 0, (
+            f"truncate roundtrip needs a non-empty table; got rows_count={before['rows_count']}"
+        )
+        before_columns = sorted(c["name"] for c in before["column_details"])
+        before_pk = list(before.get("primary_key") or [])
+
+        # Dry-run: receipt must show rows_before > 0 but never touch the table.
+        dry = self._run_ok(
+            "storage",
+            "truncate-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--dry-run",
+        )["data"]
+        assert dry["dry_run"] is True
+        assert dry["would_truncate"][0]["table_id"] == table_id
+        assert dry["would_truncate"][0]["rows_before"] == before["rows_count"]
+
+        # Apply: rows must report as 0. The Storage API endpoint is
+        # uniformly async-via-job; the client polls to completion before
+        # returning, so rows_after=0 is authoritative at this point.
+        applied = self._run_ok(
+            "storage",
+            "truncate-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--yes",
+        )["data"]
+        assert applied["dry_run"] is False
+        assert applied["truncated"][0]["table_id"] == table_id
+        assert applied["truncated"][0]["rows_before"] == before["rows_count"]
+        assert applied["truncated"][0]["rows_after"] == 0
+        assert applied["failed"] == []
+
+        # Verify: rowsCount=0, columns unchanged, primary key unchanged,
+        # table identity unchanged.
+        after = self._run_ok(
+            "storage",
+            "table-detail",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )["data"]
+        assert after["rows_count"] == 0, (
+            f"expected rows_count=0 after truncate, got {after['rows_count']}"
+        )
+        after_columns = sorted(c["name"] for c in after["column_details"])
+        assert after_columns == before_columns, (
+            f"truncate changed columns: before={before_columns} after={after_columns}"
+        )
+        assert list(after.get("primary_key") or []) == before_pk, "truncate changed primary key"
+        assert after["table_id"] == before["table_id"], "table identity changed"
+
+        # Restore: re-upload the same 5-row base + 3-row incremental so the
+        # downstream hops (download, unload, workspace load) see the same
+        # row count they would have otherwise.
+        base_csv = _create_test_csv(self.data_dir, rows=5)
+        self._run_ok(
+            "storage",
+            "upload-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--file",
+            str(base_csv),
+        )
+        incr_csv = _create_incremental_csv(self.data_dir, start=6, rows=3)
+        self._run_ok(
+            "storage",
+            "upload-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--file",
+            str(incr_csv),
+            "--incremental",
+        )
+
+        restored = self._run_ok(
+            "storage",
+            "table-detail",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )["data"]
+        assert restored["rows_count"] == before["rows_count"], (
+            f"restore failed: expected {before['rows_count']} rows, got {restored['rows_count']}"
+        )
 
     def _test_table_listing(self, bucket_id: str, table_id: str) -> None:
         """Verify table appears in listings and detail is correct."""

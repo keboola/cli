@@ -1686,6 +1686,41 @@ class KeboolaClient(BaseHttpClient):
         response = self._request("DELETE", f"{prefix}/tables/{safe_id}", params=params)
         return self._wait_for_storage_job(response.json())
 
+    def truncate_table(
+        self,
+        table_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Truncate a storage table (delete all rows; preserve schema).
+
+        The Storage API requires the ``allowTruncate=1`` safety opt-in to
+        confirm the caller intends to remove every row when no filter
+        clauses are sent. The endpoint is inherently asynchronous on
+        every branch -- it always returns ``HTTP 202`` with a queued
+        storage job (``operationName: tableRowsDelete``), which
+        ``_wait_for_storage_job`` polls to completion. Passing
+        ``async=true`` is rejected by the API as an unknown field, so
+        we do NOT send it (this is a deliberate departure from
+        ``delete_table``'s contract -- see the truncate-table gotcha
+        in plugins/.../gotchas.md for the live-API evidence).
+
+        The table definition (columns, types, primary key, descriptions,
+        sharing edges, and dependents) is preserved -- only the rows
+        are removed.
+
+        Args:
+            table_id: Full table ID (e.g. "in.c-bucket.table").
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Completed storage job dict.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_id = quote(table_id, safe="")
+        params: dict[str, str] = {"allowTruncate": "1"}
+        response = self._request("DELETE", f"{prefix}/tables/{safe_id}/rows", params=params)
+        return self._wait_for_storage_job(response.json())
+
     def delete_column(
         self,
         table_id: str,

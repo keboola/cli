@@ -368,6 +368,57 @@ HintRegistry.register(
     )
 )
 
+# ── storage truncate-table ────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="storage.truncate-table",
+        description="Truncate (delete all rows from) one or more tables; preserves schema",
+        steps=[
+            HintStep(
+                comment="Capture rows_before for the receipt",
+                client=ClientCall(
+                    method="get_table_detail",
+                    args={
+                        "table_id": "{table_id}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="table",
+                ),
+                service=None,
+            ),
+            HintStep(
+                comment="Truncate the table (preserves columns, PK, descriptions, dependents)",
+                client=ClientCall(
+                    method="truncate_table",
+                    args={
+                        "table_id": "{table_id}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="result",
+                ),
+                service=ServiceCall(
+                    service_class="StorageService",
+                    service_module="storage_service",
+                    method="truncate_tables",
+                    args={
+                        "alias": "{project}",
+                        "table_ids": "{table_id}",
+                        "dry_run": "{dry_run}",
+                        "branch_id": "{branch}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "Client layer truncates one table at a time. Loop for batch.",
+            "Endpoint: DELETE /v2/storage/[branch/{id}/]tables/{id}/rows?allowTruncate=1.",
+            "Endpoint is uniformly async on every branch -- returns a queued job that _wait_for_storage_job polls to completion. Do NOT pass async=true (the API rejects it).",
+            "Table schema, primary key, descriptions, and dependents are preserved.",
+        ],
+    )
+)
+
 # ── storage delete-column ─────────────────────────────────────────
 
 HintRegistry.register(

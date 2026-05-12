@@ -142,6 +142,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.delete-bucket": "destructive",
     "storage.file-delete": "destructive",
     "storage.swap-tables": "destructive",
+    "storage.truncate-table": "destructive",
     # Storage descriptions
     "storage.describe-bucket": "write",
     "storage.describe-table": "write",

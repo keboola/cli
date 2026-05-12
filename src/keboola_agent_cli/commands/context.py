@@ -358,6 +358,12 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--force] [--dry-run] [--yes] [--branch ID]
     Delete one or more tables. Batch: repeat --table-id. --force to cascade-delete aliased tables. --dry-run to preview. Branch-aware.
 
+  kbagent storage truncate-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes] [--branch ID]
+    Truncate one or more tables (delete all rows; preserve schema, primary key, descriptions, sharing edges, and dependents).
+    Batch: repeat --table-id. Endpoint is async-via-job on every branch (the client polls to completion before returning;
+    do not pass async=true -- the API rejects it). Idempotent (truncating an empty table is a no-op). Use this when re-seeding
+    a table without losing the schema contract.
+
   kbagent storage delete-column --project NAME --table-id ID --column COL [--column ...] [--force] [--dry-run] [--yes] [--branch ID]
     Delete one or more columns from a table. Batch: repeat --column. --force when column is referenced by aliases. --dry-run to preview. Branch-aware.
 
