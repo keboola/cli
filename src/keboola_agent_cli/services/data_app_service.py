@@ -360,7 +360,7 @@ class DataAppService(BaseService):
                     merged.append(
                         {
                             "project_alias": alias,
-                            "id": str(app.get("id", "")),
+                            "app_id": str(app.get("id", "")),
                             "config_id": config_id,
                             "name": config_names.get(config_id, app.get("name", "")),
                             "type": app.get("type", ""),
@@ -393,7 +393,7 @@ class DataAppService(BaseService):
         all_apps: list[dict[str, Any]] = []
         for _alias, apps, _ok in successes:
             all_apps.extend(apps)
-        all_apps.sort(key=lambda a: (a["project_alias"], a.get("id", "")))
+        all_apps.sort(key=lambda a: (a["project_alias"], a.get("app_id", "")))
         errors.sort(key=lambda e: e.get("project_alias", ""))
         return {"apps": all_apps, "errors": errors}
 
@@ -441,7 +441,7 @@ class DataAppService(BaseService):
 
         return {
             "project_alias": alias,
-            "id": str(app.get("id", "")),
+            "app_id": str(app.get("id", "")),
             "config_id": config_id,
             "config_version_storage": str(storage_config.get("version", "") or ""),
             "config_version_deployed": str(app.get("configVersion", "") or ""),
@@ -642,9 +642,11 @@ class DataAppService(BaseService):
                         timeout_seconds=timeout_seconds,
                     )
 
+            url_record = deployed_record or shell
+            state_record = poll_result or deployed_record or shell
             return {
                 "project_alias": alias,
-                "id": app_id,
+                "app_id": app_id,
                 "config_id": config_id,
                 "name": name,
                 "slug": slug,
@@ -657,9 +659,9 @@ class DataAppService(BaseService):
                 "config_version": storage_version,
                 "deployed": bool(deploy),
                 "wait": bool(wait),
-                "url": (deployed_record or shell).get("url", ""),
-                "state": (poll_result or deployed_record or shell).get("state", ""),
-                "desired_state": (poll_result or deployed_record or shell).get("desiredState", ""),
+                "url": url_record.get("url", ""),
+                "state": state_record.get("state", ""),
+                "desired_state": state_record.get("desiredState", ""),
                 "last_start_timestamp": (poll_result or deployed_record or {}).get(
                     "lastStartTimestamp"
                 ),
@@ -668,7 +670,7 @@ class DataAppService(BaseService):
                     auth=auth,
                     deployed=bool(deploy),
                     wait=bool(wait),
-                    state=(poll_result or deployed_record or shell).get("state", ""),
+                    state=state_record.get("state", ""),
                 ),
             }
         except Exception:
@@ -846,7 +848,7 @@ class DataAppService(BaseService):
             ds_client.close()
         return {
             "project_alias": alias,
-            "id": str(app_id),
+            "app_id": str(app_id),
             "deleted": True,
             "message": (
                 f"Data app {app_id} deleted from project '{alias}'. "
@@ -888,7 +890,7 @@ class DataAppService(BaseService):
         password = payload.get("password", "") if isinstance(payload, dict) else ""
         return {
             "project_alias": alias,
-            "id": str(app_id),
+            "app_id": str(app_id),
             "password": password,
             "message": (
                 f"Retrieved simpleAuth password for data app {app_id}. "
@@ -1045,7 +1047,7 @@ class DataAppService(BaseService):
                 return {
                     "dry_run": True,
                     "project_alias": alias,
-                    "id": str(app_id),
+                    "app_id": str(app_id),
                     "config_id": config_id,
                     "secrets_set": sorted(_derive_runtime_env_var_name(k) for k in validated),
                     "secrets_unchanged": unchanged,
@@ -1128,7 +1130,7 @@ class DataAppService(BaseService):
             secrets_set = sorted(_derive_runtime_env_var_name(k) for k in validated)
             return {
                 "project_alias": alias,
-                "id": str(app_id),
+                "app_id": str(app_id),
                 "config_id": config_id,
                 "secrets_set": secrets_set,
                 "secrets_unchanged": unchanged,
@@ -1191,7 +1193,7 @@ class DataAppService(BaseService):
 
             return {
                 "project_alias": alias,
-                "id": str(app_id),
+                "app_id": str(app_id),
                 "config_id": config_id,
                 "secrets": entries,
                 "count": len(entries),
@@ -1245,7 +1247,7 @@ class DataAppService(BaseService):
             env_var = _derive_runtime_env_var_name(key)
             return {
                 "project_alias": alias,
-                "id": str(app_id),
+                "app_id": str(app_id),
                 "config_id": config_id,
                 "key": key,
                 "env_var": env_var,
@@ -1305,7 +1307,7 @@ class DataAppService(BaseService):
                 # Idempotent: removing a non-existent key is success.
                 return {
                     "project_alias": alias,
-                    "id": str(app_id),
+                    "app_id": str(app_id),
                     "config_id": config_id,
                     "removed": [],
                     "not_found": not_found,
@@ -1324,7 +1326,7 @@ class DataAppService(BaseService):
                 return {
                     "dry_run": True,
                     "project_alias": alias,
-                    "id": str(app_id),
+                    "app_id": str(app_id),
                     "config_id": config_id,
                     "to_remove": removed,
                     "not_found": not_found,
@@ -1352,7 +1354,7 @@ class DataAppService(BaseService):
             new_version = str(put_response.get("version", "") or "")
             return {
                 "project_alias": alias,
-                "id": str(app_id),
+                "app_id": str(app_id),
                 "config_id": config_id,
                 "removed": removed,
                 "not_found": not_found,
@@ -1862,7 +1864,7 @@ class DataAppService(BaseService):
         record = poll_result or deployed
         return {
             "project_alias": alias,
-            "id": str(app_id),
+            "app_id": str(app_id),
             "action": action,
             "state": record.get("state", ""),
             "desired_state": record.get("desiredState", ""),

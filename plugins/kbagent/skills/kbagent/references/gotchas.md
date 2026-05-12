@@ -1,5 +1,29 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## `data-app` JSON output: key for the app's own id is `app_id` (since v0.31.1)
+
+- Every `kbagent --json data-app <subcommand>` envelope emits the
+  data-app's own identifier under the key `app_id`. Prior to v0.31.1 the
+  same key was named bare `id`, which did not match the `--app-id` input
+  flag. Affects `data-app list / detail / create / deploy / start / stop /
+  delete / password / secrets-set / secrets-list / secrets-get /
+  secrets-remove`. The companion `config_id` key is unchanged.
+- Pipe-friendly chain that v0.31.1 enables:
+  `kbagent --json data-app list | jq -r '.apps[].app_id' | xargs -I{} kbagent data-app deploy --project P --app-id {}`.
+  On pre-v0.31.1 you had to read `.apps[].id` (mismatched the input flag,
+  surprised AI agents that templated `.app_id`).
+- **What is NOT renamed:** the Storage config back-pointer at
+  `parameters.id` inside the configuration body sent TO Storage (writeup
+  §5) -- that lives in the Storage config, not in kbagent's output
+  envelope. The auth-provider id (`auth_providers[].id == "simpleAuth"`)
+  is also unchanged.
+- The Data Science API on every Keboola stack we've probed (europe-west3.gcp,
+  us-east4.gcp; 2026-05-12) serves camelCase keys on the wire (`id`,
+  `configId`, `desiredState`, `configVersion`, ...). kbagent reads those
+  camelCase keys directly and emits its own snake_case-ish output keys.
+  If a future API shape change introduces snake_case wire keys, this
+  helper will need a defensive alias pass -- not yet warranted.
+
 ## `project edit --new-alias` does NOT rewrite lineage caches (since v0.31.0)
 
 - `kbagent project edit --project OLD --new-alias NEW` cascades the rename

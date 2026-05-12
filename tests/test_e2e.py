@@ -6293,11 +6293,33 @@ class TestE2EDataAppLifecycle:
         )
         assert result.exit_code == 0, result.output
         body = _json_ok(result)
-        app_id = body["data"]["id"]
+        # v0.31.1 rename: envelope key is ``app_id`` (was bare ``id``).
+        app_id = body["data"]["app_id"]
         assert app_id, "expected a numeric app id from POST /apps"
+        assert body["data"]["config_id"], "expected a config_id from POST /apps"
         self._created_app_ids.append(app_id)
 
-        _step(2, "Detail merges Data Science + Storage")
+        _step(2, "List shows the created app with populated app_id + config_id")
+        list_result = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "list",
+                    "--project",
+                    self.alias,
+                ],
+            )
+        )["data"]
+        listed = next(
+            (a for a in list_result["apps"] if a["app_id"] == app_id),
+            None,
+        )
+        assert listed is not None, f"newly-created app {app_id} not found in data-app list output"
+        assert listed["config_id"], "data-app list must emit a populated config_id"
+
+        _step(3, "Detail merges Data Science + Storage")
         detail = _json_ok(
             _invoke(
                 self.config_dir,
@@ -6312,7 +6334,7 @@ class TestE2EDataAppLifecycle:
                 ],
             )
         )["data"]
-        assert detail["id"] == app_id
+        assert detail["app_id"] == app_id
         assert detail["slug"] == slug
         assert detail["config_version_storage"], (
             "Storage config version should be populated after PUT"
@@ -6351,7 +6373,7 @@ class TestE2EDataAppLifecycle:
         )
         assert result.exit_code == 0, result.output
         body = _json_ok(result)
-        app_id = body["data"]["id"]
+        app_id = body["data"]["app_id"]
         self._created_app_ids.append(app_id)
         # The encrypted PAT must NEVER appear in the JSON output.
         plaintext_pat = os.environ[ENV_DATA_APP_GIT_PAT]
@@ -6432,7 +6454,7 @@ class TestE2EDataAppLifecycle:
                 ],
             )
         )["data"]
-        app_id = create["id"]
+        app_id = create["app_id"]
         self._created_app_ids.append(app_id)
 
         _step(2, "secrets-set: encrypt and write")

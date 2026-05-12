@@ -80,7 +80,7 @@ class TestDataAppList:
             "apps": [
                 {
                     "project_alias": "prod",
-                    "id": "42",
+                    "app_id": "42",
                     "config_id": "ulid",
                     "name": "App",
                     "type": "python-js",
@@ -100,7 +100,8 @@ class TestDataAppList:
         assert result.exit_code == 0, result.output
         body = json.loads(result.output)
         assert body["status"] == "ok"
-        assert body["data"]["apps"][0]["id"] == "42"
+        assert body["data"]["apps"][0]["app_id"] == "42"
+        assert body["data"]["apps"][0]["config_id"] == "ulid"
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +226,7 @@ class TestDataAppDeploy:
         mock = MagicMock()
         mock.deploy_data_app.return_value = {
             "project_alias": "prod",
-            "id": "42",
+            "app_id": "42",
             "action": "deploy",
             "state": "starting",
             "desired_state": "running",
@@ -293,7 +294,7 @@ class TestDataAppDelete:
         mock = MagicMock()
         mock.delete_data_app.return_value = {
             "project_alias": "prod",
-            "id": "42",
+            "app_id": "42",
             "deleted": True,
             "message": "Data app 42 deleted.",
         }
@@ -328,7 +329,7 @@ class TestDataAppPassword:
         mock = MagicMock()
         mock.get_data_app_password.return_value = {
             "project_alias": "prod",
-            "id": "42",
+            "app_id": "42",
             "password": "deadbeefcafe",
             "message": "Retrieved.",
         }

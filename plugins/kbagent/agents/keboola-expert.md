@@ -78,6 +78,8 @@ a critical failure.
    `config row-delete`, `config oauth-url` need 0.30.0+,
    `project edit --new-alias` (cascading rename across config.json +
    nested sync dir; warns on lineage cache rebuild) needs 0.31.0+,
+   `data-app *` JSON output uses key `app_id` (was bare `id`) on 0.31.1+
+   -- pipe with `jq -r '.apps[].app_id'`, not `'.id'`,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.

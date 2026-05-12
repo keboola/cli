@@ -468,7 +468,7 @@ class TestDataAppCreate:
             restart_if_running=True,
         )
 
-        assert result["id"] == "43661269"
+        assert result["app_id"] == "43661269"
         assert result["config_id"] == "01kqj88t0vktxe0vfhk6ps5kzs"
         assert result["url"].endswith("hub.us-east4.gcp.keboola.com")
         # Encrypted PAT is redacted in the returned dict for human display.
@@ -804,7 +804,7 @@ class TestDataAppDelete:
         result = service.delete_data_app(alias="prod", app_id="42")
         ds_mock.delete_app.assert_called_once_with("42")
         assert result["deleted"] is True
-        assert result["id"] == "42"
+        assert result["app_id"] == "42"
 
 
 # ---------------------------------------------------------------------------
@@ -851,7 +851,7 @@ class TestDataAppDetail:
         }
         result = service.get_data_app(alias="prod", app_id="42")
 
-        assert result["id"] == "42"
+        assert result["app_id"] == "42"
         assert result["state"] == "running"
         assert result["config_version_storage"] == "5"
         assert result["config_version_deployed"] == "3"
@@ -914,3 +914,211 @@ class TestRedactStorageConfig:
 
     def test_empty_dict_passes_through(self) -> None:
         assert _redact_storage_config({}) == {}
+
+
+# ---------------------------------------------------------------------------
+# List service — output key rename to `app_id` (v0.31.1)
+# ---------------------------------------------------------------------------
+
+
+class TestDataAppListOutputKeys:
+    """Lock the v0.31.1 JSON output rename ``id`` -> ``app_id``.
+
+    Prior to v0.31.1 ``list_data_apps`` emitted the data-app's own
+    identifier as bare ``id``. The renamed key matches the ``--app-id``
+    input flag and the rest of kbagent's CLI convention (e.g.
+    ``config_id``, ``bucket_id``, ``table_id``).
+    """
+
+    def test_list_emits_app_id_key(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.list_apps.return_value = [
+            {
+                "id": "43661269",
+                "configId": "01kqj88t0vktxe0vfhk6ps5kzs",
+                "type": "python-js",
+                "state": "running",
+                "desiredState": "running",
+                "configVersion": "3",
+                "url": "https://x.hub.example.com",
+                "size": "tiny",
+                "autoSuspendAfterSeconds": 900,
+                "lastStartTimestamp": "2026-05-01T00:00:00Z",
+            }
+        ]
+        storage_mock.list_component_configs.return_value = [
+            {"id": "01kqj88t0vktxe0vfhk6ps5kzs", "name": "App"}
+        ]
+
+        result = service.list_data_apps(aliases=["prod"])
+
+        assert result["errors"] == []
+        assert len(result["apps"]) == 1
+        app = result["apps"][0]
+        assert app["app_id"] == "43661269"
+        # Regression guard: pre-0.31.1 callers would have read ``app["id"]``.
+        assert "id" not in app
+        assert app["config_id"] == "01kqj88t0vktxe0vfhk6ps5kzs"
+        assert app["name"] == "App"
+
+
+class TestDataAppEnvelopesNoBareIdKey:
+    """Regression guard: NO ``DataAppService`` envelope emits the legacy bare
+    ``id`` key. The id key was renamed to ``app_id`` in v0.31.1; future
+    edits that accidentally re-add ``"id":`` to any envelope must fail here.
+
+    Covers every method whose return dict carries the data-app identifier:
+    detail, create, deploy, start, stop, delete, password, secrets-* (set,
+    list, get, remove). ``list_data_apps`` is covered by
+    ``TestDataAppListOutputKeys``.
+    """
+
+    def test_detail_envelope(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"id": "42", "configId": "ulid", "state": "running"}
+        storage_mock.get_config_detail.return_value = {"version": "3", "name": "App"}
+        result = service.get_data_app(alias="prod", app_id="42")
+        assert result["app_id"] == "42"
+        assert "id" not in result
+
+    def test_create_envelope(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.create_app.return_value = {"id": "42", "configId": "ulid"}
+        storage_mock.update_config.return_value = {"version": "2"}
+        result = service.create_data_app(
+            alias="prod",
+            name="App",
+            description="",
+            slug="my-app",
+            git_repo="https://github.com/o/r",
+            git_public=True,
+            auth="password",
+            size="tiny",
+            auto_suspend_after_seconds=900,
+            type_="python-js",
+            deploy=False,
+            wait=False,
+            dry_run=False,
+        )
+        assert result["app_id"] == "42"
+        assert "id" not in result
+
+    def test_deploy_envelope(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid"}
+        storage_mock.get_config_detail.return_value = {"version": "3"}
+        ds_mock.patch_app.return_value = {"state": "starting", "desiredState": "running"}
+        result = service.deploy_data_app(alias="prod", app_id="42")
+        assert result["app_id"] == "42"
+        assert "id" not in result
+
+    def test_start_envelope(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.patch_app.return_value = {"state": "starting", "desiredState": "running"}
+        result = service.start_data_app(alias="prod", app_id="42")
+        assert result["app_id"] == "42"
+        assert "id" not in result
+
+    def test_stop_envelope(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.patch_app.return_value = {"state": "stopping", "desiredState": "stopped"}
+        result = service.stop_data_app(alias="prod", app_id="42")
+        assert result["app_id"] == "42"
+        assert "id" not in result
+
+    def test_delete_envelope(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ds, _storage, _enc = _make_service(store)
+        result = service.delete_data_app(alias="prod", app_id="42")
+        assert result["app_id"] == "42"
+        assert "id" not in result
+
+    def test_password_envelope(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.get_app_password.return_value = {"password": "deadbeefcafe"}
+        result = service.get_data_app_password(
+            alias="prod", app_id="42", manage_token=TEST_MANAGE_TOKEN
+        )
+        assert result["app_id"] == "42"
+        assert "id" not in result
+
+    def test_secrets_set_envelope(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, encrypt_mock = _make_service(store)
+        encrypt_mock.encrypt.return_value = {"#API_KEY": "KBC::ProjectSecureGKMS::xyz"}
+        ds_mock.get_app.return_value = {"configId": "ulid"}
+        storage_mock.get_config_detail.return_value = {
+            "version": "5",
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        storage_mock.update_config.return_value = {"version": "6"}
+        result = service.set_data_app_secrets(
+            alias="prod", app_id="42", secrets={"#API_KEY": "plaintext"}
+        )
+        assert result["app_id"] == "42"
+        assert "id" not in result
+
+    def test_secrets_list_envelope(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid"}
+        storage_mock.get_config_detail.return_value = {
+            "version": "5",
+            "configuration": {
+                "parameters": {
+                    "dataApp": {
+                        "slug": "x",
+                        "secrets": {"#FOO": "KBC::ProjectSecureGKMS::abc"},
+                    }
+                }
+            },
+        }
+        result = service.list_data_app_secrets(alias="prod", app_id="42")
+        assert result["app_id"] == "42"
+        assert "id" not in result
+
+    def test_secrets_get_envelope(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid"}
+        storage_mock.get_config_detail.return_value = {
+            "version": "5",
+            "configuration": {
+                "parameters": {
+                    "dataApp": {
+                        "slug": "x",
+                        "secrets": {"#FOO": "KBC::ProjectSecureGKMS::abc"},
+                    }
+                }
+            },
+        }
+        result = service.get_data_app_secret(alias="prod", app_id="42", key="#FOO")
+        assert result["app_id"] == "42"
+        assert "id" not in result
+
+    def test_secrets_remove_envelope(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid"}
+        storage_mock.get_config_detail.return_value = {
+            "version": "5",
+            "configuration": {
+                "parameters": {
+                    "dataApp": {
+                        "slug": "x",
+                        "secrets": {"#FOO": "KBC::ProjectSecureGKMS::abc"},
+                    }
+                }
+            },
+        }
+        storage_mock.update_config.return_value = {"version": "6"}
+        result = service.remove_data_app_secrets(alias="prod", app_id="42", keys=["#FOO"])
+        assert result["app_id"] == "42"
+        assert "id" not in result
