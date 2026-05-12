@@ -118,7 +118,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Set or clear ``storage.output.default_bucket`` on a configuration | `kbagent config set-default-bucket --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Rename a configuration (update name via API + rename local sync directory) | `kbagent config rename --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Delete a configuration from a project | `kbagent config delete --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
-| Generate boilerplate configuration files for a Keboola component | `kbagent config new --component-id COMPONENT-ID` |
+| Generate boilerplate configuration files for a Keboola component, optionally creating the config remotely in one shot | `kbagent config new --component-id COMPONENT-ID` |
 | List all metadata entries on a configuration | `kbagent config metadata-list --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Read a single metadata value by key | `kbagent config get-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --key KEY` |
 | Set a metadata key/value on a configuration (upsert) | `kbagent config set-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --key KEY --value VALUE` |

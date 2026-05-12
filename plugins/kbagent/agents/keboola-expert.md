@@ -100,7 +100,7 @@ a critical failure.
 |---|---|---|---|
 | Update flow (rename, description, phases) | `kbagent flow update` (partial, no `--file`) | `--file` after fetching current phases, merging locally, passing full YAML | `tool call update_flow` (strips `behavior.onError` pre-MCP v1.60); partial `--file` that drops fields |
 | Schedule flow | `kbagent flow schedule --cron ... [--timezone]` | `tool call create_flow_schedule` | raw REST to `/storage/configurations/keboola.scheduler` |
-| Create Snowflake transformation | `kbagent config new --component-id keboola.snowflake-transformation` + `config update --set ...` | `tool call create_sql_transformation` (lower schema, avoids the component refusal) | `tool call create_config` (refuses keboola.snowflake-transformation) |
+| Create Snowflake transformation | `kbagent config new --component-id keboola.snowflake-transformation --name N --project P --push --no-files` (0.31.1+; one-shot, no scaffold, body defaults to `{}` and validation auto-skips for empty shell -- then `config update --set ...` to fill in script) **or** `kbagent config new --component-id keboola.snowflake-transformation --project P --output-dir D` + `config update --set ...` (scaffold-then-patch) | `tool call create_sql_transformation` (lower schema, avoids the MCP `create_config` Snowflake refusal) | `tool call create_config` (refuses keboola.snowflake-transformation) -- note: `config new --push` does NOT inherit this refusal because it wraps the raw Storage API directly |
 | Update SQL transformation body (script[]) | `kbagent config update --project P --component-id keboola.snowflake-transformation --config-id K --configuration @body.json` (0.28.0+ auto-normalizes string `script` to array; SQL gets statement-level split, Python/R gets `[script]` wrap; envelope's `normalizations: [...]` records every change. 0.31.0+ also re-splits multi-statement LIST elements -- closes the #274 ODBC `statement count 2 vs desired 1` crash that survives the 0.28.0 string fix) | `kbagent --hint client config update ...` if you need to bypass the auto-normalize for some reason | `tool call update_sql_transformation` -- still vulnerable to BOTH the #245 string-vs-array AND #274 list-element runtime crashes because it pushes raw to Storage API; raw `PUT /v2/storage/components/.../configs/...` -- same trap |
 | Run a job (and wait) | `kbagent job run --project P --component-id C --config-id K --wait` | `tool call run_component` | `job run` without `--wait` when user expects the result |
 | Search items by name across projects | `kbagent search QUERY [--project P] [--type table\|bucket\|config\|flow] [--limit N]` (0.30.0+) | `tool call search_tables` / `tool call search_configurations` (one resource-type per call) | chaining multiple `tool call` for different types |
@@ -116,6 +116,7 @@ a critical failure.
 | Ad-hoc SQL / row-count / type audit | `kbagent workspace create` + `kbagent workspace load` + `kbagent workspace query --sql "..."` | `kbagent workspace from-transformation` for existing transform debugging | querying Keboola Storage directly via Snowflake credentials outside the workspace abstraction |
 | Inspect dev branch | `kbagent branch list --project P`, `kbagent branch use --project P --branch ID` | `tool call get_branch` | acting on `main` when a dev branch exists |
 | Audit project capabilities / features | `kbagent project info --project P` (0.30.0+) -- returns project ID, name, backend, enabled features, quota limits, and metrics | `tool call verify_token` (returns less structured info; no feature list) | inspecting the UI project settings manually |
+| Create a new config (one-shot remote, no scaffold to disk) | `kbagent config new --project P --component-id C --name N --push --no-files [--configuration @body.json] [--branch ID]` (0.31.1+) -- single CLI call POSTs to `/v2/storage/components/{cid}/configs`; default body is `{}` (FIIA empty-shell pattern, validation auto-skips); explicit `--configuration` body is schema-validated by default (`--no-validate` opts out); works for ALL component types incl. `keboola.snowflake-transformation` | `kbagent config new --output-dir D` then edit + `kbagent sync push` (scaffold-then-push GitOps flow) | `tool call create_config` (refuses keboola.snowflake-transformation; raw MCP envelope, no validation) |
 | Create a config row | `kbagent config row-create --project P --component-id C --config-id K --name NAME` (0.30.0+) | `tool call create_config_row` | `POST /v2/storage/components/C/configs/K/rows` (raw REST) |
 | Update a config row | `kbagent config row-update --project P --component-id C --config-id K --row-id R [--name N] [--configuration JSON]` (0.30.0+) | `tool call update_config_row` | `PUT /v2/storage/components/C/configs/K/rows/R` (raw REST) |
 | Delete a config row | `kbagent config row-delete --project P --component-id C --config-id K --row-id R [--yes]` (0.30.0+) -- destructive (gated behind `--allow-destructive`); branch-aware | `tool call delete_config_row` | `DELETE /v2/storage/components/C/configs/K/rows/R` (raw REST) |
@@ -158,10 +159,16 @@ success, not a failure.
   `update_flow` strip bug, reached via a different door.
 
 - **Snowflake transformation scaffolding**: `tool call create_config`
-  REFUSES `keboola.snowflake-transformation`. Use
-  `kbagent config new --component-id keboola.snowflake-transformation`
-  for the local scaffold, then `kbagent config update` for the body.
-  Or MCP `create_sql_transformation` which uses a lower-level schema.
+  REFUSES `keboola.snowflake-transformation`. Three options that work:
+  (a) `kbagent config new --component-id keboola.snowflake-transformation
+  --name N --project P --push --no-files` (0.31.1+) -- one-shot remote
+  create wrapping the raw Storage API, then `kbagent config update --set
+  parameters.blocks...=...` to fill in the body. **Recommended path.**
+  (b) `kbagent config new --component-id keboola.snowflake-transformation
+  --output-dir D` for the local scaffold, then `kbagent config update` for
+  the body. (c) MCP `tool call create_sql_transformation` which uses a
+  lower-level schema. `config new --push` does NOT inherit the MCP
+  refusal because it calls Storage API directly.
 
 - **`script[]` string-vs-array runtime crash** (0.28.0+ auto-fix; #245):
   the Storage API silently accepts `parameters.blocks[].codes[].script`

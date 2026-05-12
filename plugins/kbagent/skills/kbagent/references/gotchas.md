@@ -1,5 +1,52 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## `kbagent config new --push` is one-shot remote create; default is scaffold-only (since v0.31.1)
+
+- **Pre-v0.31.1**, `kbagent config new` was scaffold-only -- it wrote
+  boilerplate files to `--output-dir` (or stdout) and made **zero API calls**.
+  The intended flow was scaffold → edit → `kbagent sync push`. The agent docs
+  in `keboola-expert.md` and SKILL.md conflated this with "create config"
+  intent, which was wrong if the goal was an API mutation.
+- **Since v0.31.1**, `--push` adds a one-shot remote create:
+  `kbagent config new --component-id C --name N --project P --push` calls
+  `POST /v2/storage/components/C/configs` after the scaffold step. Returns
+  the new config ID immediately. `--no-files` skips the filesystem step
+  entirely (no scaffold to disk or stdout, only the API POST) -- this is
+  the FIIA-style "empty shell, then patch via `config update --set ...`"
+  pattern.
+- `--push` **requires** `--project` AND a non-empty `--name`. All other
+  push-gated flags (`--no-files`, `--description`, `--configuration` /
+  `--configuration-file`, `--no-validate`, `--branch`, `--dry-run`) are
+  no-ops without `--push` and exit 2 if set independently.
+- `--configuration` and `--configuration-file` are mutually exclusive;
+  `--no-files` and `--output-dir` are mutually exclusive.
+- **MCP `create_config` quirk does NOT apply**: the raw MCP tool refuses
+  `keboola.snowflake-transformation` and routes you to
+  `tool call create_sql_transformation`. `kbagent config new --push` does
+  NOT refuse; the typed CLI wraps the raw Storage API directly. For
+  Snowflake transformations: one `config new --push` call works; the
+  MCP-typed `create_sql_transformation` shape is only needed if you
+  specifically want that envelope.
+- **Schema validation** runs by default whenever `--configuration` /
+  `--configuration-file` provide an explicit body. On mismatch the create
+  aborts with exit 5 and a list of error paths. If the AI Service has no
+  schema for the component or returns an error, validation skips silently
+  (the result envelope shows `validation_status: "skipped"`). Use
+  `--no-validate` to skip the AI Service call entirely.
+- **Empty-shell exception**: when no body is provided (default `{}`),
+  validation auto-skips. Component schemas almost always require parameters
+  and would reject `{}` -- skipping is the FIIA-pattern-friendly default.
+  Passing `--configuration '{}'` explicitly does NOT take the skip path:
+  the body is treated as caller-provided and validated, which typically
+  fails. Use `--no-validate` to suppress validation entirely.
+- **`--push --dry-run`** returns the planned POST body + validation result
+  without making the API call (`dry_run: true` in the envelope, exit 0 even
+  on validation failure -- dry-run is inspection-only).
+- The result envelope on success includes the full Storage API response
+  plus `project_alias`, `branch_id`, `validation_status`, and
+  `validation_errors` (always present, even if empty). Shape-symmetric with
+  `config detail` single-config mode and `config row-create`.
+
 ## `project edit --new-alias` does NOT rewrite lineage caches (since v0.31.0)
 
 - `kbagent project edit --project OLD --new-alias NEW` cascades the rename

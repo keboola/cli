@@ -430,6 +430,9 @@ class TestFullE2E:
         _step(19, "config new scaffold", "generate boilerplate for component")
         self._test_config_new_scaffold()
 
+        _step("19b", "config new --push", "one-shot remote create (0.31.1+)")
+        self._test_config_new_push()
+
         # ==============================================================
         # PHASE 5: Component commands
         # ==============================================================
@@ -1529,6 +1532,110 @@ class TestFullE2E:
         )
         result = data["data"]
         assert "files_written" in result or "directory" in result
+
+    def _test_config_new_push(self) -> None:
+        """Test ``config new --push`` -- one-shot remote create (0.31.1+).
+
+        Exercises the full lifecycle introduced in v0.31.1:
+        1. ``--push --no-files --dry-run`` returns the planned POST envelope
+           with ``validation_status`` and no real API call.
+        2. ``--push --no-files`` creates an empty-shell config and returns
+           ``project_alias`` / ``branch_id`` / ``validation_status="skipped"``.
+        3. ``config detail`` finds the newly created config.
+        4. ``config update --set`` patches it (proves create + update interop).
+        5. ``config delete`` cleans up (also tracked in ``_created_config_ids``
+           for the safety-net teardown).
+        """
+        push_name = f"{RUN_ID} push-created"
+
+        # 1) Dry-run -- envelope only, no POST.
+        dry = self._run_ok(
+            "config",
+            "new",
+            "--component-id",
+            "keboola.ex-http",
+            "--project",
+            self.alias,
+            "--name",
+            f"{push_name} (dry)",
+            "--push",
+            "--no-files",
+            "--dry-run",
+        )["data"]
+        assert dry["dry_run"] is True, dry
+        assert dry["project_alias"] == self.alias
+        assert dry["component_id"] == "keboola.ex-http"
+        assert dry["configuration"] == {}  # default empty shell
+        assert dry["validation_status"] in ("ok", "skipped", "failed")
+
+        # 2) Real create.
+        created = self._run_ok(
+            "config",
+            "new",
+            "--component-id",
+            "keboola.ex-http",
+            "--project",
+            self.alias,
+            "--name",
+            push_name,
+            "--push",
+            "--no-files",
+        )["data"]
+        new_config_id = str(created["id"])
+        # Register for the safety-net cleanup loop in teardown BEFORE any
+        # downstream assertion can raise -- guarantees the config is reaped
+        # even if a verification step below fails.
+        self._created_config_ids.append(("keboola.ex-http", new_config_id))
+
+        try:
+            assert created["project_alias"] == self.alias
+            # Empty-shell creation auto-skips validation (FIIA pattern).
+            assert created["validation_status"] == "skipped", created
+            # validation_errors is always annotated (symmetric with dry-run).
+            assert created["validation_errors"] == [], created
+
+            # 3) Verify via config detail.
+            detail = self._run_ok(
+                "config",
+                "detail",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                new_config_id,
+            )["data"]
+            assert str(detail["id"]) == new_config_id
+            assert detail["name"] == push_name
+
+            # 4) Patch the freshly-pushed config.
+            self._run_ok(
+                "config",
+                "update",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                new_config_id,
+                "--set",
+                "parameters.smoke_test=true",
+            )
+        finally:
+            # 5) Inline cleanup so failures mid-flow still tear down the
+            # remote config promptly; the global teardown loop is a safety
+            # net for the case where this delete itself fails.
+            # ``config delete`` has no ``--yes`` flag (CLAUDE.md inventory).
+            self._run_ok(
+                "config",
+                "delete",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                new_config_id,
+            )
 
     def _test_component_commands(self) -> None:
         """List components and get detail for one.

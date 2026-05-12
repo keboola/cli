@@ -187,7 +187,14 @@ Use `kbagent <command> --help` for full flag details and examples.
     Delete a configuration. Branch-aware.
 
   kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR]
-    Generate boilerplate config from component schema. Use --output-dir to write files.
+                     [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run]
+    Default: generate boilerplate config from component schema (scaffold to --output-dir or stdout).
+    With --push (0.31.1+): also create the config remotely via Storage API in one shot.
+    --push requires --project AND a non-empty --name. --no-files skips the filesystem step
+    entirely for FIIA-style one-shot creates. Schema validation runs by default when an explicit
+    --configuration body is given (fail-closed; --no-validate opts out). Default body is {{}}
+    (empty shell, validation auto-skipped). Works for ALL component types including
+    keboola.snowflake-transformation (unlike tool call create_config which refuses it).
 
   kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [-i] [-r] [--branch ID]
     Search config bodies for string/regex. Reports match location in JSON tree. Branch-aware.

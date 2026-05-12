@@ -791,3 +791,62 @@ HintRegistry.register(
         ],
     )
 )
+
+# ── config new --push (one-shot remote create) ────────────────────────────────
+#
+# Scaffold-only mode (no --push) has no hint -- it's a local filesystem
+# operation with no API mapping. The hint emits only when --push is set; the
+# command layer guards the emit_hint() call accordingly.
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="config.new",
+        description=(
+            "Create a new configuration remotely via the Storage API "
+            "(`config new --push`). Scaffold-only mode is a local filesystem "
+            "operation and not represented in this hint."
+        ),
+        steps=[
+            HintStep(
+                comment="Create configuration via Storage API POST",
+                client=ClientCall(
+                    method="create_config",
+                    args={
+                        "component_id": "{component_id}",
+                        "name": "{name}",
+                        "configuration": "{configuration}",
+                        "description": "{description}",
+                        "branch_id": "{branch}",
+                    },
+                    result_var="config",
+                    result_hint="dict",
+                ),
+                service=ServiceCall(
+                    service_class="ConfigService",
+                    service_module="config_service",
+                    method="create_config",
+                    args={
+                        "alias": "{project}",
+                        "component_id": "{component_id}",
+                        "name": "{name}",
+                        "description": "{description}",
+                        "configuration": "{configuration}",
+                        "branch_id": "{branch}",
+                        "dry_run": "{dry_run}",
+                        "validate": "not {no_validate}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "configuration defaults to {} (empty shell) when omitted -- FIIA's "
+            "'create-then-patch' pattern. Validation auto-skips for the empty case.",
+            "Without --no-validate, the body is validated against the component's "
+            "AI Service JSON schema before POSTing (fail-closed: exit 5 on mismatch). "
+            "Skips gracefully when the AI Service has no schema for the component.",
+            "The returned dict includes the new config 'id' assigned by the API "
+            "plus 'project_alias', 'branch_id', and 'validation_status' annotations.",
+            "The client-mode snippet bypasses validation; the service-mode snippet runs it.",
+        ],
+    )
+)
