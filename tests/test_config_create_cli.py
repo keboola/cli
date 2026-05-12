@@ -358,6 +358,65 @@ class TestConfigNewPushHappyPath:
         # fix: _write_scaffold_to_disk now honors formatter.json_mode).
         json.loads(result.output)
 
+    def test_push_output_dir_dry_run_does_not_write_files(self, tmp_path: Path) -> None:
+        """--push --output-dir --dry-run must NOT write scaffold to disk.
+
+        Dry-run is a preview; it must have zero filesystem side effects
+        regardless of which flags accompany it. Regression guard for NB-1
+        from the PR #282 review: the scaffold-write branch at config.py:1338
+        previously had no `and not dry_run` clause, so dry-run silently
+        created files alongside the preview envelope.
+        """
+        scaffold_dir = tmp_path / "scaffold"
+        scaffold_dir.mkdir()
+        svc_config = MagicMock()
+        svc_config.create_config.return_value = {
+            "dry_run": True,
+            "would_post": {"name": "test-config", "configuration": {}},
+            "validation_status": "skipped",
+            "validation_errors": [],
+            "project_alias": "prod",
+            "branch_id": None,
+        }
+        svc_component = MagicMock()
+        svc_component.generate_scaffold.return_value = {
+            "component_id": "keboola.ex-http",
+            "component_name": "HTTP",
+            "component_type": "extractor",
+            "directory": "extractor/keboola.ex-http/test-config",
+            "files": [{"path": "_config.yml", "content": "name: test\n"}],
+        }
+
+        result = _invoke_push(
+            [
+                "--json",
+                "config",
+                "new",
+                "--component-id",
+                "keboola.ex-http",
+                "--project",
+                "prod",
+                "--name",
+                "test-config",
+                "--push",
+                "--output-dir",
+                str(scaffold_dir),
+                "--dry-run",
+            ],
+            config_dir=tmp_path / "config",
+            config_service_mock=svc_config,
+            component_service_mock=svc_component,
+        )
+
+        assert result.exit_code == 0, result.output
+        # Envelope must reflect dry-run (the formatter wraps the payload under
+        # ``data``).
+        envelope = json.loads(result.output)
+        assert envelope["data"]["dry_run"] is True, envelope
+        # No scaffold files anywhere under output_dir.
+        written_files = list(scaffold_dir.rglob("*.yml")) + list(scaffold_dir.rglob("*.json"))
+        assert written_files == [], f"Dry-run must not write files; found {written_files}"
+
     def test_push_with_configuration_inline(self, tmp_path: Path) -> None:
         svc_config = MagicMock()
         svc_config.create_config.return_value = _push_result()

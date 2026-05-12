@@ -437,7 +437,7 @@ class TestFullE2E:
         _step(19, "config new scaffold", "generate boilerplate for component")
         self._test_config_new_scaffold()
 
-        _step("19b", "config new --push", "one-shot remote create (0.31.1+)")
+        _step("19b", "config new --push", "one-shot remote create (0.33.0+)")
         self._test_config_new_push()
 
         # ==============================================================
@@ -1656,9 +1656,9 @@ class TestFullE2E:
         assert "files_written" in result or "directory" in result
 
     def _test_config_new_push(self) -> None:
-        """Test ``config new --push`` -- one-shot remote create (0.31.1+).
+        """Test ``config new --push`` -- one-shot remote create (0.33.0+).
 
-        Exercises the full lifecycle introduced in v0.31.1:
+        Exercises the full lifecycle introduced in v0.33.0:
         1. ``--push --no-files --dry-run`` returns the planned POST envelope
            with ``validation_status`` and no real API call.
         2. ``--push --no-files`` creates an empty-shell config and returns
@@ -6522,7 +6522,7 @@ class TestE2EDataAppLifecycle:
         )
         assert result.exit_code == 0, result.output
         body = _json_ok(result)
-        # v0.31.1 rename: envelope key is ``app_id`` (was bare ``id``).
+        # v0.33.0 rename: envelope key is ``app_id`` (was bare ``id``).
         app_id = body["data"]["app_id"]
         assert app_id, "expected a numeric app id from POST /apps"
         assert body["data"]["config_id"], "expected a config_id from POST /apps"

@@ -1328,17 +1328,20 @@ def config_new(
             )
             raise typer.Exit(code=exit_code) from None
 
-        # When --push is set AND --output-dir is given, ALSO write the scaffold
-        # to disk in addition to the POST (the "scaffold + push" combo).
+        # When --push is set AND --output-dir is given AND we're not in
+        # dry-run mode, ALSO write the scaffold to disk in addition to the
+        # POST (the "scaffold + push" combo). Dry-run must NOT touch the
+        # filesystem -- the user expects a preview, not a side effect.
+        #
         # ``silent=True``: the push-result envelope below is the authoritative
         # output for this path. In JSON mode emitting the scaffold envelope
         # too would produce two concatenated JSON documents on stdout (breaks
         # ``jq``); in human mode the dim banner adds noise above the "Created
-        # config ..." line that already lists the same path.
-        if output_dir and scaffold is not None:
-            _write_scaffold_to_disk(
-                formatter, scaffold, output_dir, json_mode=formatter.json_mode, silent=True
-            )
+        # config ..." line that already lists the same path. ``json_mode`` is
+        # passed as a sentinel ``False`` because ``silent=True`` short-circuits
+        # before it is read.
+        if output_dir and scaffold is not None and not dry_run:
+            _write_scaffold_to_disk(formatter, scaffold, output_dir, json_mode=False, silent=True)
 
         if formatter.json_mode:
             formatter.output(push_result)

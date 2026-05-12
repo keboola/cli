@@ -917,14 +917,14 @@ class TestRedactStorageConfig:
 
 
 # ---------------------------------------------------------------------------
-# List service — output key rename to `app_id` (v0.31.1)
+# List service — output key rename to `app_id` (v0.33.0)
 # ---------------------------------------------------------------------------
 
 
 class TestDataAppListOutputKeys:
-    """Lock the v0.31.1 JSON output rename ``id`` -> ``app_id``.
+    """Lock the v0.33.0 JSON output rename ``id`` -> ``app_id``.
 
-    Prior to v0.31.1 ``list_data_apps`` emitted the data-app's own
+    Prior to v0.33.0 ``list_data_apps`` emitted the data-app's own
     identifier as bare ``id``. The renamed key matches the ``--app-id``
     input flag and the rest of kbagent's CLI convention (e.g.
     ``config_id``, ``bucket_id``, ``table_id``).
@@ -957,7 +957,7 @@ class TestDataAppListOutputKeys:
         assert len(result["apps"]) == 1
         app = result["apps"][0]
         assert app["app_id"] == "43661269"
-        # Regression guard: pre-0.31.1 callers would have read ``app["id"]``.
+        # Regression guard: pre-0.33.0 callers would have read ``app["id"]``.
         assert "id" not in app
         assert app["config_id"] == "01kqj88t0vktxe0vfhk6ps5kzs"
         assert app["name"] == "App"
@@ -965,7 +965,7 @@ class TestDataAppListOutputKeys:
 
 class TestDataAppEnvelopesNoBareIdKey:
     """Regression guard: NO ``DataAppService`` envelope emits the legacy bare
-    ``id`` key. The id key was renamed to ``app_id`` in v0.31.1; future
+    ``id`` key. The id key was renamed to ``app_id`` in v0.33.0; future
     edits that accidentally re-add ``"id":`` to any envelope must fail here.
 
     Covers every method whose return dict carries the data-app identifier:
