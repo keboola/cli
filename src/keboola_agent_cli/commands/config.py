@@ -1102,72 +1102,257 @@ def config_new(
     name: str = typer.Option(
         "",
         "--name",
-        help="Configuration name (default: auto-generated from component)",
+        help="Configuration name (default: auto-generated from component; required with --push)",
     ),
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (for AI Service auth)",
+        help="Project alias (for AI Service auth; required with --push)",
     ),
     output_dir: str | None = typer.Option(
         None,
         "--output-dir",
         help="Write scaffold files to disk instead of printing",
     ),
+    push: bool = typer.Option(
+        False,
+        "--push",
+        help="Also create the configuration remotely via the Storage API (one-shot; requires --project and --name)",
+    ),
+    no_files: bool = typer.Option(
+        False,
+        "--no-files",
+        help="With --push: skip writing/printing scaffold; only POST to API (FIIA-style one-shot)",
+    ),
+    description: str = typer.Option(
+        "",
+        "--description",
+        help="Configuration description (used with --push)",
+    ),
+    configuration: str | None = typer.Option(
+        None,
+        "--configuration",
+        help="Override the configuration body to POST (used with --push): JSON inline, @file, or - for stdin",
+    ),
+    configuration_file: Path | None = typer.Option(
+        None,
+        "--configuration-file",
+        help="Override the configuration body from a JSON file (used with --push)",
+        exists=True,
+        readable=True,
+    ),
+    no_validate: bool = typer.Option(
+        False,
+        "--no-validate",
+        help="Skip schema validation against the component's AI Service spec (used with --push)",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Create in a specific dev branch (used with --push; defaults to active branch)",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="With --push: show planned POST + validation result without creating",
+    ),
 ) -> None:
-    """Generate boilerplate configuration files for a Keboola component.
+    """Generate boilerplate configuration files for a Keboola component, optionally creating the config remotely in one shot.
 
-    Produces a ready-to-edit scaffold (config YAML, SQL/Python code blocks,
-    description) that can be written to disk with --output-dir or printed
-    to stdout for inspection.
+    \b
+    Two modes:
+      * Default (no --push): scaffold only -- generates ready-to-edit files
+        (config YAML, code blocks, description). Writes to --output-dir or
+        prints to stdout. **Zero API calls.**
+      * With --push: scaffold step + POST to Storage API. Requires --project
+        and a non-empty --name. Use --no-files for FIIA-style one-shot create
+        with no filesystem step.
+
+    \b
+    Examples:
+      # Scaffold-only (today's behavior, unchanged)
+      kbagent config new --component-id keboola.ex-http --output-dir ./scratch
+
+      # Scaffold AND remote create:
+      kbagent config new --component-id keboola.ex-http --name "API ingest" \\
+        --project prod --output-dir ./scratch --push
+
+      # FIIA-style: one-shot remote create with no filesystem step:
+      kbagent config new --component-id keboola.ex-http --name "API ingest" \\
+        --project prod --push --no-files
+
+      # Override the POSTed body with a pre-made config:
+      kbagent config new --component-id keboola.python-transformation-v2 \\
+        --name "T1" --project prod --push --no-files \\
+        --configuration-file ./body.json --branch 42
+
+      # Preview the planned POST without creating:
+      kbagent config new --component-id keboola.ex-http --name "smoke" \\
+        --project prod --push --no-files --dry-run
     """
     formatter = get_formatter(ctx)
-    service = get_service(ctx, "component_service")
 
-    try:
-        scaffold = service.generate_scaffold(
-            alias=project,
-            component_id=component_id,
-            name=name or None,
-        )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            project=project or "",
-            retryable=exc.retryable,
-        )
-        raise typer.Exit(code=exit_code) from None
+    # ── Flag-combination validation ──────────────────────────────────────────
+    #
+    # All --push-gated flags must be set only when --push is on; --push itself
+    # requires --project and a non-empty --name; --configuration vs
+    # --configuration-file and --output-dir vs --no-files are mutually
+    # exclusive.
+    push_gated: list[tuple[str, bool]] = [
+        ("--no-files", no_files),
+        ("--description", bool(description)),
+        ("--configuration", configuration is not None),
+        ("--configuration-file", configuration_file is not None),
+        ("--no-validate", no_validate),
+        ("--branch", branch is not None),
+        ("--dry-run", dry_run),
+    ]
+    if not push:
+        for flag_name, flag_set in push_gated:
+            if flag_set:
+                formatter.error(
+                    message=f"{flag_name} requires --push",
+                    error_code=ErrorCode.VALIDATION_ERROR,
+                )
+                raise typer.Exit(code=2)
+    else:
+        if not project:
+            formatter.error(
+                message="--push requires --project",
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
+            raise typer.Exit(code=2)
+        if not name:
+            formatter.error(
+                message="--push requires a non-empty --name",
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
+            raise typer.Exit(code=2)
+        if configuration is not None and configuration_file is not None:
+            formatter.error(
+                message="--configuration and --configuration-file are mutually exclusive",
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
+            raise typer.Exit(code=2)
+        if no_files and output_dir:
+            formatter.error(
+                message="--no-files and --output-dir are mutually exclusive",
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
+            raise typer.Exit(code=2)
 
-    if output_dir:
-        # Detect kbc project branch prefix (e.g. "main/")
-        branch_prefix = _detect_branch_prefix(Path(output_dir))
-        if branch_prefix:
-            scaffold_dir = branch_prefix + "/" + scaffold["directory"]
-        else:
-            scaffold_dir = scaffold["directory"]
+    # ── Parse the optional body override (used only with --push) ─────────────
+    config_body: dict[str, Any] | None = None
+    if push:
+        if configuration is not None:
+            try:
+                config_body = _parse_json_input(configuration)
+            except (json.JSONDecodeError, FileNotFoundError) as exc:
+                formatter.error(
+                    message=f"Invalid --configuration input: {exc}",
+                    error_code=ErrorCode.VALIDATION_ERROR,
+                )
+                raise typer.Exit(code=2) from None
+        elif configuration_file is not None:
+            try:
+                config_body = json.loads(configuration_file.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                formatter.error(
+                    message=f"Invalid JSON in --configuration-file {configuration_file}: {exc}",
+                    error_code=ErrorCode.VALIDATION_ERROR,
+                )
+                raise typer.Exit(code=2) from None
 
-        base_path = Path(output_dir) / scaffold_dir
-        base_path.mkdir(parents=True, exist_ok=True)
+    # ── Scaffold step (runs in scaffold-only mode and in push+files modes) ───
+    scaffold: dict[str, Any] | None = None
+    skip_scaffold = push and no_files
+    if not skip_scaffold:
+        component_service = get_service(ctx, "component_service")
+        try:
+            scaffold = component_service.generate_scaffold(
+                alias=project,
+                component_id=component_id,
+                name=name or None,
+            )
+        except ConfigError as exc:
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+            raise typer.Exit(code=5) from None
+        except KeboolaApiError as exc:
+            exit_code = map_error_to_exit_code(exc)
+            formatter.error(
+                message=exc.message,
+                error_code=exc.error_code,
+                project=project or "",
+                retryable=exc.retryable,
+            )
+            raise typer.Exit(code=exit_code) from None
 
-        for file_entry in scaffold["files"]:
-            file_path = base_path / file_entry["path"]
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(file_entry["content"], encoding="utf-8")
+    # ── Push path: also create remotely via Storage API ──────────────────────
+    if push:
+        if should_hint(ctx):
+            emit_hint(
+                ctx,
+                "config.new",
+                project=project,
+                component_id=component_id,
+                name=name,
+                description=description,
+                configuration=config_body if config_body is not None else {},
+                no_validate=no_validate,
+                branch=branch,
+                dry_run=dry_run,
+            )
+
+        config_service = get_service(ctx, "config_service")
+        try:
+            push_result = config_service.create_config(
+                alias=project,
+                component_id=component_id,
+                name=name,
+                description=description,
+                configuration=config_body,
+                branch_id=branch,
+                dry_run=dry_run,
+                validate=not no_validate,
+            )
+        except ConfigError as exc:
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+            raise typer.Exit(code=5) from None
+        except KeboolaApiError as exc:
+            exit_code = map_error_to_exit_code(exc)
+            formatter.error(
+                message=exc.message,
+                error_code=exc.error_code,
+                project=project or "",
+                retryable=exc.retryable,
+            )
+            raise typer.Exit(code=exit_code) from None
+
+        # When --push is set AND --output-dir is given AND we're not in
+        # dry-run mode, ALSO write the scaffold to disk in addition to the
+        # POST (the "scaffold + push" combo). Dry-run must NOT touch the
+        # filesystem -- the user expects a preview, not a side effect.
+        #
+        # ``silent=True``: the push-result envelope below is the authoritative
+        # output for this path. In JSON mode emitting the scaffold envelope
+        # too would produce two concatenated JSON documents on stdout (breaks
+        # ``jq``); in human mode the dim banner adds noise above the "Created
+        # config ..." line that already lists the same path. ``json_mode`` is
+        # passed as a sentinel ``False`` because ``silent=True`` short-circuits
+        # before it is read.
+        if output_dir and scaffold is not None and not dry_run:
+            _write_scaffold_to_disk(formatter, scaffold, output_dir, json_mode=False, silent=True)
 
         if formatter.json_mode:
-            formatter.output(
-                {
-                    "directory": str(base_path),
-                    "files_written": [f["path"] for f in scaffold["files"]],
-                }
-            )
+            formatter.output(push_result)
         else:
-            formatter.success(f"Scaffold written to {base_path} ({len(scaffold['files'])} file(s))")
+            _render_push_result_human(formatter, push_result, component_id, name)
+        return
+
+    # ── Scaffold-only path: today's behavior, byte-for-byte unchanged ────────
+    assert scaffold is not None  # narrowing for type-checker; skip_scaffold is False here.
+    if output_dir:
+        _write_scaffold_to_disk(formatter, scaffold, output_dir, json_mode=formatter.json_mode)
     else:
         # Print scaffold content
         if formatter.json_mode:
@@ -1193,6 +1378,99 @@ def config_new(
                 )
                 formatter.console.print(syntax)
                 formatter.console.print()
+
+
+def _write_scaffold_to_disk(
+    formatter: Any,
+    scaffold: dict[str, Any],
+    output_dir: str,
+    json_mode: bool,
+    silent: bool = False,
+) -> None:
+    """Shared helper: write the generated scaffold files under ``output_dir``.
+
+    Detects an enclosing ``main/`` branch prefix the same way the pre-push
+    path does, so the layout matches what ``kbagent sync push`` would expect.
+
+    Output rules:
+    - ``silent=True``: write files only; emit no banner and no JSON envelope.
+      Used by the ``--push --output-dir`` path, where the push-result envelope
+      (single JSON in JSON mode; the "Created config ..." line in human mode)
+      is the authoritative output and the scaffold-banner side-channel would
+      either duplicate JSON (breaking ``jq`` pipes) or distract in human mode.
+    - ``silent=False`` (default; scaffold-only mode): emit a JSON envelope
+      ``{directory, files_written}`` when ``json_mode`` is set, otherwise a
+      dim-formatted "Scaffold written to ..." banner.
+    """
+    branch_prefix = _detect_branch_prefix(Path(output_dir))
+    if branch_prefix:
+        scaffold_dir = branch_prefix + "/" + scaffold["directory"]
+    else:
+        scaffold_dir = scaffold["directory"]
+
+    base_path = Path(output_dir) / scaffold_dir
+    base_path.mkdir(parents=True, exist_ok=True)
+
+    for file_entry in scaffold["files"]:
+        file_path = base_path / file_entry["path"]
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(file_entry["content"], encoding="utf-8")
+
+    if silent:
+        return
+
+    if json_mode:
+        formatter.output(
+            {
+                "directory": str(base_path),
+                "files_written": [f["path"] for f in scaffold["files"]],
+            }
+        )
+    else:
+        formatter.console.print(
+            f"[dim]Scaffold written to {base_path} ({len(scaffold['files'])} file(s))[/dim]"
+        )
+
+
+def _render_push_result_human(
+    formatter: Any,
+    result: dict[str, Any],
+    component_id: str,
+    name: str,
+) -> None:
+    """Render the human-mode banner for ``config new --push`` (dry-run + success)."""
+    validation_status = result.get("validation_status", "skipped")
+    validation_errors = result.get("validation_errors", []) or []
+    branch_info = f" (branch {result['branch_id']})" if result.get("branch_id") else ""
+
+    if result.get("dry_run"):
+        formatter.console.print(
+            f"\n[bold]Dry-run -- would POST {escape(component_id)} '{escape(name)}'{branch_info}[/bold]\n"
+        )
+        formatter.console.print("[dim]Planned configuration body:[/dim]")
+        formatter.console.print(json.dumps(result.get("configuration", {}), indent=2))
+        if validation_status == "ok":
+            formatter.console.print("\n[green]✓ Schema validation passed[/green]")
+        elif validation_status == "skipped":
+            formatter.console.print(
+                "\n[yellow]⚠ Schema validation skipped[/yellow] "
+                "[dim](empty shell, no schema available, or --no-validate)[/dim]"
+            )
+        else:  # failed
+            formatter.console.print("\n[red]✗ Schema validation failed:[/red]")
+            for err in validation_errors:
+                formatter.console.print(f"  [red]• {escape(err)}[/red]")
+        return
+
+    config_id = result.get("id", "")
+    formatter.success(
+        f"Created config '{escape(name)}' [{config_id}] in {escape(component_id)}{branch_info}"
+    )
+    if validation_status == "skipped":
+        formatter.console.print(
+            "[dim]Note: schema validation was skipped "
+            "(empty shell, no schema available, or --no-validate).[/dim]"
+        )
 
 
 # ── Config metadata commands ───────────────────────────────────────────

@@ -383,7 +383,7 @@ kbagent data-app validate-repo --git-repo URL [--git-branch BRANCH] [--git-publi
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
-kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR]
+kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR] [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run]
 
 kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]
 
