@@ -1,11 +1,45 @@
 import { useQuery } from "@tanstack/react-query";
+import { Download, Eye, Info } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api/client";
+import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
 import type { Bucket, ProjectError, Table as TableT } from "../types";
+
+interface TablePreview {
+  header: string[];
+  rows: string[][];
+  row_count: number;
+}
+
+interface TableDetail {
+  project_alias: string;
+  table_id: string;
+  name: string;
+  bucket_id: string;
+  description: string;
+  columns: string[];
+  column_details: Array<{
+    name: string;
+    type?: string;
+    native_type?: string;
+    length?: string;
+    nullable?: boolean;
+    default?: string;
+    description?: string;
+  }>;
+  primary_key: string[];
+  rows_count: number;
+  data_size_bytes: number;
+  is_alias: boolean;
+  last_import_date: string;
+  last_change_date: string;
+  created: string;
+  metadata: Array<Record<string, unknown>>;
+}
 
 interface BucketsResp {
   buckets: Bucket[];
@@ -131,35 +165,222 @@ export function StoragePage() {
         <FilesTab />
       )}
 
-      {selectedTable ? (
-        <TableDetail
-          table={selectedTable}
-          onClose={() => setSelectedTable(null)}
-        />
-      ) : null}
+      <TableDetailDrawer
+        table={selectedTable}
+        onClose={() => setSelectedTable(null)}
+      />
     </div>
   );
 }
 
-function TableDetail({ table, onClose }: { table: TableT; onClose: () => void }) {
+function TableDetailDrawer({
+  table,
+  onClose,
+}: {
+  table: TableT | null;
+  onClose: () => void;
+}) {
   const { branchId } = useUIState();
-  const q = useQuery({
-    queryKey: ["table-detail", table.project_alias, table.id, branchId],
+  const [tab, setTab] = useState<"info" | "schema" | "preview" | "raw">("info");
+
+  const detailQ = useQuery<TableDetail>({
+    queryKey: ["table-detail", table?.project_alias, table?.id, branchId],
     queryFn: () =>
-      api.get(`/storage/tables/${encodeURIComponent(table.project_alias)}/${encodeURIComponent(table.id)}`, {
-        query: { branch_id: branchId ?? undefined },
-      }),
+      api.get(
+        `/storage/table-detail/${encodeURIComponent(table!.project_alias)}/${encodeURIComponent(table!.id)}`,
+        { query: { branch_id: branchId ?? undefined } },
+      ),
+    enabled: !!table,
   });
+
+  const previewQ = useQuery<TablePreview>({
+    queryKey: ["table-preview", table?.project_alias, table?.id],
+    queryFn: () =>
+      api.get(
+        `/storage/table-preview/${encodeURIComponent(table!.project_alias)}/${encodeURIComponent(table!.id)}`,
+        { query: { limit: 100 } },
+      ),
+    enabled: !!table && tab === "preview",
+  });
+
+  const downloadHref = table
+    ? `/api/storage/table-download/${encodeURIComponent(table.project_alias)}/${encodeURIComponent(table.id)}${
+        branchId ? `?branch_id=${branchId}` : ""
+      }`
+    : "#";
+
   return (
-    <div className="nerd-card">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="font-bold text-keboola">{table.id}</h3>
-        <button type="button" className="nerd-btn text-xs" onClick={onClose}>
-          Close
-        </button>
+    <Drawer
+      open={!!table}
+      onClose={onClose}
+      title={table?.id ?? ""}
+      subtitle={
+        table
+          ? `${table.rows_count.toLocaleString()} rows ・ ${formatBytes(table.data_size_bytes)} ・ ${
+              table.is_alias ? "alias" : "table"
+            }`
+          : undefined
+      }
+      width="max-w-5xl"
+      actions={
+        <a
+          href={downloadHref}
+          download
+          className="nerd-btn flex items-center gap-1 hover:text-keboola"
+        >
+          <Download className="w-3 h-3" /> CSV
+        </a>
+      }
+    >
+      <div className="space-y-4">
+        <div className="flex gap-2">
+          {(["info", "schema", "preview", "raw"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`nerd-btn text-xs ${
+                tab === t ? "border-keboola text-keboola" : ""
+              }`}
+              onClick={() => setTab(t)}
+            >
+              {t === "info" ? (
+                <Info className="w-3 h-3 inline mr-1" />
+              ) : t === "preview" ? (
+                <Eye className="w-3 h-3 inline mr-1" />
+              ) : null}
+              {t}
+            </button>
+          ))}
+        </div>
+
+        {detailQ.isLoading ? <Loading /> : null}
+        {detailQ.error ? (
+          <ErrorBox message={(detailQ.error as Error).message} />
+        ) : null}
+
+        {detailQ.data && tab === "info" ? <InfoTab d={detailQ.data} /> : null}
+        {detailQ.data && tab === "schema" ? <SchemaTab d={detailQ.data} /> : null}
+        {tab === "preview" ? (
+          previewQ.isLoading ? (
+            <Loading label="loading 100 rows..." />
+          ) : previewQ.error ? (
+            <ErrorBox message={(previewQ.error as Error).message} />
+          ) : previewQ.data ? (
+            <PreviewTab p={previewQ.data} />
+          ) : null
+        ) : null}
+        {detailQ.data && tab === "raw" ? <JsonView data={detailQ.data} /> : null}
       </div>
-      {q.isLoading ? <Loading /> : null}
-      {q.data ? <JsonView data={q.data} /> : null}
+    </Drawer>
+  );
+}
+
+function InfoTab({ d }: { d: TableDetail }) {
+  return (
+    <div className="space-y-3">
+      <Field label="Bucket" value={d.bucket_id} mono />
+      <Field label="Name" value={d.name} />
+      {d.description ? <Field label="Description" value={d.description} /> : null}
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Rows" value={d.rows_count.toLocaleString()} />
+        <Field label="Size" value={formatBytes(d.data_size_bytes)} />
+        <Field
+          label="Primary key"
+          value={d.primary_key.length ? d.primary_key.join(", ") : "-"}
+          mono
+        />
+        <Field label="Columns" value={String(d.columns.length)} />
+        <Field label="Created" value={d.created} mono />
+        <Field label="Last import" value={d.last_import_date || "-"} mono />
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">{label}</div>
+      <div className={`text-sm ${mono ? "font-mono text-accent" : "text-zinc-200"}`}>{value}</div>
+    </div>
+  );
+}
+
+function SchemaTab({ d }: { d: TableDetail }) {
+  return (
+    <div className="overflow-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-zinc-800 text-zinc-500 uppercase tracking-wider">
+            <th className="px-3 py-2 text-left font-normal">Column</th>
+            <th className="px-3 py-2 text-left font-normal">Type</th>
+            <th className="px-3 py-2 text-left font-normal">Native</th>
+            <th className="px-3 py-2 text-left font-normal">Length</th>
+            <th className="px-3 py-2 text-center font-normal">Null</th>
+            <th className="px-3 py-2 text-center font-normal">PK</th>
+            <th className="px-3 py-2 text-left font-normal">Default</th>
+            <th className="px-3 py-2 text-left font-normal">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          {d.column_details.map((c) => (
+            <tr key={c.name} className="border-b border-zinc-900/50">
+              <td className="px-3 py-2 font-bold text-accent">{c.name}</td>
+              <td className="px-3 py-2 text-zinc-400">{c.type ?? "-"}</td>
+              <td className="px-3 py-2 text-zinc-500">{c.native_type ?? "-"}</td>
+              <td className="px-3 py-2 text-zinc-500">{c.length ?? "-"}</td>
+              <td className="px-3 py-2 text-center">
+                {c.nullable === undefined ? "-" : c.nullable ? "✓" : ""}
+              </td>
+              <td className="px-3 py-2 text-center">
+                {d.primary_key.includes(c.name) ? "🔑" : ""}
+              </td>
+              <td className="px-3 py-2 text-zinc-500">{c.default ?? "-"}</td>
+              <td className="px-3 py-2 text-zinc-400 text-xs">{c.description ?? ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PreviewTab({ p }: { p: TablePreview }) {
+  if (p.row_count === 0) {
+    return <Empty title="Table is empty (no rows returned)" />;
+  }
+  return (
+    <div>
+      <div className="text-xs text-zinc-500 mb-2">
+        Showing first {p.row_count} row(s)
+      </div>
+      <div className="overflow-auto border border-zinc-800 rounded">
+        <table className="w-full text-xs font-mono">
+          <thead className="bg-zinc-900/60">
+            <tr>
+              {p.header.map((h, i) => (
+                <th
+                  key={i}
+                  className="px-3 py-1.5 text-left text-keboola border-b border-zinc-800 whitespace-nowrap"
+                >
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {p.rows.map((r, i) => (
+              <tr key={i} className="border-b border-zinc-900/40">
+                {r.map((c, j) => (
+                  <td key={j} className="px-3 py-1 text-zinc-300 whitespace-nowrap">
+                    {c}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

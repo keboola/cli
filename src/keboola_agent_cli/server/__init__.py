@@ -13,8 +13,11 @@ Key design choices:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import secrets
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,9 +27,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .. import __version__
 from ..config_store import ConfigStore, resolve_config_dir
 from ..errors import ConfigError, KeboolaApiError
+from .agents_store import AgentStore
 from .auth import AuthSettings, install_auth
 from .dependencies import ServiceRegistry, install_registry
 from .routers import (
+    agents,
     branches,
     components,
     configs,
@@ -83,7 +88,28 @@ def create_app(
     """
     resolved_token = auth_token or secrets.token_urlsafe(32)
 
+    @asynccontextmanager
+    async def _lifespan(app_: FastAPI):
+        # Start the agent scheduler loop in the background once services
+        # exist (registry is installed below before include_router calls).
+        from .agent_runner import scheduler_loop
+
+        scheduler_task = None
+        store = getattr(app_.state, "agent_store", None)
+        registry_ = getattr(app_.state, "registry", None)
+        if store is not None and registry_ is not None:
+            scheduler_task = asyncio.create_task(scheduler_loop(store, registry_))
+            logger.info("Agent scheduler task spawned")
+        try:
+            yield
+        finally:
+            if scheduler_task is not None:
+                scheduler_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await scheduler_task
+
     app = FastAPI(
+        lifespan=_lifespan,  # type: ignore[arg-type]
         title="kbagent serve",
         description=(
             "HTTP API surface for kbagent. Wraps all kbagent CLI commands as "
@@ -115,6 +141,8 @@ def create_app(
     config_store = ConfigStore(config_dir=resolved_dir, source=source)
     registry = ServiceRegistry(config_store=config_store)
     install_registry(app, registry)
+
+    app.state.agent_store = AgentStore(resolved_dir)
 
     @app.exception_handler(ConfigError)
     async def _config_error_handler(_request, exc: ConfigError):
@@ -154,6 +182,7 @@ def create_app(
     app.include_router(encrypt.router)
     app.include_router(search.router)
     app.include_router(org.router)
+    app.include_router(agents.router)
 
     app.state.auth_token = resolved_token
     return app

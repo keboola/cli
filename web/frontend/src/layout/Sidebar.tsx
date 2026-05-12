@@ -1,5 +1,6 @@
 import {
   Activity,
+  Bot,
   Boxes,
   Braces,
   Calendar,
@@ -15,8 +16,6 @@ import {
   PackageSearch,
   PlayCircle,
   Search,
-  Settings,
-  Share2,
   Sparkles,
   Terminal,
   Workflow,
@@ -59,8 +58,9 @@ const SECTIONS: Array<{
   {
     title: "Insights",
     items: [
+      // Lineage page has both "Sharing graph" + "Deep lineage" tabs --
+      // the standalone Sharing entry would be a duplicate.
       { id: "lineage", label: "Lineage", icon: Network },
-      { id: "sharing", label: "Sharing", icon: Share2 },
     ],
   },
   {
@@ -68,6 +68,7 @@ const SECTIONS: Array<{
     items: [
       { id: "mcp", label: "MCP Tools", icon: Sparkles },
       { id: "kai", label: "Kai Chat", icon: MessageSquare },
+      { id: "agents", label: "Agent Tasks", icon: Bot },
     ],
   },
   {

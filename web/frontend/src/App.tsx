@@ -1,4 +1,5 @@
 import { Shell } from "./layout/Shell";
+import { AgentsPage } from "./pages/Agents";
 import { BranchesPage } from "./pages/Branches";
 import { ChangelogPage } from "./pages/Changelog";
 import { ComponentsPage } from "./pages/Components";
@@ -52,6 +53,8 @@ function Router() {
       return <McpPage />;
     case "kai":
       return <KaiPage />;
+    case "agents":
+      return <AgentsPage />;
     case "search":
       return <SearchPage />;
     case "encrypt":

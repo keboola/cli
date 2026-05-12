@@ -146,7 +146,7 @@ def list_tables(
     return registry.storage.list_tables(aliases=project, bucket_id=bucket_id, branch_id=branch_id)
 
 
-@router.get("/tables/{project}/{table_id:path}")
+@router.get("/table-detail/{project}/{table_id:path}")
 def table_detail(
     project: str,
     table_id: str,
@@ -154,6 +154,66 @@ def table_detail(
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     return registry.storage.get_table_detail(alias=project, table_id=table_id, branch_id=branch_id)
+
+
+@router.get("/table-preview/{project}/{table_id:path}")
+def preview_table_v2(
+    project: str,
+    table_id: str,
+    limit: int = 100,
+    columns: list[str] | None = Query(None),
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Return up to ``limit`` rows via the synchronous data-preview endpoint.
+
+    Uses ``/v2/storage/tables/{id}/data-preview`` -- synchronous, capped at
+    a few hundred rows, no async export job. Storage API caps sync preview
+    at 30 columns max.
+
+    Lives under ``/table-preview`` (not ``/tables/.../preview``) because
+    ``{table_id:path}`` is greedy and would conflict with sibling routes.
+    """
+    import csv as _csv
+    import io as _io
+
+    projects = registry.storage.resolve_projects([project])
+    proj = projects[project]
+    client = registry.storage._client_factory(proj.stack_url, proj.token)
+    try:
+        text = client.get_table_data_preview(table_id=table_id, limit=limit, columns=columns)
+    finally:
+        client.close()
+    reader = _csv.reader(_io.StringIO(text))
+    rows = list(reader)
+    if not rows:
+        return {"header": [], "rows": [], "row_count": 0}
+    return {"header": rows[0], "rows": rows[1:], "row_count": len(rows) - 1}
+
+
+@router.get("/table-download/{project}/{table_id:path}")
+def download_table_v2(
+    project: str,
+    table_id: str,
+    columns: list[str] | None = Query(None),
+    limit: int | None = None,
+    branch_id: int | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> FileResponse:
+    """Download the full table as CSV (uses async export)."""
+    out_path = Path(tempfile.mkstemp(suffix=".csv", prefix="kbagent-")[1])
+    registry.storage.download_table(
+        alias=project,
+        table_id=table_id,
+        output_path=str(out_path),
+        columns=columns,
+        limit=limit,
+        branch_id=branch_id,
+    )
+    return FileResponse(
+        path=str(out_path),
+        media_type="text/csv",
+        filename=f"{table_id.replace('.', '_')}.csv",
+    )
 
 
 @router.post("/tables/{project}")
@@ -194,31 +254,6 @@ async def upload_table(
         )
     finally:
         tmp_path.unlink(missing_ok=True)
-
-
-@router.get("/tables/{project}/{table_id:path}/download")
-def download_table(
-    project: str,
-    table_id: str,
-    columns: list[str] | None = Query(None),
-    limit: int | None = None,
-    branch_id: int | None = None,
-    registry: ServiceRegistry = Depends(get_registry),
-) -> FileResponse:
-    out_path = Path(tempfile.mkstemp(suffix=".csv", prefix="kbagent-")[1])
-    registry.storage.download_table(
-        alias=project,
-        table_id=table_id,
-        output_path=out_path,
-        columns=columns,
-        limit=limit,
-        branch_id=branch_id,
-    )
-    return FileResponse(
-        path=str(out_path),
-        media_type="text/csv",
-        filename=f"{table_id.replace('.', '_')}.csv",
-    )
 
 
 @router.delete("/tables/{project}")

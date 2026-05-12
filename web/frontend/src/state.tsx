@@ -20,6 +20,7 @@ export type PageId =
   | "components"
   | "mcp"
   | "kai"
+  | "agents"
   | "search"
   | "encrypt"
   | "org"

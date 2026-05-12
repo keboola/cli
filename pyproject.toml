@@ -28,6 +28,7 @@ server = [
     "uvicorn[standard]>=0.30",
     "sse-starlette>=2.1",
     "python-multipart>=0.0.9",
+    "croniter>=2.0",
 ]
 
 [project.scripts]

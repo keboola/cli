@@ -108,10 +108,13 @@ web-install: ## Install web/backend + web/frontend npm dependencies
 	cd web/backend && npm install
 	cd web/frontend && npm install
 
-web-dev-backend: ## Run the Node BFF in watch mode (needs KBAGENT_SERVE_TOKEN env)
+web-dev: ## Spin up kbagent serve + BFF + Vite in ONE terminal (Ctrl+C kills all)
+	./scripts/web-dev.sh $(if $(CONFIG_DIR),--config-dir $(CONFIG_DIR),)
+
+web-dev-backend: ## Run only the Node BFF in watch mode (needs KBAGENT_SERVE_TOKEN env)
 	cd web/backend && npm run dev
 
-web-dev-frontend: ## Run the Vite dev server (proxies /api -> BFF on :8000)
+web-dev-frontend: ## Run only the Vite dev server (proxies /api -> BFF on :8000)
 	cd web/frontend && npm run dev
 
 web-build: ## Build the React app into web/frontend/dist
