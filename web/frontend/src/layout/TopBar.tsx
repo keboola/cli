@@ -40,7 +40,7 @@ export function TopBar() {
     : "main";
 
   return (
-    <header className="border-b border-zinc-900 bg-zinc-950/40 backdrop-blur px-4 h-12 flex items-center gap-4">
+    <header className="relative z-40 border-b border-zinc-900 bg-zinc-950/40 backdrop-blur px-4 h-12 flex items-center gap-4">
       <ProjectPicker
         projects={projectsQ.data?.projects ?? []}
         current={project}
@@ -98,7 +98,7 @@ function ProjectPicker({
         <ChevronDown className="w-3 h-3 opacity-60" />
       </button>
       {open ? (
-        <div className="absolute top-full left-0 mt-1 z-30 w-72 max-h-96 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 shadow-xl">
+        <div className="absolute top-full left-0 mt-1 z-50 w-72 max-h-96 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 shadow-xl">
           {projects.length === 0 ? (
             <div className="px-3 py-4 text-xs text-zinc-500">
               No projects. Add one via the Projects page.
@@ -166,7 +166,7 @@ function BranchPicker({
         <ChevronDown className="w-3 h-3 opacity-60" />
       </button>
       {open ? (
-        <div className="absolute top-full left-0 mt-1 z-30 w-64 max-h-72 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 shadow-xl">
+        <div className="absolute top-full left-0 mt-1 z-50 w-64 max-h-72 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 shadow-xl">
           <button
             type="button"
             onClick={() => {

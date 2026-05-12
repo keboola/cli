@@ -329,8 +329,8 @@ def describe_columns(
 def list_files(
     project: str,
     tag: list[str] | None = Query(None),
-    limit: int | None = None,
-    offset: int | None = None,
+    limit: int = 50,
+    offset: int = 0,
     query: str | None = None,
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
@@ -364,7 +364,7 @@ async def upload_file(
             file_path=tmp_path,
             name=name or file.filename,
             tags=tag,
-            permanent=permanent,
+            is_permanent=permanent,
             branch_id=branch_id,
         )
     finally:
