@@ -330,14 +330,52 @@ function DeepLineageTab() {
 
       {info ? (
         <>
-          <div className="nerd-card">
-            <h3 className="text-sm font-bold text-keboola mb-2">Graph summary</h3>
-            <JsonView data={info} maxHeight="200px" />
+          <details className="nerd-card">
+            <summary className="text-sm font-bold text-keboola cursor-pointer">
+              Graph summary (click to expand)
+            </summary>
+            <div className="mt-2">
+              <JsonView data={info} maxHeight="200px" />
+            </div>
+          </details>
+
+          {/* Embed the existing `kbagent lineage server` HTML browser as an
+              iframe -- it already handles sidebar / node search / direction /
+              depth / mermaid diagram / columns toggle / ER view. No need to
+              re-implement any of it in React. */}
+          <div className="nerd-card p-0 overflow-hidden">
+            <div className="px-3 py-2 border-b border-zinc-800 flex items-center justify-between text-xs">
+              <span className="text-keboola font-bold">
+                Interactive browser
+                <span className="text-zinc-500 font-normal ml-2">
+                  (sidebar tree ・ search ・ upstream / downstream walk ・ Mermaid ・ ER ・ columns)
+                </span>
+              </span>
+              <a
+                href={`/api/lineage/browser?load=${encodeURIComponent(path)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-zinc-500 hover:text-keboola"
+              >
+                open in new tab ↗
+              </a>
+            </div>
+            <iframe
+              key={path}
+              src={`/api/lineage/browser?load=${encodeURIComponent(path)}`}
+              title="Lineage browser"
+              className="w-full bg-white"
+              style={{ height: "70vh", border: 0 }}
+            />
           </div>
 
-          <div className="nerd-card space-y-3">
-            <h3 className="text-sm font-bold text-keboola">Walk the graph</h3>
-            <div className="flex gap-2 flex-wrap items-end">
+          {/* Headless walk -- handy if you just want a JSON dump for an LLM
+              to consume without scraping the iframe. */}
+          <details className="nerd-card space-y-3">
+            <summary className="text-sm font-bold text-keboola cursor-pointer">
+              Headless walk (JSON, for scripting)
+            </summary>
+            <div className="flex gap-2 flex-wrap items-end mt-3">
               <label className="text-xs text-zinc-400 flex-1 min-w-[260px]">
                 Node FQN (project:table or table.id)
                 <input
@@ -380,14 +418,8 @@ function DeepLineageTab() {
                 {queryMu.isPending ? "walking..." : "Walk"}
               </button>
             </div>
-          </div>
-
-          {queryResult ? (
-            <div className="nerd-card">
-              <h3 className="text-sm font-bold text-keboola mb-2">Walk result</h3>
-              <JsonView data={queryResult} />
-            </div>
-          ) : null}
+            {queryResult ? <JsonView data={queryResult} /> : null}
+          </details>
         </>
       ) : (
         <Empty
