@@ -98,9 +98,10 @@ def serve_command(
         "--ui",
         help=(
             "Mount the built React SPA at / so a single uvicorn process serves "
-            "both the API and the UI. The bearer token is injected into "
-            "index.html so the browser boots already authenticated -- no Node "
-            "BFF needed. Run `make web-build` once to produce the dist/ folder."
+            "both the API and the UI. ``GET /`` sets an HttpOnly `kbagent_session` "
+            "cookie (SameSite=Strict, Path=/) so the browser boots already "
+            "authenticated -- no Node BFF, no paste step, no token in the JS "
+            "heap or URL. Run `make web-build` once to produce the dist/ folder."
         ),
     ),
     ui_dist: str | None = typer.Option(
@@ -186,7 +187,8 @@ def serve_command(
             f"  ├─ ui dist:   {resolved_ui_dist}\n"
             f"  └─ token:     {auth_token}\n"
             "\n"
-            "  Browser is auto-authenticated via injected window.__KBAGENT_TOKEN.\n"
+            "  Browser is auto-authenticated via an HttpOnly kbagent_session cookie\n"
+            "  set on GET /. Token never enters the JS heap or the URL.\n"
             f"  For curl / scripts: Authorization: Bearer {auth_token}\n"
             "\n"
         )

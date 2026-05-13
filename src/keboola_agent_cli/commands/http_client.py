@@ -27,7 +27,7 @@ from ..services.http_forwarder_service import (
     ForwarderError,
     HttpForwarderService,
 )
-from ._helpers import emit_hint, get_formatter, get_service, should_hint
+from ._helpers import emit_hint, get_formatter, should_hint
 
 http_app = typer.Typer(
     help=(
@@ -163,11 +163,3 @@ def http_delete(
     if should_hint(ctx):
         emit_hint(ctx, "http.delete", path=path, timeout=timeout)
     _do_request(ctx, "DELETE", path, body=None, timeout=timeout)
-
-
-# Note on ``get_service`` import:
-# We import it for symmetry with other command modules even though
-# ``_resolve_service`` uses ``ctx.obj.get(...)`` directly so the empty-
-# ctx test path stays graceful. Leaving the import in place keeps the
-# module structurally identical to other command files.
-_ = get_service  # silence "unused import" without changing the public surface

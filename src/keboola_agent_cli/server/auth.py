@@ -17,6 +17,8 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
+from ..errors import ErrorCode
+
 logger = logging.getLogger(__name__)
 
 PUBLIC_PATHS: frozenset[str] = frozenset(
@@ -91,7 +93,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
                 content={
                     "status": "error",
                     "error": {
-                        "code": "UNAUTHORIZED",
+                        "code": str(ErrorCode.UNAUTHORIZED),
                         "message": "Missing Bearer token. Set Authorization header.",
                     },
                 },
@@ -102,7 +104,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
                 content={
                     "status": "error",
                     "error": {
-                        "code": "UNAUTHORIZED",
+                        "code": str(ErrorCode.UNAUTHORIZED),
                         "message": "Invalid Bearer token.",
                     },
                 },

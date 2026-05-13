@@ -196,7 +196,7 @@ Requires the project to be added with its **master ('owner') Storage API token**
 ## Encryption
 - `encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]` -- encrypt #-prefixed secrets via Keboola Encryption API (one-way, no decrypt). Scope: ComponentSecure (project + component). Use for MCP tool call workflows.
 
-## Self-Call HTTP (inside `kbagent serve` subprocesses; since v0.33.x)
+## Self-Call HTTP (inside `kbagent serve` subprocesses; since v0.40.0)
 - `http get PATH [--timeout SECONDS]` -- GET an endpoint on the running `kbagent serve`
 - `http post PATH [--body JSON|@file|-] [--timeout SECONDS]` -- POST with optional JSON body
 - `http patch PATH [--body JSON|@file|-] [--timeout SECONDS]` -- PATCH with optional JSON body

@@ -26,7 +26,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .. import __version__
 from ..config_store import ConfigStore, resolve_config_dir
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from .agents_store import AgentStore
 from .auth import AuthSettings, install_auth
 from .dependencies import ServiceRegistry, install_registry
@@ -56,14 +56,23 @@ from .routers import (
 logger = logging.getLogger(__name__)
 
 
-def _format_error(message: str, error_code: str, *, http_status: int = 400) -> JSONResponse:
-    """Render a kbagent-style error envelope at the given HTTP status."""
+def _format_error(
+    message: str, error_code: ErrorCode | str, *, http_status: int = 400
+) -> JSONResponse:
+    """Render a kbagent-style error envelope at the given HTTP status.
+
+    ``error_code`` accepts both :class:`ErrorCode` enum members (the canonical
+    surface; matches CLI error envelopes byte-for-byte) and raw strings (for
+    forward compatibility when a router wraps a third-party exception whose
+    code is not yet in the enum). The :class:`ErrorCode` mixes in ``str``, so
+    both shapes serialise as plain strings in the JSON body.
+    """
     return JSONResponse(
         status_code=http_status,
         content={
             "status": "error",
             "error": {
-                "code": error_code,
+                "code": str(error_code),
                 "message": message,
             },
         },
@@ -175,22 +184,24 @@ def create_app(
 
     @app.exception_handler(ConfigError)
     async def _config_error_handler(_request, exc: ConfigError):
-        return _format_error(str(exc), "CONFIG_ERROR", http_status=400)
+        return _format_error(str(exc), ErrorCode.CONFIG_ERROR, http_status=400)
 
     @app.exception_handler(KeboolaApiError)
     async def _api_error_handler(_request, exc: KeboolaApiError):
-        code = getattr(exc, "error_code", "API_ERROR")
+        code = getattr(exc, "error_code", ErrorCode.API_ERROR)
         msg = getattr(exc, "message", str(exc)) or str(exc)
         return _format_error(msg, code, http_status=502)
 
     @app.exception_handler(StarletteHTTPException)
     async def _starlette_handler(_request, exc: StarletteHTTPException):
-        return _format_error(exc.detail or "HTTP error", "HTTP_ERROR", http_status=exc.status_code)
+        return _format_error(
+            exc.detail or "HTTP error", ErrorCode.HTTP_ERROR, http_status=exc.status_code
+        )
 
     @app.exception_handler(Exception)
     async def _generic_handler(_request, exc: Exception):
         logger.exception("Unhandled error: %s", exc)
-        return _format_error(str(exc) or repr(exc), "INTERNAL_ERROR", http_status=500)
+        return _format_error(str(exc) or repr(exc), ErrorCode.INTERNAL_ERROR, http_status=500)
 
     app.include_router(health.router)
     app.include_router(projects.router)
