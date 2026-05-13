@@ -2,9 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
   Brain,
-  Check,
-  ChevronRight,
-  Clipboard,
   Pause,
   Pencil,
   Play,
@@ -12,11 +9,16 @@ import {
   Sparkles,
   Terminal,
   Trash2,
-  Wrench,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ssePost, type SsePostHandle } from "../api/client";
+import {
+  AgentRunRaw,
+  AgentRunView,
+  type AgentEvent,
+  type RunSummary,
+} from "../components/AgentRunView";
 import { Drawer } from "../components/Drawer";
 import { ErrorBox, Loading, PageTitle, TwoPathEmpty } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
@@ -66,15 +68,10 @@ interface AgentRun {
   status: "running" | "ok" | "error";
   output: Record<string, unknown> | null;
   error: string | null;
-}
-
-// One line item in the live event timeline shown during a test run.
-// Mirror of the SSE `event:` field; data shape depends on event name
-// (init / stdout / stderr / done). See routers/agents.py:test_action_stream.
-interface TestEvent {
-  type: string;
-  data: Record<string, unknown>;
-  at: number; // ms since the test started
+  // Optional fields populated by ``server/pricing.build_run_summary`` after
+  // v0.10.x for ai_agent runs. Older persisted runs carry them as null/absent.
+  summary?: RunSummary | null;
+  events_path?: string | null;
 }
 
 const CRON_PRESETS: Array<{ label: string; cron: string }> = [
@@ -117,263 +114,10 @@ function ActionLabel({ action }: { action: AgentTask["action"] }) {
   );
 }
 
-// Render the live event stream from /agents/test/stream. We do type-aware
-// formatting for claude's stream-json events (the ones the user wants to see:
-// "session init", "tool use Bash", "tool result", "assistant text") and fall
-// back to a raw JSON line for unknown shapes.
-// Serialize the event stream as a copy-paste-friendly text block.
-// One event per line for stdout/stderr (the JSONL body) and a single
-// line for init/done. Mirrors what the user visually scans, but without
-// the type-aware icons -- so they can paste into a bug report or grep.
-function formatEventsForClipboard(events: TestEvent[]): string {
-  const lines: string[] = [];
-  for (const evt of events) {
-    const ts = `+${(evt.at / 1000).toFixed(1)}s`;
-    const d = evt.data;
-    if (evt.type === "init") {
-      lines.push(`${ts} [init] ${d.cli ?? d.action_type ?? ""} argv=${JSON.stringify(d.argv ?? [])}`);
-    } else if (evt.type === "stdout" || evt.type === "stderr") {
-      const body =
-        "raw" in d ? String(d.raw) : JSON.stringify(d);
-      lines.push(`${ts} [${evt.type}] ${body}`);
-    } else if (evt.type === "done") {
-      lines.push(
-        `${ts} [done] status=${d.status ?? "?"} exit=${d.exit_code ?? "?"} elapsed=${d.elapsed_seconds ?? "?"}s`,
-      );
-      if (d.response) lines.push(`--- response ---\n${d.response}`);
-      if (d.stderr) lines.push(`--- stderr ---\n${d.stderr}`);
-      if (d.error) lines.push(`--- error ---\n${d.error}`);
-    } else {
-      lines.push(`${ts} [${evt.type}] ${JSON.stringify(d)}`);
-    }
-  }
-  return lines.join("\n");
-}
-
-function TimelinePanel({
-  events,
-  running,
-  elapsed,
-}: {
-  events: TestEvent[];
-  running: boolean;
-  elapsed: number;
-}) {
-  // Stick-to-bottom UX: auto-scroll on new events only while the user is
-  // already near the bottom (within ~40px). If they scrolled up to read
-  // an older event we leave their viewport alone -- a chat-log convention
-  // (Slack, Discord, terminal `tail -f` UIs).
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const stickyRef = useRef(true);
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !stickyRef.current) return;
-    el.scrollTop = el.scrollHeight;
-  }, [events.length]);
-  const onCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(formatEventsForClipboard(events));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard API requires secure context + user gesture. We're inside
-      // an onClick so the gesture is fine; secure context is the failure
-      // mode (http:// without --allow-insecure-localhost). Silent fall
-      // through: user will notice "copied!" never appears.
-    }
-  };
-  return (
-    <div className="nerd-card border-neon-pink/40">
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-xs text-neon-pink flex items-center gap-2">
-          {running ? (
-            <>
-              <span className="w-2 h-2 rounded-full bg-neon-pink animate-pulse" />
-              Test running ・ {elapsed}s elapsed ・ AI agents can take 30-120s
-            </>
-          ) : (
-            <>
-              <span className="w-2 h-2 rounded-full bg-zinc-700" />
-              Test finished ・ {events.length} events
-            </>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={onCopy}
-          className="nerd-btn text-[10px] flex items-center gap-1"
-          title="Copy the full event log as plain text (for bug reports, grep, jq)"
-          disabled={events.length === 0}
-        >
-          {copied ? (
-            <>
-              <Check className="w-3 h-3 text-keboola" />
-              copied!
-            </>
-          ) : (
-            <>
-              <Clipboard className="w-3 h-3" />
-              copy log
-            </>
-          )}
-        </button>
-      </div>
-      <div
-        ref={scrollRef}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          stickyRef.current =
-            el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-        }}
-        className="space-y-1 font-mono text-[11px] overflow-auto"
-        style={{ maxHeight: "calc(100vh - 14rem)" }}
-      >
-        {events.map((evt, i) => (
-          <TimelineRow key={i} event={evt} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function TimelineRow({ event }: { event: TestEvent }) {
-  const { type, data, at } = event;
-  const ts = `+${(at / 1000).toFixed(1)}s`;
-  const claudeType =
-    type === "stdout" && typeof data?.type === "string"
-      ? (data.type as string)
-      : null;
-
-  // --- claude stream-json events: type-aware pretty rendering ---
-  if (claudeType === "system" && data.subtype === "init") {
-    return (
-      <div className="text-zinc-500">
-        <span className="text-zinc-600 mr-2">{ts}</span>
-        <ChevronRight className="w-3 h-3 inline" /> session init ・ model{" "}
-        <span className="text-accent">{String(data.model ?? "?")}</span>
-        {data.tools ? ` ・ ${(data.tools as unknown[]).length} tools` : ""}
-      </div>
-    );
-  }
-  if (claudeType === "assistant") {
-    const content = ((data.message as Record<string, unknown> | undefined)?.content ??
-      []) as Array<Record<string, unknown>>;
-    return (
-      <>
-        {content.map((block, i) => {
-          if (block.type === "text") {
-            return (
-              <div key={i} className="text-zinc-200">
-                <span className="text-zinc-600 mr-2">{ts}</span>
-                <Brain className="w-3 h-3 inline mr-1 text-neon-pink" />
-                {String(block.text ?? "")}
-              </div>
-            );
-          }
-          if (block.type === "tool_use") {
-            const input = block.input ? JSON.stringify(block.input) : "";
-            return (
-              <div key={i} className="text-keboola">
-                <span className="text-zinc-600 mr-2">{ts}</span>
-                <Wrench className="w-3 h-3 inline mr-1" /> {String(block.name)}(
-                <span className="text-zinc-500">
-                  {input.length > 120 ? input.slice(0, 120) + "…" : input}
-                </span>
-                )
-              </div>
-            );
-          }
-          return (
-            <div key={i} className="text-zinc-500">
-              <span className="text-zinc-600 mr-2">{ts}</span>
-              {JSON.stringify(block)}
-            </div>
-          );
-        })}
-      </>
-    );
-  }
-  if (claudeType === "user") {
-    const content = ((data.message as Record<string, unknown> | undefined)?.content ??
-      []) as Array<Record<string, unknown>>;
-    return (
-      <>
-        {content.map((block, i) => {
-          if (block.type === "tool_result") {
-            const text = Array.isArray(block.content)
-              ? (block.content as Array<{ text?: string }>)
-                  .map((c) => c.text ?? "")
-                  .join("")
-              : String(block.content ?? "");
-            const isError = block.is_error === true;
-            return (
-              <div
-                key={i}
-                className={isError ? "text-red-400" : "text-zinc-400"}
-              >
-                <span className="text-zinc-600 mr-2">{ts}</span>
-                {isError ? "✗" : "✓"} tool result:{" "}
-                <span className="text-zinc-500">
-                  {text.length > 200 ? text.slice(0, 200) + "…" : text}
-                </span>
-              </div>
-            );
-          }
-          return null;
-        })}
-      </>
-    );
-  }
-  if (claudeType === "result") {
-    return (
-      <div className="text-keboola font-bold">
-        <span className="text-zinc-600 mr-2">{ts}</span>
-        ✓ result ・ {String(data.subtype ?? "")} ・{" "}
-        {data.duration_ms ? `${Math.round((data.duration_ms as number) / 100) / 10}s` : ""}
-      </div>
-    );
-  }
-
-  // --- non-claude events ---
-  if (type === "init") {
-    return (
-      <div className="text-zinc-500">
-        <span className="text-zinc-600 mr-2">{ts}</span>
-        <ChevronRight className="w-3 h-3 inline" /> spawning{" "}
-        <span className="text-accent">{String(data.cli ?? data.action_type ?? "?")}</span>
-      </div>
-    );
-  }
-  if (type === "stderr") {
-    return (
-      <div className="text-yellow-500/80">
-        <span className="text-zinc-600 mr-2">{ts}</span>
-        stderr: {String(data.raw ?? "")}
-      </div>
-    );
-  }
-  if (type === "done") {
-    const status = String(data.status ?? "?");
-    return (
-      <div
-        className={`font-bold ${
-          status === "ok" ? "text-keboola" : "text-red-400"
-        }`}
-      >
-        <span className="text-zinc-600 mr-2">{ts}</span>
-        done ・ status={status} ・ exit={String(data.exit_code ?? "?")}
-      </div>
-    );
-  }
-  // Fallback: raw JSON
-  return (
-    <div className="text-zinc-500">
-      <span className="text-zinc-600 mr-2">{ts}</span>
-      [{type}] {JSON.stringify(data)}
-    </div>
-  );
-}
+// Helper: convert raw SSE event from /agents/.../run/stream into the
+// AgentEvent shape consumed by AgentRunView. ``type`` becomes ``event``,
+// ``data`` is preserved, and ``at`` is filled in by the caller (it's the
+// ms-since-start that lives in the SSE consumer closure).
 
 export function AgentsPage() {
   const qc = useQueryClient();
@@ -664,7 +408,7 @@ function NewTaskDrawer({
   // Live event timeline -- populated by the SSE consumer, rendered while
   // the AI agent is still running so the user sees what claude is doing
   // instead of staring at a "running... 60s" spinner.
-  const [testEvents, setTestEvents] = useState<TestEvent[]>([]);
+  const [testEvents, setTestEvents] = useState<AgentEvent[]>([]);
   const [testRunning, setTestRunning] = useState(false);
   const testHandleRef = useRef<SsePostHandle | null>(null);
 
@@ -749,11 +493,11 @@ function NewTaskDrawer({
       () => setTestElapsed(Math.round((Date.now() - start) / 1000)),
       500,
     );
-    const push = (type: string, data: unknown) => {
+    const push = (event: string, data: unknown) => {
       setTestEvents((prev) => [
         ...prev,
         {
-          type,
+          event,
           data: (data ?? {}) as Record<string, unknown>,
           at: Date.now() - start,
         },
@@ -896,8 +640,7 @@ function NewTaskDrawer({
         </>
       }
     >
-      <div className="flex gap-4">
-        <div className="flex-1 min-w-0 space-y-4">
+      <div className="space-y-4">
         <label className="text-xs text-zinc-400 block">
           Name
           <input
@@ -1069,136 +812,36 @@ function NewTaskDrawer({
           Enable immediately (will start running per cron)
         </label>
         {error ? <ErrorBox message={error} /> : null}
-        </div>
-        {testRunning || testEvents.length > 0 || testRun ? (
-          <aside
-            className="w-[440px] flex-shrink-0 sticky top-0 self-start space-y-3"
-            style={{ maxHeight: "calc(100vh - 8rem)" }}
-          >
-            {testRunning || testEvents.length > 0 ? (
-              <TimelinePanel
-                events={testEvents}
-                running={testRunning}
-                elapsed={testElapsed}
-              />
-            ) : null}
-            {testRun ? (
-          <div
-            className={`nerd-card ${
-              testRun.status === "ok"
-                ? "border-keboola/40"
-                : "border-red-700/40"
-            }`}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-bold text-keboola">
-                Test result ・ {testRun.status} ・{" "}
-                {testRun.ended_at && testRun.started_at
-                  ? `${Math.round(
-                      (new Date(testRun.ended_at).getTime() -
-                        new Date(testRun.started_at).getTime()) /
-                        1000,
-                    )}s`
-                  : "?s"}
+      </div>
+      {testRunning || testEvents.length > 0 ? (
+        <div className="mt-4 space-y-3">
+          <AgentRunView
+            events={testEvents}
+            running={testRunning}
+            elapsed={testElapsed}
+            onCancel={cancelTest}
+          />
+          <AgentRunRaw events={testEvents} />
+          {testRun?.output && ("stdout" in testRun.output || "results" in testRun.output) ? (
+            <div className="nerd-card">
+              <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
+                Raw output (cli/mcp action)
               </h3>
-              <button
-                type="button"
-                className="nerd-btn text-xs"
-                onClick={() => setTestRun(null)}
-              >
-                clear
-              </button>
-            </div>
-            {testRun.error ? <ErrorBox message={testRun.error} /> : null}
-            {testRun.output && "response" in testRun.output ? (
-              <>
-                <details open>
-                  <summary className="text-xs text-keboola cursor-pointer">
-                    AI response (exit code:{" "}
-                    {String(testRun.output.exit_code ?? "?")})
-                  </summary>
-                  <pre
-                    className="nerd-code whitespace-pre-wrap"
-                    style={{ maxHeight: "320px" }}
-                  >
-                    {String(testRun.output.response ?? "")}
-                  </pre>
-                </details>
-                {testRun.output.stderr ? (
-                  <details
-                    open={
-                      Number(testRun.output.exit_code) !== 0 ||
-                      !testRun.output.response
-                    }
-                  >
-                    <summary className="text-xs text-zinc-500 cursor-pointer mt-2">
-                      stderr (where claude logs its plan + errors)
-                    </summary>
-                    <pre
-                      className="nerd-code whitespace-pre-wrap"
-                      style={{ maxHeight: "240px" }}
-                    >
-                      {String(testRun.output.stderr ?? "")}
-                    </pre>
-                  </details>
-                ) : null}
-                {testRun.output.argv ? (
-                  <details>
-                    <summary className="text-xs text-zinc-500 cursor-pointer mt-2">
-                      argv (exact subprocess invocation)
-                    </summary>
-                    <pre
-                      className="nerd-code whitespace-pre-wrap"
-                      style={{ maxHeight: "120px" }}
-                    >
-                      {Array.isArray(testRun.output.argv)
-                        ? (testRun.output.argv as string[]).join(" ")
-                        : String(testRun.output.argv)}
-                    </pre>
-                  </details>
-                ) : null}
-              </>
-            ) : null}
-            {testRun.output && "stdout" in testRun.output ? (
-              <details open>
-                <summary className="text-xs text-keboola cursor-pointer">
-                  stdout (exit code:{" "}
-                  {String(testRun.output.exit_code ?? "?")})
-                </summary>
+              {testRun.output && "stdout" in testRun.output ? (
                 <pre
                   className="nerd-code whitespace-pre-wrap"
                   style={{ maxHeight: "240px" }}
                 >
                   {String(testRun.output.stdout ?? "")}
                 </pre>
-                {testRun.output.stderr ? (
-                  <details>
-                    <summary className="text-xs text-zinc-500 cursor-pointer mt-2">
-                      stderr
-                    </summary>
-                    <pre
-                      className="nerd-code whitespace-pre-wrap"
-                      style={{ maxHeight: "160px" }}
-                    >
-                      {String(testRun.output.stderr ?? "")}
-                    </pre>
-                  </details>
-                ) : null}
-              </details>
-            ) : null}
-            {testRun.output && "results" in testRun.output ? (
-              <details open>
-                <summary className="text-xs text-keboola cursor-pointer">
-                  MCP results
-                </summary>
+              ) : null}
+              {testRun.output && "results" in testRun.output ? (
                 <JsonView data={testRun.output} maxHeight="320px" />
-              </details>
-            ) : null}
-          </div>
-        ) : null}
-          </aside>
-        ) : null}
-      </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </Drawer>
   );
 }
@@ -1223,7 +866,7 @@ function TaskDetailDrawer({
 
   // Live-run state mirrors what NewTaskDrawer does for /agents/test/stream,
   // but here we point at /agents/{id}/run/stream (persistent + attach-aware).
-  const [liveEvents, setLiveEvents] = useState<TestEvent[]>([]);
+  const [liveEvents, setLiveEvents] = useState<AgentEvent[]>([]);
   const [liveRunning, setLiveRunning] = useState(false);
   const [liveElapsed, setLiveElapsed] = useState(0);
   const [liveError, setLiveError] = useState<string | null>(null);
@@ -1243,10 +886,10 @@ function TaskDetailDrawer({
       () => setLiveElapsed(Math.round((Date.now() - start) / 1000)),
       500,
     );
-    const push = (type: string, data: unknown) => {
+    const push = (event: string, data: unknown) => {
       setLiveEvents((prev) => [
         ...prev,
-        { type, data: (data ?? {}) as Record<string, unknown>, at: Date.now() - start },
+        { event, data: (data ?? {}) as Record<string, unknown>, at: Date.now() - start },
       ]);
     };
     const handle = ssePost(
@@ -1309,7 +952,7 @@ function TaskDetailDrawer({
     };
   }, []);
 
-  const showSidebar = liveRunning || liveEvents.length > 0;
+  const showLive = liveRunning || liveEvents.length > 0;
 
   return (
     <Drawer
@@ -1319,13 +962,13 @@ function TaskDetailDrawer({
       subtitle={`${task.action.type} ・ cron: ${task.cron} ・ ${
         task.enabled ? "enabled" : "disabled"
       }`}
-      width={showSidebar ? "max-w-6xl" : "max-w-4xl"}
+      width={showLive ? "max-w-7xl" : "max-w-4xl"}
       actions={
         <>
           {liveRunning ? (
             <button
               type="button"
-              className="nerd-btn hover:text-red-400"
+              className="nerd-btn hover:text-red-500"
               onClick={cancelLive}
               title="Stop the live run (kill-on-disconnect)"
             >
@@ -1355,49 +998,53 @@ function TaskDetailDrawer({
         </>
       }
     >
-      <div className="flex gap-4">
-        <div className="flex-1 min-w-0 space-y-4">
-          <div className="nerd-card">
-            <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
-              Action
-            </h3>
-            <JsonView data={task.action} maxHeight="200px" />
-          </div>
-          <div>
-            <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
-              Recent runs (auto-refreshing)
-            </h3>
-            {runsQ.isLoading ? <Loading /> : null}
-            {runsQ.data?.runs.length === 0 ? (
-              <div className="text-xs text-zinc-500">No runs yet.</div>
-            ) : null}
-            <div className="space-y-2">
-              {(runsQ.data?.runs ?? []).map((r) => (
-                <RunItem key={r.run_id} run={r} />
-              ))}
-            </div>
-          </div>
-          {liveError ? <ErrorBox message={liveError} /> : null}
-        </div>
-        {showSidebar ? (
-          <aside
-            className="w-[440px] flex-shrink-0 sticky top-0 self-start"
-            style={{ maxHeight: "calc(100vh - 8rem)" }}
-          >
-            <TimelinePanel
+      <div className="space-y-4">
+        {showLive ? (
+          <div className="space-y-3">
+            <AgentRunView
               events={liveEvents}
               running={liveRunning}
               elapsed={liveElapsed}
+              onCancel={cancelLive}
             />
-          </aside>
+            <AgentRunRaw events={liveEvents} />
+          </div>
         ) : null}
+        {liveError ? <ErrorBox message={liveError} /> : null}
+        <div className="nerd-card">
+          <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-2">Action</h3>
+          <JsonView data={task.action} maxHeight="200px" />
+        </div>
+        <div>
+          <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
+            Recent runs (auto-refreshing)
+          </h3>
+          {runsQ.isLoading ? <Loading /> : null}
+          {runsQ.data?.runs.length === 0 ? (
+            <div className="text-xs text-zinc-500">No runs yet.</div>
+          ) : null}
+          <div className="space-y-2">
+            {(runsQ.data?.runs ?? []).map((r) => (
+              <RunItem key={r.run_id} run={r} taskId={task.id} />
+            ))}
+          </div>
+        </div>
       </div>
     </Drawer>
   );
 }
 
-function RunItem({ run }: { run: AgentRun }) {
+function RunItem({ run, taskId }: { run: AgentRun; taskId: string }) {
   const [open, setOpen] = useState(false);
+  // Lazy-load the persisted event timeline only when the user expands the
+  // row -- keeps the runs list cheap (we'd otherwise refetch N timelines
+  // every 5s as the list auto-refreshes).
+  const eventsQ = useQuery<{ events: AgentEvent[]; count: number }>({
+    queryKey: ["agent-run-events", taskId, run.run_id],
+    queryFn: () => api.get(`/agents/${taskId}/runs/${run.run_id}/events`),
+    enabled: open && !!run.events_path,
+    retry: false,
+  });
   const styleClass =
     run.status === "ok"
       ? "nerd-pill-green"
@@ -1413,36 +1060,72 @@ function RunItem({ run }: { run: AgentRun }) {
     run.output && typeof run.output === "object" && "stdout" in run.output
       ? String((run.output as Record<string, unknown>).stdout ?? "")
       : null;
+  // Surface a few key metrics inline on the collapsed row so users can scan
+  // the runs list at a glance ($ + tokens + tool calls per run).
+  const summary = run.summary ?? null;
+  const dur = run.ended_at
+    ? Math.round((new Date(run.ended_at).getTime() - new Date(run.started_at).getTime()) / 1000)
+    : null;
   return (
-    <div className="border border-zinc-800 rounded">
+    <div className="border border-zinc-200 rounded bg-white dark:border-zinc-800 dark:bg-transparent">
       <button
         type="button"
-        className="w-full text-left px-3 py-2 flex items-center justify-between hover:bg-zinc-900/40"
+        className="w-full text-left px-3 py-2 flex items-center justify-between hover:bg-zinc-50 dark:hover:bg-zinc-900/40"
         onClick={() => setOpen((o) => !o)}
       >
-        <div className="flex items-center gap-3 text-xs">
+        <div className="flex items-center gap-3 text-xs flex-wrap">
           <span className={styleClass}>{run.status}</span>
-          <span className="text-zinc-400">{new Date(run.started_at).toLocaleString()}</span>
-          {run.ended_at ? (
-            <span className="text-zinc-600">
-              (
-              {Math.round(
-                (new Date(run.ended_at).getTime() - new Date(run.started_at).getTime()) /
-                  1000,
-              )}
-              s)
+          <span className="text-zinc-700 dark:text-zinc-400">
+            {new Date(run.started_at).toLocaleString()}
+          </span>
+          {dur != null ? (
+            <span className="text-zinc-500 dark:text-zinc-600">({dur}s)</span>
+          ) : null}
+          {summary?.cost_usd?.total != null ? (
+            <span className="nerd-pill border-keboola/40 text-keboola">
+              ${summary.cost_usd.total.toFixed(summary.cost_usd.total < 0.01 ? 4 : 3)}
+            </span>
+          ) : null}
+          {summary?.tokens?.total ? (
+            <span className="nerd-pill">
+              {summary.tokens.total < 1000
+                ? `${summary.tokens.total} tok`
+                : `${(summary.tokens.total / 1000).toFixed(1)}k tok`}
+            </span>
+          ) : null}
+          {summary?.tools?.count ? (
+            <span className="nerd-pill">
+              {summary.tools.count} tool{summary.tools.count === 1 ? "" : "s"}
+              {summary.tools.errors > 0 ? (
+                <span className="text-red-500 ml-1">({summary.tools.errors} err)</span>
+              ) : null}
             </span>
           ) : null}
         </div>
-        <span className="text-zinc-600 text-xs">{open ? "− hide" : "+ details"}</span>
+        <span className="text-zinc-500 dark:text-zinc-600 text-xs">
+          {open ? "− hide" : "+ details"}
+        </span>
       </button>
       {open ? (
-        <div className="p-3 border-t border-zinc-900 space-y-3">
+        <div className="p-3 border-t border-zinc-100 dark:border-zinc-900 space-y-3">
           {run.error ? <ErrorBox message={run.error} /> : null}
-          {aiResponse ? (
+          {/* Replay the persisted timeline if available -- gives historical
+              runs the same 3-panel view the live runs show. */}
+          {run.events_path ? (
+            eventsQ.isLoading ? (
+              <Loading />
+            ) : eventsQ.error ? (
+              <ErrorBox message={(eventsQ.error as Error).message} />
+            ) : eventsQ.data ? (
+              <>
+                <AgentRunView events={eventsQ.data.events} summary={summary ?? undefined} />
+                <AgentRunRaw events={eventsQ.data.events} />
+              </>
+            ) : null
+          ) : aiResponse ? (
             <details open>
               <summary className="text-xs text-zinc-500 cursor-pointer">
-                AI response
+                AI response (legacy run, no event timeline persisted)
               </summary>
               <pre className="nerd-code whitespace-pre-wrap" style={{ maxHeight: "320px" }}>
                 {aiResponse}

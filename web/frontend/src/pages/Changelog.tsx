@@ -22,7 +22,7 @@ export function ChangelogPage() {
             <h3 className="font-bold text-keboola">v{e.version}</h3>
             <ul className="mt-2 text-sm space-y-1">
               {e.highlights.map((h, i) => (
-                <li key={i} className="text-zinc-300">
+                <li key={i} className="text-zinc-700 dark:text-zinc-300">
                   • {h}
                 </li>
               ))}

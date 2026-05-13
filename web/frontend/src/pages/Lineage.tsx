@@ -6,6 +6,7 @@ import { api } from "../api/client";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
+import { useTheme } from "../theme";
 import type { LineageEdge, ProjectError, SharedBucket } from "../types";
 
 interface SharingResp {
@@ -16,17 +17,38 @@ interface SharingResp {
   errors: ProjectError[];
 }
 
-mermaid.initialize({
-  startOnLoad: false,
-  theme: "dark",
-  themeVariables: {
-    background: "#050508",
-    primaryColor: "#1a1a2e",
-    primaryTextColor: "#22c55e",
-    primaryBorderColor: "#22c55e",
-    lineColor: "#22d3ee",
-  },
-});
+/**
+ * Re-initialize mermaid with the appropriate theme variables for the current
+ * light/dark mode. Must be called both on first render and any time the theme
+ * flips so previously rendered diagrams pick up the new palette on next render.
+ */
+function initMermaid(theme: "light" | "dark"): void {
+  if (theme === "dark") {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "dark",
+      themeVariables: {
+        background: "#050508",
+        primaryColor: "#1a1a2e",
+        primaryTextColor: "#22c55e",
+        primaryBorderColor: "#22c55e",
+        lineColor: "#22d3ee",
+      },
+    });
+  } else {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "default",
+      themeVariables: {
+        background: "#ffffff",
+        primaryColor: "#f4f4f5",
+        primaryTextColor: "#18181b",
+        primaryBorderColor: "#16a34a",
+        lineColor: "#0891b2",
+      },
+    });
+  }
+}
 
 export function LineagePage() {
   const [tab, setTab] = useState<"sharing" | "deep">("sharing");
@@ -225,7 +247,7 @@ function DeepLineageTab() {
           minutes. The output JSON is auto-loaded on success.
         </p>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-          <label className="text-xs text-zinc-400">
+          <label className="text-xs text-zinc-600 dark:text-zinc-400">
             Working directory (where to sync project configs)
             <input
               className="nerd-input w-full mt-1 font-mono"
@@ -234,7 +256,7 @@ function DeepLineageTab() {
               onChange={(e) => setBuildDir(e.target.value)}
             />
           </label>
-          <label className="text-xs text-zinc-400">
+          <label className="text-xs text-zinc-600 dark:text-zinc-400">
             Output file (defaults to ./lineage.json inside the working dir)
             <input
               className="nerd-input w-full mt-1 font-mono"
@@ -245,7 +267,7 @@ function DeepLineageTab() {
           </label>
         </div>
         <div className="flex flex-wrap gap-3 items-center">
-          <label className="flex items-center gap-2 text-xs text-zinc-400">
+          <label className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
             <input
               type="checkbox"
               checked={refresh}
@@ -253,7 +275,7 @@ function DeepLineageTab() {
             />
             sync pull all projects first (recommended)
           </label>
-          <label className="flex items-center gap-2 text-xs text-zinc-400">
+          <label className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
             <input
               type="checkbox"
               checked={useAi}
@@ -264,7 +286,7 @@ function DeepLineageTab() {
           <div className="ml-auto flex gap-2">
             <button
               type="button"
-              className="nerd-btn hover:text-keboola disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-zinc-400"
+              className="nerd-btn hover:text-keboola disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-zinc-600 dark:disabled:hover:text-zinc-400"
               disabled={!buildDir.trim() || buildMu.isPending}
               title={
                 !buildDir.trim() ? "Working directory required" : undefined
@@ -281,7 +303,7 @@ function DeepLineageTab() {
           </div>
         </div>
         {!buildDir.trim() ? (
-          <div className="text-xs text-neon-amber">
+          <div className="text-xs text-amber-700 dark:text-neon-amber">
             ⚠ Working directory is empty -- type a path (e.g.{" "}
             <code className="text-accent">/tmp/kbagent-lineage</code>) to enable
             Build.
@@ -344,7 +366,7 @@ function DeepLineageTab() {
               depth / mermaid diagram / columns toggle / ER view. No need to
               re-implement any of it in React. */}
           <div className="nerd-card p-0 overflow-hidden">
-            <div className="px-3 py-2 border-b border-zinc-800 flex items-center justify-between text-xs">
+            <div className="px-3 py-2 border-b border-zinc-200 flex items-center justify-between text-xs dark:border-zinc-800">
               <span className="text-keboola font-bold">
                 Interactive browser
                 <span className="text-zinc-500 font-normal ml-2">
@@ -376,7 +398,7 @@ function DeepLineageTab() {
               Headless walk (JSON, for scripting)
             </summary>
             <div className="flex gap-2 flex-wrap items-end mt-3">
-              <label className="text-xs text-zinc-400 flex-1 min-w-[260px]">
+              <label className="text-xs text-zinc-600 flex-1 min-w-[260px] dark:text-zinc-400">
                 Node FQN (project:table or table.id)
                 <input
                   className="nerd-input w-full mt-1"
@@ -385,7 +407,7 @@ function DeepLineageTab() {
                   onChange={(e) => setQueryNode(e.target.value)}
                 />
               </label>
-              <label className="text-xs text-zinc-400">
+              <label className="text-xs text-zinc-600 dark:text-zinc-400">
                 Direction
                 <select
                   className="nerd-input w-full mt-1"
@@ -398,7 +420,7 @@ function DeepLineageTab() {
                   <option value="downstream">downstream (consumers)</option>
                 </select>
               </label>
-              <label className="text-xs text-zinc-400">
+              <label className="text-xs text-zinc-600 dark:text-zinc-400">
                 Depth
                 <input
                   type="number"
@@ -444,10 +466,14 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
   const ref = useRef<HTMLDivElement>(null);
   const renderSeq = useRef(0);
   const [error, setError] = useState<string | null>(null);
+  const { theme } = useTheme();
 
   useEffect(() => {
     if (!ref.current) return;
     let cancelled = false;
+    // Re-initialize mermaid with the current theme palette before each
+    // render so dark <-> light flips swap node fills/text without a reload.
+    initMermaid(theme);
     // Unique id per render so mermaid doesn't choke on duplicate IDs in
     // dev StrictMode (first effect inserts SVG, second pass would collide).
     renderSeq.current += 1;
@@ -492,7 +518,7 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
       const orphan = document.getElementById(runId);
       orphan?.remove();
     };
-  }, [edges]);
+  }, [edges, theme]);
 
   if (edges.length === 0) {
     return (
@@ -505,7 +531,9 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
   return (
     <div className="nerd-card">
       <h3 className="text-keboola font-bold text-sm mb-3">Diagram</h3>
-      {error ? <div className="text-red-400 text-xs mb-2">{error}</div> : null}
+      {error ? (
+        <div className="text-red-600 text-xs mb-2 dark:text-red-400">{error}</div>
+      ) : null}
       <div ref={ref} className="overflow-auto" style={{ minHeight: 280 }} />
     </div>
   );

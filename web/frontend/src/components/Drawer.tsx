@@ -45,9 +45,9 @@ export function Drawer({
         role="presentation"
       />
       <aside
-        className={`relative w-full ${width} h-full bg-zinc-950 border-l border-zinc-800 shadow-2xl flex flex-col`}
+        className={`relative w-full ${width} h-full bg-white border-l border-zinc-200 shadow-2xl flex flex-col dark:bg-zinc-950 dark:border-zinc-800`}
       >
-        <header className="flex items-start justify-between gap-3 p-4 border-b border-zinc-900 shrink-0">
+        <header className="flex items-start justify-between gap-3 p-4 border-b border-zinc-200 shrink-0 dark:border-zinc-900">
           <div>
             <h2 className="font-bold text-keboola text-base">{title}</h2>
             {subtitle ? (
@@ -59,7 +59,7 @@ export function Drawer({
             <button
               type="button"
               onClick={onClose}
-              className="text-zinc-500 hover:text-zinc-100 p-1"
+              className="text-zinc-500 hover:text-zinc-900 p-1 dark:hover:text-zinc-100"
               aria-label="Close"
             >
               <X className="w-4 h-4" />

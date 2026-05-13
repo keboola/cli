@@ -103,7 +103,7 @@ export function DashboardPage() {
 
       {/* Big Kai prompt -- the hero on Keboola UI dashboard. */}
       <form
-        className="nerd-card border-keboola/30 bg-zinc-900/40"
+        className="nerd-card border-keboola/30 bg-white dark:bg-zinc-900/40"
         onSubmit={(e) => {
           e.preventDefault();
           if (kaiInput.trim()) kaiMu.mutate();
@@ -112,7 +112,7 @@ export function DashboardPage() {
         <div className="flex items-center gap-3">
           <Sparkles className="w-5 h-5 text-keboola flex-shrink-0" />
           <input
-            className="flex-1 bg-transparent border-0 focus:outline-none text-sm placeholder-zinc-600"
+            className="flex-1 bg-transparent border-0 focus:outline-none text-sm placeholder-zinc-500 dark:placeholder-zinc-600"
             placeholder={
               project
                 ? `Ask Kai anything about ${project}...`
@@ -131,7 +131,7 @@ export function DashboardPage() {
           </button>
         </div>
         {kaiResponse ? (
-          <div className="mt-4 p-3 bg-zinc-950 rounded border border-zinc-800 text-xs whitespace-pre-wrap text-zinc-300">
+          <div className="mt-4 p-3 bg-zinc-50 dark:bg-zinc-950 rounded border border-zinc-200 dark:border-zinc-800 text-xs whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">
             {kaiResponse}
           </div>
         ) : null}
@@ -197,7 +197,7 @@ export function DashboardPage() {
                   <div className="text-[10px] uppercase tracking-wider text-keboola mb-1">
                     Next firing
                   </div>
-                  <div className="font-bold text-zinc-100">{nextAgent.name}</div>
+                  <div className="font-bold text-zinc-900 dark:text-zinc-100">{nextAgent.name}</div>
                   <div className="text-zinc-500">
                     {nextAgent.next_run_at
                       ? new Date(nextAgent.next_run_at).toLocaleString()
@@ -209,14 +209,14 @@ export function DashboardPage() {
                 {tasks.slice(0, 5).map((t) => (
                   <li
                     key={t.id}
-                    className="flex items-center gap-2 text-xs py-1 border-b border-zinc-900/40"
+                    className="flex items-center gap-2 text-xs py-1 border-b border-zinc-200 dark:border-zinc-900/40"
                   >
                     <span
                       className={`w-2 h-2 rounded-full ${
                         t.enabled ? "bg-keboola animate-pulse" : "bg-zinc-700"
                       }`}
                     />
-                    <span className="flex-1 truncate text-zinc-300">{t.name}</span>
+                    <span className="flex-1 truncate text-zinc-700 dark:text-zinc-300">{t.name}</span>
                     <span className="font-mono text-[10px] text-zinc-500">{t.cron}</span>
                   </li>
                 ))}
@@ -248,7 +248,7 @@ export function DashboardPage() {
             ) : null}
             {doctorWarnings > 0 || doctorFailed > 0 ? (
               <SuggestedAction
-                icon={<Heart className="w-3.5 h-3.5 text-neon-amber" />}
+                icon={<Heart className="w-3.5 h-3.5 text-amber-700 dark:text-neon-amber" />}
                 text={`Doctor reports ${doctorFailed} fail + ${doctorWarnings} warn -- triage`}
                 target="doctor"
                 setPage={setPage}
@@ -300,7 +300,7 @@ export function DashboardPage() {
               {(jobsQ.data?.jobs ?? []).slice(0, 6).map((j) => (
                 <li
                   key={String(j.id)}
-                  className="flex items-center gap-3 py-1 border-b border-zinc-900/40"
+                  className="flex items-center gap-3 py-1 border-b border-zinc-200 dark:border-zinc-900/40"
                 >
                   <span className="font-mono text-zinc-500">{j.id}</span>
                   <span className="nerd-pill">{j.status}</span>
@@ -333,12 +333,12 @@ function StatTile({
 }) {
   const toneClass =
     tone === "red"
-      ? "border-red-700/40 text-red-400"
+      ? "border-red-300 dark:border-red-700/40 text-red-600 dark:text-red-400"
       : tone === "amber"
-        ? "border-neon-amber/40 text-neon-amber"
+        ? "border-neon-amber/40 text-amber-700 dark:text-neon-amber"
         : tone === "green"
           ? "border-keboola/40 text-keboola"
-          : "border-zinc-800";
+          : "border-zinc-200 dark:border-zinc-800";
   return (
     <button
       type="button"
@@ -370,11 +370,11 @@ function SuggestedAction({
     <button
       type="button"
       onClick={() => setPage(target)}
-      className="w-full text-left p-2 rounded border border-zinc-900 hover:border-keboola/40 hover:bg-zinc-900/30 transition-colors flex items-start gap-2 text-xs"
+      className="w-full text-left p-2 rounded border border-zinc-200 dark:border-zinc-900 hover:border-keboola/40 hover:bg-zinc-100 dark:hover:bg-zinc-900/30 transition-colors flex items-start gap-2 text-xs"
     >
       <span className="mt-0.5">{icon}</span>
-      <span className="text-zinc-300">{text}</span>
-      <span className="ml-auto text-zinc-600">→</span>
+      <span className="text-zinc-700 dark:text-zinc-300">{text}</span>
+      <span className="ml-auto text-zinc-500 dark:text-zinc-600">→</span>
     </button>
   );
 }

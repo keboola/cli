@@ -83,7 +83,7 @@ export function WorkspacesPage() {
             { header: "Backend", cell: (w) => w.backend },
             {
               header: "Schema",
-              cell: (w) => <span className="text-zinc-400">{w.schema}</span>,
+              cell: (w) => <span className="text-zinc-600 dark:text-zinc-400">{w.schema}</span>,
             },
             {
               header: "Created",
@@ -95,7 +95,7 @@ export function WorkspacesPage() {
               cell: (w) => (
                 <button
                   type="button"
-                  className="nerd-btn text-xs hover:text-red-400 hover:border-red-700"
+                  className="nerd-btn text-xs hover:text-red-600 hover:border-red-300 dark:hover:text-red-400 dark:hover:border-red-700"
                   onClick={(e) => {
                     e.stopPropagation();
                     if (confirm(`Delete workspace ${w.name} (#${w.id})?`)) {
@@ -233,12 +233,12 @@ function WorkspaceInfoDrawer({
                     <Key className="w-3 h-3 inline mr-1" /> Reset & show
                   </button>
                   {showPassword && passwordMu.data ? (
-                    <code className="text-xs text-neon-amber font-mono">
+                    <code className="text-xs text-amber-700 dark:text-neon-amber font-mono">
                       {passwordMu.data.password}
                     </code>
                   ) : null}
                 </div>
-                <div className="text-[11px] text-zinc-600">
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-600">
                   Reset is the only way to retrieve a password — Keboola never
                   stores the plaintext.
                 </div>
@@ -276,10 +276,10 @@ function WorkspaceInfoDrawer({
               label="Run AI agent here"
               hint="Spawn an agent task scoped to this workspace"
             />
-            <hr className="border-zinc-900 my-2" />
+            <hr className="border-zinc-100 dark:border-zinc-900 my-2" />
             <button
               type="button"
-              className="w-full nerd-btn flex items-center gap-2 hover:text-red-400 hover:border-red-700 justify-start py-2 text-red-400"
+              className="w-full nerd-btn flex items-center gap-2 hover:text-red-600 hover:border-red-300 dark:hover:text-red-400 dark:hover:border-red-700 justify-start py-2 text-red-600 dark:text-red-400"
               onClick={() => onDelete(workspace)}
             >
               <Trash2 className="w-4 h-4" />
@@ -311,7 +311,7 @@ function KV({
   return (
     <div>
       <div className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</div>
-      <div className={`text-xs mt-0.5 ${mono ? "font-mono text-accent" : "text-zinc-200"} truncate`}>
+      <div className={`text-xs mt-0.5 ${mono ? "font-mono text-accent" : "text-zinc-800 dark:text-zinc-200"} truncate`}>
         {value || "—"}
       </div>
     </div>
@@ -335,10 +335,10 @@ function ActionItem({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`w-full text-left p-2 rounded border border-zinc-900 ${
+      className={`w-full text-left p-2 rounded border border-zinc-100 dark:border-zinc-900 ${
         disabled
-          ? "text-zinc-600 cursor-not-allowed"
-          : "text-zinc-300 hover:bg-zinc-900 hover:border-keboola/30"
+          ? "text-zinc-500 dark:text-zinc-600 cursor-not-allowed"
+          : "text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-900 hover:border-keboola/30"
       }`}
       title={disabled ? "Not yet wired" : undefined}
     >
@@ -346,7 +346,7 @@ function ActionItem({
         <span>{icon}</span>
         <span className="font-medium">{label}</span>
       </div>
-      {hint ? <div className="text-[10px] text-zinc-600 mt-0.5 ml-5.5">{hint}</div> : null}
+      {hint ? <div className="text-[10px] text-zinc-500 dark:text-zinc-600 mt-0.5 ml-5.5">{hint}</div> : null}
     </button>
   );
 }
@@ -399,7 +399,7 @@ function CreateWorkspaceDrawer({
       }
     >
       <div className="space-y-3">
-        <label className="text-xs text-zinc-400 block">
+        <label className="text-xs text-zinc-600 dark:text-zinc-400 block">
           Name
           <input
             className="nerd-input w-full mt-1 font-mono"
@@ -408,11 +408,11 @@ function CreateWorkspaceDrawer({
             placeholder="my-workspace"
             required
           />
-          <span className="text-zinc-600">
+          <span className="text-zinc-500 dark:text-zinc-600">
             Visible on the warehouse and in the Keboola UI (if ui_mode).
           </span>
         </label>
-        <label className="flex items-center gap-2 text-xs text-zinc-400">
+        <label className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
           <input
             type="checkbox"
             checked={readOnly}
@@ -421,7 +421,7 @@ function CreateWorkspaceDrawer({
           Read-only storage access (recommended for analysis -- prevents
           accidental writes to project tables)
         </label>
-        <label className="flex items-center gap-2 text-xs text-zinc-400">
+        <label className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
           <input
             type="checkbox"
             checked={uiMode}
@@ -575,7 +575,7 @@ SELECT current_timestamp() AS now;`);
         </aside>
         {/* Editor + results */}
         <div className="flex-1 space-y-3 min-w-0">
-          <div className="border border-zinc-800 rounded">
+          <div className="border border-zinc-200 dark:border-zinc-800 rounded">
             <Editor
               height="280px"
               language="sql"
@@ -591,10 +591,10 @@ SELECT current_timestamp() AS now;`);
             />
           </div>
           {error ? (
-            <div className="nerd-card border-red-700/40 text-red-400 text-sm space-y-2">
+            <div className="nerd-card border-red-300 dark:border-red-700/40 text-red-600 dark:text-red-400 text-sm space-y-2">
               <div>{error}</div>
               {hint ? (
-                <div className="text-amber-400 text-xs whitespace-pre-wrap">
+                <div className="text-amber-700 dark:text-amber-400 text-xs whitespace-pre-wrap">
                   Hint: {hint}
                 </div>
               ) : null}
@@ -624,17 +624,17 @@ function BucketNode({
         className="w-full text-left flex items-center gap-1 px-1 py-0.5 hover:text-keboola"
         onClick={() => setOpen((o) => !o)}
       >
-        <span className="text-zinc-600">{open ? "▾" : "▸"}</span>
+        <span className="text-zinc-500 dark:text-zinc-600">{open ? "▾" : "▸"}</span>
         <span className="font-mono text-accent truncate">{bucketId}</span>
-        <span className="text-[10px] text-zinc-600 ml-auto">{tables.length}</span>
+        <span className="text-[10px] text-zinc-500 dark:text-zinc-600 ml-auto">{tables.length}</span>
       </button>
       {open && tables.length > 0 ? (
-        <div className="ml-4 mt-1 space-y-0.5 border-l border-zinc-900 pl-2">
+        <div className="ml-4 mt-1 space-y-0.5 border-l border-zinc-100 dark:border-zinc-900 pl-2">
           {tables.map((t) => (
             <button
               key={t}
               type="button"
-              className="w-full text-left text-xs font-mono text-zinc-400 hover:text-keboola truncate"
+              className="w-full text-left text-xs font-mono text-zinc-600 dark:text-zinc-400 hover:text-keboola truncate"
               onClick={() => onPick(t)}
               title={`Click to insert ${t}`}
             >
@@ -660,8 +660,8 @@ function SqlResults({ result }: { result: unknown }) {
   return (
     <div className="space-y-3">
       {statements.map((stmt, i) => (
-        <div key={stmt.statement_id ?? i} className="border border-zinc-800 rounded">
-          <div className="px-3 py-2 border-b border-zinc-800 text-xs flex justify-between">
+        <div key={stmt.statement_id ?? i} className="border border-zinc-200 dark:border-zinc-800 rounded">
+          <div className="px-3 py-2 border-b border-zinc-200 dark:border-zinc-800 text-xs flex justify-between">
             <span>
               Statement {i + 1} ・ {stmt.status} ・ {stmt.rows_affected} rows
             </span>
@@ -687,12 +687,12 @@ function CsvTable({ csv }: { csv: string }) {
   return (
     <div className="overflow-auto" style={{ maxHeight: 360 }}>
       <table className="w-full text-xs font-mono">
-        <thead className="bg-zinc-900/60">
+        <thead className="bg-zinc-100 dark:bg-zinc-900/60">
           <tr>
             {header.map((h, i) => (
               <th
                 key={i}
-                className="px-3 py-1.5 text-left text-keboola border-b border-zinc-800 whitespace-nowrap"
+                className="px-3 py-1.5 text-left text-keboola border-b border-zinc-200 dark:border-zinc-800 whitespace-nowrap"
               >
                 {h}
               </th>
@@ -701,9 +701,9 @@ function CsvTable({ csv }: { csv: string }) {
         </thead>
         <tbody>
           {body.slice(0, 200).map((r, i) => (
-            <tr key={i} className="border-b border-zinc-900/40">
+            <tr key={i} className="border-b border-zinc-200 dark:border-zinc-900/40">
               {r.map((c, j) => (
-                <td key={j} className="px-3 py-1 text-zinc-300 whitespace-nowrap">
+                <td key={j} className="px-3 py-1 text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
                   {c}
                 </td>
               ))}

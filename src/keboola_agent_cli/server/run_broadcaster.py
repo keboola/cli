@@ -62,6 +62,7 @@ from .agent_runner import (
     stream_ai_agent_events,
 )
 from .agents_store import AgentRun, AgentStore, AgentTask
+from .pricing import build_run_summary
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +174,22 @@ class _ActiveRun:
             if not agent_run.ended_at:
                 agent_run.ended_at = _now_utc().isoformat()
             self.done = True
+            # Build the per-run summary (model, tokens, cost, tool counts)
+            # and persist the full event timeline alongside the run record.
+            # Both are best-effort: if disk I/O fails we still publish the
+            # done sentinel so subscribers don't hang. The summary lives on
+            # the AgentRun row for cheap listings; the events file lives in
+            # a per-task subdirectory so the detail drawer can replay it.
+            with contextlib.suppress(Exception):
+                if self.task.action.type == "ai_agent" and self.events:
+                    agent_run.summary = build_run_summary(self.events)
+            with contextlib.suppress(Exception):
+                # Persist the timeline first so events_path is set before
+                # we write the run row -- otherwise the row points at a
+                # nonexistent file in the rare partial-write case.
+                if self.events:
+                    rel = self.store.append_events(self.task.id, agent_run.run_id, self.events)
+                    agent_run.events_path = rel
             self.final_run = agent_run
             # Persist the run record + bump last/next on the task.
             with contextlib.suppress(Exception):

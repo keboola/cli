@@ -29,7 +29,7 @@ export function DataTable<T>({
     <div className="nerd-card overflow-auto p-0">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-zinc-800 text-xs text-zinc-500 uppercase tracking-wider">
+          <tr className="border-b border-zinc-200 text-xs text-zinc-500 uppercase tracking-wider dark:border-zinc-800">
             {columns.map((col, i) => (
               <th
                 key={i}
@@ -46,8 +46,8 @@ export function DataTable<T>({
             <tr
               key={rowKey(row)}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
-              className={`border-b border-zinc-900/50 ${
-                onRowClick ? "cursor-pointer hover:bg-zinc-900/40" : ""
+              className={`border-b border-zinc-100 dark:border-zinc-900/50 ${
+                onRowClick ? "cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-900/40" : ""
               }`}
             >
               {columns.map((col, i) => (

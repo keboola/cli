@@ -60,11 +60,11 @@ export function ComponentsPage() {
 
       {/* Big AI-style search input -- the Components page is a discovery page,
           this is the primary action so it deserves the screen real estate. */}
-      <div className="nerd-card border-keboola/30 bg-zinc-900/40">
+      <div className="nerd-card border-keboola/30 bg-keboola/5 dark:bg-zinc-900/40">
         <div className="flex items-center gap-3">
           <Sparkles className="w-5 h-5 text-keboola flex-shrink-0" />
           <input
-            className="flex-1 bg-transparent border-0 focus:outline-none text-sm font-mono placeholder-zinc-600"
+            className="flex-1 bg-transparent border-0 focus:outline-none text-sm font-mono placeholder-zinc-400 dark:placeholder-zinc-600"
             placeholder={PROMPT_HINTS[hintIdx]}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -73,7 +73,7 @@ export function ComponentsPage() {
           {query ? (
             <button
               type="button"
-              className="text-xs text-zinc-500 hover:text-zinc-200"
+              className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200"
               onClick={() => setQuery("")}
             >
               clear

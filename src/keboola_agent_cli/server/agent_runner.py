@@ -432,26 +432,70 @@ async def stream_ai_agent_events(
 
 
 async def run_task_once(task: AgentTask, registry: Any, store: AgentStore) -> AgentRun:
-    """Execute one task and append a run record."""
+    """Execute one task and append a run record.
+
+    For ai_agent runs we now drive the streaming generator and capture
+    every emitted event so the persisted run carries:
+    - the full timeline (saved to ``agent_runs/<task_id>/<run_id>.jsonl``)
+    - a precomputed summary (model, tokens, cost, tool calls)
+
+    This unifies cron-driven runs with UI-driven runs (RunBroadcaster):
+    both produce the same persisted shape, and the detail drawer can
+    replay either using the same /events endpoint. cli_command and
+    mcp_tool runs still use the one-shot path; their structured output
+    fits in the ``output`` field directly.
+    """
     started = _now_utc()
     run = AgentRun(task_id=task.id, started_at=started.isoformat())
+    captured_events: list[dict[str, Any]] = []
     try:
         if task.action.type == "mcp_tool":
             output = await _run_mcp_tool(registry, task.action.params)
+            run.status = "ok"
+            run.output = output if isinstance(output, dict) else {"value": output}
         elif task.action.type == "cli_command":
             output = await _run_cli(registry, task.action.params)
+            run.status = "ok"
+            run.output = output if isinstance(output, dict) else {"value": output}
         elif task.action.type == "ai_agent":
-            output = await _run_ai_agent(registry, task.action.params)
+            # Stream events so we can persist the full timeline. The final
+            # ``done`` event carries the same payload the legacy
+            # _run_ai_agent built, so callers reading ``run.output`` see
+            # an identical shape.
+            done_payload: dict[str, Any] | None = None
+            async for evt in stream_ai_agent_events(registry, task.action.params):
+                captured_events.append(evt)
+                if evt["event"] == "done":
+                    done_payload = evt["data"]
+            if done_payload is None:
+                # Stream ended without a done frame -- treat as error so
+                # the UI flags it; the captured events still get persisted
+                # so an operator can see what claude was up to.
+                run.status = "error"
+                run.error = "ai_agent stream ended without a done event"
+            else:
+                run.status = done_payload.get("status", "ok")
+                run.output = done_payload
+                if done_payload.get("error"):
+                    run.error = done_payload["error"]
         else:
             raise ValueError(f"Unknown action type: {task.action.type}")
-        run.status = "ok"
-        run.output = output if isinstance(output, dict) else {"value": output}
     except Exception as exc:
         logger.exception("Agent task %s failed", task.id)
         run.status = "error"
         run.error = str(exc)
     finally:
         run.ended_at = _now_utc().isoformat()
+        # Persist the timeline + compute summary BEFORE appending the run
+        # row so events_path/summary land on the same JSONL line.
+        from .pricing import build_run_summary
+
+        try:
+            if task.action.type == "ai_agent" and captured_events:
+                run.summary = build_run_summary(captured_events)
+                run.events_path = store.append_events(task.id, run.run_id, captured_events)
+        except Exception:
+            logger.exception("Failed to persist event timeline for %s/%s", task.id, run.run_id)
         store.append_run(run)
         # Update last_run / next_run on the task itself.
         task.last_run_at = run.started_at

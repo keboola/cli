@@ -160,7 +160,7 @@ function ToolRunnerDrawer({ tool, onClose }: { tool: McpTool | null; onClose: ()
             {error ? <ErrorBox message={error} /> : null}
             {result ? <JsonView data={result} /> : null}
             {!error && !result ? (
-              <div className="text-zinc-600 text-xs">Result will appear here after Call.</div>
+              <div className="text-zinc-500 text-xs dark:text-zinc-600">Result will appear here after Call.</div>
             ) : null}
           </div>
         </div>

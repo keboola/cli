@@ -74,7 +74,7 @@ export function JobsPage() {
           rowKey={(j) => String(j.id)}
           onRowClick={(j) => setSelected(j)}
           columns={[
-            { header: "Job ID", cell: (j) => <span className="text-zinc-400">{j.id}</span> },
+            { header: "Job ID", cell: (j) => <span className="text-zinc-600 dark:text-zinc-400">{j.id}</span> },
             {
               header: "Status",
               cell: (j) => (
@@ -91,7 +91,7 @@ export function JobsPage() {
               header: "Duration",
               align: "right",
               cell: (j) => (
-                <span className="text-xs text-zinc-400">
+                <span className="text-xs text-zinc-600 dark:text-zinc-400">
                   {j.durationSeconds != null ? formatDuration(j.durationSeconds) : "-"}
                 </span>
               ),
@@ -266,7 +266,7 @@ function JobCards({
         <KV k="Ended" v={end} />
       </Card>
       <Card icon={<User className="w-3.5 h-3.5" />} label="Created by">
-        <div className="text-xs text-zinc-300 break-words">{tokenDesc || "—"}</div>
+        <div className="text-xs text-zinc-700 dark:text-zinc-300 break-words">{tokenDesc || "—"}</div>
       </Card>
       <Card icon={<Activity className="w-3.5 h-3.5" />} label="Configuration">
         <KV k="Component" v={String(detail.component ?? job.component)} />
@@ -274,7 +274,7 @@ function JobCards({
         {branchId ? <KV k="Branch ID" v={String(branchId)} /> : null}
       </Card>
       <Card icon={<Server className="w-3.5 h-3.5" />} label="Backend">
-        <div className="text-sm text-zinc-300">{backendSize}</div>
+        <div className="text-sm text-zinc-700 dark:text-zinc-300">{backendSize}</div>
       </Card>
       <Card icon={<Cpu className="w-3.5 h-3.5" />} label="Run IDs">
         <KV k="Run ID" v={String(detail.runId ?? "")} />
@@ -312,7 +312,7 @@ function KV({ k, v }: { k: string; v: string }) {
   return (
     <div className="text-xs">
       <span className="text-zinc-500">{k}:</span>{" "}
-      <span className="font-mono text-zinc-300">{v}</span>
+      <span className="font-mono text-zinc-700 dark:text-zinc-300">{v}</span>
     </div>
   );
 }
@@ -336,7 +336,7 @@ function ParametersAndMapping({ detail }: { detail: Record<string, unknown> }) {
           Parameters
         </div>
         {Object.keys(params).length === 0 ? (
-          <div className="text-xs text-zinc-600">No parameters.</div>
+          <div className="text-xs text-zinc-500 dark:text-zinc-600">No parameters.</div>
         ) : (
           <pre className="nerd-code text-[10px]" style={{ maxHeight: "200px" }}>
             {JSON.stringify(params, null, 2)}
@@ -355,11 +355,11 @@ function ParametersAndMapping({ detail }: { detail: Record<string, unknown> }) {
         <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-2">
           Mapping
         </div>
-        <div className="text-xs text-zinc-300 mb-1">
+        <div className="text-xs text-zinc-700 dark:text-zinc-300 mb-1">
           Input ({inputTables.length})
         </div>
         {inputTables.length === 0 ? (
-          <div className="text-xs text-zinc-600">No tables.</div>
+          <div className="text-xs text-zinc-500 dark:text-zinc-600">No tables.</div>
         ) : (
           <ul className="text-xs space-y-1">
             {inputTables.map((t, i) => (
@@ -369,11 +369,11 @@ function ParametersAndMapping({ detail }: { detail: Record<string, unknown> }) {
             ))}
           </ul>
         )}
-        <div className="text-xs text-zinc-300 mt-3 mb-1">
+        <div className="text-xs text-zinc-700 dark:text-zinc-300 mt-3 mb-1">
           Output ({outputTables.length})
         </div>
         {outputTables.length === 0 ? (
-          <div className="text-xs text-zinc-600">No tables.</div>
+          <div className="text-xs text-zinc-500 dark:text-zinc-600">No tables.</div>
         ) : (
           <ul className="text-xs space-y-1">
             {outputTables.map((t, i) => (

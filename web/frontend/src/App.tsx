@@ -22,6 +22,7 @@ import { SharingPage } from "./pages/Sharing";
 import { StoragePage } from "./pages/Storage";
 import { WorkspacesPage } from "./pages/Workspaces";
 import { UIStateProvider, useUIState } from "./state";
+import { ThemeProvider } from "./theme";
 
 function Router() {
   const { page } = useUIState();
@@ -77,10 +78,12 @@ function Router() {
 
 export function App() {
   return (
-    <UIStateProvider>
-      <Shell>
-        <Router />
-      </Shell>
-    </UIStateProvider>
+    <ThemeProvider>
+      <UIStateProvider>
+        <Shell>
+          <Router />
+        </Shell>
+      </UIStateProvider>
+    </ThemeProvider>
   );
 }

@@ -57,7 +57,20 @@ class AgentTask(BaseModel):
 
 
 class AgentRun(BaseModel):
-    """One execution of a task."""
+    """One execution of a task.
+
+    The ``output`` field carries the final terminal payload (response text,
+    exit code, stderr) so old clients keep working. Newer fields:
+
+    - ``summary``: aggregated metrics produced by ``pricing.build_run_summary``
+      (model, token totals, cost breakdown, per-tool call counts). Always
+      present for ai_agent runs after v0.10.x; ``None`` for cli_command /
+      mcp_tool runs (no per-step structure to summarize).
+    - ``events_path``: relative path under the store's run directory pointing
+      at ``<task_id>/<run_id>.jsonl`` -- the full event timeline as it was
+      streamed live. Lets the detail drawer "replay" a finished run with the
+      same per-step UI shown during the live run.
+    """
 
     run_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     task_id: str
@@ -66,6 +79,8 @@ class AgentRun(BaseModel):
     status: Literal["running", "ok", "error"] = "running"
     output: dict[str, Any] | None = None
     error: str | None = None
+    summary: dict[str, Any] | None = None
+    events_path: str | None = None
 
 
 class AgentStore:
@@ -155,3 +170,66 @@ class AgentStore:
             if len(runs) >= limit:
                 break
         return runs
+
+    # ---- per-run event timeline (since v0.10.x) ------------------------
+    # Events are stored separately from the run summary to keep the
+    # row-level <task_id>.jsonl small (one line per run for fast listing)
+    # while letting the detail view fetch the full timeline on demand.
+
+    def _events_path(self, task_id: str, run_id: str) -> Path:
+        """Filesystem path for a run's full event timeline JSONL."""
+        return self._runs_dir / task_id / f"{run_id}.jsonl"
+
+    def append_events(self, task_id: str, run_id: str, events: list[dict[str, Any]]) -> str:
+        """Persist the full event stream for one run, return the relative path.
+
+        File layout: ``<runs_dir>/<task_id>/<run_id>.jsonl`` with one JSON
+        object per line (the same shape that ``stream_ai_agent_events``
+        emits, plus the ``seq`` tag from ``RunBroadcaster``).
+
+        Empty event lists still create an empty file so callers can later
+        distinguish "no timeline persisted" (path is None) from "agent
+        produced nothing" (file exists, zero lines).
+        """
+        self._ensure_dirs()
+        path = self._events_path(task_id, run_id)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # 0600: events can leak Storage tokens via tool inputs (e.g. MCP
+        # tool calls dump full project context); same security posture as
+        # the rest of config_dir.
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            for evt in events:
+                line = json.dumps(evt, ensure_ascii=False) + "\n"
+                os.write(fd, line.encode("utf-8"))
+        finally:
+            os.close(fd)
+        # Return the relative path for storage on the AgentRun record.
+        # Resolving back to absolute is the store's job, not the caller's.
+        return f"{task_id}/{run_id}.jsonl"
+
+    def load_events(self, task_id: str, run_id: str) -> list[dict[str, Any]] | None:
+        """Load a run's event timeline, or ``None`` if no timeline was saved."""
+        path = self._events_path(task_id, run_id)
+        if not path.exists():
+            return None
+        events: list[dict[str, Any]] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                # One bad line should not poison the whole replay; the
+                # frontend just sees a slightly shorter timeline.
+                logger.warning("Skipping malformed event line in %s", path)
+                continue
+        return events
+
+    def get_run(self, task_id: str, run_id: str) -> AgentRun | None:
+        """Find a single run record by run_id (linear scan, OK for <1000 runs)."""
+        for run in self.list_runs(task_id, limit=10_000):
+            if run.run_id == run_id:
+                return run
+        return None

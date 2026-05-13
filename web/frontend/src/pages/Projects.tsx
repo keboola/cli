@@ -84,7 +84,7 @@ export function ProjectsPage() {
             {
               header: "Alias",
               cell: (p) => (
-                <span className="font-bold text-zinc-100">
+                <span className="font-bold text-zinc-900 dark:text-zinc-100">
                   {p.alias} {p.is_default ? <span className="nerd-pill-green">default</span> : null}
                 </span>
               ),

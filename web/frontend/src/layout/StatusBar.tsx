@@ -13,10 +13,12 @@ export function StatusBar() {
   });
   const v = versionQ.data?.kbagent;
   return (
-    <footer className="h-6 border-t border-zinc-900 bg-zinc-950/60 backdrop-blur px-4 flex items-center text-[10px] text-zinc-600 gap-4">
+    <footer className="h-6 border-t border-zinc-200 bg-white/80 backdrop-blur px-4 flex items-center text-[10px] text-zinc-500 gap-4 dark:border-zinc-900 dark:bg-zinc-950/60 dark:text-zinc-600">
       <span>kbagent serve {v?.version ?? "…"}</span>
       {v && !v.up_to_date ? (
-        <span className="text-neon-amber">⬆ {v.latest_version} available</span>
+        <span className="text-amber-700 dark:text-neon-amber">
+          ⬆ {v.latest_version} available
+        </span>
       ) : null}
       <span className="ml-auto">localhost only ・ bearer auth ・ kernel: python ・ ui: typescript</span>
     </footer>

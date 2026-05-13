@@ -2,38 +2,74 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Theme tokens
+ * ============
+ * Color-scheme on :root tells the browser which form/scrollbar widgets to
+ * render. The ``dark`` class on <html> is what tailwind toggles -- never edit
+ * :root colors directly, edit utility variants ``dark:``.
+ *
+ * body background uses the radial gradient only in dark mode (depth + glow);
+ * light mode wants a flat surface so cards and dividers stay legible.
+ */
 @layer base {
   :root {
+    color-scheme: light;
+  }
+  :root.dark {
     color-scheme: dark;
   }
   body {
+    @apply bg-zinc-50 text-zinc-900 dark:text-zinc-100;
+  }
+  html.dark body {
     background: radial-gradient(at 0% 0%, #0a0a14 0%, #050508 100%);
+  }
+
+  /*
+   * Default heading colors. Most page-level <h1>/<h2> in the codebase rely on
+   * tailwind utilities passed at the call site; setting a sane default here
+   * means *new* pages and any heading whose author forgot ``dark:`` get
+   * legible defaults in both modes. Cards/sections that want a different
+   * tone (e.g. ``text-keboola`` for accent headers) override these utilities.
+   */
+  h1, h2, h3 {
+    @apply text-zinc-900 dark:text-zinc-100;
   }
 }
 
 @layer components {
   .nerd-card {
-    @apply rounded-md border border-zinc-800 bg-zinc-900/40 backdrop-blur p-4;
+    @apply rounded-md border border-zinc-200 bg-white p-4
+      dark:border-zinc-800 dark:bg-zinc-900/40 dark:backdrop-blur;
   }
   .nerd-btn {
-    @apply px-3 py-1.5 rounded border border-zinc-700 hover:border-keboola hover:text-keboola transition-colors text-sm;
+    @apply px-3 py-1.5 rounded border border-zinc-300 text-sm
+      hover:border-keboola hover:text-keboola transition-colors
+      dark:border-zinc-700;
   }
   .nerd-input {
-    @apply px-3 py-1.5 rounded border border-zinc-800 bg-zinc-950 text-sm focus:outline-none focus:border-keboola;
+    @apply px-3 py-1.5 rounded border border-zinc-300 bg-white text-sm
+      focus:outline-none focus:border-keboola
+      dark:border-zinc-800 dark:bg-zinc-950;
   }
   .nerd-code {
-    @apply font-mono text-xs text-zinc-300 bg-zinc-950 border border-zinc-800 rounded p-3 overflow-auto;
+    @apply font-mono text-xs text-zinc-700 bg-zinc-100 border border-zinc-200 rounded p-3 overflow-auto
+      dark:text-zinc-300 dark:bg-zinc-950 dark:border-zinc-800;
   }
   .nerd-pill {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border border-zinc-700 text-zinc-400;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs
+      border border-zinc-300 text-zinc-600
+      dark:border-zinc-700 dark:text-zinc-400;
   }
   .nerd-pill-green {
-    @apply nerd-pill border-keboola/40 text-keboola;
+    @apply nerd-pill border-keboola/40 text-keboola dark:border-keboola/40 dark:text-keboola;
   }
   .nerd-pill-amber {
-    @apply nerd-pill border-neon-amber/40 text-neon-amber;
+    @apply nerd-pill border-neon-amber/50 text-amber-700
+      dark:border-neon-amber/40 dark:text-neon-amber;
   }
   .nerd-pill-red {
-    @apply nerd-pill border-red-700/40 text-red-400;
+    @apply nerd-pill border-red-300 text-red-700 dark:border-red-700/40 dark:text-red-400;
   }
 }

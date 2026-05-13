@@ -44,7 +44,10 @@ export function KaiPage() {
 
   return (
     <div className="space-y-4">
-      <PageTitle title="Kai (Keboola AI)" description="Chat with the Keboola AI assistant scoped to your project." />
+      <PageTitle
+        title="Kai (Keboola AI)"
+        description="Chat with the Keboola AI assistant scoped to your project. Requires the 'AI Agent Chat' feature flag enabled on the project's Storage API token."
+      />
       {pingQ.error ? (
         <ErrorBox message={`Kai not available: ${(pingQ.error as Error).message}`} />
       ) : pingQ.isLoading ? (
@@ -60,7 +63,9 @@ export function KaiPage() {
             <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
               <div
                 className={`max-w-[80%] rounded p-3 text-sm ${
-                  m.role === "user" ? "bg-keboola/10 border border-keboola/30" : "bg-zinc-900 border border-zinc-800"
+                  m.role === "user"
+                    ? "bg-keboola/10 border border-keboola/30"
+                    : "bg-zinc-100 border border-zinc-200 dark:bg-zinc-900 dark:border-zinc-800"
                 }`}
               >
                 <div className="text-xs text-zinc-500 mb-1">{m.role}</div>

@@ -102,7 +102,7 @@ export function StoragePage() {
         {bucketFilter ? (
           <button
             type="button"
-            className="nerd-btn text-xs hover:text-amber-400"
+            className="nerd-btn text-xs hover:text-amber-700 dark:hover:text-amber-400"
             onClick={() => setBucketFilter(null)}
           >
             ✕ filter: {bucketFilter}
@@ -134,8 +134,8 @@ export function StoragePage() {
                   </span>
                 ),
               },
-              { header: "Stage", cell: (b) => <span className="text-zinc-400">{b.stage}</span> },
-              { header: "Backend", cell: (b) => <span className="text-zinc-400">{b.backend}</span> },
+              { header: "Stage", cell: (b) => <span className="text-zinc-600 dark:text-zinc-400">{b.stage}</span> },
+              { header: "Backend", cell: (b) => <span className="text-zinc-600 dark:text-zinc-400">{b.backend}</span> },
               { header: "Rows", align: "right", cell: (b) => b.rows_count.toLocaleString() },
               { header: "Size", align: "right", cell: (b) => formatBytes(b.data_size_bytes) },
             ]}
@@ -301,7 +301,7 @@ function Field({ label, value, mono = false }: { label: string; value: string; m
   return (
     <div>
       <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">{label}</div>
-      <div className={`text-sm ${mono ? "font-mono text-accent" : "text-zinc-200"}`}>{value}</div>
+      <div className={`text-sm ${mono ? "font-mono text-accent" : "text-zinc-800 dark:text-zinc-200"}`}>{value}</div>
     </div>
   );
 }
@@ -311,7 +311,7 @@ function SchemaTab({ d }: { d: TableDetail }) {
     <div className="overflow-auto">
       <table className="w-full text-xs">
         <thead>
-          <tr className="border-b border-zinc-800 text-zinc-500 uppercase tracking-wider">
+          <tr className="border-b border-zinc-200 dark:border-zinc-800 text-zinc-500 uppercase tracking-wider">
             <th className="px-3 py-2 text-left font-normal">Column</th>
             <th className="px-3 py-2 text-left font-normal">Type</th>
             <th className="px-3 py-2 text-left font-normal">Native</th>
@@ -324,9 +324,9 @@ function SchemaTab({ d }: { d: TableDetail }) {
         </thead>
         <tbody>
           {d.column_details.map((c) => (
-            <tr key={c.name} className="border-b border-zinc-900/50">
+            <tr key={c.name} className="border-b border-zinc-200 dark:border-zinc-900/50">
               <td className="px-3 py-2 font-bold text-accent">{c.name}</td>
-              <td className="px-3 py-2 text-zinc-400">{c.type ?? "-"}</td>
+              <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{c.type ?? "-"}</td>
               <td className="px-3 py-2 text-zinc-500">{c.native_type ?? "-"}</td>
               <td className="px-3 py-2 text-zinc-500">{c.length ?? "-"}</td>
               <td className="px-3 py-2 text-center">
@@ -336,7 +336,7 @@ function SchemaTab({ d }: { d: TableDetail }) {
                 {d.primary_key.includes(c.name) ? "🔑" : ""}
               </td>
               <td className="px-3 py-2 text-zinc-500">{c.default ?? "-"}</td>
-              <td className="px-3 py-2 text-zinc-400 text-xs">{c.description ?? ""}</td>
+              <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400 text-xs">{c.description ?? ""}</td>
             </tr>
           ))}
         </tbody>
@@ -390,7 +390,7 @@ function PreviewTab({ p }: { p: TablePreview }) {
         <span>
           Showing {visible.length} of {p.row_count} row(s)
           {sortCol !== null ? (
-            <span className="ml-2 text-zinc-600">
+            <span className="ml-2 text-zinc-500 dark:text-zinc-600">
               ・ sorted by {p.header[sortCol]} {sortDir === "asc" ? "↑" : "↓"}
             </span>
           ) : null}
@@ -408,30 +408,30 @@ function PreviewTab({ p }: { p: TablePreview }) {
           </button>
         ) : null}
       </div>
-      <div className="overflow-auto border border-zinc-800 rounded">
+      <div className="overflow-auto border border-zinc-200 dark:border-zinc-800 rounded">
         <table className="w-full text-xs font-mono">
-          <thead className="bg-zinc-900/60 sticky top-0">
+          <thead className="bg-zinc-100 dark:bg-zinc-900/60 sticky top-0">
             <tr>
               {p.header.map((h, i) => (
                 <th
                   key={i}
-                  className="px-3 py-1.5 text-left text-keboola border-b border-zinc-800 whitespace-nowrap cursor-pointer hover:bg-zinc-900"
+                  className="px-3 py-1.5 text-left text-keboola border-b border-zinc-200 dark:border-zinc-800 whitespace-nowrap cursor-pointer hover:bg-zinc-200 dark:hover:bg-zinc-900"
                   onClick={() => toggleSort(i)}
                 >
                   <span className="inline-flex items-center gap-1">
                     {h}
-                    <span className="text-zinc-600 text-[10px]">
+                    <span className="text-zinc-500 dark:text-zinc-600 text-[10px]">
                       {sortCol === i ? (sortDir === "asc" ? "↑" : "↓") : "↕"}
                     </span>
                   </span>
                 </th>
               ))}
             </tr>
-            <tr className="bg-zinc-950">
+            <tr className="bg-zinc-50 dark:bg-zinc-950">
               {p.header.map((_, i) => (
                 <th
                   key={i}
-                  className="px-2 py-1 border-b border-zinc-800 font-normal"
+                  className="px-2 py-1 border-b border-zinc-200 dark:border-zinc-800 font-normal"
                 >
                   <input
                     type="text"
@@ -442,7 +442,7 @@ function PreviewTab({ p }: { p: TablePreview }) {
                       next[i] = e.target.value;
                       setFilters(next);
                     }}
-                    className="w-full bg-transparent border border-zinc-800 rounded px-1 py-0.5 text-[10px] text-zinc-300 focus:outline-none focus:border-keboola"
+                    className="w-full bg-transparent border border-zinc-200 dark:border-zinc-800 rounded px-1 py-0.5 text-[10px] text-zinc-700 dark:text-zinc-300 focus:outline-none focus:border-keboola"
                   />
                 </th>
               ))}
@@ -450,9 +450,9 @@ function PreviewTab({ p }: { p: TablePreview }) {
           </thead>
           <tbody>
             {visible.map((r, i) => (
-              <tr key={i} className="border-b border-zinc-900/40 hover:bg-zinc-900/30">
+              <tr key={i} className="border-b border-zinc-200 dark:border-zinc-900/40 hover:bg-zinc-100 dark:hover:bg-zinc-900/30">
                 {r.map((c, j) => (
-                  <td key={j} className="px-3 py-1 text-zinc-300 whitespace-nowrap">
+                  <td key={j} className="px-3 py-1 text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
                     {c}
                   </td>
                 ))}

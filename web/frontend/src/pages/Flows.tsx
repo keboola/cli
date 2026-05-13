@@ -72,7 +72,7 @@ export function FlowsPage() {
                 f.schedules?.length ? (
                   <span className="text-xs">{f.schedules.length} schedule(s)</span>
                 ) : (
-                  <span className="text-xs text-zinc-600">-</span>
+                  <span className="text-xs text-zinc-500 dark:text-zinc-600">-</span>
                 ),
             },
           ]}
@@ -163,7 +163,7 @@ function FlowBuilder({ detail }: { detail: FlowDetail }) {
                 <span className="text-xs text-zinc-500">
                   {pTasks.length} task(s)
                   {p.dependsOn && p.dependsOn.length > 0 ? (
-                    <span className="ml-2 text-zinc-600">
+                    <span className="ml-2 text-zinc-500 dark:text-zinc-600">
                       depends on:{" "}
                       {p.dependsOn
                         .map((d) => phases.find((x) => x.id === d)?.name ?? d)
@@ -173,22 +173,22 @@ function FlowBuilder({ detail }: { detail: FlowDetail }) {
                 </span>
               </div>
               {pTasks.length === 0 ? (
-                <div className="text-xs text-zinc-600">No tasks in this phase.</div>
+                <div className="text-xs text-zinc-500 dark:text-zinc-600">No tasks in this phase.</div>
               ) : (
                 <ul className="text-xs space-y-1">
                   {pTasks.map((t) => (
                     <li
                       key={String(t.id)}
-                      className="flex items-center gap-2 py-1 border-b border-zinc-900/40"
+                      className="flex items-center gap-2 py-1 border-b border-zinc-200 dark:border-zinc-900/40"
                     >
                       <span className="font-mono text-accent">
                         {t.task?.componentId ?? "?"}
                       </span>
                       <span className="text-zinc-500">/</span>
-                      <span className="font-mono text-zinc-400">
+                      <span className="font-mono text-zinc-600 dark:text-zinc-400">
                         {t.task?.configId ?? "?"}
                       </span>
-                      <span className="ml-auto text-zinc-300">{t.name ?? ""}</span>
+                      <span className="ml-auto text-zinc-700 dark:text-zinc-300">{t.name ?? ""}</span>
                     </li>
                   ))}
                 </ul>
@@ -269,7 +269,7 @@ function FlowMermaid({
       <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-2">
         Flow diagram
       </div>
-      {error ? <div className="text-xs text-red-400">{error}</div> : null}
+      {error ? <div className="text-xs text-red-600 dark:text-red-400">{error}</div> : null}
       <div ref={ref} className="overflow-auto" style={{ minHeight: 200 }} />
     </div>
   );

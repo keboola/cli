@@ -180,6 +180,45 @@ def list_runs(task_id: str, request: Request, limit: int = 50) -> dict[str, Any]
     return {"runs": [r.model_dump(mode="json") for r in runs]}
 
 
+@router.get("/{task_id}/runs/{run_id}")
+def get_run(task_id: str, run_id: str, request: Request) -> dict[str, Any]:
+    """Fetch a single persisted run record by its run_id.
+
+    Lighter than ``/runs?limit=...`` when the UI already has the run_id
+    (e.g. clicking on a row from the runs list). Includes the ``summary``
+    (model, tokens, cost, tool counts) and ``events_path`` so the caller
+    knows whether a timeline can be replayed via ``/runs/{run_id}/events``.
+    """
+    store = _store(request)
+    run = store.get_run(task_id, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+    return run.model_dump(mode="json")
+
+
+@router.get("/{task_id}/runs/{run_id}/events")
+def get_run_events(task_id: str, run_id: str, request: Request) -> dict[str, Any]:
+    """Return the full event timeline for one finished run.
+
+    Used by the detail drawer to "replay" a run with the same per-step
+    UI shown during a live run. ``events`` mirrors the SSE stream shape
+    one-for-one (each item has ``event`` + ``data`` + ``seq`` keys); the
+    frontend renderer can treat live and replay sources interchangeably.
+
+    Returns 404 if the run exists but no timeline was persisted (e.g. an
+    older run from before v0.10.x), so the caller can fall back to the
+    legacy ``output.response`` rendering.
+    """
+    store = _store(request)
+    events = store.load_events(task_id, run_id)
+    if events is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No event timeline persisted for run '{run_id}' (likely a pre-0.10 run)",
+        )
+    return {"events": events, "count": len(events)}
+
+
 @router.post("/test")
 async def test_action(
     body: AgentTaskCreate,

@@ -33,8 +33,8 @@ export function DoctorPage() {
           <div className="grid grid-cols-4 gap-3">
             <Stat label="Total" value={q.data.summary.total} />
             <Stat label="Passed" value={q.data.summary.passed} color="text-keboola" />
-            <Stat label="Failed" value={q.data.summary.failed} color="text-red-400" />
-            <Stat label="Warnings" value={q.data.summary.warnings ?? 0} color="text-neon-amber" />
+            <Stat label="Failed" value={q.data.summary.failed} color="text-red-600 dark:text-red-400" />
+            <Stat label="Warnings" value={q.data.summary.warnings ?? 0} color="text-amber-700 dark:text-neon-amber" />
           </div>
           <div className="space-y-2">
             {q.data.checks.map((c) => (
@@ -43,14 +43,14 @@ export function DoctorPage() {
                   {c.status === "pass" ? (
                     <CheckCircle className="w-4 h-4 text-keboola" />
                   ) : c.status === "fail" ? (
-                    <XCircle className="w-4 h-4 text-red-400" />
+                    <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
                   ) : (
-                    <CheckCircle className="w-4 h-4 text-neon-amber" />
+                    <CheckCircle className="w-4 h-4 text-amber-700 dark:text-neon-amber" />
                   )}
                 </div>
                 <div className="flex-1">
                   <div className="font-bold">{c.name}</div>
-                  <div className="text-xs text-zinc-400">{c.message}</div>
+                  <div className="text-xs text-zinc-600 dark:text-zinc-400">{c.message}</div>
                   {c.details ? (
                     <details className="mt-2">
                       <summary className="text-xs text-zinc-500 cursor-pointer">details</summary>
@@ -67,7 +67,7 @@ export function DoctorPage() {
   );
 }
 
-function Stat({ label, value, color = "text-zinc-100" }: { label: string; value: number; color?: string }) {
+function Stat({ label, value, color = "text-zinc-900 dark:text-zinc-100" }: { label: string; value: number; color?: string }) {
   return (
     <div className="nerd-card">
       <div className="text-xs text-zinc-500 uppercase tracking-wider">{label}</div>
