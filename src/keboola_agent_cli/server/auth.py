@@ -58,8 +58,29 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         if path in PUBLIC_PATHS or path.startswith("/docs") or path.startswith("/redoc"):
             return await call_next(request)
 
+        # Single-process UI mode (`kbagent serve --ui`): the SPA shell
+        # (index.html, /assets/*, favicons, client-side route URLs) is
+        # served unauthenticated so the browser can boot. The injected
+        # ``window.__KBAGENT_TOKEN`` then carries auth on every API call.
+        # ``is_ui_public`` is set on app.state by ``_install_ui`` only when
+        # ``--ui`` is enabled; in pure-API mode it is absent and this skip
+        # never fires.
+        is_ui_public = getattr(request.app.state, "is_ui_public", None)
+        if callable(is_ui_public) and is_ui_public(request.method, path):
+            return await call_next(request)
+
         header = request.headers.get(self._header, "")
         scheme, _, value = header.partition(" ")
+        # EventSource fallback: in single-process UI mode the SPA passes the
+        # token as ``?_kbagent_token=...`` because ``EventSource`` cannot
+        # carry custom request headers. We accept it iff the header is empty.
+        # The header path is preferred for everything else (scripts, fetch,
+        # ssePost) so the token never lands in server access logs by default.
+        if not value:
+            qs_token = request.query_params.get("_kbagent_token", "")
+            if qs_token:
+                value = qs_token
+                scheme = "bearer"
         if scheme.lower() != "bearer" or not value:
             return JSONResponse(
                 status_code=401,

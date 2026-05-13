@@ -1,7 +1,19 @@
 /**
- * Thin fetch wrapper. The BFF accepts requests on the same origin (Vite proxies
- * /api/* in dev, Fastify serves /api/* in prod), so no auth headers needed
- * client-side -- the BFF injects the kbagent serve token on the way upstream.
+ * Thin fetch wrapper. Two transport modes, transparent to call sites:
+ *
+ * - **BFF mode** (Vite dev / Fastify prod): the BFF receives /api/* on the
+ *   same origin and proxies upstream with the bearer token attached. The
+ *   browser sends no auth header.
+ * - **Single-process mode** (`kbagent serve --ui`): FastAPI serves both
+ *   the SPA and the API on one port. The server-rendered index.html
+ *   injects ``window.__KBAGENT_TOKEN``, which we forward as
+ *   ``Authorization: Bearer <token>`` on every request. ``/api/*`` is
+ *   path-rewritten to bare endpoints by an ASGI middleware on the
+ *   server side, so URLs stay identical between the two modes.
+ *
+ * The check is cheap: a single property read per request. The token can
+ * be set after page load only via DOM injection, so we capture it once at
+ * module import time -- subsequent calls reuse the snapshot.
  */
 export interface KbagentError {
   status: "error";
@@ -19,6 +31,19 @@ export class ApiError extends Error {
 }
 
 const API_BASE = "/api";
+
+/**
+ * Token captured from server-rendered <script>window.__KBAGENT_TOKEN = "..."</script>
+ * in single-process UI mode. Empty string in BFF mode (the BFF injects auth
+ * upstream so the browser doesn't see the token).
+ */
+const KBAGENT_TOKEN: string = ((): string => {
+  if (typeof window === "undefined") return "";
+  // The injection script may have escaped < and > -- those decode at parse
+  // time, so the value here is already the raw token. We read once and cache.
+  const value = (window as unknown as { __KBAGENT_TOKEN?: unknown }).__KBAGENT_TOKEN;
+  return typeof value === "string" ? value : "";
+})();
 
 interface RequestOptions {
   manageToken?: string;
@@ -53,6 +78,9 @@ async function request<T>(
   }
   if (opts.manageToken) {
     headers["x-manage-token"] = opts.manageToken;
+  }
+  if (KBAGENT_TOKEN) {
+    headers["authorization"] = `Bearer ${KBAGENT_TOKEN}`;
   }
   const res = await fetch(buildUrl(path, opts.query), {
     method,
@@ -100,7 +128,15 @@ export function sseSubscribe(
   query: RequestOptions["query"] | undefined,
   handlers: Record<string, (data: unknown) => void>,
 ): EventSource {
-  const url = buildUrl(path, query);
+  // EventSource does NOT support custom request headers, so in
+  // single-process UI mode we smuggle the bearer token through a query
+  // param (``_kbagent_token``). The auth middleware on the server
+  // accepts it as an Authorization fallback. In BFF mode no token is
+  // present, so this becomes a no-op.
+  const finalQuery = KBAGENT_TOKEN
+    ? { ...(query ?? {}), _kbagent_token: KBAGENT_TOKEN }
+    : query;
+  const url = buildUrl(path, finalQuery);
   const es = new EventSource(url, { withCredentials: false });
   for (const [event, handler] of Object.entries(handlers)) {
     es.addEventListener(event, (msg) => {
@@ -139,9 +175,14 @@ export function ssePost(
 ): SsePostHandle {
   const controller = new AbortController();
   const done = (async () => {
+    const sseHeaders: Record<string, string> = {
+      "content-type": "application/json",
+      accept: "text/event-stream",
+    };
+    if (KBAGENT_TOKEN) sseHeaders["authorization"] = `Bearer ${KBAGENT_TOKEN}`;
     const res = await fetch(buildUrl(path), {
       method: "POST",
-      headers: { "content-type": "application/json", accept: "text/event-stream" },
+      headers: sseHeaders,
       body: JSON.stringify(body),
       signal: controller.signal,
     });

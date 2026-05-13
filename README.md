@@ -14,6 +14,19 @@ uv tool install git+https://github.com/padak/keboola_agent_cli
 
 Auto-updates kbagent **and** its `keboola-mcp-server` dependency on every launch (since 0.30.1) -- no more silently running on a six-month-old MCP server. Run `kbagent changelog` to see what changed.
 
+## Web UI (optional)
+
+Want a browser dashboard instead of (or alongside) the CLI? One command:
+
+```bash
+uv pip install -e ".[server]"
+(cd web/frontend && npm install && npm run build)
+kbagent serve --ui
+# Open the URL printed at startup -- the browser is auto-authenticated.
+```
+
+Single Python process, no Node runtime needed at runtime. Covers everything the CLI exposes (projects, configs, storage, jobs, flows, schedules, MCP tools, lineage, scheduled AI agents with cost/token timeline). See [`web/README.md`](web/README.md) for the dev-mode setup.
+
 ## For AI agents
 
 This CLI is built AI-first. Every command outputs structured JSON (`--json`), errors include machine-readable codes, and the permission firewall enforces safety at the code level -- not via prompt instructions.
