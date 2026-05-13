@@ -38,12 +38,12 @@ export function Drawer({
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex">
-      <div
-        className="flex-1 bg-black/60 backdrop-blur-sm"
-        onClick={onClose}
-        role="presentation"
-      />
+    // Solid overlay on the container itself + transparent click-catcher inside
+    // it, instead of relying on a 60%-opacity child. Stops the page underneath
+    // (action buttons, text in cards) from bleeding through in light mode when
+    // the TopBar/Sidebar add their own backdrop-blur on top.
+    <div className="fixed inset-0 z-50 flex bg-zinc-900/70 backdrop-blur-sm dark:bg-black/75">
+      <div className="flex-1" onClick={onClose} role="presentation" />
       <aside
         className={`relative w-full ${width} h-full bg-white border-l border-zinc-200 shadow-2xl flex flex-col dark:bg-zinc-950 dark:border-zinc-800`}
       >
