@@ -346,31 +346,111 @@ function SchemaTab({ d }: { d: TableDetail }) {
 }
 
 function PreviewTab({ p }: { p: TablePreview }) {
+  // Per-column filter inputs + sortable headers, mimicking the Keboola UI
+  // Data Sample tab. State lives here so flipping tabs in the drawer
+  // resets it -- intentional.
+  const [filters, setFilters] = useState<string[]>(() => p.header.map(() => ""));
+  const [sortCol, setSortCol] = useState<number | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
   if (p.row_count === 0) {
     return <Empty title="Table is empty (no rows returned)" />;
   }
+
+  // Filter -> sort -> render. Filters are case-insensitive substring matches
+  // per column, ANDed together (so the filter row works like a query builder).
+  let visible = p.rows.filter((row) =>
+    filters.every((f, i) => !f || row[i]?.toLowerCase().includes(f.toLowerCase())),
+  );
+  if (sortCol !== null) {
+    visible = [...visible].sort((a, b) => {
+      const av = a[sortCol] ?? "";
+      const bv = b[sortCol] ?? "";
+      // Try numeric sort first; fall back to string compare.
+      const an = Number(av);
+      const bn = Number(bv);
+      const numeric = !Number.isNaN(an) && !Number.isNaN(bn);
+      const cmp = numeric ? an - bn : av.localeCompare(bv);
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }
+
+  const toggleSort = (i: number) => {
+    if (sortCol === i) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortCol(i);
+      setSortDir("asc");
+    }
+  };
+
   return (
-    <div>
-      <div className="text-xs text-zinc-500 mb-2">
-        Showing first {p.row_count} row(s)
+    <div className="space-y-2">
+      <div className="text-xs text-zinc-500 flex justify-between items-center">
+        <span>
+          Showing {visible.length} of {p.row_count} row(s)
+          {sortCol !== null ? (
+            <span className="ml-2 text-zinc-600">
+              ・ sorted by {p.header[sortCol]} {sortDir === "asc" ? "↑" : "↓"}
+            </span>
+          ) : null}
+        </span>
+        {filters.some((f) => f) || sortCol !== null ? (
+          <button
+            type="button"
+            className="text-xs text-zinc-500 hover:text-keboola"
+            onClick={() => {
+              setFilters(p.header.map(() => ""));
+              setSortCol(null);
+            }}
+          >
+            clear filters + sort
+          </button>
+        ) : null}
       </div>
       <div className="overflow-auto border border-zinc-800 rounded">
         <table className="w-full text-xs font-mono">
-          <thead className="bg-zinc-900/60">
+          <thead className="bg-zinc-900/60 sticky top-0">
             <tr>
               {p.header.map((h, i) => (
                 <th
                   key={i}
-                  className="px-3 py-1.5 text-left text-keboola border-b border-zinc-800 whitespace-nowrap"
+                  className="px-3 py-1.5 text-left text-keboola border-b border-zinc-800 whitespace-nowrap cursor-pointer hover:bg-zinc-900"
+                  onClick={() => toggleSort(i)}
                 >
-                  {h}
+                  <span className="inline-flex items-center gap-1">
+                    {h}
+                    <span className="text-zinc-600 text-[10px]">
+                      {sortCol === i ? (sortDir === "asc" ? "↑" : "↓") : "↕"}
+                    </span>
+                  </span>
+                </th>
+              ))}
+            </tr>
+            <tr className="bg-zinc-950">
+              {p.header.map((_, i) => (
+                <th
+                  key={i}
+                  className="px-2 py-1 border-b border-zinc-800 font-normal"
+                >
+                  <input
+                    type="text"
+                    placeholder="filter..."
+                    value={filters[i]}
+                    onChange={(e) => {
+                      const next = [...filters];
+                      next[i] = e.target.value;
+                      setFilters(next);
+                    }}
+                    className="w-full bg-transparent border border-zinc-800 rounded px-1 py-0.5 text-[10px] text-zinc-300 focus:outline-none focus:border-keboola"
+                  />
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {p.rows.map((r, i) => (
-              <tr key={i} className="border-b border-zinc-900/40">
+            {visible.map((r, i) => (
+              <tr key={i} className="border-b border-zinc-900/40 hover:bg-zinc-900/30">
                 {r.map((c, j) => (
                   <td key={j} className="px-3 py-1 text-zinc-300 whitespace-nowrap">
                     {c}
@@ -380,6 +460,11 @@ function PreviewTab({ p }: { p: TablePreview }) {
             ))}
           </tbody>
         </table>
+        {visible.length === 0 ? (
+          <div className="text-center text-xs text-zinc-500 py-6">
+            No rows match the active filters.
+          </div>
+        ) : null}
       </div>
     </div>
   );

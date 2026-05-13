@@ -6,6 +6,7 @@ import { createContext, useCallback, useContext, useState } from "react";
 import type { ReactNode } from "react";
 
 export type PageId =
+  | "dashboard"
   | "projects"
   | "configs"
   | "storage"
@@ -42,7 +43,7 @@ interface UIState {
 const UIStateContext = createContext<UIState | null>(null);
 
 export function UIStateProvider({ children }: { children: ReactNode }) {
-  const [page, setPage] = useState<PageId>("projects");
+  const [page, setPage] = useState<PageId>("dashboard");
   const [project, setProject] = useState<string | null>(null);
   const [branchId, setBranchId] = useState<number | null>(null);
   const [manageToken, setManageToken] = useState<string | null>(null);

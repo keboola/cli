@@ -153,15 +153,29 @@ function BranchPicker({
     window.addEventListener("mousedown", onClick);
     return () => window.removeEventListener("mousedown", onClick);
   }, [open]);
+  // When a non-default branch is selected, the indicator goes neon-amber so
+  // the user can never miss that they're not on production.
+  const isDevBranch = current !== null;
   return (
     <div className="relative" ref={ref}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-keboola px-2 py-1 rounded border border-zinc-800 hover:border-keboola/40"
+        className={`flex items-center gap-1.5 text-sm px-2.5 py-1 rounded border ${
+          isDevBranch
+            ? "border-neon-amber/60 bg-neon-amber/10 text-neon-amber hover:bg-neon-amber/20"
+            : "border-zinc-800 text-zinc-400 hover:text-keboola hover:border-keboola/40"
+        }`}
       >
         <GitBranch className="w-3.5 h-3.5" />
-        <span>{label}</span>
+        <span className="font-medium">{label}</span>
+        {isDevBranch ? (
+          <span className="text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-neon-amber/20 border border-neon-amber/40">
+            DEV
+          </span>
+        ) : (
+          <span className="text-[9px] uppercase tracking-wider text-zinc-600">prod</span>
+        )}
         {loading ? <span className="text-xs text-zinc-600">...</span> : null}
         <ChevronDown className="w-3 h-3 opacity-60" />
       </button>

@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, Brain, Pause, Play, Plus, Sparkles, Terminal, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { api } from "../api/client";
 import { Drawer } from "../components/Drawer";
-import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
+import { ErrorBox, Loading, PageTitle, TwoPathEmpty } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
@@ -114,9 +114,42 @@ export function AgentsPage() {
       {q.isLoading ? <Loading /> : null}
       {q.error ? <ErrorBox message={(q.error as Error).message} /> : null}
       {q.data?.tasks.length === 0 ? (
-        <Empty
-          title="No agent tasks scheduled yet"
-          hint="Click 'New task' to create your first one. E.g. every midnight, ask claude to triage error jobs."
+        <TwoPathEmpty
+          headline="Schedule your first agent"
+          subline="Two paths -- pick the one that fits your task."
+          paths={[
+            {
+              title: "Schedule a kbagent CLI command",
+              description:
+                "For deterministic background jobs: nightly sync pulls, periodic doctor checks, polling for failed jobs. Output captured to history.",
+              icon: <Terminal className="w-8 h-8 text-keboola" />,
+              action: (
+                <button
+                  type="button"
+                  className="nerd-btn hover:text-keboola"
+                  onClick={() => setShowNew(true)}
+                >
+                  + New CLI task
+                </button>
+              ),
+            },
+            {
+              title: "Schedule an AI agent",
+              description:
+                "For tasks that need judgement: 'triage overnight error jobs', 'summarize storage growth'. Runs claude / codex / gemini with a prompt.",
+              icon: <Brain className="w-8 h-8 text-neon-pink" />,
+              badge: "more agentic",
+              action: (
+                <button
+                  type="button"
+                  className="nerd-btn hover:text-neon-pink"
+                  onClick={() => setShowNew(true)}
+                >
+                  + New AI task
+                </button>
+              ),
+            },
+          ]}
         />
       ) : (
         <DataTable
@@ -237,6 +270,48 @@ function NewTaskDrawer({ onClose }: { onClose: () => void }) {
   const [testRun, setTestRun] = useState<AgentRun | null>(null);
   const [testElapsed, setTestElapsed] = useState(0);
 
+  // Dirty-form guard: snapshot the initial state on first render, then compare
+  // on every render. If the user touched anything, Esc / backdrop / X clicks
+  // ask for confirmation before discarding the form (drawer unmount = state loss).
+  // useMemo with [] runs once -- exhaustive-deps would force us to list every
+  // field, which would defeat the snapshot.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const initialSnapshot = useMemo(
+    () =>
+      JSON.stringify({
+        name,
+        description,
+        cron,
+        enabled,
+        actionType,
+        tool,
+        toolInput,
+        argv,
+        aiCli,
+        aiPrompt,
+        aiExtraArgs,
+      }),
+    [],
+  );
+  const currentSnapshot = JSON.stringify({
+    name,
+    description,
+    cron,
+    enabled,
+    actionType,
+    tool,
+    toolInput,
+    argv,
+    aiCli,
+    aiPrompt,
+    aiExtraArgs,
+  });
+  const dirty = currentSnapshot !== initialSnapshot;
+  const handleClose = () => {
+    if (dirty && !window.confirm("Discard unsaved changes?")) return;
+    onClose();
+  };
+
   // Build the action body that both Test and Create use -- single source of
   // truth so Test really executes the same action that Create would persist.
   const buildAction = (): { type: ActionType; params: Record<string, unknown> } => {
@@ -307,7 +382,7 @@ function NewTaskDrawer({ onClose }: { onClose: () => void }) {
   return (
     <Drawer
       open={true}
-      onClose={onClose}
+      onClose={handleClose}
       title="New scheduled agent task"
       subtitle="Pick a cron schedule and one of three actions: AI agent (claude/codex/gemini), MCP tool call, or kbagent CLI command."
       width="max-w-3xl"

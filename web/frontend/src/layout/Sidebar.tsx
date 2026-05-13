@@ -10,6 +10,7 @@ import {
   GitBranch,
   Heart,
   Layers,
+  LayoutDashboard,
   Lock,
   MessageSquare,
   Network,
@@ -27,6 +28,10 @@ const SECTIONS: Array<{
   title: string;
   items: Array<{ id: PageId; label: string; icon: React.ComponentType<{ className?: string }> }>;
 }> = [
+  {
+    title: "Home",
+    items: [{ id: "dashboard", label: "Dashboard", icon: LayoutDashboard }],
+  },
   {
     title: "Manage",
     items: [

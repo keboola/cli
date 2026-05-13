@@ -1,6 +1,7 @@
 import { Shell } from "./layout/Shell";
 import { AgentsPage } from "./pages/Agents";
 import { BranchesPage } from "./pages/Branches";
+import { DashboardPage } from "./pages/Dashboard";
 import { ChangelogPage } from "./pages/Changelog";
 import { ComponentsPage } from "./pages/Components";
 import { ConfigsPage } from "./pages/Configs";
@@ -25,6 +26,8 @@ import { UIStateProvider, useUIState } from "./state";
 function Router() {
   const { page } = useUIState();
   switch (page) {
+    case "dashboard":
+      return <DashboardPage />;
     case "projects":
       return <ProjectsPage />;
     case "configs":
@@ -68,7 +71,7 @@ function Router() {
     case "changelog":
       return <ChangelogPage />;
     default:
-      return <ProjectsPage />;
+      return <DashboardPage />;
   }
 }
 
