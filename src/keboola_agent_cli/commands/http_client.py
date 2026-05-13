@@ -27,7 +27,7 @@ from ..services.http_forwarder_service import (
     ForwarderError,
     HttpForwarderService,
 )
-from ._helpers import emit_hint, get_formatter, should_hint
+from ._helpers import get_formatter
 
 http_app = typer.Typer(
     help=(
@@ -106,8 +106,6 @@ def http_get(
     ),
 ) -> None:
     """GET an endpoint on the running kbagent serve."""
-    if should_hint(ctx):
-        emit_hint(ctx, "http.get", path=path, timeout=timeout)
     _do_request(ctx, "GET", path, body=None, timeout=timeout)
 
 
@@ -126,8 +124,6 @@ def http_post(
     ),
 ) -> None:
     """POST to an endpoint on the running kbagent serve."""
-    if should_hint(ctx):
-        emit_hint(ctx, "http.post", path=path, body=body, timeout=timeout)
     _do_request(ctx, "POST", path, body=body, timeout=timeout)
 
 
@@ -146,8 +142,6 @@ def http_patch(
     ),
 ) -> None:
     """PATCH an endpoint on the running kbagent serve."""
-    if should_hint(ctx):
-        emit_hint(ctx, "http.patch", path=path, body=body, timeout=timeout)
     _do_request(ctx, "PATCH", path, body=body, timeout=timeout)
 
 
@@ -160,6 +154,4 @@ def http_delete(
     ),
 ) -> None:
     """DELETE an endpoint on the running kbagent serve."""
-    if should_hint(ctx):
-        emit_hint(ctx, "http.delete", path=path, timeout=timeout)
     _do_request(ctx, "DELETE", path, body=None, timeout=timeout)
