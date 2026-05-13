@@ -15,6 +15,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Capture the caller's invocation cwd BEFORE any `cd`. ``kbagent serve``
+# is launched with this cwd so any nested-sync workspace it creates
+# (`kbagent sync init/pull <alias>` -> `<cwd>/<alias>/`) lands in the
+# operator's working directory, not the keboola_agent_cli repo root.
+# All other child processes (Vite, BFF) continue to need REPO_DIR.
+USER_CWD="${PWD}"
 
 CONFIG_DIR_FLAG=""
 if [[ "${1:-}" == "--config-dir" && -n "${2:-}" ]]; then
@@ -37,8 +43,12 @@ trap cleanup EXIT INT TERM
 cd "${REPO_DIR}"
 
 echo "[web-dev] kbagent serve token: ${TOKEN}"
-echo "[web-dev] starting kbagent serve on :8001 (Python)"
-uv run kbagent serve --port 8001 --log-level warning ${CONFIG_DIR_FLAG} 2>&1 \
+echo "[web-dev] starting kbagent serve on :8001 (Python) -- cwd: ${USER_CWD}"
+# Run uv from REPO_DIR (so it finds the project's pyproject.toml + venv)
+# but execute kbagent in USER_CWD so nested-sync workspaces land where
+# the operator launched the server. uv's --project flag resolves the
+# project root explicitly so we can chdir freely.
+(cd "${USER_CWD}" && uv run --project "${REPO_DIR}" kbagent serve --port 8001 --log-level warning ${CONFIG_DIR_FLAG}) 2>&1 \
   | sed -u 's/^/[serve] /' &
 
 # Wait for kbagent serve to come up before launching the BFF (which would
