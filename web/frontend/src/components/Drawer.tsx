@@ -1,10 +1,17 @@
 import { X } from "lucide-react";
 import { type ReactNode, useEffect } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * Right-side slide-over drawer. Fixed-position, full viewport height,
  * blocks scroll behind it. Use for "open detail / runner without
  * losing place in the table" UX (MCP tool runner, table detail, ...).
+ *
+ * The drawer is rendered through a React portal into ``document.body`` so it
+ * is NOT constrained by any wrapper styles further up the page tree. Without
+ * the portal a parent's ``space-y-4`` was leaking ``margin-top: 16px`` onto
+ * the fixed container — the drawer's modality starts ~16px below the top of
+ * the viewport, letting the page sneak through the gap.
  */
 export function Drawer({
   open,
@@ -37,12 +44,11 @@ export function Drawer({
   }, [open, onClose]);
 
   if (!open) return null;
-  return (
-    // Solid overlay on the container itself + transparent click-catcher inside
-    // it, instead of relying on a 60%-opacity child. Stops the page underneath
-    // (action buttons, text in cards) from bleeding through in light mode when
-    // the TopBar/Sidebar add their own backdrop-blur on top.
-    <div className="fixed inset-0 z-50 flex bg-zinc-900/70 backdrop-blur-sm dark:bg-black/75">
+  // Near-opaque overlay (90% black-ish) — 70% let the page content under the
+  // drawer bleed through enough to break modality, especially on the agent-task
+  // table where action buttons are right under the click-catch area.
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex bg-zinc-950/90 backdrop-blur-sm">
       <div className="flex-1" onClick={onClose} role="presentation" />
       <aside
         className={`relative w-full ${width} h-full bg-white border-l border-zinc-200 shadow-2xl flex flex-col dark:bg-zinc-950 dark:border-zinc-800`}
@@ -68,6 +74,7 @@ export function Drawer({
         </header>
         <div className="flex-1 overflow-auto p-4">{children}</div>
       </aside>
-    </div>
+    </div>,
+    document.body,
   );
 }
