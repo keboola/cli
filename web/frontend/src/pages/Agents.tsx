@@ -25,6 +25,27 @@ import { useUIState } from "../state";
 
 type ActionType = "mcp_tool" | "cli_command" | "ai_agent";
 
+/**
+ * True if `err` is the AbortError thrown when an in-flight fetch is
+ * cancelled via AbortController.abort(). React StrictMode in dev
+ * triggers cleanup between mount and re-mount, which fires
+ * controller.abort() before the user has done anything -- the SSE
+ * promise then rejects with this error. It is *not* a user-facing
+ * failure; the user-initiated cancel paths (cancelTest, cancelLive,
+ * drawer-close cleanup) all produce the same exception, so the
+ * symmetric handling is to swallow it.
+ */
+function isAbortError(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === "AbortError") return true;
+  if (err instanceof Error && err.name === "AbortError") return true;
+  // Some Chrome versions stringify as "signal is aborted without reason"
+  // even though name is set. Belt-and-suspenders.
+  return Boolean(
+    err && typeof err === "object" && "message" in err &&
+      String((err as { message: unknown }).message).toLowerCase().includes("abort"),
+  );
+}
+
 interface AgentTask {
   id: string;
   name: string;
@@ -771,6 +792,10 @@ function NewTaskDrawer({
     testHandleRef.current = handle;
     handle.done
       .catch((err) => {
+        // AbortError is the *expected* outcome of cancelTest() and of the
+        // dev-only StrictMode cleanup that fires between mount and re-mount.
+        // Don't surface it as a user-facing error.
+        if (isAbortError(err)) return;
         setError((err as Error).message);
       })
       .finally(() => {
@@ -1242,7 +1267,10 @@ function TaskDetailDrawer({
     );
     liveHandleRef.current = handle;
     handle.done
-      .catch((err) => setLiveError((err as Error).message))
+      .catch((err) => {
+        if (isAbortError(err)) return;
+        setLiveError((err as Error).message);
+      })
       .finally(() => {
         clearInterval(tick);
         setLiveRunning(false);
