@@ -1,6 +1,6 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
-## `kbagent http` works only inside `kbagent serve` subprocesses (since v0.33.x)
+## `kbagent http` works only inside `kbagent serve` subprocesses (since v0.40.0)
 
 - `kbagent http get/post/patch/delete <PATH>` is a thin self-call client
   against the running `kbagent serve`. It requires both

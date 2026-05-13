@@ -47,6 +47,7 @@ from .services.deep_lineage_service import DeepLineageService
 from .services.doctor_service import DoctorService
 from .services.encrypt_service import EncryptService
 from .services.flow_service import FlowService
+from .services.http_forwarder_service import HttpForwarderService
 from .services.job_service import JobService
 from .services.kai_service import KaiService
 from .services.lineage_service import LineageService
@@ -333,6 +334,7 @@ def main(
     kai_service = KaiService(config_store=config_store)
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
     version_service = VersionService()
+    http_forwarder_service = HttpForwarderService()
 
     try:
         config = config_store.load()
@@ -390,6 +392,7 @@ def main(
     ctx.obj["kai_service"] = kai_service
     ctx.obj["doctor_service"] = doctor_service
     ctx.obj["version_service"] = version_service
+    ctx.obj["http_forwarder_service"] = http_forwarder_service
 
     # Warn if empty local config shadows global with projects (#104)
     if source == "local" and not json_output and ctx.invoked_subcommand != "init":
