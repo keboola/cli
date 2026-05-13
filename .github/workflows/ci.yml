@@ -21,7 +21,15 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: uv sync
+        # `--extra server` pulls in fastapi/uvicorn/sse-starlette/python-multipart/
+        # croniter so the test suite can import `keboola_agent_cli.server.*`.
+        # The server module is `[project.optional-dependencies]` because the
+        # core CLI works without it, but every test that touches the FastAPI
+        # app (test_agent_runner, test_pricing, test_run_broadcaster,
+        # test_agents_store_events, test_serve_ui, test_server_smoke) requires
+        # it. Without this flag those tests fail at collection time with
+        # `ModuleNotFoundError: No module named 'fastapi'`.
+        run: uv sync --extra server
 
       - name: Lint
         run: uv run ruff check src/ tests/ scripts/
