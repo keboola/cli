@@ -26,6 +26,18 @@ kbagent serve --ui
 
 The React SPA is bundled inside the wheel by a hatchling build hook (requires Node 20+ on the install host so `npm run build` can run during wheel creation). Single Python process at runtime; no Node needed once installed. Covers everything the CLI exposes (projects, configs, storage, jobs, flows, schedules, MCP tools, lineage, scheduled AI agents with cost/token timeline). Agent runs that produce long-form reports (e.g. "Storage Cleanup Advisor", "Schedule Drift Detector") surface in a dedicated **Artifacts** tab — GFM-rendered preview in a VSCode-style viewer with one-click Copy / Download `.md` for hand-off to Slack, Notion, or your editor. See [`web/README.md`](web/README.md) for the dev-mode setup with hot reload.
 
+## Agent Tasks
+
+Schedule AI agents to run **inside `kbagent serve`** -- cron, manual triggers, or chained (one agent finishes, another starts). Each task picks one of three action flavours:
+
+- **AI agent** -- `claude` / `codex` / `gemini` with a custom prompt. The subprocess inherits `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` so it calls back via `kbagent http get /...` instead of forking fresh CLI processes against stale config.
+- **MCP tool call** -- any tool from `keboola-mcp-server`, validated against its input schema.
+- **Raw kbagent CLI** -- any `kbagent ...` command with its args (encrypted secrets supported).
+
+Every run is recorded as a persisted timeline (JSONL on disk, `0600`) with authoritative cost & token accounting (Opus 4.7 / Sonnet 4.6 / Haiku 4.5 pricing built-in) and per-step replay over SSE. Long-form markdown reports (e.g. "Storage Cleanup Advisor", "Schedule Drift Detector") auto-surface in a dedicated **Artifacts** tab with GFM preview + one-click Copy / Download `.md` for Slack, Notion, or your editor.
+
+Build the agent once, schedule it, walk away — the platform handles auth, scheduling, history, cost reporting, and report rendering.
+
 ## For AI agents
 
 This CLI is built AI-first. Every command outputs structured JSON (`--json`), errors include machine-readable codes, and the permission firewall enforces safety at the code level -- not via prompt instructions.
@@ -50,6 +62,8 @@ Then either let the `kbagent` skill auto-trigger from natural prompts, or delega
 > "Compare the SQL transformation between production and the dev branch."
 
 > "Create a new Snowflake transformation that joins orders and customers, push it to a dev branch."
+
+> "Set up a weekly Storage Cleanup advisor that flags orphan tables, estimates monthly Snowflake savings, and writes a markdown report I can read in the dashboard."
 
 ### Sandboxing
 
@@ -98,6 +112,7 @@ kbagent workspace query --project prod --workspace-id WS_ID \
 | **Dev branches** | Create a branch, activate it, and every command auto-targets it. Storage writes, MCP, sync -- everything follows. Storage reads default to production (safer). |
 | **Sync & GitOps** | Pull configs as YAML, edit in IDE, push back. SQL/Python extracted as real files. Diff and status tracking. Adopt existing kbc Go CLI checkouts (`sync init --adopt-existing`). |
 | **MCP tools** | Call `keboola-mcp-server` tools with auto-expand, multi-project fan-out, branch propagation, schema validation. **MCP server itself is also auto-updated on every kbagent startup** (since 0.30.1) -- no more "the AI agent recommends a feature my MCP install does not support." |
+| **Agent Tasks** | Schedule AI agents inside `kbagent serve` (CRON / manual / chained). Three action flavours per task: `claude` / `codex` / `gemini` with prompt, MCP tool call, or raw kbagent CLI. Per-run cost & token timeline with authoritative Claude 4.x pricing built-in; persisted JSONL history (`0600`); live SSE replay; **Artifacts tab** auto-renders long-form markdown reports (GFM tables, Copy / Download `.md`). Subprocesses get `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` auto-injected for self-calls via `kbagent http`. (since 0.40.0) |
 | **Workspaces** | Create Snowflake/BQ workspace, load tables, run SQL. Create from transformation config for instant debugging. Orphan detection + garbage collection. |
 | **Sharing** | Cross-project bucket sharing with org/project/user access control. Share, link, unlink. |
 | **Data apps** | First-class lifecycle for Streamlit / Flask / Node deployments (`keboola.data-apps`). `create / deploy / start / stop / password / delete` (since 0.27.0); `secrets-set / -list / -get / -remove` for `#`-prefixed runtime secrets with per-project KMS encryption (since 0.29.0); `validate-repo` pre-flight Golden Rule check that catches misconfigured git repos before a deploy (since 0.29.0). Hides the redeploy contract and per-project KMS encryption of git PATs. |
