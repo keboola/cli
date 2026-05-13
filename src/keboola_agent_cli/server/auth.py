@@ -60,8 +60,9 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
         # Single-process UI mode (`kbagent serve --ui`): the SPA shell
         # (index.html, /assets/*, favicons, client-side route URLs) is
-        # served unauthenticated so the browser can boot. The injected
-        # ``window.__KBAGENT_TOKEN`` then carries auth on every API call.
+        # served unauthenticated so the browser can boot. The HttpOnly
+        # ``kbagent_session`` cookie set on ``GET /`` then carries auth
+        # on every same-origin API call (see the cookie branch below).
         # ``is_ui_public`` is set on app.state by ``_install_ui`` only when
         # ``--ui`` is enabled; in pure-API mode it is absent and this skip
         # never fires.
@@ -71,15 +72,18 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
         header = request.headers.get(self._header, "")
         scheme, _, value = header.partition(" ")
-        # EventSource fallback: in single-process UI mode the SPA passes the
-        # token as ``?_kbagent_token=...`` because ``EventSource`` cannot
-        # carry custom request headers. We accept it iff the header is empty.
-        # The header path is preferred for everything else (scripts, fetch,
-        # ssePost) so the token never lands in server access logs by default.
+        # Browser fallback: in single-process UI mode the SPA reaches the
+        # API on the same origin via ``credentials: "include"``, so the
+        # browser attaches a HttpOnly ``kbagent_session`` cookie set by
+        # ``GET /`` (see ``server.__init__._install_ui``). We accept it
+        # only when no Authorization header was present, so scripted callers
+        # (``kbagent http``, curl, BFF) keep the header path -- the token
+        # therefore never lands in URLs / access logs and never in any
+        # JS-readable surface.
         if not value:
-            qs_token = request.query_params.get("_kbagent_token", "")
-            if qs_token:
-                value = qs_token
+            cookie_token = request.cookies.get("kbagent_session", "")
+            if cookie_token:
+                value = cookie_token
                 scheme = "bearer"
         if scheme.lower() != "bearer" or not value:
             return JSONResponse(

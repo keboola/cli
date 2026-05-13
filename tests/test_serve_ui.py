@@ -2,13 +2,15 @@
 
 Covers the three pieces glued in by ``server._install_ui``:
 
-1. ``GET /`` and ``GET /index.html`` serve the SPA shell with the bearer
-   token injected as ``window.__KBAGENT_TOKEN`` -- and they do so
-   *unauthenticated* (otherwise the browser couldn't bootstrap).
+1. ``GET /`` and ``GET /index.html`` serve the SPA shell *unauthenticated*
+   and set a ``kbagent_session`` HttpOnly cookie. The browser then attaches
+   it to every same-origin request automatically. The token never enters
+   the JS heap, the URL, or uvicorn's access log.
 2. ``/api/<path>`` is path-rewritten to ``/<path>`` so the SPA's existing
    ``/api/projects`` calls reach the bare ``projects`` router.
-3. The auth middleware accepts ``?_kbagent_token=...`` as a fallback so
-   ``EventSource`` (which can't send headers) still authenticates.
+3. The auth middleware accepts the ``kbagent_session`` cookie as a Bearer
+   fallback so ``EventSource`` (which cannot send custom headers) still
+   authenticates -- via cookie, not via URL query param.
 """
 
 from __future__ import annotations
@@ -52,38 +54,39 @@ def _make_client(
 
 
 class TestUiBootstrap:
-    def test_index_served_unauthenticated_with_token_injected(
+    def test_index_served_unauthenticated_with_session_cookie(
         self, tmp_path: Path, ui_dist: Path
     ) -> None:
         client = _make_client(tmp_path, ui_dist=ui_dist, token="my-secret-123")
         # No Authorization header -> still 200, because index.html is the
-        # bootstrap surface that LATER carries the token.
+        # bootstrap surface. Auth materializes via the Set-Cookie response.
         resp = client.get("/")
         assert resp.status_code == 200
         body = resp.text
-        # Token injected into a <script> tag before </head>.
-        assert 'window.__KBAGENT_TOKEN = "my-secret-123"' in body
-        assert "kbagent-token-inject" in body
-        assert "</head>" in body  # not corrupted
-        # And /index.html is the same.
+        # Token NOT injected into the page body anymore -- it lives only in
+        # the HttpOnly cookie. This is the key security improvement: the
+        # token cannot be exfiltrated via XSS (JS can't read HttpOnly).
+        assert "my-secret-123" not in body
+        assert "__KBAGENT_TOKEN" not in body
+        # Cookie shape: HttpOnly + SameSite=Strict + Path=/ (Secure flag
+        # intentionally absent so http://127.0.0.1 dev installs work).
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert "kbagent_session=my-secret-123" in set_cookie
+        assert "HttpOnly" in set_cookie
+        assert "SameSite=strict" in set_cookie.replace("Strict", "strict").replace(
+            "STRICT", "strict"
+        )
+        assert "Path=/" in set_cookie
+        # Same behavior on /index.html.
         resp2 = client.get("/index.html")
         assert resp2.status_code == 200
-        assert 'window.__KBAGENT_TOKEN = "my-secret-123"' in resp2.text
+        assert "kbagent_session=my-secret-123" in resp2.headers.get("set-cookie", "")
 
     def test_assets_served_unauthenticated(self, tmp_path: Path, ui_dist: Path) -> None:
         client = _make_client(tmp_path, ui_dist=ui_dist)
         resp = client.get("/assets/main.js")
         assert resp.status_code == 200
         assert "console.log" in resp.text
-
-    def test_token_html_special_chars_escaped(self, tmp_path: Path, ui_dist: Path) -> None:
-        # Tokens are urlsafe base64, so '<' / '>' don't appear in practice,
-        # but the escape function should defend against an injected one
-        # anyway. ``"`` would break the literal; verify it doesn't get through.
-        client = _make_client(tmp_path, ui_dist=ui_dist, token='ab"cd<ef>')
-        body = client.get("/").text
-        assert 'ab"cd<ef>' not in body  # raw form is gone
-        assert 'ab\\"cd\\u003cef\\u003e' in body  # escaped form is present
 
 
 class TestApiAlias:
@@ -111,32 +114,49 @@ class TestApiAlias:
         assert resp.status_code in {404, 401}
 
 
-class TestEventSourceQueryFallback:
-    def test_query_param_token_authenticates(self, tmp_path: Path, ui_dist: Path) -> None:
-        client = _make_client(tmp_path, ui_dist=ui_dist, token="qt-token")
-        # /docs is public, so use a non-public route to exercise auth.
-        # /agents requires auth and works without external state if the
-        # store is empty; pick GET /agents which lists tasks (returns []).
-        # Without auth -> 401.
-        resp_no_auth = client.get("/agents")
-        assert resp_no_auth.status_code == 401
-        # With ?_kbagent_token=... -> 200, even without Authorization header.
-        resp_qs = client.get("/agents?_kbagent_token=qt-token")
-        assert resp_qs.status_code == 200
+class TestCookieAuth:
+    """Cookie path: ``GET /`` sets the cookie, subsequent requests use it.
 
-    def test_query_param_invalid_still_rejected(self, tmp_path: Path, ui_dist: Path) -> None:
-        client = _make_client(tmp_path, ui_dist=ui_dist, token="qt-token")
-        resp = client.get("/agents?_kbagent_token=wrong")
+    The auth middleware accepts ``kbagent_session=<token>`` as a Bearer
+    fallback iff no Authorization header was sent. This is what makes
+    ``EventSource`` work without smuggling the token through a query
+    param (which would land in uvicorn's access log).
+    """
+
+    def test_cookie_authenticates_after_bootstrap(self, tmp_path: Path, ui_dist: Path) -> None:
+        client = _make_client(tmp_path, ui_dist=ui_dist, token="ck-token")
+        # Without auth -> 401.
+        assert client.get("/agents").status_code == 401
+        # Bootstrap GET / sets the cookie on the TestClient session jar.
+        bootstrap = client.get("/")
+        assert bootstrap.status_code == 200
+        assert "kbagent_session=ck-token" in bootstrap.headers.get("set-cookie", "")
+        # Subsequent request reuses the cookie automatically.
+        resp = client.get("/agents")
+        assert resp.status_code == 200
+
+    def test_invalid_cookie_rejected(self, tmp_path: Path, ui_dist: Path) -> None:
+        client = _make_client(tmp_path, ui_dist=ui_dist, token="real-token")
+        client.cookies.set("kbagent_session", "wrong-token")
+        assert client.get("/agents").status_code == 401
+
+    def test_query_param_no_longer_accepted(self, tmp_path: Path, ui_dist: Path) -> None:
+        # The legacy ``?_kbagent_token=...`` fallback was removed in favor
+        # of the cookie path -- it was the only reason the bearer token
+        # ever appeared in URLs / access logs. Verify a request that would
+        # have authenticated under the old design is now rejected.
+        client = _make_client(tmp_path, ui_dist=ui_dist, token="t")
+        resp = client.get("/agents?_kbagent_token=t")
         assert resp.status_code == 401
 
     def test_header_takes_precedence_when_both_present(self, tmp_path: Path, ui_dist: Path) -> None:
-        # When the header IS present, the query param fallback is not even
-        # consulted -- so a wrong query value next to a right header still
-        # passes (the inverse would also pass; we just want to prove the
-        # branches don't interfere).
+        # When the header IS present, the cookie fallback is not even
+        # consulted -- so a wrong cookie value next to a right header still
+        # passes. Asserts the branches don't interfere.
         client = _make_client(tmp_path, ui_dist=ui_dist, token="t")
+        client.cookies.set("kbagent_session", "wrong-cookie")
         resp = client.get(
-            "/agents?_kbagent_token=wrong-but-ignored",
+            "/agents",
             headers={"authorization": "Bearer t"},
         )
         assert resp.status_code == 200

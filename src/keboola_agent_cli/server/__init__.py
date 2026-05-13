@@ -221,6 +221,9 @@ def create_app(
     return app
 
 
+_SESSION_COOKIE_NAME = "kbagent_session"
+
+
 def _install_ui(app: FastAPI, *, ui_dist: str, token: str) -> None:
     """Mount the built React SPA at ``/`` and bridge ``/api/*`` to bare routes.
 
@@ -229,11 +232,19 @@ def _install_ui(app: FastAPI, *, ui_dist: str, token: str) -> None:
     1) **Path-rewrite middleware** for ``/api/<rest>`` -> ``<rest>``. Mounted
        BEFORE auth so the auth header check runs against the rewritten path
        (auth doesn't care about path, but PUBLIC_PATHS exact-matches do).
-    2) **Token-injecting** ``GET /`` and ``GET /index.html``: read the built
-       ``index.html``, inject ``window.__KBAGENT_TOKEN = "..."`` before the
-       closing ``</head>``, return as text/html. Public (no auth) so the SPA
-       can bootstrap. The token is short-lived (one per process, rotated on
-       restart) and only sent over loopback by default.
+    2) **Cookie-setting** ``GET /`` and ``GET /index.html``: read the built
+       ``index.html``, return it with a ``Set-Cookie: kbagent_session=<token>;
+       HttpOnly; SameSite=Strict; Path=/`` header. Public (no auth) so the
+       SPA can bootstrap. The browser then attaches the cookie to every
+       same-origin REST + SSE request automatically. The token is HttpOnly
+       (no JS access -- XSS-resistant), SameSite=Strict (no cross-origin
+       sends -- CSRF-resistant), and lives only for the browser session.
+
+       This replaces the older "inject ``window.__KBAGENT_TOKEN`` into a
+       ``<script>`` tag" approach. The injected token landed in the JS heap
+       (XSS-readable) and the EventSource fallback (``?_kbagent_token=...``
+       query param) put it into uvicorn's access log -- both attack surfaces
+       are gone with the cookie-only design.
     3) **StaticFiles mount at ``/``** with ``html=True`` so missing paths fall
        through to ``index.html`` for SPA client-side routing.
 
@@ -276,7 +287,7 @@ def _install_ui(app: FastAPI, *, ui_dist: str, token: str) -> None:
     app.add_middleware(_ApiAliasMiddleware)
 
     # Allow unauthenticated access to the bootstrap HTML so the browser can
-    # load it and pick up the injected token. Static assets (JS/CSS/icons)
+    # load it and pick up the session cookie. Static assets (JS/CSS/icons)
     # under /assets/* are also public -- they carry no secrets.
     from .auth import PUBLIC_PATHS as _AUTH_PUBLIC_PATHS  # noqa: F401  (touch to confirm import)
 
@@ -284,24 +295,23 @@ def _install_ui(app: FastAPI, *, ui_dist: str, token: str) -> None:
     @app.get("/index.html", include_in_schema=False)
     async def _serve_ui_index() -> HTMLResponse:
         html = (dist / "index.html").read_text(encoding="utf-8")
-        # Idempotent inject: replace any prior token script (warm-reload of
-        # uvicorn shouldn't accumulate them) before adding the current one.
-        marker = "<!-- kbagent-token-inject -->"
-        injection = (
-            f"{marker}\n<script>window.__KBAGENT_TOKEN = {_js_string_literal(token)};</script>"
+        response = HTMLResponse(html)
+        # Browser session cookie: HttpOnly + SameSite=Strict + Path=/. No
+        # ``Secure`` flag because kbagent serve defaults to plain http on
+        # 127.0.0.1; setting Secure would prevent the cookie from ever being
+        # set on a localhost dev install. Operators running `--host 0.0.0.0`
+        # behind TLS termination should layer Secure via the proxy.
+        # ``max_age`` deliberately omitted -> cookie is a session cookie
+        # (cleared when the browser closes), matching the token's
+        # one-per-process lifecycle.
+        response.set_cookie(
+            key=_SESSION_COOKIE_NAME,
+            value=token,
+            httponly=True,
+            samesite="strict",
+            path="/",
         )
-        if marker in html:
-            # Strip prior block (marker + immediately-following <script>).
-            import re as _re
-
-            html = _re.sub(
-                rf"{_re.escape(marker)}\s*<script>[^<]*</script>",
-                "",
-                html,
-                count=1,
-            )
-        html = html.replace("</head>", f"{injection}\n</head>", 1)
-        return HTMLResponse(html)
+        return response
 
     # SPA fallback + assets. ``html=True`` makes StaticFiles serve index.html
     # for unknown paths (so /workspaces, /jobs, etc. client-side routes work
@@ -314,22 +324,6 @@ def _install_ui(app: FastAPI, *, ui_dist: str, token: str) -> None:
     _allow_static_through_auth(app)
 
     app.mount("/", StaticFiles(directory=str(dist), html=True), name="ui")
-
-
-def _js_string_literal(value: str) -> str:
-    """Safely embed ``value`` as a JS string literal in inline ``<script>``.
-
-    Escapes the four characters that can break out of the literal or the
-    surrounding HTML context (``\\``, ``"``, ``<``, ``>``). Anything else
-    in a UrlSafe base64 token is plain ASCII, so this is sufficient.
-    """
-    escaped = (
-        value.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-    )
-    return f'"{escaped}"'
 
 
 def _allow_static_through_auth(app: FastAPI) -> None:

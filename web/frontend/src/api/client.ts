@@ -1,19 +1,22 @@
 /**
- * Thin fetch wrapper. Two transport modes, transparent to call sites:
+ * Thin fetch wrapper. The browser never sees the bearer token.
+ *
+ * Two transport modes, both transparent to call sites:
  *
  * - **BFF mode** (Vite dev / Fastify prod): the BFF receives /api/* on the
- *   same origin and proxies upstream with the bearer token attached. The
- *   browser sends no auth header.
+ *   same origin and proxies upstream with ``Authorization: Bearer <token>``
+ *   attached. The browser sends no auth.
  * - **Single-process mode** (`kbagent serve --ui`): FastAPI serves both
- *   the SPA and the API on one port. The server-rendered index.html
- *   injects ``window.__KBAGENT_TOKEN``, which we forward as
- *   ``Authorization: Bearer <token>`` on every request. ``/api/*`` is
- *   path-rewritten to bare endpoints by an ASGI middleware on the
- *   server side, so URLs stay identical between the two modes.
+ *   the SPA and the API on one origin. ``GET /`` sets a HttpOnly
+ *   ``kbagent_session`` cookie (SameSite=Strict, Path=/) that the browser
+ *   attaches automatically to every same-origin request when we pass
+ *   ``credentials: "include"`` (REST) / ``withCredentials: true`` (SSE).
  *
- * The check is cheap: a single property read per request. The token can
- * be set after page load only via DOM injection, so we capture it once at
- * module import time -- subsequent calls reuse the snapshot.
+ * The ``credentials`` opt-in is a no-op in BFF mode (no cookie is set on
+ * the BFF origin), so we can use the same call shape unconditionally.
+ *
+ * The token never lands in the JS heap, in URLs, or in uvicorn's access
+ * log -- the cookie is HttpOnly + the auth path is header/cookie only.
  */
 export interface KbagentError {
   status: "error";
@@ -31,19 +34,6 @@ export class ApiError extends Error {
 }
 
 const API_BASE = "/api";
-
-/**
- * Token captured from server-rendered <script>window.__KBAGENT_TOKEN = "..."</script>
- * in single-process UI mode. Empty string in BFF mode (the BFF injects auth
- * upstream so the browser doesn't see the token).
- */
-const KBAGENT_TOKEN: string = ((): string => {
-  if (typeof window === "undefined") return "";
-  // The injection script may have escaped < and > -- those decode at parse
-  // time, so the value here is already the raw token. We read once and cache.
-  const value = (window as unknown as { __KBAGENT_TOKEN?: unknown }).__KBAGENT_TOKEN;
-  return typeof value === "string" ? value : "";
-})();
 
 interface RequestOptions {
   manageToken?: string;
@@ -79,14 +69,15 @@ async function request<T>(
   if (opts.manageToken) {
     headers["x-manage-token"] = opts.manageToken;
   }
-  if (KBAGENT_TOKEN) {
-    headers["authorization"] = `Bearer ${KBAGENT_TOKEN}`;
-  }
   const res = await fetch(buildUrl(path, opts.query), {
     method,
     headers,
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     signal: opts.signal,
+    // Send the kbagent_session cookie on same-origin requests in
+    // single-process UI mode. In BFF mode no such cookie exists, so this
+    // is a no-op (browser sends an empty cookie jar for the BFF origin).
+    credentials: "include",
   });
   if (!res.ok) {
     let payload: KbagentError | null = null;
@@ -122,22 +113,19 @@ export const api = {
 
 /**
  * Subscribe to an SSE endpoint. Returns the EventSource so the caller can close it.
+ *
+ * ``withCredentials: true`` makes the browser attach the same-origin
+ * ``kbagent_session`` cookie -- the only auth surface in single-process
+ * UI mode. In BFF mode the cookie is absent and the BFF injects the
+ * Authorization header upstream, so the call shape stays identical.
  */
 export function sseSubscribe(
   path: string,
   query: RequestOptions["query"] | undefined,
   handlers: Record<string, (data: unknown) => void>,
 ): EventSource {
-  // EventSource does NOT support custom request headers, so in
-  // single-process UI mode we smuggle the bearer token through a query
-  // param (``_kbagent_token``). The auth middleware on the server
-  // accepts it as an Authorization fallback. In BFF mode no token is
-  // present, so this becomes a no-op.
-  const finalQuery = KBAGENT_TOKEN
-    ? { ...(query ?? {}), _kbagent_token: KBAGENT_TOKEN }
-    : query;
-  const url = buildUrl(path, finalQuery);
-  const es = new EventSource(url, { withCredentials: false });
+  const url = buildUrl(path, query);
+  const es = new EventSource(url, { withCredentials: true });
   for (const [event, handler] of Object.entries(handlers)) {
     es.addEventListener(event, (msg) => {
       try {
@@ -179,12 +167,14 @@ export function ssePost(
       "content-type": "application/json",
       accept: "text/event-stream",
     };
-    if (KBAGENT_TOKEN) sseHeaders["authorization"] = `Bearer ${KBAGENT_TOKEN}`;
     const res = await fetch(buildUrl(path), {
       method: "POST",
       headers: sseHeaders,
       body: JSON.stringify(body),
       signal: controller.signal,
+      // Same rationale as ``request()`` above -- carries the session
+      // cookie in --ui mode, no-op in BFF mode.
+      credentials: "include",
     });
     if (!res.ok || !res.body) {
       throw new ApiError("HTTP_ERROR", res.statusText, res.status);
