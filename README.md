@@ -16,16 +16,15 @@ Auto-updates kbagent **and** its `keboola-mcp-server` dependency on every launch
 
 ## Web UI (optional)
 
-Want a browser dashboard instead of (or alongside) the CLI? One command:
+Want a browser dashboard? One command:
 
 ```bash
-uv pip install -e ".[server]"
-(cd web/frontend && npm install && npm run build)
+uv tool install --with 'keboola-agent-cli[server]' 'git+https://github.com/padak/keboola_agent_cli'
 kbagent serve --ui
 # Open the URL printed at startup -- the browser is auto-authenticated.
 ```
 
-Single Python process, no Node runtime needed at runtime. Covers everything the CLI exposes (projects, configs, storage, jobs, flows, schedules, MCP tools, lineage, scheduled AI agents with cost/token timeline). See [`web/README.md`](web/README.md) for the dev-mode setup.
+The React SPA is bundled inside the wheel by a hatchling build hook (requires Node 20+ on the install host so `npm run build` can run during wheel creation). Single Python process at runtime; no Node needed once installed. Covers everything the CLI exposes (projects, configs, storage, jobs, flows, schedules, MCP tools, lineage, scheduled AI agents with cost/token timeline). See [`web/README.md`](web/README.md) for the dev-mode setup with hot reload.
 
 ## For AI agents
 

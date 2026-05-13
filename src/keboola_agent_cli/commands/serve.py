@@ -25,23 +25,31 @@ ENV_UI_DIST = "KBAGENT_UI_DIST"
 
 
 def _autodetect_ui_dist() -> Path | None:
-    """Find ``web/frontend/dist`` for an editable install or local checkout.
+    """Find the built React SPA across install layouts.
 
-    Search order:
-    1) ``$KBAGENT_UI_DIST`` env var (explicit override).
-    2) ``<repo>/web/frontend/dist`` resolved relative to *this* file. Works
-       for ``uv pip install -e .`` checkouts where the package lives at
-       ``<repo>/src/keboola_agent_cli/`` and the SPA build is sibling at
-       ``<repo>/web/frontend/dist``.
-    3) ``<cwd>/web/frontend/dist`` -- helpful when running from a clone.
+    Search order (first match wins):
+    1) ``$KBAGENT_UI_DIST`` env var -- explicit override, never auto-overridden.
+    2) ``keboola_agent_cli/_ui_dist`` *inside the installed package* --
+       populated at wheel build time by the ``hatch_build.py`` hook. This
+       is what ``uv tool install git+...`` and ``pip install`` from PyPI
+       both produce when Node is available (or a maintainer pre-built it).
+    3) ``<repo>/web/frontend/dist`` resolved relative to this source file --
+       editable installs (``uv pip install -e .``) plus local clones.
+    4) ``<cwd>/web/frontend/dist`` -- last-resort for unusual layouts.
 
     Returns ``None`` if no candidate exists; the caller then surfaces a
-    "run `make web-build` first" error.
+    "no UI bundled" error with rebuild instructions tailored to the
+    likely install method.
     """
     env = os.environ.get(ENV_UI_DIST)
     if env:
         p = Path(env).expanduser().resolve()
         return p if (p / "index.html").exists() else None
+
+    # commands/serve.py -> commands -> keboola_agent_cli/ -> _ui_dist
+    bundled = Path(__file__).resolve().parent.parent / "_ui_dist"
+    if (bundled / "index.html").exists():
+        return bundled
 
     # commands/serve.py -> commands -> keboola_agent_cli -> src -> repo
     repo_dist = Path(__file__).resolve().parents[3] / "web" / "frontend" / "dist"
@@ -136,12 +144,23 @@ def serve_command(
     if ui or ui_dist:
         candidate = Path(ui_dist).expanduser().resolve() if ui_dist else _autodetect_ui_dist()
         if candidate is None or not (candidate / "index.html").exists():
+            bundled = Path(__file__).resolve().parent.parent / "_ui_dist"
+            repo_dist = Path(__file__).resolve().parents[3] / "web" / "frontend" / "dist"
+            cwd_dist = Path.cwd() / "web" / "frontend" / "dist"
             typer.echo(
-                "--ui: no built React dist/ found.\n"
-                "  Run `make web-build` (or set --ui-dist / $KBAGENT_UI_DIST).\n"
-                f"  Searched: $KBAGENT_UI_DIST, "
-                f"{Path(__file__).resolve().parents[3] / 'web/frontend/dist'}, "
-                f"{Path.cwd() / 'web/frontend/dist'}",
+                "--ui: no built React SPA found.\n"
+                "\n"
+                "  Searched these locations (none had index.html):\n"
+                f"    1. $KBAGENT_UI_DIST    {os.environ.get(ENV_UI_DIST, '(unset)')}\n"
+                f"    2. installed package   {bundled}\n"
+                f"    3. repo checkout       {repo_dist}\n"
+                f"    4. cwd                 {cwd_dist}\n"
+                "\n"
+                "  How to fix:\n"
+                "    - From git checkout: `make web-build` then re-run.\n"
+                "    - From `uv tool install git+...`: re-install with Node 20+\n"
+                "      on PATH; the build hook will compile the SPA automatically.\n"
+                "    - Or pin a path: `kbagent serve --ui-dist /path/to/dist`.",
                 err=True,
             )
             raise typer.Exit(code=1) from None

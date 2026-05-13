@@ -12,14 +12,25 @@ Two ways to run the UI:
 
 ## Single-process mode (recommended for users)
 
+### Install from git (recommended)
+
 ```bash
-# one-time
+# Node 20+ on PATH so the build hook can compile the SPA into the wheel:
+uv tool install --with 'keboola-agent-cli[server]' 'git+https://github.com/padak/keboola_agent_cli'
+
+# Run:
+kbagent serve --ui
+# Open the URL printed at startup -- the browser is auto-authenticated.
+```
+
+The wheel ships with the React SPA inside it (`keboola_agent_cli/_ui_dist/`). A hatchling build hook (`hatch_build.py`) runs `npm ci && npm run build` during wheel creation so `uv tool install git+...` produces a self-contained install. If Node is unavailable on the install host the CLI still works but `kbagent serve --ui` will exit with a "no UI bundled" error and instructions to rebuild.
+
+### From a local checkout (editable install)
+
+```bash
 uv pip install -e ".[server]"
 (cd web/frontend && npm install && npm run build)   # produces web/frontend/dist
-
-# every time
 uv run kbagent serve --ui --port 8001 --config-dir ~/.config/keboola-agent-cli
-# Open the URL printed at startup -- the browser is auto-authenticated.
 ```
 
 What `--ui` does on top of `kbagent serve`:

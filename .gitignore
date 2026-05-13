@@ -63,3 +63,8 @@ web/**/.vite/
 web/**/.cache/
 web/**/npm-debug.log*
 web/frontend/tsconfig.tsbuildinfo
+
+# Hatch build hook copies the built SPA here right before wheel / sdist
+# packaging so the installed package can serve `kbagent serve --ui`
+# without needing the source `web/` tree. Generated -- never checked in.
+src/keboola_agent_cli/_ui_dist/
