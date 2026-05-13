@@ -105,6 +105,93 @@ def _format_call_args(args: dict[str, str]) -> str:
     return "\n    " + ",\n    ".join(parts) + ",\n"
 
 
+def _render_kbagent_serve_client(hint: CommandHint, params: dict[str, Any]) -> str:
+    """Generate an ``httpx`` snippet for a `kbagent http <verb>` command.
+
+    Self-call hints have no KeboolaClient surface to mimic — the equivalent
+    raw-Python flow is just ``httpx.Client`` against ``$KBAGENT_SERVE_URL``
+    with the bearer token from ``$KBAGENT_SERVE_TOKEN``. Generated code is
+    intentionally compact so an AI agent reading it understands how to call
+    *any* endpoint on the live serve, not just the four pinned verbs.
+
+    The hint definition supplies the HTTP verb via ``step.client.method``
+    (``"get"`` / ``"post"`` / ``"patch"`` / ``"delete"``) and the
+    ``path`` / ``body`` / ``timeout`` placeholder names via ``step.client.args``.
+    """
+    step = hint.steps[0]
+    method = step.client.method.lower()
+    original_cmd = _build_original_command(hint, params)
+    safe_cmd = original_cmd.replace('"""', '"\\"" ')
+
+    path = params.get("path") or "/openapi.json"
+    timeout = params.get("timeout") if params.get("timeout") is not None else 30.0
+    body = params.get("body")
+
+    safe_path = _escape_for_python_string(str(path))
+    if not safe_path.startswith("/"):
+        safe_path = "/" + safe_path
+
+    lines: list[str] = [
+        "#!/usr/bin/env python3",
+        f'"""Equivalent of: {safe_cmd}"""',
+        "",
+        "import os",
+        "import httpx",
+        "",
+        "# kbagent serve --port 8001 must be running. URL + bearer are auto-injected",
+        "# into AI-agent / cli_command subprocesses by the scheduler; outside that",
+        "# context export them yourself before running this snippet.",
+        'serve_url = os.environ["KBAGENT_SERVE_URL"].rstrip("/")',
+        'serve_token = os.environ["KBAGENT_SERVE_TOKEN"]',
+        "",
+        f'path = "{safe_path}"',
+        'headers = {"Authorization": f"Bearer {serve_token}"}',
+    ]
+
+    needs_body = method in {"post", "patch"} and body is not None
+    if needs_body:
+        # Body is parsed as JSON at the CLI layer (httpx.Client(...).post(json=...));
+        # mirror that contract in the generated snippet. Use a placeholder dict
+        # so the user can swap in the real payload — embedding the raw --body
+        # value would re-escape JSON-in-JSON or leak inline secrets.
+        lines.append("payload: dict | list = {  # ← edit me to match the endpoint contract")
+        lines.append('    "key": "value",')
+        lines.append("}")
+
+    lines.append("")
+    lines.append(f"with httpx.Client(timeout={float(timeout)}) as serve_client:")
+    if needs_body:
+        lines.append(
+            f'    response = serve_client.{method}(f"{{serve_url}}{{path}}", '
+            "headers=headers, json=payload)"
+        )
+    elif method in {"post", "patch"}:
+        # POST/PATCH without --body: kbagent http still sends Content-Length 0
+        # but most endpoints expect JSON. Show the call shape without payload
+        # so the agent picks it up from /openapi.json before pasting.
+        lines.append(
+            f'    response = serve_client.{method}(f"{{serve_url}}{{path}}", headers=headers)'
+        )
+    else:
+        lines.append(
+            f'    response = serve_client.{method}(f"{{serve_url}}{{path}}", headers=headers)'
+        )
+    lines.append("    response.raise_for_status()")
+    lines.append(
+        '    result = response.json() if "application/json" in response.headers.get('
+        '"content-type", "") else response.text'
+    )
+    lines.append("")
+    lines.append("print(result)")
+
+    if hint.notes:
+        lines.append("")
+        for note in hint.notes:
+            lines.append(f"# NOTE: {note}")
+
+    return "\n".join(lines)
+
+
 class ClientRenderer:
     """Renders Python code using KeboolaClient (direct API calls)."""
 
@@ -117,6 +204,14 @@ class ClientRenderer:
         config_dir: Path | None = None,
     ) -> str:
         """Generate Python code using the client layer."""
+        # Pure self-call HTTP hints (kbagent http get/post/patch/delete) have no
+        # Keboola client involved — they talk to a running ``kbagent serve``
+        # via raw httpx + the bearer token in env. Short-circuit so the
+        # generated snippet does not pull in KeboolaClient boilerplate that
+        # would be dead code at runtime.
+        if all(step.client.client_type == "kbagent_serve" for step in hint.steps):
+            return _render_kbagent_serve_client(hint, params)
+
         url = stack_url or _DEFAULT_STACK_URL
         original_cmd = _build_original_command(hint, params)
         lines: list[str] = []
@@ -134,12 +229,17 @@ class ClientRenderer:
             client_types.add(step.client.client_type)
 
         needs_os = (
-            "storage" in client_types or "manage" in client_types or "data_science" in client_types
+            "storage" in client_types
+            or "manage" in client_types
+            or "data_science" in client_types
+            or "kbagent_serve" in client_types
         )
         if needs_os:
             lines.append("import os")
         if needs_time:
             lines.append("import time")
+        if "kbagent_serve" in client_types:
+            lines.append("import httpx")
         if "mcp" in client_types:
             lines.append("from pathlib import Path")
         lines.append("")

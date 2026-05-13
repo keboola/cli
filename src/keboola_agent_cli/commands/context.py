@@ -826,10 +826,22 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent context
     Show this reference text.
 
-  kbagent serve [--host HOST] [--port PORT] [--reload] [--config-dir DIR]
-    Launch the FastAPI HTTP server that backs the web UI (web/backend +
-    web/frontend). Prints a bearer token on startup. Requires the optional
-    'server' extra: `uv pip install -e ".[server]"`.
+  kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload]
+                [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]
+    Launch the FastAPI HTTP server backing the web UI. Two modes:
+
+    - `--ui` (single-process, recommended): bundles the built React SPA from
+      `--ui-dist PATH` (default: shipped `web/frontend/dist`) and mounts it at
+      `/`. The bearer token is injected via an HttpOnly `kbagent_session`
+      cookie on the SPA bootstrap, so the browser is already authenticated
+      and no token leaves the terminal. EventSource SSE connections use the
+      same cookie; nothing leaks into URLs or proxy logs.
+    - No `--ui`: API-only mode; the SPA must be served separately (the
+      legacy three-process dev setup with web/backend + web/frontend).
+
+    Prints the bearer token to stdout on startup (use it for `kbagent http`
+    subprocesses). Requires the optional 'server' extra:
+    `uv pip install -e ".[server]"`.
 
   kbagent doctor [--fix]
     Health checks. --fix auto-installs MCP server binary.

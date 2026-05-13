@@ -422,4 +422,5 @@ kbagent doctor [--fix]
 kbagent version
 kbagent update
 kbagent changelog [--limit N]
+kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]
 ```

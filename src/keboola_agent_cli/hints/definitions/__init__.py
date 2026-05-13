@@ -7,6 +7,7 @@ from . import (
     data_app,  # noqa: F401
     encrypt,  # noqa: F401
     flow,  # noqa: F401
+    http_client,  # noqa: F401
     job,  # noqa: F401
     kai,  # noqa: F401
     lineage,  # noqa: F401
