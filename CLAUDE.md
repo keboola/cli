@@ -397,8 +397,10 @@ kbagent http delete PATH [--timeout SECONDS]
 # task instead of forking another `kbagent` CLI process tree.
 
 kbagent kai ping [--project NAME]
+kbagent kai preflight [--project NAME]
 kbagent kai ask --message "question" [--project NAME]
 kbagent kai chat --message "msg" [--chat-id ID] [--project NAME]
+kbagent kai chat-detail --chat-id ID [--project NAME]
 kbagent kai history [--project NAME] [--limit N]
 
 kbagent flow list [--project NAME] [--branch ID] [--with-schedules]

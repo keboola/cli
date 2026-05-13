@@ -187,6 +187,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Check Kai server health and MCP connection status | `kbagent kai ping` |
 | Ask Kai a one-shot question and get the full response | `kbagent kai ask --message MESSAGE` |
 | Send a message to Kai in a chat session | `kbagent kai chat --message MESSAGE` |
+| Check whether the configured token can use Kai (master token + AI Agent Chat) | `kbagent kai preflight` |
+| Fetch the full message history of a single Kai chat | `kbagent kai chat-detail --chat-id CHAT-ID` |
 | List recent Kai chat sessions | `kbagent kai history` |
 | List all flows (keboola.orchestrator + keboola.flow) across projects | `kbagent flow list` |
 | Show detailed flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |

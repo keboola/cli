@@ -785,9 +785,26 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
 ### Kai -- Keboola AI Assistant (BETA)
 
+  Requires the project to be added with its MASTER Storage API token (the
+  auto-generated 'owner' token, not a custom one) and the 'AI Agent Chat'
+  feature flag enabled on the project. Custom Storage API tokens cannot
+  access Kai -- all `kbagent kai *` calls will fail with KAI_NOT_ENABLED.
+
   kbagent kai ping [--project NAME]
     Check Kai server health and MCP connection status.
-    Fails with KAI_NOT_ENABLED if the project lacks the 'agent-chat' feature.
+    Fails with KAI_NOT_ENABLED if the project lacks the 'agent-chat' feature
+    or was added with a non-master token.
+
+  kbagent kai preflight [--project NAME]
+    Inspect the configured token's Kai readiness WITHOUT raising. Returns
+    {{ok, is_master_token, has_agent_chat_feature, token_description, error}}.
+    Use this when you need to render a warning instead of failing — UIs and
+    automation pre-flight checks should use this instead of `ping`.
+
+  kbagent kai chat-detail --chat-id ID [--project NAME]
+    Fetch the full message history of a single Kai chat. Returns a flat list
+    of {{role, content, created_at}} records. Use to restore / continue a
+    conversation with `kai chat --chat-id ID` or to export a transcript.
 
   kbagent kai ask --message "question" [--project NAME]
     One-shot question to Kai. Collects full response. Use --json for structured output.

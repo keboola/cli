@@ -97,8 +97,10 @@ OPERATION_REGISTRY: dict[str, str] = {
     "tool.call": "write",
     # Kai (Keboola AI Assistant)
     "kai.ping": "read",
+    "kai.preflight": "read",
     "kai.ask": "read",
     "kai.chat": "write",
+    "kai.chat-detail": "read",
     "kai.history": "read",
     # Component discovery
     "component.list": "read",
