@@ -92,6 +92,118 @@ End of runtime context. The user's task follows:
 """
 
 
+def build_prompt_helper_meta_prompt(
+    *,
+    goal: str,
+    draft: str = "",
+    project: str | None = None,
+) -> str:
+    """Compose the meta-prompt sent to the AI CLI by the prompt-helper.
+
+    The helper's job is to take a user's plain-English goal (and an optional
+    half-baked draft) and produce a polished prompt that another scheduled
+    AI agent will execute. The output is consumed verbatim, so the meta-
+    prompt is engineered to make the AI emit ONLY the final prompt body --
+    no preamble, no code fences, no commentary.
+
+    The meta-prompt is deliberately specific about kbagent CLI commands so
+    the AI recommends real commands the scheduled agent can actually invoke
+    instead of inventing API calls.
+    """
+    project_hint = (
+        f"The user has pinned project '{project}'. Reference it explicitly in the prompt."
+        if project
+        else "No project is pinned in this serve; if the goal needs one, the prompt should ask for it."
+    )
+    draft_block = (
+        f"USER'S CURRENT DRAFT (preserve any concrete details from here):\n{draft.strip()}"
+        if draft.strip()
+        else "USER'S CURRENT DRAFT: (empty -- write the prompt from scratch.)"
+    )
+    return f"""\
+You are a senior prompt engineer. Rewrite the user's request into a polished
+single-shot prompt for an AI agent that will run unattended on a CRON schedule
+inside `kbagent serve`. The scheduled agent has access to the kbagent CLI and
+the `kbagent http` family of commands; it can query Keboola Connection
+projects via the serve's REST API (env vars KBAGENT_SERVE_URL +
+KBAGENT_SERVE_TOKEN) or fall back to local CLI calls (KBAGENT_CONFIG_DIR is
+pre-set).
+
+USER'S GOAL (plain English):
+{goal.strip()}
+
+{draft_block}
+
+PROJECT CONTEXT: {project_hint}
+
+REQUIREMENTS for the rewritten prompt:
+- Imperative voice, second person ("Use ...", "Then summarize ...").
+- Concrete: name the kbagent commands the agent should run. Examples of
+  real commands: `kbagent job list --project NAME --status error --limit 10`,
+  `kbagent config search --query 'snowflake'`, `kbagent doctor`,
+  `kbagent http get /projects`, `kbagent storage tables --project NAME`.
+- Bound the scope: time window, project alias, max results, expected output
+  format (markdown table, JSON, top-3 list, ...).
+- Be self-contained: the agent has no chat history. Restate the goal in
+  the prompt body.
+- 80 to 250 words. No preamble, no headings, no code fences.
+
+OUTPUT CONTRACT (critical):
+- Output ONLY the rewritten prompt body. Plain text.
+- Do not say "Here is the prompt:" or wrap the result in ``` fences.
+- Do not include any text before or after the prompt body.
+"""
+
+
+# Markdown artifacts the AI sometimes emits despite the OUTPUT CONTRACT.
+# Stripped post-hoc so the textarea is filled with a clean prompt body.
+_PROMPT_RESPONSE_PREAMBLES = (
+    "here is the prompt:",
+    "here's the prompt:",
+    "here is a prompt:",
+    "here's a prompt:",
+    "rewritten prompt:",
+    "prompt:",
+)
+
+
+def clean_prompt_helper_response(text: str) -> str:
+    """Trim surrounding code fences, preambles, and dedup the response.
+
+    Three independent cleanups, applied in order:
+
+    1. **Deduplication.** ``stream_ai_agent_events`` accumulates both
+       claude's incremental ``assistant`` turns AND the final ``result``
+       event into ``response``. Claude often emits the same body in both
+       (assistant streams it; result repeats the whole thing). For a
+       prompt-helper task -- a single non-tool turn -- the result is
+       effectively duplicated. If the string is exactly two equal halves,
+       collapse to one.
+    2. **Code-fence strip** (``` / ```text / ```md).
+    3. **Preamble strip** (``Here is the prompt:`` / ``Rewritten prompt:`` ...).
+    """
+    text = text.strip()
+    # Step 1: collapse "AB" where A == B (claude jsonl duplication).
+    if text and len(text) % 2 == 0:
+        half = len(text) // 2
+        if text[:half] == text[half:]:
+            text = text[:half].rstrip()
+    # Step 2: strip a single set of leading/trailing code fences.
+    if text.startswith("```"):
+        nl = text.find("\n")
+        if nl != -1:
+            text = text[nl + 1 :]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+    # Step 3: strip a preamble like "Here is the prompt:\n\n..." on the first line.
+    lines = text.split("\n", 1)
+    first = lines[0].strip().lower()
+    if any(first == p or first.startswith(p) for p in _PROMPT_RESPONSE_PREAMBLES):
+        text = lines[1].strip() if len(lines) > 1 else ""
+    return text.strip()
+
+
 def _now_utc() -> datetime:
     return datetime.now(UTC).replace(microsecond=0)
 

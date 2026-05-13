@@ -751,6 +751,12 @@ function NewTaskDrawer({
                 response is captured into the run history.
               </div>
             </div>
+            <PromptHelperPanel
+              cli={aiCli}
+              draft={aiPrompt}
+              project={project}
+              onApply={(p) => setAiPrompt(p)}
+            />
             <label className="text-xs text-zinc-400 block">
               Prompt
               <textarea
@@ -1146,6 +1152,308 @@ function RunItem({ run, taskId }: { run: AgentRun; taskId: string }) {
               <JsonView data={run.output} maxHeight="240px" />
             </details>
           ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Inline AI helper for the ai_agent prompt textarea.
+ *
+ * Collapsed by default to keep the form short. When expanded, the user fills
+ * in a plain-English goal; the same AI CLI selected for the task itself
+ * (claude / codex / gemini) is then asked to rewrite the goal + draft into
+ * a polished prompt body via /agents/prompt/improve/stream. The streamed
+ * SSE events feed a live preview; the final `done` event carries a cleaned
+ * prompt that the user can accept (replaces `aiPrompt`) or discard.
+ *
+ * Two design choices worth flagging:
+ *
+ * - **Live preview accumulates assistant text only.** Claude's stream-json
+ *   emits a sequence of typed events (init, system, tool calls, assistant,
+ *   result). For a "rewrite this prompt" task we only care about the
+ *   assistant turn text; everything else is noise for the preview. The
+ *   final cleaned prompt always comes from the `done` event's `prompt`
+ *   field, which is computed server-side from the same stream.
+ *
+ * - **Cancel cleanup is mandatory.** ssePost holds an AbortController over
+ *   a long-lived fetch; if the user closes the helper or the whole drawer
+ *   mid-stream we MUST abort, otherwise the backend keeps the AI CLI
+ *   subprocess alive (the SSE writer is the only thing keeping the
+ *   subprocess relevant). We mirror NewTaskDrawer's `testHandleRef`
+ *   pattern for symmetry.
+ */
+function PromptHelperPanel({
+  cli,
+  draft,
+  project,
+  onApply,
+}: {
+  cli: "claude" | "codex" | "gemini";
+  draft: string;
+  project: string | null | undefined;
+  onApply: (prompt: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [goal, setGoal] = useState("");
+  const [running, setRunning] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  // ``livePreview`` is the accumulating assistant text shown WHILE the AI
+  // is still streaming. The polished final prompt lives in ``finalPrompt``
+  // and only renders after the ``done`` event.
+  const [livePreview, setLivePreview] = useState("");
+  const [finalPrompt, setFinalPrompt] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const handleRef = useRef<SsePostHandle | null>(null);
+
+  const reset = () => {
+    setLivePreview("");
+    setFinalPrompt(null);
+    setError(null);
+    setElapsed(0);
+  };
+
+  const start = () => {
+    if (!goal.trim()) {
+      setError("Describe what you want the agent to do first.");
+      return;
+    }
+    if (handleRef.current) {
+      handleRef.current.abort();
+      handleRef.current = null;
+    }
+    reset();
+    setRunning(true);
+    const startMs = Date.now();
+    const tick = setInterval(
+      () => setElapsed(Math.round((Date.now() - startMs) / 1000)),
+      500,
+    );
+    let assistantText = "";
+    const handle = ssePost(
+      "/agents/prompt/improve/stream",
+      { cli, goal, draft, project: project ?? null },
+      {
+        init: () => {
+          /* the running indicator already covers this */
+        },
+        stdout: (d) => {
+          const data = (d ?? {}) as Record<string, unknown>;
+          // Claude stream-json: assistant turns carry `message.content[].text`.
+          if (data.type === "assistant" && typeof data.message === "object") {
+            const msg = data.message as Record<string, unknown>;
+            const content = msg.content;
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (
+                  block &&
+                  typeof block === "object" &&
+                  (block as Record<string, unknown>).type === "text" &&
+                  typeof (block as Record<string, unknown>).text === "string"
+                ) {
+                  assistantText += (block as Record<string, unknown>).text as string;
+                  setLivePreview(assistantText);
+                }
+              }
+            }
+          } else if (typeof data.raw === "string") {
+            // codex / gemini stream raw text lines (no jsonl).
+            assistantText += (assistantText ? "\n" : "") + data.raw;
+            setLivePreview(assistantText);
+          }
+        },
+        stderr: () => {
+          /* progress notes -- ignored for the preview pane */
+        },
+        done: (d) => {
+          const data = (d ?? {}) as Record<string, unknown>;
+          if (data.status === "error") {
+            setError(String(data.error ?? "AI helper failed"));
+            return;
+          }
+          const cleaned = typeof data.prompt === "string" ? data.prompt.trim() : "";
+          if (!cleaned) {
+            setError(
+              "AI returned an empty prompt. Try refining your goal description.",
+            );
+            return;
+          }
+          setFinalPrompt(cleaned);
+        },
+        message: () => {
+          /* unknown event -- ignore */
+        },
+      },
+    );
+    handleRef.current = handle;
+    handle.done
+      .catch((err) => {
+        if (isAbortError(err)) return;
+        setError((err as Error).message);
+      })
+      .finally(() => {
+        clearInterval(tick);
+        setRunning(false);
+        handleRef.current = null;
+      });
+  };
+
+  const cancel = () => {
+    if (handleRef.current) {
+      handleRef.current.abort();
+      handleRef.current = null;
+    }
+    setRunning(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (handleRef.current) {
+        handleRef.current.abort();
+        handleRef.current = null;
+      }
+    };
+  }, []);
+
+  if (!open) {
+    return (
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className="nerd-btn text-xs flex items-center gap-1 hover:text-neon-pink hover:border-neon-pink/60"
+          onClick={() => setOpen(true)}
+          title={`Let ${cli} help you write a polished prompt`}
+        >
+          <Sparkles className="w-3 h-3" />
+          Help me write this prompt
+        </button>
+        <span className="text-xs text-zinc-500">
+          uses {cli} to turn a plain-English goal into a polished prompt
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="nerd-card border-neon-pink/40 dark:border-neon-pink/40 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-bold text-neon-pink flex items-center gap-1">
+          <Sparkles className="w-3 h-3" />
+          AI prompt helper · {cli}
+        </div>
+        <button
+          type="button"
+          className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 flex items-center gap-1"
+          onClick={() => {
+            cancel();
+            setOpen(false);
+            reset();
+            setGoal("");
+          }}
+          title="Close the helper without applying"
+        >
+          <X className="w-3 h-3" /> close
+        </button>
+      </div>
+
+      <label className="text-xs text-zinc-400 block">
+        What do you want the agent to accomplish?
+        <textarea
+          className="nerd-input w-full mt-1 h-20"
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
+          placeholder="e.g. Each morning summarize errored jobs in project 'padak' from the last 24h, top 3 root causes."
+          disabled={running}
+        />
+      </label>
+
+      {draft.trim() ? (
+        <div className="text-xs text-zinc-500">
+          Existing draft below the form will be used as a starting point
+          ({draft.trim().length} chars).
+        </div>
+      ) : null}
+
+      <div className="flex gap-2 items-center flex-wrap">
+        {running ? (
+          <button
+            type="button"
+            className="nerd-btn hover:text-red-400 hover:border-red-700"
+            onClick={cancel}
+            title="Abort the AI helper"
+          >
+            <X className="w-3 h-3 inline mr-1" />
+            cancel ({elapsed}s)
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="nerd-btn hover:text-neon-pink hover:border-neon-pink/60"
+            onClick={start}
+            disabled={!goal.trim()}
+            title="Ask the AI to write a polished prompt"
+          >
+            <Sparkles className="w-3 h-3 inline mr-1" />
+            {finalPrompt ? "Regenerate" : "Generate prompt"}
+          </button>
+        )}
+        {!running && finalPrompt ? (
+          <span className="text-xs text-zinc-500">
+            generated in {elapsed}s
+          </span>
+        ) : null}
+      </div>
+
+      {error ? <ErrorBox message={error} /> : null}
+
+      {running && livePreview ? (
+        <div>
+          <div className="text-xs text-zinc-500 mb-1">live output:</div>
+          <pre
+            className="nerd-code whitespace-pre-wrap text-xs text-zinc-600 dark:text-zinc-400"
+            style={{ maxHeight: "200px", overflow: "auto" }}
+          >
+            {livePreview}
+          </pre>
+        </div>
+      ) : null}
+
+      {finalPrompt ? (
+        <div className="space-y-2">
+          <div className="text-xs text-zinc-500">AI suggestion:</div>
+          <pre
+            className="nerd-code whitespace-pre-wrap text-zinc-800 dark:text-zinc-200 border-neon-pink/30"
+            style={{ maxHeight: "320px", overflow: "auto" }}
+          >
+            {finalPrompt}
+          </pre>
+          <div className="flex gap-2 flex-wrap">
+            <button
+              type="button"
+              className="nerd-btn hover:text-keboola hover:border-keboola/60"
+              onClick={() => {
+                onApply(finalPrompt);
+                setOpen(false);
+                reset();
+                setGoal("");
+              }}
+              title="Replace the Prompt field below with this suggestion"
+            >
+              ✓ Use this prompt
+            </button>
+            <button
+              type="button"
+              className="nerd-btn hover:text-red-400 hover:border-red-700"
+              onClick={() => {
+                setFinalPrompt(null);
+                setLivePreview("");
+              }}
+              title="Throw away this suggestion (keeps the helper open)"
+            >
+              ✗ Discard
+            </button>
+          </div>
         </div>
       ) : null}
     </div>

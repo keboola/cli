@@ -356,3 +356,99 @@ def cron_preview(cron: str, count: int = 5) -> dict[str, Any]:
         return {"cron": cron, "firings": firings}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid cron expression: {exc}") from exc
+
+
+class PromptHelperRequest(BaseModel):
+    """Input for the /agents/prompt/improve/stream endpoint.
+
+    The helper rewrites the user's plain-English goal (and any half-baked
+    draft) into a polished prompt suitable for an AI-agent scheduled task.
+    The output is streamed back as SSE so the UI can show progress, and the
+    final ``done`` event carries the cleaned prompt body ready to drop into
+    the task's prompt textarea.
+    """
+
+    cli: str  # claude | codex | gemini -- same recipe as ai_agent runs
+    goal: str
+    draft: str = ""
+    project: str | None = None
+    extra_args: list[str] = []
+
+
+@router.post("/prompt/improve/stream")
+async def improve_prompt_stream(
+    body: PromptHelperRequest,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> StreamingResponse:
+    """Stream an AI-generated, polished prompt back to the UI as SSE events.
+
+    The chosen CLI (claude / codex / gemini) is invoked exactly the same way
+    a scheduled ai_agent run would invoke it -- via
+    :func:`stream_ai_agent_events` -- but the *prompt* it receives is a
+    meta-prompt asking it to rewrite the user's draft into a polished
+    single-shot prompt. The UI consumes the same SSE event shapes
+    (``init`` / ``stdout`` / ``stderr`` / ``done``) the test-stream
+    endpoint emits, so it can reuse the live-progress renderer.
+
+    The ``done`` event is enriched with a ``prompt`` field carrying the
+    cleaned AI response (code fences and "Here is the prompt:" preambles
+    stripped) so the frontend can drop it straight into the textarea.
+    """
+    from ..agent_runner import (
+        build_prompt_helper_meta_prompt,
+        clean_prompt_helper_response,
+    )
+
+    goal = body.goal.strip()
+    if not goal:
+        raise HTTPException(status_code=400, detail="goal must not be empty")
+    meta_prompt = build_prompt_helper_meta_prompt(
+        goal=goal,
+        draft=body.draft,
+        project=body.project,
+    )
+    params: dict[str, Any] = {
+        "cli": body.cli,
+        "prompt": meta_prompt,
+        "extra_args": body.extra_args,
+        # Helper prompts should finish in <60s; cap aggressively so a stuck
+        # CLI doesn't hold the SSE connection for the default 10 minutes.
+        "timeout": 180.0,
+    }
+
+    async def gen() -> AsyncIterator[bytes]:
+        # Mirror the /test/stream init shape so the React side can reuse
+        # AgentRunView verbatim.
+        yield _sse(
+            "init",
+            {
+                "kind": "prompt_helper",
+                "cli": body.cli,
+                "goal_preview": goal[:200],
+            },
+        )
+        try:
+            async for evt in stream_ai_agent_events(registry, params):
+                if evt["event"] == "done":
+                    raw = str(evt["data"].get("response") or "")
+                    cleaned = clean_prompt_helper_response(raw)
+                    enriched = {**evt["data"], "prompt": cleaned, "raw_response": raw}
+                    yield _sse("done", enriched)
+                else:
+                    yield _sse(evt["event"], evt["data"])
+        except ValueError as exc:
+            # build_*_meta_prompt and stream_ai_agent_events raise ValueError
+            # for bad CLI / empty prompt / malformed extra_args. Send a final
+            # done event so the client doesn't hang waiting.
+            yield _sse("done", {"status": "error", "error": str(exc)})
+        except Exception as exc:
+            yield _sse("done", {"status": "error", "error": str(exc)})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
