@@ -119,6 +119,11 @@ class ConfigStore:
         return self._config_path
 
     @property
+    def config_dir(self) -> Path:
+        """Return the directory holding ``config.json`` (and sibling state files)."""
+        return self._config_dir
+
+    @property
     def source(self) -> str:
         """Return the config source label (cli-flag, env-var, local, global)."""
         return self._source

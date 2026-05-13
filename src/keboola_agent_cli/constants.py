@@ -148,6 +148,20 @@ ENV_MCP_INIT_TIMEOUT: str = "KBAGENT_MCP_INIT_TIMEOUT"
 ENV_MCP_MAX_SESSIONS: str = "KBAGENT_MCP_MAX_SESSIONS"
 ENV_CONVERSATION_ID: str = "KBAGENT_CONVERSATION_ID"
 
+# --- Serve subprocess context (since v0.7.x) ---
+# Injected by `kbagent serve` into scheduled-agent subprocess env so AI CLIs
+# (claude / codex / gemini) and plain `kbagent` invocations can talk to the
+# live HTTP API instead of reading possibly-stale local config. Pair them:
+# ENV_KBAGENT_SERVE_URL points at the FastAPI bind URL and ENV_KBAGENT_SERVE_TOKEN
+# is the bearer token printed at serve startup. Used by `kbagent http <verb>`.
+ENV_KBAGENT_SERVE_URL: str = "KBAGENT_SERVE_URL"
+ENV_KBAGENT_SERVE_TOKEN: str = "KBAGENT_SERVE_TOKEN"
+
+# Default timeout for `kbagent http` requests. AI agents poll endpoints
+# during multi-step tasks; long enough for slow Storage table listings,
+# short enough to fail fast on a dead serve.
+HTTP_DEFAULT_TIMEOUT: float = 60.0
+
 # --- Version Check ---
 VERSION_CHECK_TIMEOUT: float = 4.0  # seconds for fetching latest version from remote
 MCP_PYPI_URL: str = "https://pypi.org/pypi/keboola-mcp-server/json"

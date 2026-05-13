@@ -48,6 +48,13 @@ class ServiceRegistry:
     """Container of long-lived services for the FastAPI app."""
 
     config_store: ConfigStore
+    # Self-contact info -- the URL + bearer token of the running serve.
+    # Injected into AI-agent / CLI subprocess env so `kbagent http` (and
+    # any HTTP-aware tool) can call this very server instead of forking
+    # a fresh process tree against potentially stale local config.
+    # Populated by ``create_app`` once uvicorn binding is known.
+    serve_url: str | None = None
+    serve_token: str | None = None
     project: ProjectService = field(init=False)
     config: ConfigService = field(init=False)
     component: ComponentService = field(init=False)

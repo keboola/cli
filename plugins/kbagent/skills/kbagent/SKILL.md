@@ -229,6 +229,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Remove the branch mapping for the current git branch | `kbagent sync branch-unlink` |
 | Show the branch mapping status for the current git branch | `kbagent sync branch-status` |
 | Encrypt #-prefixed secret values for a Keboola component | `kbagent encrypt values --project PROJECT --component-id COMPONENT-ID --input INPUT-DATA` |
+| GET an endpoint on the running kbagent serve | `kbagent http get <PATH>` |
+| POST to an endpoint on the running kbagent serve | `kbagent http post <PATH>` |
+| PATCH an endpoint on the running kbagent serve | `kbagent http patch <PATH>` |
+| DELETE an endpoint on the running kbagent serve | `kbagent http delete <PATH>` |
 <!-- END AUTO-GENERATED COMMANDS -->
 
 ### Sync pull notable flags

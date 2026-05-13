@@ -75,6 +75,7 @@ def create_app(
     config_dir: str | None = None,
     auth_token: str | None = None,
     cors_origins: list[str] | None = None,
+    serve_url: str | None = None,
 ) -> FastAPI:
     """Build and configure the FastAPI application.
 
@@ -82,6 +83,10 @@ def create_app(
         config_dir: Override config directory (matches kbagent --config-dir).
         auth_token: Bearer token clients must send. If None, generates one.
         cors_origins: Allowed CORS origins. Default: localhost dev ports.
+        serve_url: Self-URL (``http://host:port``) of this server. Stored on
+            the registry so agent subprocesses can be told where to call back.
+            If None, defaults are still injected into subprocess env using
+            ``127.0.0.1:8001`` -- the serve_command default.
 
     Returns:
         Configured FastAPI app ready for uvicorn.
@@ -139,10 +144,18 @@ def create_app(
 
     resolved_dir, source = resolve_config_dir(cli_config_dir=config_dir)
     config_store = ConfigStore(config_dir=resolved_dir, source=source)
-    registry = ServiceRegistry(config_store=config_store)
+    registry = ServiceRegistry(
+        config_store=config_store,
+        serve_url=serve_url,
+        serve_token=resolved_token,
+    )
     install_registry(app, registry)
 
     app.state.agent_store = AgentStore(resolved_dir)
+
+    from .run_broadcaster import install_broadcaster
+
+    install_broadcaster(app)
 
     @app.exception_handler(ConfigError)
     async def _config_error_handler(_request, exc: ConfigError):

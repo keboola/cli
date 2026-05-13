@@ -115,3 +115,82 @@ export function sseSubscribe(
   }
   return es;
 }
+
+/**
+ * POST to an SSE endpoint and stream events back. EventSource only supports
+ * GET, so for POST we hand-roll a `fetch + ReadableStream + manual SSE parser`.
+ *
+ * Each "message" in the SSE protocol is delimited by a blank line; within a
+ * message, `event:` and `data:` lines accumulate. Once a blank line arrives
+ * we dispatch the buffered message to `handlers[event]`. Unknown event names
+ * fall through to `handlers["message"]` if defined.
+ */
+export interface SsePostHandle {
+  /** Reject the in-flight fetch (best-effort -- backend cancels via finally). */
+  abort: () => void;
+  /** Resolves when the server closes the stream (or aborted). */
+  done: Promise<void>;
+}
+
+export function ssePost(
+  path: string,
+  body: unknown,
+  handlers: Record<string, (data: unknown) => void>,
+): SsePostHandle {
+  const controller = new AbortController();
+  const done = (async () => {
+    const res = await fetch(buildUrl(path), {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "text/event-stream" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!res.ok || !res.body) {
+      throw new ApiError("HTTP_ERROR", res.statusText, res.status);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let event = "message";
+    let dataLines: string[] = [];
+    const dispatch = () => {
+      if (dataLines.length === 0) return;
+      const payload = dataLines.join("\n");
+      const handler = handlers[event] ?? handlers["message"];
+      if (handler) {
+        try {
+          handler(JSON.parse(payload));
+        } catch {
+          handler(payload);
+        }
+      }
+      event = "message";
+      dataLines = [];
+    };
+    while (true) {
+      const { value, done: streamDone } = await reader.read();
+      if (streamDone) break;
+      buf += decoder.decode(value, { stream: true });
+      // SSE: messages are separated by a blank line. We parse line by line.
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl).replace(/\r$/, "");
+        buf = buf.slice(nl + 1);
+        if (line === "") {
+          dispatch();
+          continue;
+        }
+        if (line.startsWith(":")) continue; // comment / heartbeat
+        const colon = line.indexOf(":");
+        if (colon === -1) continue;
+        const field = line.slice(0, colon);
+        const value = line.slice(colon + 1).replace(/^ /, "");
+        if (field === "event") event = value;
+        else if (field === "data") dataLines.push(value);
+      }
+    }
+    // Flush any trailing event without terminating blank line.
+    dispatch();
+  })();
+  return { abort: () => controller.abort(), done };
+}

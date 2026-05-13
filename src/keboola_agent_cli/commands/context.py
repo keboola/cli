@@ -756,6 +756,23 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     --input accepts: inline JSON, @file.json (from file), or - (from stdin).
     Already-encrypted values (KBC:: prefix) pass through unchanged.
 
+### Self-call HTTP (inside `kbagent serve` subprocesses)
+
+  kbagent http get PATH [--timeout SECONDS]
+  kbagent http post PATH [--body JSON|@file|-] [--timeout SECONDS]
+  kbagent http patch PATH [--body JSON|@file|-] [--timeout SECONDS]
+  kbagent http delete PATH [--timeout SECONDS]
+    Raw HTTP client against the running `kbagent serve`. Reads KBAGENT_SERVE_URL +
+    KBAGENT_SERVE_TOKEN env vars (auto-injected into AI-agent / cli_command
+    subprocesses by the scheduler). Example:
+      kbagent http get /openapi.json     # browse server's OpenAPI schema
+      kbagent http get /projects         # list projects via HTTP
+      kbagent http post /agents/test --body @task.json
+    Prefer this over forking `kbagent` CLI inside scheduled-agent tasks --
+    `kbagent http` calls the serve directly so you always see the same config
+    the operator configured (not the global ~/.config one). Outside a serve
+    subprocess context the command refuses to run.
+
 ### MCP Tools (Multi-Project)
 
   kbagent tool list [--project NAME] [--branch ID]

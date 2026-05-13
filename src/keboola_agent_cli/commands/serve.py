@@ -72,7 +72,13 @@ def serve_command(
 
     cors = list(cors_origin) if cors_origin else None
 
-    app = create_app(config_dir=config_dir, auth_token=auth_token, cors_origins=cors)
+    serve_url = f"http://{host}:{port}"
+    app = create_app(
+        config_dir=config_dir,
+        auth_token=auth_token,
+        cors_origins=cors,
+        serve_url=serve_url,
+    )
 
     sys.stdout.write(
         "\n"

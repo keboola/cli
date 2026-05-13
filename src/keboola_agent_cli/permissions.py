@@ -150,6 +150,13 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.describe-batch": "write",
     # Encryption
     "encrypt.values": "write",
+    # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
+    # Categorised by the underlying HTTP method: GET = read, mutating verbs
+    # = write. The serve's own routes enforce their own permissions on top.
+    "http.get": "read",
+    "http.post": "write",
+    "http.patch": "write",
+    "http.delete": "destructive",
     # Sync / git workflow
     "sync.init": "read",
     "sync.pull": "read",

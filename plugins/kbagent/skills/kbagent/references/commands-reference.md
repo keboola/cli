@@ -193,6 +193,14 @@ Lifecycle for `keboola.data-apps`. Combines Storage API (config body, git block,
 ## Encryption
 - `encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]` -- encrypt #-prefixed secrets via Keboola Encryption API (one-way, no decrypt). Scope: ComponentSecure (project + component). Use for MCP tool call workflows.
 
+## Self-Call HTTP (inside `kbagent serve` subprocesses; since v0.33.x)
+- `http get PATH [--timeout SECONDS]` -- GET an endpoint on the running `kbagent serve`
+- `http post PATH [--body JSON|@file|-] [--timeout SECONDS]` -- POST with optional JSON body
+- `http patch PATH [--body JSON|@file|-] [--timeout SECONDS]` -- PATCH with optional JSON body
+- `http delete PATH [--timeout SECONDS]` -- DELETE an endpoint
+
+Reads `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` env vars. The scheduler auto-injects these (plus `KBAGENT_CONFIG_DIR`) into every AI-agent / `cli_command` subprocess. Outside a serve subprocess context the command refuses to run with exit code 2. **Inside a scheduled-agent task, prefer `kbagent http get /openapi.json` then a typed call over forking another `kbagent` CLI -- the HTTP path always sees the operator's live config (not the global `~/.config/keboola-agent-cli/` one).**
+
 ## Utility
 - `init [--from-global]` -- create local `.kbagent/` workspace (per-directory isolation)
 - `doctor [--fix]` -- health checks; `--fix` auto-installs MCP server binary
@@ -215,6 +223,8 @@ Lifecycle for `keboola.data-apps`. Combines Storage API (config body, git block,
 | `KBC_STORAGE_API_URL` | Default stack URL |
 | `KBC_MANAGE_API_TOKEN` | Manage API token (org setup, project refresh, data-app password). Default-DENY since 0.28.0: requires top-level `--allow-env-manage-token` to opt in, otherwise ignored with a warning. |
 | `KBAGENT_CONFIG_DIR` | Override config directory |
+| `KBAGENT_SERVE_URL` | Self-URL of `kbagent serve` (used by `kbagent http`; auto-injected into scheduled-agent subprocesses) |
+| `KBAGENT_SERVE_TOKEN` | Bearer token for `kbagent serve` (paired with `KBAGENT_SERVE_URL`; auto-injected into scheduled-agent subprocesses) |
 
 ## Exit Codes
 `0` success, `1` general error, `2` usage error, `3` auth error, `4` network error, `5` config error

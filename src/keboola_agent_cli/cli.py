@@ -15,6 +15,7 @@ from .commands.data_app import data_app_app
 from .commands.doctor import doctor_command
 from .commands.encrypt import encrypt_app
 from .commands.flow import flow_app
+from .commands.http_client import http_app
 from .commands.init import init_command
 from .commands.job import job_app
 from .commands.kai import kai_app
@@ -115,6 +116,7 @@ app.add_typer(workspace_app, name="workspace", rich_help_panel=_DEV)
 app.add_typer(tool_app, name="tool", rich_help_panel=_DEV)
 app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
 app.add_typer(encrypt_app, name="encrypt", rich_help_panel=_DEV)
+app.add_typer(http_app, name="http", rich_help_panel=_DEV)
 
 
 def apply_firewall_flags(

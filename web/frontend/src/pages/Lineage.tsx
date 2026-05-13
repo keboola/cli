@@ -127,11 +127,15 @@ function SharingTab() {
 }
 
 function DeepLineageTab() {
-  const [path, setPath] = useState(() =>
-    localStorage.getItem("kbagent-lineage-path") ?? "",
+  // Pre-fill defaults so the Build button is enabled out of the box.
+  // Empty inputs were the #1 reason "Build does nothing" reports landed --
+  // the placeholder text looked identical to a real value and the disabled
+  // state on the button was too subtle to notice.
+  const [path, setPath] = useState(
+    () => localStorage.getItem("kbagent-lineage-path") ?? "",
   );
-  const [buildDir, setBuildDir] = useState(() =>
-    localStorage.getItem("kbagent-lineage-build-dir") ?? "",
+  const [buildDir, setBuildDir] = useState(
+    () => localStorage.getItem("kbagent-lineage-build-dir") ?? "/tmp/kbagent-lineage",
   );
   const [refresh, setRefresh] = useState(true);
   const [useAi, setUseAi] = useState(false);
@@ -143,12 +147,20 @@ function DeepLineageTab() {
   const [depth, setDepth] = useState(5);
   const [queryResult, setQueryResult] = useState<unknown | null>(null);
 
+  // loadMu takes the path as a mutate() argument (instead of reading state)
+  // because React batches setPath() so the post-build auto-load was reading
+  // the *previous* (empty) path through closure -> 500 from /info?load=
   const loadMu = useMutation({
-    mutationFn: () => api.get(`/lineage/info?load=${encodeURIComponent(path)}`),
-    onSuccess: (data) => {
+    mutationFn: (overridePath?: string) => {
+      const target = (overridePath ?? path).trim();
+      if (!target) throw new Error("No lineage cache path to load.");
+      return api.get(`/lineage/info?load=${encodeURIComponent(target)}`);
+    },
+    onSuccess: (data, variables) => {
       setInfo(data);
       setError(null);
-      localStorage.setItem("kbagent-lineage-path", path);
+      const used = (variables ?? path).trim();
+      if (used) localStorage.setItem("kbagent-lineage-path", used);
     },
     onError: (err) => {
       setInfo(null);
@@ -176,10 +188,11 @@ function DeepLineageTab() {
       // Server returns the resolved output_path; trust that over what we sent.
       const resolved =
         (data.output_path as string | undefined) ??
-        path ??
-        `${buildDir}/lineage.json`;
+        (path.trim() || `${buildDir}/lineage.json`);
       setPath(resolved);
-      loadMu.mutate();
+      // Pass the resolved path explicitly -- can't rely on `path` here because
+      // React hasn't applied setPath yet when this fires synchronously.
+      loadMu.mutate(resolved);
     },
     onError: (err) => {
       setBuildResult(null);
@@ -251,8 +264,11 @@ function DeepLineageTab() {
           <div className="ml-auto flex gap-2">
             <button
               type="button"
-              className="nerd-btn hover:text-keboola"
+              className="nerd-btn hover:text-keboola disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-zinc-400"
               disabled={!buildDir.trim() || buildMu.isPending}
+              title={
+                !buildDir.trim() ? "Working directory required" : undefined
+              }
               onClick={() => {
                 setError(null);
                 setBuildResult(null);
@@ -264,6 +280,13 @@ function DeepLineageTab() {
             </button>
           </div>
         </div>
+        {!buildDir.trim() ? (
+          <div className="text-xs text-neon-amber">
+            ⚠ Working directory is empty -- type a path (e.g.{" "}
+            <code className="text-accent">/tmp/kbagent-lineage</code>) to enable
+            Build.
+          </div>
+        ) : null}
         {buildMu.isPending ? (
           <div className="text-xs text-keboola flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-keboola animate-pulse" />
@@ -296,7 +319,7 @@ function DeepLineageTab() {
             type="button"
             className="nerd-btn hover:text-keboola"
             disabled={!path || loadMu.isPending}
-            onClick={() => loadMu.mutate()}
+            onClick={() => loadMu.mutate(undefined)}
           >
             {loadMu.isPending ? "loading..." : "Load"}
           </button>
