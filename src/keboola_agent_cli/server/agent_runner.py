@@ -30,13 +30,21 @@ from ..constants import (
     ENV_CONFIG_DIR,
     ENV_KBAGENT_SERVE_TOKEN,
     ENV_KBAGENT_SERVE_URL,
+    ENV_KBAGENT_UPSTREAM_RUN_ID,
+    ENV_KBAGENT_UPSTREAM_STATUS,
+    ENV_KBAGENT_UPSTREAM_TASK_ID,
 )
 from .agents_store import AgentRun, AgentStore, AgentTask
 
 logger = logging.getLogger(__name__)
 
 
-def _build_subprocess_env(registry: Any) -> dict[str, str]:
+def _build_subprocess_env(
+    registry: Any,
+    *,
+    upstream_run: AgentRun | None = None,
+    upstream_task: AgentTask | None = None,
+) -> dict[str, str]:
     """Compose the env for an AI / CLI subprocess spawned by the scheduler.
 
     Inherits the parent's environment and overlays three keys so the child
@@ -53,6 +61,14 @@ def _build_subprocess_env(registry: Any) -> dict[str, str]:
       directly, bypassing local config entirely. Useful for AI agents
       that prefer one stateless HTTP hop over forking ``kbagent`` CLIs.
 
+    When the task was triggered as a downstream of another task's
+    ``trigger`` chain, three more keys are added so the subprocess can
+    discover its upstream context:
+
+    - ``KBAGENT_UPSTREAM_TASK_ID``
+    - ``KBAGENT_UPSTREAM_RUN_ID``
+    - ``KBAGENT_UPSTREAM_STATUS`` (``ok`` or ``error``)
+
     Returns a fresh dict (callers can mutate without affecting parent env).
     """
     env = dict(os.environ)
@@ -65,7 +81,29 @@ def _build_subprocess_env(registry: Any) -> dict[str, str]:
     serve_token = getattr(registry, "serve_token", None)
     if serve_token:
         env[ENV_KBAGENT_SERVE_TOKEN] = serve_token
+    if upstream_task is not None and upstream_run is not None:
+        env[ENV_KBAGENT_UPSTREAM_TASK_ID] = upstream_task.id
+        env[ENV_KBAGENT_UPSTREAM_RUN_ID] = upstream_run.run_id
+        env[ENV_KBAGENT_UPSTREAM_STATUS] = upstream_run.status
     return env
+
+
+def _upstream_prompt_prefix(upstream_run: AgentRun | None, upstream_task: AgentTask | None) -> str:
+    """Compose a short prompt prefix announcing the upstream chain context.
+
+    Empty when no upstream — kept out-of-line so the regular prefix stays
+    the dominant signal for cron-driven runs.
+    """
+    if upstream_run is None or upstream_task is None:
+        return ""
+    return (
+        "[Upstream chain context]\n"
+        f"You were triggered after the upstream task '{upstream_task.name}' "
+        f"(id={upstream_task.id}) completed with status '{upstream_run.status}'.\n"
+        f"Read the full upstream output: "
+        f"`kbagent http get /agents/{upstream_task.id}/runs/{upstream_run.run_id}`\n"
+        "Env vars KBAGENT_UPSTREAM_TASK_ID + KBAGENT_UPSTREAM_RUN_ID carry the same values.\n\n"
+    )
 
 
 # Instruction injected at the head of every ai_agent prompt. Tells the AI
@@ -256,7 +294,13 @@ async def _run_mcp_tool(registry: Any, params: dict[str, Any]) -> dict[str, Any]
     )
 
 
-async def _run_cli(registry: Any, params: dict[str, Any]) -> dict[str, Any]:
+async def _run_cli(
+    registry: Any,
+    params: dict[str, Any],
+    *,
+    upstream_run: AgentRun | None = None,
+    upstream_task: AgentTask | None = None,
+) -> dict[str, Any]:
     """Dispatch a cli_command action via subprocess."""
     argv_param = params.get("argv")
     if not isinstance(argv_param, list) or not argv_param:
@@ -268,7 +312,7 @@ async def _run_cli(registry: Any, params: dict[str, Any]) -> dict[str, Any]:
         *argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=_build_subprocess_env(registry),
+        env=_build_subprocess_env(registry, upstream_run=upstream_run, upstream_task=upstream_task),
     )
     timeout = float(params.get("timeout", 300.0))
     try:
@@ -295,7 +339,13 @@ _AI_CLI_RECIPES: dict[str, Any] = {
 }
 
 
-async def _run_ai_agent(registry: Any, params: dict[str, Any]) -> dict[str, Any]:
+async def _run_ai_agent(
+    registry: Any,
+    params: dict[str, Any],
+    *,
+    upstream_run: AgentRun | None = None,
+    upstream_task: AgentTask | None = None,
+) -> dict[str, Any]:
     """Dispatch an ai_agent action via an AI CLI (claude / codex / gemini).
 
     Spawns the chosen CLI once with the prompt, captures stdout (the AI
@@ -321,14 +371,16 @@ async def _run_ai_agent(registry: Any, params: dict[str, Any]) -> dict[str, Any]
     extra_args = [str(a) for a in extra_args]
     timeout = float(params.get("timeout", 600.0))
 
-    wrapped_prompt = _AI_AGENT_PROMPT_PREFIX + prompt
+    wrapped_prompt = (
+        _upstream_prompt_prefix(upstream_run, upstream_task) + _AI_AGENT_PROMPT_PREFIX + prompt
+    )
     argv = _AI_CLI_RECIPES[cli_name](wrapped_prompt, extra_args)
     proc = await asyncio.create_subprocess_exec(
         *argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         stdin=asyncio.subprocess.DEVNULL,
-        env=_build_subprocess_env(registry),
+        env=_build_subprocess_env(registry, upstream_run=upstream_run, upstream_task=upstream_task),
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -374,6 +426,9 @@ _AI_CLI_STREAM_RECIPES: dict[str, Any] = {
 async def stream_ai_agent_events(
     registry: Any,
     params: dict[str, Any],
+    *,
+    upstream_run: AgentRun | None = None,
+    upstream_task: AgentTask | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Spawn an AI CLI and yield events as they are emitted, live.
 
@@ -410,7 +465,9 @@ async def stream_ai_agent_events(
     extra_args = [str(a) for a in extra_args]
     timeout = float(params.get("timeout", 600.0))
 
-    wrapped_prompt = _AI_AGENT_PROMPT_PREFIX + prompt
+    wrapped_prompt = (
+        _upstream_prompt_prefix(upstream_run, upstream_task) + _AI_AGENT_PROMPT_PREFIX + prompt
+    )
     argv, jsonl = _AI_CLI_STREAM_RECIPES[cli_name](wrapped_prompt, extra_args)
     started_monotonic = time.monotonic()
     started_at = _now_utc().isoformat()
@@ -431,7 +488,7 @@ async def stream_ai_agent_events(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         stdin=asyncio.subprocess.DEVNULL,
-        env=_build_subprocess_env(registry),
+        env=_build_subprocess_env(registry, upstream_run=upstream_run, upstream_task=upstream_task),
     )
 
     # Walk stdout + stderr concurrently. Each side gets its own consumer
@@ -543,7 +600,27 @@ async def stream_ai_agent_events(
     yield {"event": "done", "data": final}
 
 
-async def run_task_once(task: AgentTask, registry: Any, store: AgentStore) -> AgentRun:
+def _trigger_should_fire(trigger_on: str, run_status: str) -> bool:
+    """Match a Trigger.on filter against the upstream run status.
+
+    Pulled out so tests can assert the policy in isolation; also makes
+    the fan-out site at the bottom of ``run_task_once`` legible.
+    """
+    if trigger_on == "always":
+        return True
+    if trigger_on == "success" and run_status == "ok":
+        return True
+    return trigger_on == "error" and run_status == "error"
+
+
+async def run_task_once(
+    task: AgentTask,
+    registry: Any,
+    store: AgentStore,
+    *,
+    upstream_run: AgentRun | None = None,
+    upstream_task: AgentTask | None = None,
+) -> AgentRun:
     """Execute one task and append a run record.
 
     For ai_agent runs we now drive the streaming generator and capture
@@ -556,17 +633,36 @@ async def run_task_once(task: AgentTask, registry: Any, store: AgentStore) -> Ag
     replay either using the same /events endpoint. cli_command and
     mcp_tool runs still use the one-shot path; their structured output
     fits in the ``output`` field directly.
+
+    When ``upstream_run`` + ``upstream_task`` are supplied (the run was
+    triggered as a chained downstream), the subprocess receives extra
+    ``KBAGENT_UPSTREAM_*`` env vars and the ai_agent prompt is prefixed
+    with a hint explaining where to fetch the upstream output.
+
+    After persist, if ``task.trigger`` is set and its ``on`` filter
+    matches this run's status, the downstream task runs synchronously
+    with this run threaded through as its upstream context. The chain
+    is awaited because each downstream's persist depends on the
+    upstream's persist already being on disk.
     """
     started = _now_utc()
     run = AgentRun(task_id=task.id, started_at=started.isoformat())
     captured_events: list[dict[str, Any]] = []
     try:
         if task.action.type == "mcp_tool":
+            # mcp_tool runs in-process via McpService, no env vars to
+            # propagate. The upstream payload, when relevant, can still
+            # be read from store by a follow-up ai_agent task.
             output = await _run_mcp_tool(registry, task.action.params)
             run.status = "ok"
             run.output = output if isinstance(output, dict) else {"value": output}
         elif task.action.type == "cli_command":
-            output = await _run_cli(registry, task.action.params)
+            output = await _run_cli(
+                registry,
+                task.action.params,
+                upstream_run=upstream_run,
+                upstream_task=upstream_task,
+            )
             run.status = "ok"
             run.output = output if isinstance(output, dict) else {"value": output}
         elif task.action.type == "ai_agent":
@@ -575,7 +671,12 @@ async def run_task_once(task: AgentTask, registry: Any, store: AgentStore) -> Ag
             # _run_ai_agent built, so callers reading ``run.output`` see
             # an identical shape.
             done_payload: dict[str, Any] | None = None
-            async for evt in stream_ai_agent_events(registry, task.action.params):
+            async for evt in stream_ai_agent_events(
+                registry,
+                task.action.params,
+                upstream_run=upstream_run,
+                upstream_task=upstream_task,
+            ):
                 captured_events.append(evt)
                 if evt["event"] == "done":
                     done_payload = evt["data"]
@@ -609,10 +710,64 @@ async def run_task_once(task: AgentTask, registry: Any, store: AgentStore) -> Ag
         except Exception:
             logger.exception("Failed to persist event timeline for %s/%s", task.id, run.run_id)
         store.append_run(run)
-        # Update last_run / next_run on the task itself.
-        task.last_run_at = run.started_at
-        task.next_run_at = compute_next_run(task.cron)
-        store.upsert_task(task)
+        # Update last_run / next_run on the PERSISTED task. We refetch from
+        # the store rather than mutating the in-memory `task` because
+        # callers (router /run with runtime_input) may pass a model-copy
+        # of the original with merged action params — upserting that ghost
+        # would clobber the saved action on disk. Refetch is cheap (single
+        # JSON file read) and keeps the persisted record clean.
+        persisted = store.get_task(task.id)
+        if persisted is not None:
+            persisted.last_run_at = run.started_at
+            persisted.next_run_at = None if persisted.manual else compute_next_run(persisted.cron)
+            store.upsert_task(persisted)
+
+    # Fan-out a chained downstream AFTER persist, so any HTTP-read the
+    # downstream does (`kbagent http get /agents/<id>/runs/<run_id>`)
+    # sees the upstream output already on disk. Disabled downstreams
+    # are skipped silently — disabling is the operator's "off switch"
+    # for the chain.
+    if task.trigger and _trigger_should_fire(task.trigger.on, run.status):
+        downstream = store.get_task(task.trigger.task_id)
+        if downstream is None:
+            logger.warning(
+                "Chain target task %s (from %s) not found; skipping fan-out",
+                task.trigger.task_id,
+                task.id,
+            )
+        elif not downstream.enabled:
+            logger.info(
+                "Chain target %s disabled; skipping fan-out from %s",
+                downstream.id,
+                task.id,
+            )
+        else:
+            logger.info(
+                "Chain: %s -> %s (on=%s, status=%s)",
+                task.name,
+                downstream.name,
+                task.trigger.on,
+                run.status,
+            )
+            try:
+                await run_task_once(
+                    downstream,
+                    registry,
+                    store,
+                    upstream_run=run,
+                    upstream_task=task,
+                )
+            except Exception:
+                # Swallow downstream errors so the upstream's run record
+                # stays "ok". The downstream's own run record captures
+                # its failure; we don't want a bad downstream to retro-
+                # flip the upstream's status.
+                logger.exception(
+                    "Chain downstream %s failed (upstream %s already persisted)",
+                    downstream.id,
+                    task.id,
+                )
+
     return run
 
 
@@ -627,6 +782,11 @@ async def scheduler_loop(store: AgentStore, registry: Any, *, tick_seconds: int 
             now = _now_utc()
             for task in store.load_tasks():
                 if not task.enabled:
+                    continue
+                if task.manual:
+                    # Manual tasks only run via POST /agents/{id}/run or as a
+                    # chained downstream — cron is preserved on the record
+                    # but the scheduler ignores it.
                     continue
                 last = datetime.fromisoformat(task.last_run_at) if task.last_run_at else None
                 if not is_due(task.cron, last, now):

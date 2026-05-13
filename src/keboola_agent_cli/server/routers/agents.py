@@ -16,26 +16,58 @@ from ..agent_runner import (
     run_task_once,
     stream_ai_agent_events,
 )
-from ..agents_store import AgentAction, AgentRun, AgentTask
+from ..agents_store import AgentAction, AgentRun, AgentTask, Trigger
 from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+def _validate_trigger(
+    store: Any, trigger: Trigger | None, *, owner_task_id: str | None = None
+) -> None:
+    """Reject obviously broken trigger configs at API boundary.
+
+    - downstream task_id must exist
+    - no self-loop (task triggering itself)
+
+    Deeper cycle detection (A→B→A) is left to runtime safety; the value of
+    a deep check here is low compared to the implementation cost.
+    """
+    if trigger is None:
+        return
+    if owner_task_id is not None and trigger.task_id == owner_task_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Trigger target cannot be the task itself (would self-loop).",
+        )
+    if store.get_task(trigger.task_id) is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Trigger target task '{trigger.task_id}' not found.",
+        )
 
 
 class AgentTaskCreate(BaseModel):
     name: str
     description: str = ""
     cron: str = "0 * * * *"
+    manual: bool = False
     enabled: bool = True
     action: AgentAction
+    trigger: Trigger | None = None
 
 
 class AgentTaskUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     cron: str | None = None
+    manual: bool | None = None
     enabled: bool | None = None
     action: AgentAction | None = None
+    # Sentinel: pass an explicit JSON ``null`` to clear the trigger; omitting
+    # the key (Pydantic default-unset) means "leave as is". FastAPI maps both
+    # to ``None`` here, so we rely on ``model_fields_set`` below.
+    trigger: Trigger | None = None
 
 
 def _store(request: Request):
@@ -58,13 +90,18 @@ def list_tasks(request: Request) -> dict[str, Any]:
 @router.post("")
 def create_task(body: AgentTaskCreate, request: Request) -> dict[str, Any]:
     store = _store(request)
+    _validate_trigger(store, body.trigger)
     task = AgentTask(
         name=body.name,
         description=body.description,
         cron=body.cron,
+        manual=body.manual,
         enabled=body.enabled,
         action=body.action,
-        next_run_at=compute_next_run(body.cron),
+        trigger=body.trigger,
+        # Manual tasks have no future cron firing; skip the croniter call so
+        # we don't store a bogus next_run_at the UI would then display.
+        next_run_at=None if body.manual else compute_next_run(body.cron),
     )
     saved = store.upsert_task(task)
     return saved.model_dump(mode="json")
@@ -92,10 +129,20 @@ def update_task(task_id: str, body: AgentTaskUpdate, request: Request) -> dict[s
     if body.cron is not None:
         task.cron = body.cron
         task.next_run_at = compute_next_run(body.cron)
+    if body.manual is not None:
+        task.manual = body.manual
+        # Switching to manual nulls out next_run_at; switching back recomputes.
+        task.next_run_at = None if body.manual else compute_next_run(task.cron)
     if body.enabled is not None:
         task.enabled = body.enabled
     if body.action is not None:
         task.action = body.action
+    # ``trigger`` uses model_fields_set so we can distinguish "field absent"
+    # (leave alone) from "explicit null" (clear chain). Pydantic v2 exposes
+    # this via the model_fields_set attribute on the BaseModel instance.
+    if "trigger" in body.model_fields_set:
+        _validate_trigger(store, body.trigger, owner_task_id=task.id)
+        task.trigger = body.trigger
     store.upsert_task(task)
     return task.model_dump(mode="json")
 
@@ -108,22 +155,89 @@ def delete_task(task_id: str, request: Request) -> dict[str, Any]:
     return {"status": "deleted", "id": task_id}
 
 
+class RunNowBody(BaseModel):
+    """Optional per-run input merged into the task's persisted action params.
+
+    Used so manual tasks (``manual=True``) can receive ad-hoc runtime input
+    — e.g. the AI Data Lab pattern where the persisted prompt says "read the
+    user's question from runtime input", and each invocation passes a
+    different question. The merge is one-shot (does not mutate the saved
+    task); the next cron / chain firing sees only the persisted params.
+
+    Per-action-type semantics:
+    - ``ai_agent``: ``runtime_input.prompt`` (string) is appended to the
+      persisted prompt as a labeled section so the AI sees both the
+      operator's static instructions and the runtime ask.
+    - ``cli_command``: ``runtime_input.argv`` (list of strings) is appended
+      to the persisted argv list.
+    - ``mcp_tool``: ``runtime_input`` (dict) is shallow-merged into the
+      persisted MCP tool input, with runtime keys winning on conflict.
+    """
+
+    runtime_input: dict[str, Any] | None = None
+
+
+def _merge_runtime_input(task: AgentTask, runtime_input: dict[str, Any] | None) -> AgentTask:
+    """Return a shallow-copied task with runtime_input merged into its action.
+
+    The original task is NOT mutated; we copy because ``run_task_once``
+    persists ``task.last_run_at`` / ``next_run_at`` and we want those side
+    effects to land on the real stored task, not the merged ghost.
+    """
+    if not runtime_input:
+        return task
+    merged_params = dict(task.action.params)
+    if task.action.type == "ai_agent":
+        extra = runtime_input.get("prompt")
+        if isinstance(extra, str) and extra.strip():
+            base_prompt = str(merged_params.get("prompt", ""))
+            # Append rather than replace so the persisted instructions still
+            # dominate; the runtime ask comes in as a clearly-labeled section.
+            merged_params["prompt"] = (
+                f"{base_prompt}\n\n[Operator's runtime input for this run]\n{extra.strip()}"
+            )
+    elif task.action.type == "cli_command":
+        extra_argv = runtime_input.get("argv")
+        if isinstance(extra_argv, list) and extra_argv:
+            base_argv = list(merged_params.get("argv") or [])
+            merged_params["argv"] = [*base_argv, *(str(a) for a in extra_argv)]
+    elif task.action.type == "mcp_tool":
+        # Shallow-merge into the tool input; runtime keys win.
+        base_input = dict(merged_params.get("input") or {})
+        base_input.update(runtime_input)
+        merged_params["input"] = base_input
+    merged_action = AgentAction(type=task.action.type, params=merged_params)
+    # AgentTask.model_copy with update returns a shallow copy with the action
+    # replaced — task.last_run_at / next_run_at on the *real* stored record
+    # still update via run_task_once.upsert_task(task) because that path uses
+    # the original task object passed in.
+    return task.model_copy(update={"action": merged_action})
+
+
 @router.post("/{task_id}/run")
 async def run_now(
     task_id: str,
     request: Request,
     registry: ServiceRegistry = Depends(get_registry),
+    body: RunNowBody | None = None,
 ) -> dict[str, Any]:
     """Trigger a task immediately (does not wait for the next cron tick).
 
     Blocking variant kept for compatibility / scripted callers.
     UI uses ``POST /agents/{task_id}/run/stream`` for live progress + attach.
+
+    Optional ``runtime_input`` body (typically used by manual tasks) is
+    merged into the task's persisted action params for this run only —
+    e.g. the operator types an ad-hoc question into the UI, the persisted
+    prompt is preserved, and the cron-driven next firing is unaffected.
     """
     store = _store(request)
     task = store.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
-    run = await run_task_once(task, registry, store)
+    runtime_input = body.runtime_input if body is not None else None
+    task_for_run = _merge_runtime_input(task, runtime_input)
+    run = await run_task_once(task_for_run, registry, store)
     return run.model_dump(mode="json")
 
 

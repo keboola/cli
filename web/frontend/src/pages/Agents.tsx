@@ -48,13 +48,22 @@ function isAbortError(err: unknown): boolean {
   );
 }
 
+type TriggerOn = "success" | "error" | "always";
+
+interface Trigger {
+  on: TriggerOn;
+  task_id: string;
+}
+
 interface AgentTask {
   id: string;
   name: string;
   description: string;
   cron: string;
+  manual: boolean;
   enabled: boolean;
   action: { type: ActionType; params: Record<string, unknown> };
+  trigger: Trigger | null;
   created_at: string;
   last_run_at: string | null;
   next_run_at: string | null;
@@ -84,6 +93,19 @@ const CRON_PRESETS: Array<{ label: string; cron: string }> = [
   { label: "daily @ 06:00 UTC", cron: "0 6 * * *" },
   { label: "weekdays @ 09:00 UTC", cron: "0 9 * * 1-5" },
 ];
+
+function ChainBadge({ trigger, tasks }: { trigger: Trigger; tasks: AgentTask[] }) {
+  const downstream = tasks.find((t) => t.id === trigger.task_id);
+  const label = downstream?.name ?? trigger.task_id;
+  return (
+    <span
+      className="nerd-pill !text-[10px] border-keboola/40 text-keboola"
+      title={`Chains to ${label} on ${trigger.on}`}
+    >
+      → {label}
+    </span>
+  );
+}
 
 function ActionLabel({ action }: { action: AgentTask["action"] }) {
   if (action.type === "mcp_tool") {
@@ -128,6 +150,10 @@ export function AgentsPage() {
   // streamed run (the "Play" button shortcut from the row).
   const [selected, setSelected] = useState<AgentTask | null>(null);
   const [selectedAutoRun, setSelectedAutoRun] = useState(false);
+  // Manual ai_agent tasks open a small "Run with prompt" modal instead of
+  // the streaming detail drawer — the operator can type ad-hoc runtime
+  // input (used heavily by the AI Data Lab pattern).
+  const [manualRun, setManualRun] = useState<AgentTask | null>(null);
 
   const q = useQuery<{ tasks: AgentTask[] }>({
     queryKey: ["agents"],
@@ -214,9 +240,29 @@ export function AgentsPage() {
                   <span className="w-2 h-2 rounded-full bg-zinc-700 inline-block" />
                 ),
             },
-            { header: "Name", cell: (t) => <span className="font-bold">{t.name}</span> },
+            {
+              header: "Name",
+              cell: (t) => (
+                <span className="font-bold inline-flex items-center gap-1.5">
+                  {t.name}
+                  {t.trigger ? (
+                    <ChainBadge trigger={t.trigger} tasks={q.data?.tasks ?? []} />
+                  ) : null}
+                </span>
+              ),
+            },
             { header: "Action", cell: (t) => <ActionLabel action={t.action} /> },
-            { header: "Cron", cell: (t) => <span className="font-mono text-xs">{t.cron}</span> },
+            {
+              header: "Cron",
+              cell: (t) =>
+                t.manual ? (
+                  <span className="nerd-pill border-zinc-400 text-zinc-500 dark:border-zinc-700">
+                    manual
+                  </span>
+                ) : (
+                  <span className="font-mono text-xs">{t.cron}</span>
+                ),
+            },
             {
               header: "Next",
               cell: (t) => (
@@ -241,11 +287,21 @@ export function AgentsPage() {
                   <button
                     type="button"
                     className="nerd-btn text-xs hover:text-keboola"
-                    title="Run now (opens detail with live event stream)"
+                    title={
+                      t.manual && t.action.type === "ai_agent"
+                        ? "Run with prompt (manual task)"
+                        : "Run now (opens detail with live event stream)"
+                    }
                     onClick={(e) => {
                       e.stopPropagation();
-                      setSelectedAutoRun(true);
-                      setSelected(t);
+                      // Manual ai_agent tasks get the prompt modal; everything
+                      // else uses the streaming detail drawer (current UX).
+                      if (t.manual && t.action.type === "ai_agent") {
+                        setManualRun(t);
+                      } else {
+                        setSelectedAutoRun(true);
+                        setSelected(t);
+                      }
                     }}
                   >
                     <Play className="w-3 h-3" />
@@ -291,6 +347,16 @@ export function AgentsPage() {
       {showNew ? <NewTaskDrawer onClose={() => setShowNew(false)} /> : null}
       {editing ? (
         <NewTaskDrawer existing={editing} onClose={() => setEditing(null)} />
+      ) : null}
+      {manualRun ? (
+        <ManualRunModal
+          task={manualRun}
+          onClose={() => setManualRun(null)}
+          onSuccess={() => {
+            setManualRun(null);
+            qc.invalidateQueries({ queryKey: ["agents"] });
+          }}
+        />
       ) : null}
       {selected ? (
         <TaskDetailDrawer
@@ -370,7 +436,10 @@ function NewTaskDrawer({
   const [name, setName] = useState(existing?.name ?? "");
   const [description, setDescription] = useState(existing?.description ?? "");
   const [cron, setCron] = useState(existing?.cron ?? "0 0 * * *");
+  const [manual, setManual] = useState(existing?.manual ?? false);
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
+  // Chain config: null = no chain, otherwise downstream task id + on filter.
+  const [trigger, setTrigger] = useState<Trigger | null>(existing?.trigger ?? null);
   const [actionType, setActionType] = useState<ActionType>(
     existing?.action.type ?? "ai_agent",
   );
@@ -401,7 +470,20 @@ function NewTaskDrawer({
         `/agents/cron/preview?cron=${encodeURIComponent(cron)}`,
       ),
     retry: false,
+    enabled: !manual,
   });
+
+  // For the chain dropdown — list of all other tasks the user can chain to.
+  // We exclude the task being edited (no self-loop). Loaded lazily so a fresh
+  // "new task" drawer doesn't fetch this until the user opens the chain row.
+  const allTasksQ = useQuery<{ tasks: AgentTask[] }>({
+    queryKey: ["agents"],
+    queryFn: () => api.get("/agents"),
+    retry: false,
+  });
+  const chainCandidates = (allTasksQ.data?.tasks ?? []).filter(
+    (t) => t.id !== existing?.id,
+  );
 
   const [testRun, setTestRun] = useState<AgentRun | null>(null);
   const [testElapsed, setTestElapsed] = useState(0);
@@ -424,7 +506,9 @@ function NewTaskDrawer({
         name,
         description,
         cron,
+        manual,
         enabled,
+        trigger,
         actionType,
         tool,
         toolInput,
@@ -439,7 +523,9 @@ function NewTaskDrawer({
     name,
     description,
     cron,
+    manual,
     enabled,
+    trigger,
     actionType,
     tool,
     toolInput,
@@ -564,7 +650,9 @@ function NewTaskDrawer({
         name,
         description,
         cron,
+        manual,
         enabled,
+        trigger,
         action: buildAction(),
       };
       // PATCH in edit mode (only mutates the named fields server-side via
@@ -661,25 +749,46 @@ function NewTaskDrawer({
         </label>
 
         <div>
-          <div className="text-xs text-zinc-400 mb-1">Cron schedule</div>
-          <input
-            className="nerd-input w-full font-mono"
-            value={cron}
-            onChange={(e) => setCron(e.target.value)}
-          />
-          <div className="flex flex-wrap gap-1 mt-2">
-            {CRON_PRESETS.map((p) => (
-              <button
-                key={p.cron}
-                type="button"
-                className="nerd-pill hover:border-keboola hover:text-keboola"
-                onClick={() => setCron(p.cron)}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          {previewQ.data ? (
+          <label className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300 mb-2">
+            <input
+              type="checkbox"
+              checked={manual}
+              onChange={(e) => setManual(e.target.checked)}
+            />
+            <span>
+              Manual trigger only{" "}
+              <span className="text-zinc-500">
+                (no schedule — runs only via Test now / Run, or as a chained downstream)
+              </span>
+            </span>
+          </label>
+          {/* Hide the cron block entirely when manual — the field stays in
+              state so the user can flip back without retyping, but showing
+              "0 0 * * *" next to a "Manual trigger only" checkbox is
+              confusing (user reported it). */}
+          {!manual ? (
+            <>
+              <div className="text-xs text-zinc-400 mb-1">Cron schedule</div>
+              <input
+                className="nerd-input w-full font-mono"
+                value={cron}
+                onChange={(e) => setCron(e.target.value)}
+              />
+              <div className="flex flex-wrap gap-1 mt-2">
+                {CRON_PRESETS.map((p) => (
+                  <button
+                    key={p.cron}
+                    type="button"
+                    className="nerd-pill hover:border-keboola hover:text-keboola"
+                    onClick={() => setCron(p.cron)}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
+          {!manual && previewQ.data ? (
             <div className="text-xs text-zinc-500 mt-2">
               Next firings:{" "}
               <span className="font-mono text-accent">
@@ -689,8 +798,68 @@ function NewTaskDrawer({
                   .join(" → ")}
               </span>
             </div>
-          ) : previewQ.error ? (
+          ) : !manual && previewQ.error ? (
             <div className="text-xs text-red-400 mt-2">Invalid cron expression</div>
+          ) : null}
+        </div>
+
+        {/* Chain configuration: after this task's run completes, optionally
+            fire another task with this run's id passed as upstream context. */}
+        <div>
+          <div className="text-xs text-zinc-400 mb-1">
+            Chain → run another task when this one completes
+          </div>
+          {chainCandidates.length === 0 ? (
+            <div className="text-xs text-zinc-500 italic">
+              No other tasks yet. Save this task first, then add another to chain to.
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                className="nerd-input"
+                value={trigger?.task_id ?? ""}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  if (!id) {
+                    setTrigger(null);
+                  } else {
+                    setTrigger({ on: trigger?.on ?? "success", task_id: id });
+                  }
+                }}
+              >
+                <option value="">— no chain —</option>
+                {chainCandidates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              {trigger ? (
+                <>
+                  <span className="text-xs text-zinc-500">on</span>
+                  {(["success", "error", "always"] as TriggerOn[]).map((opt) => (
+                    <button
+                      key={opt}
+                      type="button"
+                      className={`nerd-pill ${
+                        trigger.on === opt ? "border-keboola text-keboola" : ""
+                      }`}
+                      onClick={() => setTrigger({ ...trigger, on: opt })}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </>
+              ) : null}
+            </div>
+          )}
+          {trigger ? (
+            <div className="text-xs text-zinc-500 mt-2">
+              After each run that ends with status{" "}
+              <span className="font-mono">{trigger.on}</span>, the downstream task
+              runs with <span className="font-mono">KBAGENT_UPSTREAM_RUN_ID</span> +{" "}
+              <span className="font-mono">KBAGENT_UPSTREAM_TASK_ID</span> in its env.
+            </div>
           ) : null}
         </div>
 
@@ -849,6 +1018,101 @@ function NewTaskDrawer({
         </div>
       ) : null}
     </Drawer>
+  );
+}
+
+/**
+ * Run-with-prompt modal for manual ai_agent tasks.
+ *
+ * Manual tasks (no cron) typically encode the "frame" of an interaction
+ * (system prompt, target project, allowed tools) and want a per-invocation
+ * ad-hoc input — e.g. the AI Data Lab pattern where each run gets a
+ * different question. POSTs the typed prompt as ``runtime_input.prompt``
+ * to ``/agents/{id}/run`` (blocking), then closes and refreshes.
+ *
+ * Non-manual or non-ai_agent tasks keep using the streaming detail drawer
+ * — runtime input is opt-in to keep the common path one-click.
+ */
+function ManualRunModal({
+  task,
+  onClose,
+  onSuccess,
+}: {
+  task: AgentTask;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [prompt, setPrompt] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const runMu = useMutation({
+    mutationFn: () =>
+      api.post<AgentRun>(`/agents/${task.id}/run`, {
+        runtime_input: prompt.trim() ? { prompt: prompt.trim() } : null,
+      }),
+    onSuccess,
+    onError: (err) => setError((err as Error).message),
+  });
+  const basePrompt = String(task.action.params.prompt ?? "");
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/90 backdrop-blur-sm p-4"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        className="nerd-card w-full max-w-2xl space-y-3"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+      >
+        <div>
+          <h2 className="font-bold text-keboola text-base">Run: {task.name}</h2>
+          <p className="text-xs text-zinc-500 mt-1">
+            Manual task. Add an ad-hoc runtime input (optional) and run blocking
+            — the run record appears in the list once it finishes.
+          </p>
+        </div>
+        <details className="text-xs text-zinc-500">
+          <summary className="cursor-pointer">Persisted prompt (read-only)</summary>
+          <pre className="mt-1 nerd-code whitespace-pre-wrap text-[11px] max-h-48 overflow-auto">
+            {basePrompt || "(empty)"}
+          </pre>
+        </details>
+        <label className="text-xs text-zinc-400 block">
+          Runtime input (optional)
+          <textarea
+            className="nerd-input w-full mt-1 font-mono min-h-[120px]"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="e.g. How many distinct customers had >3 orders in Q1?"
+            autoFocus
+          />
+        </label>
+        <div className="text-xs text-zinc-500">
+          The runtime input is appended to the persisted prompt as a labeled
+          section, just for this run. The saved task is not modified.
+        </div>
+        {error ? <div className="text-xs text-red-400">{error}</div> : null}
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            className="nerd-btn"
+            onClick={onClose}
+            disabled={runMu.isPending}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="nerd-btn flex items-center gap-1 hover:text-keboola"
+            onClick={() => runMu.mutate()}
+            disabled={runMu.isPending}
+          >
+            <Play className="w-3 h-3" />
+            {runMu.isPending ? "running..." : "Run"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

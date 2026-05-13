@@ -157,6 +157,14 @@ ENV_CONVERSATION_ID: str = "KBAGENT_CONVERSATION_ID"
 ENV_KBAGENT_SERVE_URL: str = "KBAGENT_SERVE_URL"
 ENV_KBAGENT_SERVE_TOKEN: str = "KBAGENT_SERVE_TOKEN"
 
+# --- Upstream-chain context (set when a task is triggered as a downstream) ---
+# Populated only on runs spawned by another task's ``trigger`` field; absent
+# on cron-driven or manually-invoked runs. AI agents read these to fetch the
+# upstream output via `kbagent http get /agents/<task>/runs/<run>`.
+ENV_KBAGENT_UPSTREAM_TASK_ID: str = "KBAGENT_UPSTREAM_TASK_ID"
+ENV_KBAGENT_UPSTREAM_RUN_ID: str = "KBAGENT_UPSTREAM_RUN_ID"
+ENV_KBAGENT_UPSTREAM_STATUS: str = "KBAGENT_UPSTREAM_STATUS"
+
 # Default timeout for `kbagent http` requests. AI agents poll endpoints
 # during multi-step tasks; long enough for slow Storage table listings,
 # short enough to fail fast on a dead serve.

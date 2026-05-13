@@ -191,12 +191,18 @@ class _ActiveRun:
                     rel = self.store.append_events(self.task.id, agent_run.run_id, self.events)
                     agent_run.events_path = rel
             self.final_run = agent_run
-            # Persist the run record + bump last/next on the task.
+            # Persist the run record + bump last/next on the PERSISTED task.
+            # Refetch from store so any runtime-merged ghost on self.task
+            # doesn't clobber the saved action; manual tasks skip cron recompute.
             with contextlib.suppress(Exception):
                 self.store.append_run(agent_run)
-                self.task.last_run_at = agent_run.started_at
-                self.task.next_run_at = compute_next_run(self.task.cron)
-                self.store.upsert_task(self.task)
+                persisted = self.store.get_task(self.task.id)
+                if persisted is not None:
+                    persisted.last_run_at = agent_run.started_at
+                    persisted.next_run_at = (
+                        None if persisted.manual else compute_next_run(persisted.cron)
+                    )
+                    self.store.upsert_task(persisted)
             # Wake every subscriber so their generator can exit.
             for q in list(self.subscribers):
                 with contextlib.suppress(asyncio.QueueFull):

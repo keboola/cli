@@ -42,15 +42,38 @@ class AgentAction(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class Trigger(BaseModel):
+    """Chain configuration: after an upstream task completes, optionally
+    run a downstream task with the upstream's run context attached.
+
+    The downstream's subprocess inherits ``KBAGENT_UPSTREAM_TASK_ID`` and
+    ``KBAGENT_UPSTREAM_RUN_ID`` env vars; ``ai_agent`` action types
+    additionally get a one-line prompt prefix pointing at the upstream
+    run JSON they can pull via the kbagent HTTP API.
+    """
+
+    on: Literal["success", "error", "always"] = "success"
+    task_id: str
+
+
 class AgentTask(BaseModel):
-    """A scheduled agent task (cron-driven)."""
+    """A scheduled agent task.
+
+    Default: cron-driven by ``cron`` expression. With ``manual=True`` the
+    scheduler skips the task entirely; it only runs when triggered through
+    ``POST /agents/{id}/run`` or as a downstream of another task's
+    ``trigger``. ``cron`` is preserved on manual tasks so the operator can
+    flip back to scheduled mode without losing the schedule.
+    """
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     name: str
     description: str = ""
     cron: str = "0 * * * *"  # default every hour, top of the hour
+    manual: bool = False
     enabled: bool = True
     action: AgentAction
+    trigger: Trigger | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     last_run_at: str | None = None
     next_run_at: str | None = None

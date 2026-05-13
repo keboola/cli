@@ -25,13 +25,19 @@ from keboola_agent_cli.constants import (
     ENV_CONFIG_DIR,
     ENV_KBAGENT_SERVE_TOKEN,
     ENV_KBAGENT_SERVE_URL,
+    ENV_KBAGENT_UPSTREAM_RUN_ID,
+    ENV_KBAGENT_UPSTREAM_STATUS,
+    ENV_KBAGENT_UPSTREAM_TASK_ID,
 )
 from keboola_agent_cli.server.agent_runner import (
     _AI_AGENT_PROMPT_PREFIX,
     _build_subprocess_env,
     _run_ai_agent,
     _run_cli,
+    _trigger_should_fire,
+    _upstream_prompt_prefix,
 )
+from keboola_agent_cli.server.agents_store import AgentAction, AgentRun, AgentTask
 
 
 def _make_registry(
@@ -254,3 +260,70 @@ class TestRunAiAgentPromptWrapping:
         kwargs = mock_spawn.call_args.kwargs
         assert kwargs["env"][ENV_KBAGENT_SERVE_URL] == "http://127.0.0.1:8001"
         assert kwargs["env"][ENV_KBAGENT_SERVE_TOKEN] == "test-bearer-token"
+
+
+# ---------------------------------------------------------------------------
+# Manual + trigger-chain tests
+# ---------------------------------------------------------------------------
+
+
+class TestTriggerPolicy:
+    """``_trigger_should_fire`` matches the three on-filter modes correctly."""
+
+    @pytest.mark.parametrize(
+        "trigger_on,status,expected",
+        [
+            ("success", "ok", True),
+            ("success", "error", False),
+            ("error", "error", True),
+            ("error", "ok", False),
+            ("always", "ok", True),
+            ("always", "error", True),
+            # Unknown values fail closed — we don't blindly fire.
+            ("nonsense", "ok", False),
+        ],
+    )
+    def test_should_fire(self, trigger_on: str, status: str, expected: bool) -> None:
+        assert _trigger_should_fire(trigger_on, status) is expected
+
+
+class TestUpstreamEnvAndPrompt:
+    """Upstream chain context propagates to subprocess env + AI prompt."""
+
+    def test_env_includes_upstream_keys_when_chained(self, tmp_path: Path) -> None:
+        registry = _make_registry(tmp_path)
+        upstream_task = AgentTask(
+            id="UPSTREAM-ID",
+            name="upstream",
+            action=AgentAction(type="ai_agent", params={"cli": "claude", "prompt": "x"}),
+        )
+        upstream_run = AgentRun(
+            task_id=upstream_task.id, started_at="2026-01-01T00:00:00+00:00", status="ok"
+        )
+        env = _build_subprocess_env(
+            registry, upstream_run=upstream_run, upstream_task=upstream_task
+        )
+        assert env[ENV_KBAGENT_UPSTREAM_TASK_ID] == "UPSTREAM-ID"
+        assert env[ENV_KBAGENT_UPSTREAM_RUN_ID] == upstream_run.run_id
+        assert env[ENV_KBAGENT_UPSTREAM_STATUS] == "ok"
+
+    def test_env_omits_upstream_keys_when_not_chained(self, tmp_path: Path) -> None:
+        env = _build_subprocess_env(_make_registry(tmp_path))
+        assert ENV_KBAGENT_UPSTREAM_TASK_ID not in env
+        assert ENV_KBAGENT_UPSTREAM_RUN_ID not in env
+        assert ENV_KBAGENT_UPSTREAM_STATUS not in env
+
+    def test_prompt_prefix_empty_without_upstream(self) -> None:
+        assert _upstream_prompt_prefix(None, None) == ""
+
+    def test_prompt_prefix_references_upstream_run(self) -> None:
+        task = AgentTask(
+            id="A",
+            name="upstream task",
+            action=AgentAction(type="ai_agent", params={"cli": "claude", "prompt": "x"}),
+        )
+        run = AgentRun(task_id="A", started_at="2026-01-01T00:00:00+00:00", status="ok")
+        prefix = _upstream_prompt_prefix(run, task)
+        assert "upstream task" in prefix
+        # AI must know how to fetch the upstream output via HTTP.
+        assert f"/agents/A/runs/{run.run_id}" in prefix
