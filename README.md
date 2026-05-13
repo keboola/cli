@@ -24,7 +24,7 @@ kbagent serve --ui
 # Open the URL printed at startup -- the browser is auto-authenticated.
 ```
 
-The React SPA is bundled inside the wheel by a hatchling build hook (requires Node 20+ on the install host so `npm run build` can run during wheel creation). Single Python process at runtime; no Node needed once installed. Covers everything the CLI exposes (projects, configs, storage, jobs, flows, schedules, MCP tools, lineage, scheduled AI agents with cost/token timeline). See [`web/README.md`](web/README.md) for the dev-mode setup with hot reload.
+The React SPA is bundled inside the wheel by a hatchling build hook (requires Node 20+ on the install host so `npm run build` can run during wheel creation). Single Python process at runtime; no Node needed once installed. Covers everything the CLI exposes (projects, configs, storage, jobs, flows, schedules, MCP tools, lineage, scheduled AI agents with cost/token timeline). Agent runs that produce long-form reports (e.g. "Storage Cleanup Advisor", "Schedule Drift Detector") surface in a dedicated **Artifacts** tab — GFM-rendered preview in a VSCode-style viewer with one-click Copy / Download `.md` for hand-off to Slack, Notion, or your editor. See [`web/README.md`](web/README.md) for the dev-mode setup with hot reload.
 
 ## For AI agents
 
