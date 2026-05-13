@@ -242,13 +242,28 @@ export function AgentsPage() {
             },
             {
               header: "Name",
+              // Two-line cell so the optional description doesn't steal a
+              // separate column (most users only care about it occasionally).
+              // Truncated to ~70ch with a native `title` tooltip carrying the
+              // full text -- mirrors how Linear / GitHub stack title + summary
+              // in their list views.
               cell: (t) => (
-                <span className="font-bold inline-flex items-center gap-1.5">
-                  {t.name}
-                  {t.trigger ? (
-                    <ChainBadge trigger={t.trigger} tasks={q.data?.tasks ?? []} />
+                <div className="leading-tight">
+                  <div className="font-bold inline-flex items-center gap-1.5">
+                    {t.name}
+                    {t.trigger ? (
+                      <ChainBadge trigger={t.trigger} tasks={q.data?.tasks ?? []} />
+                    ) : null}
+                  </div>
+                  {t.description ? (
+                    <div
+                      className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate max-w-[40ch] mt-0.5"
+                      title={t.description}
+                    >
+                      {t.description}
+                    </div>
                   ) : null}
-                </span>
+                </div>
               ),
             },
             { header: "Action", cell: (t) => <ActionLabel action={t.action} /> },
