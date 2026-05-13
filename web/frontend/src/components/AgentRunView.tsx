@@ -21,9 +21,30 @@
  * which source the events came from -- it just renders.
  */
 
-import { Activity, Brain, ChevronDown, ChevronRight, Wrench, X } from "lucide-react";
+import {
+  Activity,
+  Brain,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  Download,
+  FileText,
+  Wrench,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+// GFM = GitHub Flavored Markdown. Without this plugin react-markdown only
+// implements CommonMark, which omits pipe-table syntax, strikethrough,
+// task lists, and autolinks. Agent reports rely heavily on tables (one
+// row per finding), so this is non-optional. Declared once at module
+// scope so React doesn't see a fresh array identity on every render and
+// re-instantiate the markdown processor.
+const MARKDOWN_PLUGINS = [remarkGfm];
 
 // Mirrors the SSE event envelope (see routers/agents.py:_sse) and the
 // persisted JSONL shape (server/agents_store.py:append_events).
@@ -58,6 +79,97 @@ interface UiStep {
   // For tool calls: a paired tool_result so clicking the step shows both
   // input and output without forcing the user to find the matching row.
   toolResult?: { isError: boolean; text: string };
+  // Plain-text payload of the step body, used by Copy / Download .md actions
+  // and by the Artifacts tab heuristic. Distinct from ``detail`` (a React
+  // node) because clipboard/file exports want raw text without the JSX
+  // wrappers. Set for thinking, text, and tool_result steps; absent on
+  // structural rows (session init, run finished) which have no body.
+  rawText?: string;
+}
+
+/**
+ * A step body that looks like a long-form report worth surfacing as a
+ * standalone artifact (Artifacts tab).
+ *
+ * Originally this required a heading in the first 8 lines, which gave too
+ * many false negatives: agents often wrap their report in an Insight or
+ * preamble block before the actual ``# Title``. Switched to a multi-signal
+ * scoring model: each markdown feature contributes one point, and the
+ * threshold is 2.
+ *
+ * Signals (each worth 1 point):
+ *   • Heading anywhere (``#``..``####`` at line start)
+ *   • Markdown pipe-table (≥ 2 lines with ``| col | col |`` shape)
+ *   • Bullet / numbered list (≥ 3 items)
+ *   • Bold spans (``**…**``, ≥ 2 occurrences)
+ *   • Substantial length (≥ 1000 chars) — long-form bodies are usually
+ *     reports even when the markdown markup is sparse
+ *
+ * Two-point threshold rejects both:
+ *   • Short chat replies that happen to contain one ``#`` heading
+ *   • Long but markup-free conversational answers
+ *
+ * The hard 500-char floor is kept as an early-exit so we don't bother
+ * scanning the text for sub-paragraph bodies that obviously aren't worth
+ * a standalone artifact card.
+ */
+const ARTIFACT_MIN_CHARS = 500;
+const ARTIFACT_SCORE_THRESHOLD = 2;
+function looksLikeMarkdownArtifact(text: string): boolean {
+  if (!text || text.length < ARTIFACT_MIN_CHARS) return false;
+  let score = 0;
+  // Heading (h1..h4) anywhere in the body. ``\s{0,3}`` allows the small
+  // amount of leading whitespace that ATX-style headings tolerate.
+  if (/^\s{0,3}#{1,4}\s+\S/m.test(text)) score++;
+  // Pipe-table: at least 2 lines that look like ``| col | col |``. One
+  // line could be coincidental ASCII art; two strongly imply a table.
+  const tableLines = text.match(/^[^\n|]*\|[^\n|]*\|[^\n]*$/gm);
+  if (tableLines && tableLines.length >= 2) score++;
+  // Bullet or ordered list. 3+ items because a single dash could be a
+  // hyphenated word in a sentence; 3 in a row is unmistakably a list.
+  const listItems = text.match(/^(?:[ \t]*[-*+]\s|\s*\d+\.\s)\S/gm);
+  if (listItems && listItems.length >= 3) score++;
+  // Bold spans. 2+ to avoid catching a single emphatic word in chat.
+  const boldMatches = text.match(/\*\*[^*\n]{2,}?\*\*/g);
+  if (boldMatches && boldMatches.length >= 2) score++;
+  // Length signal: bodies that long are reports even if they happen to be
+  // markup-light (e.g. a Q&A answer with a single inline table).
+  if (text.length >= 1000) score++;
+  return score >= ARTIFACT_SCORE_THRESHOLD;
+}
+
+export interface RunArtifact {
+  /** UiStep id; lets the user jump from Artifacts back to the timeline row. */
+  stepId: string;
+  /** Best-effort title: first ``# `` heading, falling back to step title. */
+  title: string;
+  /** Raw markdown content. */
+  content: string;
+  /** Step kind so the badge can colour it (thinking vs text vs tool_result). */
+  sourceKind: UiStep["kind"];
+  /** Relative seconds since run start, if available. */
+  ts?: number;
+  sizeChars: number;
+}
+
+/** Walk the distilled steps once and pull every markdown-report-like body. */
+export function extractArtifacts(steps: UiStep[]): RunArtifact[] {
+  const out: RunArtifact[] = [];
+  for (const step of steps) {
+    const text = step.rawText;
+    if (!text || !looksLikeMarkdownArtifact(text)) continue;
+    const firstHeading =
+      text.match(/^\s{0,3}#{1,4}\s+(.+)$/m)?.[1]?.trim() ?? step.title;
+    out.push({
+      stepId: step.id,
+      title: firstHeading.slice(0, 120),
+      content: text,
+      sourceKind: step.kind,
+      ts: step.ts,
+      sizeChars: text.length,
+    });
+  }
+  return out;
 }
 
 // Per-run summary as built by ``server/pricing.py:build_run_summary`` and
@@ -84,6 +196,339 @@ export interface RunSummary {
   };
   tools?: { count: number; by_tool: Record<string, number>; errors: number };
   events_count?: number;
+}
+
+/**
+ * Render the body of a step. Auto-detects long-form markdown reports
+ * (those that ``looksLikeMarkdownArtifact`` recognises) and renders them
+ * with ``react-markdown`` so headings, lists, and code blocks are styled
+ * the way the agent intended. Short bodies, chat snippets, and tool output
+ * fall back to a monospace ``<pre>`` so we don't surprise users by
+ * reformatting their plain text.
+ */
+function StepBody({ text }: { text: string }) {
+  const isReport = looksLikeMarkdownArtifact(text);
+  if (!isReport) {
+    return <pre className="whitespace-pre-wrap text-xs">{text}</pre>;
+  }
+  return (
+    <div className="markdown-body text-xs">
+      <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS}>{text}</ReactMarkdown>
+    </div>
+  );
+}
+
+/**
+ * Trigger a browser download of ``content`` as a file named ``filename``.
+ *
+ * We use the Blob + URL.createObjectURL + anchor-click pattern rather than
+ * a server-side download endpoint: the markdown body is already in the
+ * user's browser (we received it via SSE / JSONL replay), so a server
+ * round-trip would only add latency and re-authentication risk. The blob
+ * URL is revoked after the click so the GC can reclaim it.
+ */
+function downloadAsFile(content: string, filename: string, mime = "text/markdown"): void {
+  const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  // setTimeout(0) so the browser has a tick to start the download before
+  // the URL becomes invalid. Revoking synchronously cancels the download
+  // on Firefox <= 128.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/**
+ * Build a filesystem-safe filename for a downloaded step body. The default
+ * filename has to convey three things at once: which run it came from,
+ * which step inside the run, and that it's markdown. ``stepId`` already
+ * encodes both run-step position; we just sanitize it.
+ */
+function safeFilename(prefix: string, raw: string, ext: string): string {
+  const cleaned = raw.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 60).replace(/^-+|-+$/g, "");
+  return `${prefix}-${cleaned || "step"}.${ext}`;
+}
+
+/**
+ * Two-button affordance shown above any step body that has a ``rawText``
+ * payload: copy the body to clipboard, or download it as a ``.md`` file.
+ *
+ * Why both: in our usage the same artifact frequently has two downstream
+ * destinations -- Slack/email (copy), or a local notes folder / Notion
+ * (download). Forcing the user to pick one in a single button hides the
+ * second route, so we expose both. The "Copied!" affordance is local
+ * state with a short timeout because the codebase has no shared toast
+ * system and one would be over-engineering for a single feature.
+ */
+function CopyDownloadButtons({
+  text,
+  filenameStem,
+  className,
+}: {
+  text: string;
+  filenameStem: string;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      // Browsers may reject clipboard in insecure contexts (no https,
+      // no user gesture). Fall back to the download path so the user
+      // still gets the content out of the UI.
+      console.warn("clipboard write rejected, falling back to download", err);
+      downloadAsFile(text, safeFilename("kbagent", filenameStem, "md"));
+    }
+  };
+  return (
+    <div className={`flex items-center gap-1 ${className ?? ""}`}>
+      <button
+        type="button"
+        onClick={onCopy}
+        className="nerd-btn !px-2 !py-0.5 text-[10px] inline-flex items-center gap-1"
+        title="Copy markdown to clipboard"
+      >
+        {copied ? (
+          <>
+            <Check className="w-3 h-3 text-keboola" />
+            <span className="text-keboola">Copied</span>
+          </>
+        ) : (
+          <>
+            <Copy className="w-3 h-3" />
+            <span>Copy</span>
+          </>
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={() => downloadAsFile(text, safeFilename("kbagent", filenameStem, "md"))}
+        className="nerd-btn !px-2 !py-0.5 text-[10px] inline-flex items-center gap-1"
+        title="Download as Markdown file"
+      >
+        <Download className="w-3 h-3" />
+        <span>.md</span>
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Full-screen overlay for reading one artifact at its natural width. The
+ * timeline detail pane is fixed at ~5 of 12 columns which works for chat
+ * snippets but truncates long-form reports (this is exactly why the
+ * Artifacts tab exists). The viewer is opened from an Artifacts card and
+ * closes on Escape / backdrop click. Clipboard + download actions ride
+ * along so the user doesn't have to close the modal first.
+ */
+function MarkdownViewerModal({
+  artifact,
+  onClose,
+  onJumpToStep,
+}: {
+  artifact: RunArtifact;
+  onClose: () => void;
+  onJumpToStep?: (stepId: string) => void;
+}) {
+  useEffect(() => {
+    // Esc handler runs in the CAPTURE phase and calls
+    // ``stopImmediatePropagation`` so the parent ``Drawer`` (which also
+    // listens for Esc on ``window``) does NOT also close itself. Without
+    // this, pressing Esc inside the artifact modal would close both
+    // layers and dump the user back to the agent-task overview instead
+    // of the run detail they opened the artifact from.
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopImmediatePropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handler, { capture: true });
+    return () => window.removeEventListener("keydown", handler, { capture: true });
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] bg-zinc-900/70 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        // ``max-w-[90vw]`` so tables and code blocks have room to breathe
+        // (VSCode preview style). ``max-h-[92vh]`` leaves a sliver of the
+        // backdrop visible so the user always sees there is an outside-the
+        // -modal area to click for dismissal.
+        style={{ maxWidth: "90vw", maxHeight: "92vh" }}
+        className="bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded shadow-2xl w-full flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-4 py-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500">artifact</div>
+            <div className="text-sm font-mono truncate">{artifact.title}</div>
+          </div>
+          <CopyDownloadButtons
+            text={artifact.content}
+            filenameStem={artifact.title}
+            className="shrink-0"
+          />
+          {onJumpToStep ? (
+            <button
+              type="button"
+              onClick={() => {
+                onJumpToStep(artifact.stepId);
+                onClose();
+              }}
+              className="nerd-btn !px-2 !py-0.5 text-[10px] shrink-0"
+              title="Show the underlying step in the timeline"
+            >
+              <ChevronRight className="w-3 h-3 inline mr-0.5" />
+              View step
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onClose}
+            className="nerd-btn !px-2 !py-0.5 text-[10px] shrink-0"
+            title="Close (Esc)"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+        <div className="overflow-auto flex-1 px-8 py-6">
+          {/* ``markdown-body-lg`` upgrades typography to VSCode-preview
+              register (16px body, larger headings, more padding in tables).
+              ``max-w-3xl mx-auto`` constrains line length even though the
+              modal itself is wide: long lines of body text become harder
+              to read past ~80ch / ~720px, so we centre the column the way
+              GitHub renders README files inside a wide repo page. */}
+          <div className="markdown-body markdown-body-lg max-w-3xl mx-auto">
+            <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS}>{artifact.content}</ReactMarkdown>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Grid of artifact cards shown when the user picks the Artifacts tab. Each
+ * card is a quick summary: title, source kind badge, size, timestamp,
+ * preview of the first non-heading paragraph. Clicking the card opens the
+ * full-screen viewer; the per-card Copy/Download buttons let the user
+ * export without opening.
+ */
+function ArtifactsView({
+  artifacts,
+  onJumpToStep,
+}: {
+  artifacts: RunArtifact[];
+  onJumpToStep?: (stepId: string) => void;
+}) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  const openArtifact = artifacts.find((a) => a.stepId === openId) ?? null;
+
+  if (artifacts.length === 0) {
+    return (
+      <div className="border border-zinc-200 rounded bg-white dark:border-zinc-800 dark:bg-zinc-900/30 px-6 py-10 text-center">
+        <FileText className="w-8 h-8 mx-auto text-zinc-400 dark:text-zinc-600 mb-2" />
+        <div className="text-sm text-zinc-600 dark:text-zinc-400">
+          No markdown reports detected in this run.
+        </div>
+        <div className="text-[11px] text-zinc-500 mt-1">
+          Artifacts are step bodies ≥ {ARTIFACT_MIN_CHARS} chars that start with a heading
+          (<code className="font-mono">#</code> or <code className="font-mono">##</code>).
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {artifacts.map((a) => (
+          <ArtifactCard
+            key={a.stepId}
+            artifact={a}
+            onOpen={() => setOpenId(a.stepId)}
+          />
+        ))}
+      </div>
+      {openArtifact ? (
+        <MarkdownViewerModal
+          artifact={openArtifact}
+          onClose={() => setOpenId(null)}
+          onJumpToStep={onJumpToStep}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function ArtifactCard({
+  artifact,
+  onOpen,
+}: {
+  artifact: RunArtifact;
+  onOpen: () => void;
+}) {
+  // First non-heading paragraph (first ~200 chars). Skip leading blanks
+  // and any line starting with ``#`` so the preview is the actual body
+  // text, not a duplicate of the title.
+  const preview =
+    artifact.content
+      .split("\n")
+      .filter((line) => line.trim().length > 0 && !line.trim().startsWith("#"))
+      .join(" ")
+      .slice(0, 200) || "(no preview)";
+
+  return (
+    <div className="border border-zinc-200 rounded bg-white dark:border-zinc-800 dark:bg-zinc-900/30 flex flex-col">
+      <div className="px-3 py-2 border-b border-zinc-200 dark:border-zinc-800 flex items-start gap-2">
+        <FileText className="w-4 h-4 text-keboola shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <button
+            type="button"
+            onClick={onOpen}
+            className="text-sm font-medium text-left hover:text-keboola truncate block w-full"
+            title={artifact.title}
+          >
+            {artifact.title}
+          </button>
+          <div className="text-[10px] text-zinc-500 mt-0.5 flex items-center gap-2">
+            <span className="uppercase tracking-wider">{artifact.sourceKind}</span>
+            <span>·</span>
+            <span className="tabular-nums">{artifact.sizeChars.toLocaleString()} ch</span>
+            {artifact.ts != null ? (
+              <>
+                <span>·</span>
+                <span className="font-mono tabular-nums">+{artifact.ts}s</span>
+              </>
+            ) : null}
+          </div>
+        </div>
+      </div>
+      <div className="px-3 py-2 text-[11px] text-zinc-600 dark:text-zinc-400 line-clamp-3 flex-1">
+        {preview}
+      </div>
+      <div className="px-3 py-2 border-t border-zinc-100 dark:border-zinc-900 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={onOpen}
+          className="nerd-btn !px-2 !py-0.5 text-[10px]"
+        >
+          Open
+        </button>
+        <CopyDownloadButtons text={artifact.content} filenameStem={artifact.title} />
+      </div>
+    </div>
+  );
 }
 
 /** Build a UI-level step list from the raw event stream. */
@@ -166,7 +611,8 @@ function distillSteps(events: AgentEvent[]): UiStep[] {
             subtitle: text.length > 80 ? `${text.length} chars` : undefined,
             eventIndex: idx,
             ts,
-            detail: <pre className="whitespace-pre-wrap text-xs">{text}</pre>,
+            rawText: text,
+            detail: <StepBody text={text} />,
           });
         } else if (block.type === "text") {
           const text = String(block.text ?? "");
@@ -177,7 +623,8 @@ function distillSteps(events: AgentEvent[]): UiStep[] {
             subtitle: text.length > 80 ? `${text.length} chars` : undefined,
             eventIndex: idx,
             ts,
-            detail: <pre className="whitespace-pre-wrap text-xs">{text}</pre>,
+            rawText: text,
+            detail: <StepBody text={text} />,
           });
         } else if (block.type === "tool_use") {
           const name = String(block.name ?? "?");
@@ -229,6 +676,10 @@ function distillSteps(events: AgentEvent[]): UiStep[] {
           const prev = steps[stepIdx];
           prev.status = isError ? "error" : "ok";
           prev.toolResult = { isError, text };
+          // Expose the tool output as ``rawText`` so Copy / Download / the
+          // Artifacts heuristic can reach it. Bash steps that produce long
+          // markdown reports (e.g. ``kbagent`` summaries) are the main case.
+          prev.rawText = text;
           prev.detail = (
             <div className="space-y-3">
               <div>
@@ -320,6 +771,8 @@ export function AgentRunView({
   onCancel,
 }: AgentRunViewProps) {
   const steps = useMemo(() => distillSteps(events), [events]);
+  const artifacts = useMemo(() => extractArtifacts(steps), [steps]);
+  const [view, setView] = useState<"timeline" | "artifacts">("timeline");
   // When live (no summary yet) we synthesize counts from steps so the
   // right pane shows progress instead of zeros until the run finishes.
   const liveSummary = useMemo<RunSummary>(() => {
@@ -371,6 +824,106 @@ export function AgentRunView({
     : steps.find((s) => s.id === selectedId) ?? null;
   const resumeLiveTail = () => setSelectedId(null);
 
+  // Click handler: when the user jumps from Artifacts back to the timeline
+  // we want them to land directly on the step that produced the artifact,
+  // not at "live tail" (which would scroll to the latest event and hide
+  // the artifact body they just clicked).
+  const handleJumpToStep = (stepId: string) => {
+    setSelectedId(stepId);
+    setView("timeline");
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Tab bar: Timeline (3-panel) vs Artifacts (markdown reports). The
+          Artifacts tab is hidden until the run produces at least one
+          report — most short interactive runs have none, so the chrome
+          would just be visual noise. */}
+      {artifacts.length > 0 ? (
+        <div className="flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800">
+          <button
+            type="button"
+            onClick={() => setView("timeline")}
+            className={`px-3 py-1.5 text-xs uppercase tracking-wider border-b-2 -mb-px ${
+              view === "timeline"
+                ? "border-keboola text-keboola"
+                : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+            }`}
+          >
+            Timeline
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("artifacts")}
+            className={`px-3 py-1.5 text-xs uppercase tracking-wider border-b-2 -mb-px inline-flex items-center gap-1.5 ${
+              view === "artifacts"
+                ? "border-keboola text-keboola"
+                : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+            }`}
+          >
+            <FileText className="w-3 h-3" />
+            Artifacts
+            <span className="tabular-nums bg-keboola/10 text-keboola px-1.5 rounded">
+              {artifacts.length}
+            </span>
+          </button>
+        </div>
+      ) : null}
+
+      {view === "artifacts" ? (
+        <ArtifactsView artifacts={artifacts} onJumpToStep={handleJumpToStep} />
+      ) : (
+        <TimelineGrid
+          steps={steps}
+          showStep={showStep}
+          selectedId={selectedId}
+          setSelectedId={setSelectedId}
+          isLiveTail={isLiveTail}
+          newSinceCount={newSinceCount}
+          running={running}
+          elapsed={elapsed}
+          effectiveSummary={effectiveSummary}
+          onCancel={onCancel}
+          resumeLiveTail={resumeLiveTail}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The original three-panel layout (Steps · Detail · Cost/Tools), extracted
+ * so the top-level ``AgentRunView`` can switch between this and the
+ * Artifacts view without doubling the JSX tree.
+ */
+function TimelineGrid({
+  steps,
+  showStep,
+  selectedId,
+  setSelectedId,
+  isLiveTail,
+  newSinceCount,
+  running,
+  elapsed,
+  effectiveSummary,
+  onCancel,
+  resumeLiveTail,
+}: {
+  steps: UiStep[];
+  showStep: UiStep | null;
+  selectedId: string | null;
+  setSelectedId: (id: string) => void;
+  isLiveTail: boolean;
+  newSinceCount: number;
+  running: boolean;
+  elapsed: number;
+  effectiveSummary: RunSummary;
+  onCancel?: () => void;
+  resumeLiveTail: () => void;
+}) {
+  // selectedId is unused here directly (StepsList uses showStepId for
+  // highlight) but kept in the prop list so the parent owns the state.
+  void selectedId;
   return (
     <div className="grid grid-cols-12 gap-3 min-h-[24rem]">
       {/* Steps panel */}
@@ -429,18 +982,30 @@ export function AgentRunView({
 
       {/* Detail panel */}
       <div className="col-span-5 border border-zinc-200 rounded bg-white dark:border-zinc-800 dark:bg-zinc-900/30 flex flex-col">
-        <div className="px-3 py-2 border-b border-zinc-200 dark:border-zinc-800">
-          <div className="text-xs uppercase tracking-wider text-zinc-500">step detail</div>
-          {showStep ? (
-            <div className="text-sm font-mono mt-0.5 truncate">
-              {showStep.title}
-              {showStep.subtitle ? (
-                <span className="text-zinc-500 ml-2">{showStep.subtitle}</span>
-              ) : null}
-            </div>
-          ) : (
-            <div className="text-sm text-zinc-500 mt-0.5">select a step</div>
-          )}
+        <div className="px-3 py-2 border-b border-zinc-200 dark:border-zinc-800 flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs uppercase tracking-wider text-zinc-500">step detail</div>
+            {showStep ? (
+              <div className="text-sm font-mono mt-0.5 truncate">
+                {showStep.title}
+                {showStep.subtitle ? (
+                  <span className="text-zinc-500 ml-2">{showStep.subtitle}</span>
+                ) : null}
+              </div>
+            ) : (
+              <div className="text-sm text-zinc-500 mt-0.5">select a step</div>
+            )}
+          </div>
+          {/* Per-step actions: Copy + Download .md. Hidden when the step has
+              no extractable body (e.g. "Run started" structural rows) so
+              the chrome only appears where it does something useful. */}
+          {showStep?.rawText ? (
+            <CopyDownloadButtons
+              text={showStep.rawText}
+              filenameStem={showStep.title}
+              className="shrink-0"
+            />
+          ) : null}
         </div>
         <div className="overflow-auto flex-1 p-3" style={{ maxHeight: "calc(100vh - 18rem)" }}>
           {showStep?.detail ?? (

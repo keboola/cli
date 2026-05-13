@@ -17,7 +17,14 @@ export function Drawer({
   open,
   title,
   subtitle,
-  width = "max-w-3xl",
+  // Drawer max-width. Accepts EITHER a Tailwind utility (``"max-w-3xl"``)
+  // for backward compatibility with existing pages, OR a raw CSS value
+  // (``"75vw"``, ``"800px"``, ``"50rem"``) which is applied as an inline
+  // style. New callers should prefer the CSS value form: it scales with
+  // the viewport (``vw`` units) and sidesteps a Tailwind JIT quirk where
+  // arbitrary ``max-w-[…]`` values declared as default-parameter literals
+  // can silently be dropped by the content scanner.
+  width = "75vw",
   onClose,
   actions,
   children,
@@ -44,6 +51,13 @@ export function Drawer({
   }, [open, onClose]);
 
   if (!open) return null;
+  // Resolve ``width`` to either a Tailwind class or an inline style. Tailwind
+  // utilities are detected by the ``max-w-`` prefix so legacy callers that
+  // pass ``"max-w-3xl"`` keep working; everything else (``75vw``, ``50rem``,
+  // ``800px``) flows through ``style.maxWidth``.
+  const isTailwindClass = width.startsWith("max-w-");
+  const widthClass = isTailwindClass ? width : "";
+  const widthStyle = isTailwindClass ? undefined : { maxWidth: width };
   // Near-opaque overlay (90% black-ish) — 70% let the page content under the
   // drawer bleed through enough to break modality, especially on the agent-task
   // table where action buttons are right under the click-catch area.
@@ -51,7 +65,8 @@ export function Drawer({
     <div className="fixed inset-0 z-50 flex bg-zinc-950/90 backdrop-blur-sm">
       <div className="flex-1" onClick={onClose} role="presentation" />
       <aside
-        className={`relative w-full ${width} h-full bg-white border-l border-zinc-200 shadow-2xl flex flex-col dark:bg-zinc-950 dark:border-zinc-800`}
+        style={widthStyle}
+        className={`relative w-full ${widthClass} h-full bg-white border-l border-zinc-200 shadow-2xl flex flex-col dark:bg-zinc-950 dark:border-zinc-800`}
       >
         <header className="flex items-start justify-between gap-3 p-4 border-b border-zinc-200 shrink-0 dark:border-zinc-900">
           <div>

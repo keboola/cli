@@ -1247,7 +1247,7 @@ function TaskDetailDrawer({
       subtitle={`${task.action.type} ・ cron: ${task.cron} ・ ${
         task.enabled ? "enabled" : "disabled"
       }`}
-      width={showLive ? "max-w-7xl" : "max-w-4xl"}
+      width={showLive ? "90vw" : "75vw"}
       actions={
         <>
           {liveRunning ? (
