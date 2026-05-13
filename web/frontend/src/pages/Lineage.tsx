@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowLeftRight, FolderOpen, Hammer, Network } from "lucide-react";
 import mermaid from "mermaid";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
@@ -158,21 +158,27 @@ function DeepLineageTab() {
 
   const buildMu = useMutation({
     mutationFn: () => {
-      const out = path || `${buildDir}/lineage.json`;
-      return api.post("/lineage/build", {
-        directory: buildDir,
-        output: out,
-        use_ai: useAi,
-        refresh,
-      });
+      const out = path.trim() || `${buildDir.replace(/\/$/, "")}/lineage.json`;
+      return api.post<Record<string, unknown> & { output_path?: string }>(
+        "/lineage/build",
+        {
+          directory: buildDir,
+          output: out,
+          use_ai: useAi,
+          refresh,
+        },
+      );
     },
-    onSuccess: (data, _vars) => {
+    onSuccess: (data) => {
       setBuildResult(data);
       setError(null);
       localStorage.setItem("kbagent-lineage-build-dir", buildDir);
-      // Auto-load info after a successful build.
-      const out = path || `${buildDir}/lineage.json`;
-      setPath(out);
+      // Server returns the resolved output_path; trust that over what we sent.
+      const resolved =
+        (data.output_path as string | undefined) ??
+        path ??
+        `${buildDir}/lineage.json`;
+      setPath(resolved);
       loadMu.mutate();
     },
     onError: (err) => {
@@ -246,20 +252,31 @@ function DeepLineageTab() {
             <button
               type="button"
               className="nerd-btn hover:text-keboola"
-              disabled={!buildDir || buildMu.isPending}
-              onClick={() => buildMu.mutate()}
+              disabled={!buildDir.trim() || buildMu.isPending}
+              onClick={() => {
+                setError(null);
+                setBuildResult(null);
+                buildMu.mutate();
+              }}
             >
               <Hammer className="w-3 h-3 inline mr-1" />
-              {buildMu.isPending ? "building (this can take minutes)..." : "Build"}
+              {buildMu.isPending ? "building..." : "Build"}
             </button>
           </div>
         </div>
+        {buildMu.isPending ? (
+          <div className="text-xs text-keboola flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-keboola animate-pulse" />
+            sync pull + parse SQL + scan configs ・ this can take minutes for big
+            organizations ・ stay on this page (the request is in-flight)
+          </div>
+        ) : null}
         {buildResult ? (
-          <details>
-            <summary className="text-xs text-zinc-500 cursor-pointer">
-              Build summary
+          <details open>
+            <summary className="text-xs text-keboola cursor-pointer">
+              ✓ Build complete -- summary (click to expand)
             </summary>
-            <JsonView data={buildResult} maxHeight="220px" />
+            <JsonView data={buildResult} maxHeight="240px" />
           </details>
         ) : null}
       </div>
@@ -369,13 +386,18 @@ function Stat({ label, value }: { label: string; value: number }) {
 }
 
 function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
-  const id = useId().replace(/:/g, "");
   const ref = useRef<HTMLDivElement>(null);
+  const renderSeq = useRef(0);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!ref.current) return;
-    const lines = ["graph LR"];
+    let cancelled = false;
+    // Unique id per render so mermaid doesn't choke on duplicate IDs in
+    // dev StrictMode (first effect inserts SVG, second pass would collide).
+    renderSeq.current += 1;
+    const runId = `mmd_${Date.now()}_${renderSeq.current}`;
+
     const slug = (s: string) => s.replace(/[^a-zA-Z0-9]/g, "_");
     const esc = (s: string) =>
       s
@@ -383,6 +405,8 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
         .replace(/"/g, "&quot;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;");
+
+    const lines = ["graph LR"];
     for (const e of edges) {
       const src = e.source_project_alias || `p${e.source_project_id}`;
       const dst = e.target_project_alias || `p${e.target_project_id}`;
@@ -393,19 +417,40 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
       );
     }
     const code = lines.join("\n");
+
     mermaid
-      .render(`graph_${id}`, code)
+      .render(runId, code)
       .then(({ svg }) => {
-        if (ref.current) ref.current.innerHTML = svg;
+        if (cancelled || !ref.current) return;
+        ref.current.innerHTML = svg;
         setError(null);
       })
-      .catch((err) => setError(String(err)));
-  }, [edges, id]);
+      .catch((err) => {
+        if (!cancelled) setError(String(err));
+      });
+
+    // Cleanup leftover off-DOM mermaid temp elements -- mermaid.render
+    // creates a hidden <div id={runId}> sibling for measuring; without
+    // this they accumulate.
+    return () => {
+      cancelled = true;
+      const orphan = document.getElementById(runId);
+      orphan?.remove();
+    };
+  }, [edges]);
+
+  if (edges.length === 0) {
+    return (
+      <div className="nerd-card text-center py-6 text-xs text-zinc-500">
+        No edges to render.
+      </div>
+    );
+  }
 
   return (
     <div className="nerd-card">
       <h3 className="text-keboola font-bold text-sm mb-3">Diagram</h3>
-      {error ? <div className="text-red-400 text-xs">{error}</div> : null}
+      {error ? <div className="text-red-400 text-xs mb-2">{error}</div> : null}
       <div ref={ref} className="overflow-auto" style={{ minHeight: 280 }} />
     </div>
   );

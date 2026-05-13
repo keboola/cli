@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from ..agent_runner import compute_next_run, run_task_once
-from ..agents_store import AgentAction, AgentTask
+from ..agents_store import AgentAction, AgentRun, AgentTask
 from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -121,6 +121,49 @@ def list_runs(task_id: str, request: Request, limit: int = 50) -> dict[str, Any]
     store = _store(request)
     runs = store.list_runs(task_id, limit=limit)
     return {"runs": [r.model_dump(mode="json") for r in runs]}
+
+
+@router.post("/test")
+async def test_action(
+    body: AgentTaskCreate,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Execute an action ad-hoc -- no persistence, no scheduling.
+
+    Used by the React "Run preview" button so users can validate an action
+    before saving the task. The result mirrors what a real run would
+    produce, but nothing is written to ``agents.json`` or run history.
+    """
+    # Build a transient task. Reuse run_task_once so the dispatch logic
+    # (mcp_tool / cli_command / ai_agent) is the same code path that
+    # the scheduler uses -- prevents test-time and live-time divergence.
+    transient = AgentTask(
+        name=body.name or "[preview]",
+        description=body.description,
+        cron=body.cron,
+        enabled=False,
+        action=body.action,
+    )
+    # Use a throwaway in-memory store so run_task_once's persistence side
+    # effects (append_run, upsert_task) write to /dev/null.
+    store = _NullStore()
+    run: AgentRun = await run_task_once(transient, registry, store)
+    return run.model_dump(mode="json")
+
+
+class _NullStore:
+    """Drop-in replacement for AgentStore for one-off /test runs.
+
+    Implements the two methods run_task_once calls -- ``append_run`` and
+    ``upsert_task`` -- as no-ops so neither the run record nor the task's
+    last_run_at update touch disk.
+    """
+
+    def append_run(self, _run: Any) -> None:
+        return None
+
+    def upsert_task(self, task: AgentTask) -> AgentTask:
+        return task
 
 
 @router.get("/cron/preview")

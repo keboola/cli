@@ -234,38 +234,69 @@ function NewTaskDrawer({ onClose }: { onClose: () => void }) {
     retry: false,
   });
 
-  const createMu = useMutation({
-    mutationFn: () => {
-      let actionParams: Record<string, unknown> = {};
-      if (actionType === "mcp_tool") {
-        try {
-          actionParams = {
-            tool,
-            project,
-            input: JSON.parse(toolInput || "{}"),
-          };
-        } catch (e) {
-          throw new Error(`Tool input is not valid JSON: ${(e as Error).message}`);
-        }
-      } else if (actionType === "cli_command") {
-        actionParams = { argv: argv.trim().split(/\s+/) };
-      } else {
-        // ai_agent
-        const extra = aiExtraArgs.trim() ? aiExtraArgs.trim().split(/\s+/) : [];
-        actionParams = {
-          cli: aiCli,
-          prompt: aiPrompt,
-          extra_args: extra,
-        };
+  const [testRun, setTestRun] = useState<AgentRun | null>(null);
+  const [testElapsed, setTestElapsed] = useState(0);
+
+  // Build the action body that both Test and Create use -- single source of
+  // truth so Test really executes the same action that Create would persist.
+  const buildAction = (): { type: ActionType; params: Record<string, unknown> } => {
+    let actionParams: Record<string, unknown> = {};
+    if (actionType === "mcp_tool") {
+      actionParams = {
+        tool,
+        project,
+        input: JSON.parse(toolInput || "{}"),
+      };
+    } else if (actionType === "cli_command") {
+      actionParams = { argv: argv.trim().split(/\s+/) };
+    } else {
+      const extra = aiExtraArgs.trim() ? aiExtraArgs.trim().split(/\s+/) : [];
+      actionParams = { cli: aiCli, prompt: aiPrompt, extra_args: extra };
+    }
+    return { type: actionType, params: actionParams };
+  };
+
+  const testMu = useMutation({
+    mutationFn: async () => {
+      const start = Date.now();
+      // Tick an "elapsed" counter every 500ms so the user sees something
+      // happen instead of staring at a frozen button (AI agent runs can
+      // take 30-120 seconds).
+      const tick = setInterval(
+        () => setTestElapsed(Math.round((Date.now() - start) / 1000)),
+        500,
+      );
+      try {
+        return await api.post<AgentRun>("/agents/test", {
+          name: name || "[preview]",
+          description,
+          cron,
+          enabled: false,
+          action: buildAction(),
+        });
+      } finally {
+        clearInterval(tick);
       }
-      return api.post("/agents", {
+    },
+    onSuccess: (data) => {
+      setTestRun(data);
+      setError(null);
+    },
+    onError: (err) => {
+      setTestRun(null);
+      setError((err as Error).message);
+    },
+  });
+
+  const createMu = useMutation({
+    mutationFn: () =>
+      api.post("/agents", {
         name,
         description,
         cron,
         enabled,
-        action: { type: actionType, params: actionParams },
-      });
-    },
+        action: buildAction(),
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agents"] });
       onClose();
@@ -281,18 +312,35 @@ function NewTaskDrawer({ onClose }: { onClose: () => void }) {
       subtitle="Pick a cron schedule and one of three actions: AI agent (claude/codex/gemini), MCP tool call, or kbagent CLI command."
       width="max-w-3xl"
       actions={
-        <button
-          type="button"
-          className="nerd-btn hover:text-keboola"
-          disabled={!name || createMu.isPending}
-          onClick={() => {
-            setError(null);
-            createMu.mutate();
-          }}
-        >
-          <Bot className="w-3 h-3 inline mr-1" />
-          {createMu.isPending ? "creating..." : "Create"}
-        </button>
+        <>
+          <button
+            type="button"
+            className="nerd-btn hover:text-neon-pink"
+            disabled={testMu.isPending || createMu.isPending}
+            onClick={() => {
+              setError(null);
+              setTestRun(null);
+              setTestElapsed(0);
+              testMu.mutate();
+            }}
+            title="Run this action right now without saving the schedule"
+          >
+            <Play className="w-3 h-3 inline mr-1" />
+            {testMu.isPending ? `running... ${testElapsed}s` : "Test now"}
+          </button>
+          <button
+            type="button"
+            className="nerd-btn hover:text-keboola"
+            disabled={!name || createMu.isPending}
+            onClick={() => {
+              setError(null);
+              createMu.mutate();
+            }}
+          >
+            <Bot className="w-3 h-3 inline mr-1" />
+            {createMu.isPending ? "creating..." : "Create"}
+          </button>
+        </>
       }
     >
       <div className="space-y-4">
@@ -467,6 +515,98 @@ function NewTaskDrawer({ onClose }: { onClose: () => void }) {
           Enable immediately (will start running per cron)
         </label>
         {error ? <ErrorBox message={error} /> : null}
+
+        {testMu.isPending ? (
+          <div className="nerd-card border-neon-pink/40">
+            <div className="text-xs text-neon-pink flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-neon-pink animate-pulse" />
+              Test running ・ {testElapsed}s elapsed ・ AI agents can take 30-120s
+            </div>
+            <div className="text-zinc-500 text-xs mt-1">
+              Sending the action to /agents/test (no persistence). Output appears
+              below when finished.
+            </div>
+          </div>
+        ) : null}
+
+        {testRun ? (
+          <div
+            className={`nerd-card ${
+              testRun.status === "ok"
+                ? "border-keboola/40"
+                : "border-red-700/40"
+            }`}
+          >
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-bold text-keboola">
+                Test result ・ {testRun.status} ・{" "}
+                {testRun.ended_at && testRun.started_at
+                  ? `${Math.round(
+                      (new Date(testRun.ended_at).getTime() -
+                        new Date(testRun.started_at).getTime()) /
+                        1000,
+                    )}s`
+                  : "?s"}
+              </h3>
+              <button
+                type="button"
+                className="nerd-btn text-xs"
+                onClick={() => setTestRun(null)}
+              >
+                clear
+              </button>
+            </div>
+            {testRun.error ? <ErrorBox message={testRun.error} /> : null}
+            {testRun.output && "response" in testRun.output ? (
+              <details open>
+                <summary className="text-xs text-keboola cursor-pointer">
+                  AI response
+                </summary>
+                <pre
+                  className="nerd-code whitespace-pre-wrap"
+                  style={{ maxHeight: "320px" }}
+                >
+                  {String(testRun.output.response ?? "")}
+                </pre>
+              </details>
+            ) : null}
+            {testRun.output && "stdout" in testRun.output ? (
+              <details open>
+                <summary className="text-xs text-keboola cursor-pointer">
+                  stdout (exit code:{" "}
+                  {String(testRun.output.exit_code ?? "?")})
+                </summary>
+                <pre
+                  className="nerd-code whitespace-pre-wrap"
+                  style={{ maxHeight: "240px" }}
+                >
+                  {String(testRun.output.stdout ?? "")}
+                </pre>
+                {testRun.output.stderr ? (
+                  <details>
+                    <summary className="text-xs text-zinc-500 cursor-pointer mt-2">
+                      stderr
+                    </summary>
+                    <pre
+                      className="nerd-code whitespace-pre-wrap"
+                      style={{ maxHeight: "160px" }}
+                    >
+                      {String(testRun.output.stderr ?? "")}
+                    </pre>
+                  </details>
+                ) : null}
+              </details>
+            ) : null}
+            {testRun.output && "results" in testRun.output ? (
+              <details open>
+                <summary className="text-xs text-keboola cursor-pointer">
+                  MCP results
+                </summary>
+                <JsonView data={testRun.output} maxHeight="320px" />
+              </details>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </Drawer>
   );

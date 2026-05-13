@@ -41,11 +41,22 @@ def edges(
 
 @router.post("/build")
 def build(body: LineageBuild, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
-    """Build deep column-level lineage and write JSON cache to ``output``."""
+    """Build deep column-level lineage and write JSON cache to ``output``.
+
+    Auto-creates the working directory if missing -- it's empty before the
+    first ``sync pull`` anyway, so 404'ing on absence was just user-hostile.
+    """
     directory = Path(body.directory).resolve()
     output = Path(body.output).resolve()
-    if not directory.is_dir():
-        raise HTTPException(status_code=400, detail=f"Directory '{body.directory}' not found.")
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot create working directory '{body.directory}': {exc}",
+        ) from exc
+    output.parent.mkdir(parents=True, exist_ok=True)
+
     if body.refresh:
         registry.sync.pull_all(base_dir=directory)
     result = registry.deep_lineage.build_lineage(directory, generate_ai_tasks=body.use_ai)
@@ -54,7 +65,9 @@ def build(body: LineageBuild, registry: ServiceRegistry = Depends(get_registry))
             json.dump(result, fh, indent=2)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Cannot write '{body.output}': {exc}") from exc
-    return result
+    # Tag the result with the resolved output path so the React UI can
+    # auto-load it without re-typing.
+    return {**result, "output_path": str(output)}
 
 
 @router.post("/show")
