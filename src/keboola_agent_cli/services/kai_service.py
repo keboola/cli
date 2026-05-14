@@ -71,7 +71,9 @@ class KaiService(BaseService):
             raise KeboolaApiError(
                 message=(
                     f"Kai is not enabled for project '{alias}'. "
-                    "Enable the 'AI Agent Chat' feature in project settings."
+                    "Enable the 'AI Agent Chat' feature in project settings and use "
+                    "the project's master Storage API token (the auto-generated "
+                    "'owner' token, not a custom one) — custom tokens cannot access Kai."
                 ),
                 status_code=0,
                 error_code=ErrorCode.KAI_NOT_ENABLED,
@@ -197,6 +199,127 @@ class KaiService(BaseService):
         except KaiError as exc:
             raise KeboolaApiError(
                 message=f"Kai chat failed: {exc.message}",
+                status_code=0,
+                error_code=ErrorCode.KAI_ERROR,
+            ) from exc
+
+    def preflight(self, alias: str) -> dict[str, Any]:
+        """Inspect the configured token for Kai readiness without raising.
+
+        Unlike ``ping``/``ask``/``chat`` which call ``_check_kai_enabled`` and
+        raise ``KAI_NOT_ENABLED`` when the agent-chat feature flag is missing,
+        this method returns a structured payload describing token state so the
+        UI can render a single, informative warning instead of an error
+        cascade. Detects both required conditions:
+
+        - ``isMasterToken == True`` on /v2/storage/tokens/verify (the
+          auto-generated 'owner' token; custom tokens cannot access Kai)
+        - ``agent-chat`` in ``owner.features``
+
+        Returns:
+            Dict with keys: ``project_alias``, ``ok`` (bool, both conditions
+            true), ``is_master_token``, ``has_agent_chat_feature``,
+            ``token_description``, ``project_id``, ``project_name``, and
+            ``error`` (None on success, string describing the failure).
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        result: dict[str, Any] = {
+            "project_alias": alias,
+            "ok": False,
+            "is_master_token": False,
+            "has_agent_chat_feature": False,
+            "token_description": None,
+            "project_id": None,
+            "project_name": None,
+            "error": None,
+        }
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            raw = client.get_project_info()
+        except KeboolaApiError as exc:
+            result["error"] = exc.message
+            return result
+        finally:
+            client.close()
+
+        owner = raw.get("owner", {}) or {}
+        features = owner.get("features", []) or []
+        result["is_master_token"] = bool(raw.get("isMasterToken", False))
+        result["has_agent_chat_feature"] = KAI_FEATURE_FLAG in features
+        result["token_description"] = raw.get("description")
+        result["project_id"] = owner.get("id")
+        result["project_name"] = owner.get("name")
+        result["ok"] = result["is_master_token"] and result["has_agent_chat_feature"]
+        if not result["ok"]:
+            reasons: list[str] = []
+            if not result["is_master_token"]:
+                reasons.append("the configured token is not the project's master ('owner') token")
+            if not result["has_agent_chat_feature"]:
+                reasons.append("the project lacks the 'AI Agent Chat' feature flag")
+            result["error"] = "; ".join(reasons)
+        return result
+
+    def get_chat_detail(self, alias: str, chat_id: str) -> dict[str, Any]:
+        """Fetch full message history for a single chat.
+
+        Args:
+            alias: Project alias.
+            chat_id: Kai chat ID (UUID).
+
+        Returns:
+            Dict with chat_id, title, created_at and a flat list of messages.
+            Each message is ``{"role": str, "content": str}`` where ``content``
+            is the concatenated text of all ``text`` parts (tool calls and
+            other non-text parts are skipped — they are an implementation
+            detail of Kai's streaming protocol, not user-facing content).
+        """
+        self._check_kai_enabled(alias)
+
+        async def _detail() -> dict[str, Any]:
+            client = await self._create_kai_client(alias)
+            async with client:
+                chat_detail = await client.get_chat(chat_id)
+
+            messages: list[dict[str, Any]] = []
+            for msg in chat_detail.messages:
+                parts = msg.parts or []
+                text_segments = [
+                    p.get("text", "")
+                    for p in parts
+                    if isinstance(p, dict) and p.get("type") == "text"
+                ]
+                content = "".join(text_segments)
+                if not content and msg.role == "user":
+                    # User messages occasionally arrive with text wrapped in a
+                    # different shape (legacy chats). Surface the raw parts
+                    # JSON dump as a fallback so the user at least sees
+                    # something — better than a silent empty bubble.
+                    continue
+                messages.append(
+                    {
+                        "id": msg.id,
+                        "role": msg.role,
+                        "content": content,
+                        "created_at": msg.created_at.isoformat() if msg.created_at else None,
+                    }
+                )
+
+            return {
+                "project_alias": alias,
+                "chat_id": chat_detail.id,
+                "title": chat_detail.title,
+                "created_at": chat_detail.created_at.isoformat()
+                if chat_detail.created_at
+                else None,
+                "messages": messages,
+            }
+
+        try:
+            return asyncio.run(_detail())
+        except KaiError as exc:
+            raise KeboolaApiError(
+                message=f"Kai chat detail failed: {exc.message}",
                 status_code=0,
                 error_code=ErrorCode.KAI_ERROR,
             ) from exc

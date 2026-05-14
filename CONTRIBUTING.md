@@ -332,6 +332,7 @@ When adding a new command (e.g., `kbagent storage create-foo`), you must update 
   - [ ] **Hint definition** in `hints/definitions/` -- register a `CommandHint` with `ClientCall` + `ServiceCall` (see existing files for pattern)
   - [ ] **Hint short-circuit** in the command function -- add `if should_hint(ctx): emit_hint(...)` **before** the service call
   - [ ] **Verify** both modes produce valid Python: `kbagent --hint client <command> ...` and `kbagent --hint service <command> ...`
+  - [ ] **Exception -- infrastructure-level commands.** `--hint` only makes sense for commands that wrap a Keboola API client (Storage / Queue / Manage / AI Service / MCP). Commands that exist purely to manage kbagent itself, or to forward HTTP to another kbagent instance, are **deliberately excluded**: `doctor`, `context`, `init`, `serve`, `version`, `update`, `changelog`, `permissions`, and `http` (the four self-call verbs `http get/post/patch/delete` pass straight through `HttpForwarderService` to a running `kbagent serve` -- there is no Keboola client to mimic, and an `httpx.Client` recipe is already the canonical generic form). If you are adding a *new* command in this infrastructure category, skip the hint definition and note the exception in the PR description so reviewers don't file a BLOCKING finding against this rule.
 - [ ] **Permission registration** in `permissions.py` (`OPERATION_REGISTRY` dict)
 - [ ] **Service wiring** in `cli.py` if adding a new service class
 

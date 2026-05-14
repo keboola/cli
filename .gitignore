@@ -53,3 +53,26 @@ docs/AGENT-REPORTS/
 Thumbs.db
 .kbagent/
 tmp/
+
+# web/ Node + React build artifacts
+web/backend/node_modules/
+web/backend/dist/
+web/frontend/node_modules/
+web/frontend/dist/
+web/**/.vite/
+web/**/.cache/
+web/**/npm-debug.log*
+web/frontend/tsconfig.tsbuildinfo
+
+# Hatch build hook copies the built SPA here right before wheel / sdist
+# packaging so the installed package can serve `kbagent serve --ui`
+# without needing the source `web/` tree. Generated -- never checked in.
+src/keboola_agent_cli/_ui_dist/
+
+# Lineage caches produced by `kbagent lineage build --output ...`. They
+# embed live Keboola project aliases, FQN table IDs, and SQL bodies, so
+# committing them would leak per-project metadata into the public repo.
+# The default output filename + the conventional `.lineage.json` suffix
+# are both ignored.
+lineage.json
+*.lineage.json

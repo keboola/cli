@@ -17,6 +17,7 @@ class ErrorCode(StrEnum):
     ACCESS_DENIED = "ACCESS_DENIED"
     PERMISSION_DENIED = "PERMISSION_DENIED"
     MISSING_MASTER_TOKEN = "MISSING_MASTER_TOKEN"
+    UNAUTHORIZED = "UNAUTHORIZED"  # Bearer-auth rejection by `kbagent serve` (0.40.0+)
 
     # Network / transport
     TIMEOUT = "TIMEOUT"
@@ -33,6 +34,9 @@ class ErrorCode(StrEnum):
     USAGE_ERROR = "USAGE_ERROR"
     MISSING_PARAMETER = "MISSING_PARAMETER"
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
+    # `kbagent serve` HTTP envelope (0.40.0+)
+    HTTP_ERROR = "HTTP_ERROR"  # Generic HTTP-layer error (Starlette HTTPException passthrough)
+    INTERNAL_ERROR = "INTERNAL_ERROR"  # Uncaught exception inside a route handler
 
     # Configuration
     CONFIG_ERROR = "CONFIG_ERROR"

@@ -756,6 +756,23 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     --input accepts: inline JSON, @file.json (from file), or - (from stdin).
     Already-encrypted values (KBC:: prefix) pass through unchanged.
 
+### Self-call HTTP (inside `kbagent serve` subprocesses)
+
+  kbagent http get PATH [--timeout SECONDS]
+  kbagent http post PATH [--body JSON|@file|-] [--timeout SECONDS]
+  kbagent http patch PATH [--body JSON|@file|-] [--timeout SECONDS]
+  kbagent http delete PATH [--timeout SECONDS]
+    Raw HTTP client against the running `kbagent serve`. Reads KBAGENT_SERVE_URL +
+    KBAGENT_SERVE_TOKEN env vars (auto-injected into AI-agent / cli_command
+    subprocesses by the scheduler). Example:
+      kbagent http get /openapi.json     # browse server's OpenAPI schema
+      kbagent http get /projects         # list projects via HTTP
+      kbagent http post /agents/test --body @task.json
+    Prefer this over forking `kbagent` CLI inside scheduled-agent tasks --
+    `kbagent http` calls the serve directly so you always see the same config
+    the operator configured (not the global ~/.config one). Outside a serve
+    subprocess context the command refuses to run.
+
 ### MCP Tools (Multi-Project)
 
   kbagent tool list [--project NAME] [--branch ID]
@@ -768,9 +785,26 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
 ### Kai -- Keboola AI Assistant (BETA)
 
+  Requires the project to be added with its MASTER Storage API token (the
+  auto-generated 'owner' token, not a custom one) and the 'AI Agent Chat'
+  feature flag enabled on the project. Custom Storage API tokens cannot
+  access Kai -- all `kbagent kai *` calls will fail with KAI_NOT_ENABLED.
+
   kbagent kai ping [--project NAME]
     Check Kai server health and MCP connection status.
-    Fails with KAI_NOT_ENABLED if the project lacks the 'agent-chat' feature.
+    Fails with KAI_NOT_ENABLED if the project lacks the 'agent-chat' feature
+    or was added with a non-master token.
+
+  kbagent kai preflight [--project NAME]
+    Inspect the configured token's Kai readiness WITHOUT raising. Returns
+    {{ok, is_master_token, has_agent_chat_feature, token_description, error}}.
+    Use this when you need to render a warning instead of failing — UIs and
+    automation pre-flight checks should use this instead of `ping`.
+
+  kbagent kai chat-detail --chat-id ID [--project NAME]
+    Fetch the full message history of a single Kai chat. Returns a flat list
+    of {{role, content, created_at}} records. Use to restore / continue a
+    conversation with `kai chat --chat-id ID` or to export a transcript.
 
   kbagent kai ask --message "question" [--project NAME]
     One-shot question to Kai. Collects full response. Use --json for structured output.
@@ -791,6 +825,23 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   kbagent context
     Show this reference text.
+
+  kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload]
+                [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]
+    Launch the FastAPI HTTP server backing the web UI. Two modes:
+
+    - `--ui` (single-process, recommended): bundles the built React SPA from
+      `--ui-dist PATH` (default: shipped `web/frontend/dist`) and mounts it at
+      `/`. The bearer token is injected via an HttpOnly `kbagent_session`
+      cookie on the SPA bootstrap, so the browser is already authenticated
+      and no token leaves the terminal. EventSource SSE connections use the
+      same cookie; nothing leaks into URLs or proxy logs.
+    - No `--ui`: API-only mode; the SPA must be served separately (the
+      legacy three-process dev setup with web/backend + web/frontend).
+
+    Prints the bearer token to stdout on startup (use it for `kbagent http`
+    subprocesses). Requires the optional 'server' extra:
+    `uv pip install -e ".[server]"`.
 
   kbagent doctor [--fix]
     Health checks. --fix auto-installs MCP server binary.

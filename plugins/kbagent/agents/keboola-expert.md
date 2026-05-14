@@ -82,6 +82,14 @@ a critical failure.
    `data-app *` JSON output uses key `app_id` (was bare `id`) on 0.33.0+
    -- pipe with `jq -r '.apps[].app_id'`, not `'.id'`,
    `config new --push` (one-shot remote create) needs 0.33.0+,
+   `kbagent http get/post/patch/delete <PATH>` (self-call against the
+   running serve from a scheduled-agent subprocess; reads
+   `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` env vars) needs 0.40.0+,
+   `kbagent serve --ui` (mounts the React SPA at `/`, single-process
+   browser dashboard with auto-injected token) needs 0.40.0+,
+   AI-agent run timeline persistence (cost / token / per-tool summary
+   on every persisted `AgentRun` plus `GET /agents/{id}/runs/{run_id}/events`
+   for replay) needs 0.40.0+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
@@ -146,6 +154,9 @@ a critical failure.
 | Remove a secret from a data app | `kbagent data-app secrets-remove --project P --app-id N --key '#KEY' --yes` (0.29.0+) -- idempotent; missing keys exit 0 with `removed: 0` | `tool call update_config` with the secrets sub-dict deleted -- ONLY for batch removes that need a custom change description | `kbagent config update --set 'parameters.dataApp.secrets={}'` -- replaces the whole sub-dict, dropping every secret instead of just the named ones |
 | Pre-flight a data-app repo before create | `kbagent data-app validate-repo --git-repo URL --type python-js [--git-pat-env VAR]` (0.29.0+) -- BLOCKING / WARN / OK with help-doc citations; ≤5 GitHub API calls regardless of repo size | git-clone the repo locally and inspect by hand | `data-app create --dry-run` (only shows the request bodies; does not validate repo structure) |
 | Rename a project alias | `kbagent project edit --project OLD --new-alias NEW [--dry-run]` (0.31.0+) -- cascades through `config.json` (`projects` key + `default_project`) and the nested-sync directory `<cwd>/<old-alias>/`. Combined with `--url`/`--token` in one call, those mutations target the new alias post-rename. `--dry-run` previews collision detection, planned disk-rename method, and the lineage-cache warning without mutating state. **Lineage cache (if any) is NOT auto-updated**: rebuild via `kbagent lineage build` after the rename | `kbagent project remove` + `kbagent project add` (re-enters the token; loses any nested sync workspace) | hand-editing `~/.config/keboola-agent-cli/config.json` (no validation, easy to miss `default_project` cascade) |
+| Call the running `kbagent serve` from a scheduled-agent subprocess | `kbagent http get/post/patch/delete <PATH>` (0.40.0+) -- uses `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` env vars auto-injected by the scheduler. `kbagent http get /openapi.json` to discover endpoints. Treats the live serve as source-of-truth (no stale local config) | forking `kbagent <command>` (also fine -- `KBAGENT_CONFIG_DIR` is propagated so the spawned CLI sees the SAME config the serve uses; no more "I'm in the wrong directory" surprises) | `curl $KBAGENT_SERVE_URL/...` by hand (works, but `kbagent http` adds auth header automatically, structured error mapping, and JSON-mode formatting) |
+| Launch the web UI for an end-user (browser dashboard, no Node BFF) | `kbagent serve --ui [--port PORT] [--ui-dist PATH]` (0.40.0+) -- single-process FastAPI mounts the bundled React SPA at `/`, sets an HttpOnly `kbagent_session` cookie on `GET /` so the browser is auto-authenticated. EventSource SSE works via the same cookie -- no token in URL, JS heap, or access log. Requires the bundled wheel (Node 20+ on the install host) OR `make web-build` from a checkout. CORS origins customisable via `--cors-origin` | `kbagent serve` (plain API) + Vite dev server + Node BFF -- the legacy three-process flow with hot reload, see `web/README.md` "Dev mode" section | inventing a `--token-in-url` flag; running uvicorn directly against `web.frontend.dist` -- the path-rewrite middleware + cookie bootstrap only fire from `kbagent serve --ui` |
+| Schedule / manage Agent Tasks (cron, manual, chained) inside `kbagent serve` | `kbagent http <verb> /agents...` (0.40.0+) -- list `GET /agents`, create `POST /agents`, update `PATCH /agents/{id}`, run-on-demand `POST /agents/{id}/run`, run history `GET /agents/{id}/runs`, replay events `GET /agents/{id}/runs/{run_id}/events`. Three action flavours: `mcp_tool` / `cli_command` / `ai_agent`. **See [agent-tasks-workflow](../skills/kbagent/references/agent-tasks-workflow.md) for full payload schemas and chained-trigger setup** | Web UI sidebar "Agent Tasks" -- preferred for human authoring; UI calls the same REST endpoints | hand-editing `~/.config/keboola-agent-cli/agents.json` (no schema validation, no scheduler reload, easy to break the cron loop) |
 
 If the table does not cover the user's task, **ask clarifying
 questions** instead of guessing. Returning a targeted question is a

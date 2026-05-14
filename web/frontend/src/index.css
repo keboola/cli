@@ -1,0 +1,193 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Theme tokens
+ * ============
+ * Color-scheme on :root tells the browser which form/scrollbar widgets to
+ * render. The ``dark`` class on <html> is what tailwind toggles -- never edit
+ * :root colors directly, edit utility variants ``dark:``.
+ *
+ * body background uses the radial gradient only in dark mode (depth + glow);
+ * light mode wants a flat surface so cards and dividers stay legible.
+ */
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+  :root.dark {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-zinc-50 text-zinc-900 dark:text-zinc-100;
+  }
+  html.dark body {
+    background: radial-gradient(at 0% 0%, #0a0a14 0%, #050508 100%);
+  }
+
+  /*
+   * Default heading colors. Most page-level <h1>/<h2> in the codebase rely on
+   * tailwind utilities passed at the call site; setting a sane default here
+   * means *new* pages and any heading whose author forgot ``dark:`` get
+   * legible defaults in both modes. Cards/sections that want a different
+   * tone (e.g. ``text-keboola`` for accent headers) override these utilities.
+   */
+  h1, h2, h3 {
+    @apply text-zinc-900 dark:text-zinc-100;
+  }
+}
+
+@layer components {
+  .nerd-card {
+    @apply rounded-md border border-zinc-200 bg-white p-4
+      dark:border-zinc-800 dark:bg-zinc-900/40 dark:backdrop-blur;
+  }
+  .nerd-btn {
+    @apply px-3 py-1.5 rounded border border-zinc-300 text-sm
+      hover:border-keboola hover:text-keboola transition-colors
+      dark:border-zinc-700;
+  }
+  .nerd-input {
+    @apply px-3 py-1.5 rounded border border-zinc-300 bg-white text-sm
+      focus:outline-none focus:border-keboola
+      dark:border-zinc-800 dark:bg-zinc-950;
+  }
+  .nerd-code {
+    @apply font-mono text-xs text-zinc-700 bg-zinc-100 border border-zinc-200 rounded p-3 overflow-auto
+      dark:text-zinc-300 dark:bg-zinc-950 dark:border-zinc-800;
+  }
+  .nerd-pill {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs
+      border border-zinc-300 text-zinc-600
+      dark:border-zinc-700 dark:text-zinc-400;
+  }
+  .nerd-pill-green {
+    @apply nerd-pill border-keboola/40 text-keboola dark:border-keboola/40 dark:text-keboola;
+  }
+  .nerd-pill-amber {
+    @apply nerd-pill border-neon-amber/50 text-amber-700
+      dark:border-neon-amber/40 dark:text-neon-amber;
+  }
+  .nerd-pill-red {
+    @apply nerd-pill border-red-300 text-red-700 dark:border-red-700/40 dark:text-red-400;
+  }
+
+  /*
+   * Styles for rendered markdown bodies (react-markdown). Used in:
+   *   - StepBody (inline auto-detected long-form reports, compact size)
+   *   - MarkdownViewerModal (Artifacts tab full-screen viewer, large size)
+   *
+   * IMPORTANT: ``<body>`` has ``class="font-mono"`` (deliberate
+   * "nerd UI / terminal" aesthetic for the rest of the app), so without
+   * the ``font-family`` override below every paragraph in a report would
+   * inherit JetBrains Mono and look like a terminal log. Reports want to
+   * read like a GitHub README or a VSCode preview — sans-serif body,
+   * monospace only for ``code`` / ``pre``.
+   *
+   * Tailwind's @tailwindcss/typography would give us "prose" classes that
+   * cover this case, but that's an extra dev-dependency for one tab's
+   * worth of styling. The rules below stay scoped to ``.markdown-body``
+   * so they cannot bleed into the rest of the UI.
+   *
+   * Sizing comes in two flavours: the base ``.markdown-body`` is compact
+   * (14px body, used inline in the timeline detail pane), and the
+   * ``.markdown-body-lg`` modifier is the VSCode-like reader for the
+   * artifact viewer modal (16px body, larger headings, generous spacing).
+   */
+  .markdown-body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    color: theme("colors.zinc.800");
+  }
+  .dark .markdown-body { color: theme("colors.zinc.200"); }
+
+  .markdown-body h1 {
+    @apply font-bold mt-5 mb-3 pb-2 border-b border-zinc-200 text-zinc-900
+           dark:border-zinc-800 dark:text-zinc-50;
+    font-size: 1.6em;
+    line-height: 1.25;
+  }
+  .markdown-body h2 {
+    @apply font-bold mt-5 mb-2.5 pb-1.5 border-b border-zinc-100 text-zinc-900
+           dark:border-zinc-900 dark:text-zinc-50;
+    font-size: 1.35em;
+    line-height: 1.3;
+  }
+  .markdown-body h3 {
+    @apply font-semibold mt-4 mb-2 text-zinc-900 dark:text-zinc-100;
+    font-size: 1.15em;
+  }
+  .markdown-body h4 {
+    @apply font-semibold mt-3 mb-1.5 text-zinc-700 dark:text-zinc-300;
+    font-size: 1em;
+  }
+  .markdown-body p { @apply my-2.5; }
+  .markdown-body ul { @apply list-disc list-outside pl-6 my-2.5 space-y-1; }
+  .markdown-body ol { @apply list-decimal list-outside pl-6 my-2.5 space-y-1; }
+  .markdown-body li { line-height: 1.6; }
+  .markdown-body li > p { @apply my-1; }
+  .markdown-body strong { @apply font-semibold text-zinc-900 dark:text-zinc-50; }
+  .markdown-body em { @apply italic; }
+  .markdown-body code {
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    @apply text-[0.88em] px-1.5 py-0.5 rounded
+           bg-zinc-100 text-zinc-800 border border-zinc-200
+           dark:bg-zinc-900 dark:text-zinc-200 dark:border-zinc-800;
+  }
+  .markdown-body pre {
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    @apply text-[0.88em] leading-snug p-3 my-3 rounded
+           bg-zinc-50 border border-zinc-200 overflow-auto
+           dark:bg-zinc-950 dark:border-zinc-800;
+  }
+  .markdown-body pre code {
+    @apply bg-transparent border-0 p-0 text-zinc-700 dark:text-zinc-300;
+    font-size: inherit;
+  }
+  .markdown-body blockquote {
+    @apply pl-4 border-l-4 border-keboola/40 italic text-zinc-600 dark:text-zinc-400 my-3;
+  }
+  .markdown-body a {
+    @apply text-keboola underline underline-offset-2 hover:opacity-80;
+  }
+  .markdown-body table {
+    @apply w-full border-collapse my-3;
+    font-size: 0.95em;
+  }
+  .markdown-body th, .markdown-body td {
+    @apply border border-zinc-200 dark:border-zinc-800 px-3 py-1.5 text-left align-top;
+  }
+  .markdown-body th {
+    @apply bg-zinc-50 dark:bg-zinc-900/50 font-semibold;
+  }
+  .markdown-body tbody tr:nth-child(even) {
+    @apply bg-zinc-50/40 dark:bg-zinc-900/30;
+  }
+  .markdown-body hr {
+    @apply my-4 border-t border-zinc-200 dark:border-zinc-800;
+  }
+  .markdown-body img {
+    @apply max-w-full rounded;
+  }
+
+  /*
+   * Large variant for the artifact viewer modal: bigger base font, more
+   * generous spacing — VSCode markdown preview's visual register, where
+   * the report is the only thing on screen so it can afford to breathe.
+   */
+  .markdown-body-lg {
+    font-size: 16px;
+    line-height: 1.7;
+  }
+  .markdown-body-lg h1 { font-size: 2em; @apply mt-6 mb-4 pb-2.5; }
+  .markdown-body-lg h2 { font-size: 1.55em; @apply mt-6 mb-3 pb-2; }
+  .markdown-body-lg h3 { font-size: 1.25em; @apply mt-5 mb-2.5; }
+  .markdown-body-lg h4 { font-size: 1.05em; @apply mt-4 mb-2; }
+  .markdown-body-lg p { @apply my-3.5; }
+  .markdown-body-lg ul, .markdown-body-lg ol { @apply my-3.5 space-y-1.5; }
+  .markdown-body-lg table { font-size: 0.95em; }
+  .markdown-body-lg th, .markdown-body-lg td { @apply px-4 py-2; }
+}

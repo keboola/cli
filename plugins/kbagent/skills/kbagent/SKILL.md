@@ -85,6 +85,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 |------|---------|
 | Update kbagent + keboola-mcp-server to the latest versions | `kbagent update` |
 | Show recent changelog (what changed in each version) | `kbagent changelog` |
+| Launch the kbagent HTTP API server | `kbagent serve` |
 | Search for items (tables, buckets, configs, flows, …) by name or content | `kbagent search <QUERY>` |
 | List all operations with their risk category and current allowed/denied status | `kbagent permissions list` |
 | Show the current active permission policy | `kbagent permissions show` |
@@ -186,6 +187,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Check Kai server health and MCP connection status | `kbagent kai ping` |
 | Ask Kai a one-shot question and get the full response | `kbagent kai ask --message MESSAGE` |
 | Send a message to Kai in a chat session | `kbagent kai chat --message MESSAGE` |
+| Check whether the configured token can use Kai (master token + AI Agent Chat) | `kbagent kai preflight` |
+| Fetch the full message history of a single Kai chat | `kbagent kai chat-detail --chat-id CHAT-ID` |
 | List recent Kai chat sessions | `kbagent kai history` |
 | List all flows (keboola.orchestrator + keboola.flow) across projects | `kbagent flow list` |
 | Show detailed flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |
@@ -228,6 +231,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Remove the branch mapping for the current git branch | `kbagent sync branch-unlink` |
 | Show the branch mapping status for the current git branch | `kbagent sync branch-status` |
 | Encrypt #-prefixed secret values for a Keboola component | `kbagent encrypt values --project PROJECT --component-id COMPONENT-ID --input INPUT-DATA` |
+| GET an endpoint on the running kbagent serve | `kbagent http get <PATH>` |
+| POST to an endpoint on the running kbagent serve | `kbagent http post <PATH>` |
+| PATCH an endpoint on the running kbagent serve | `kbagent http patch <PATH>` |
+| DELETE an endpoint on the running kbagent serve | `kbagent http delete <PATH>` |
 <!-- END AUTO-GENERATED COMMANDS -->
 
 ### Sync pull notable flags
@@ -268,6 +275,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Creating new configurations | [scaffold-workflow](references/scaffold-workflow.md) |
 | MCP tools (multi-project read/write) | [mcp-workflow](references/mcp-workflow.md) |
 | Workspace SQL debugging | [workspace-workflow](references/workspace-workflow.md) |
+| **Agent Tasks** (schedule AI agents inside `kbagent serve` -- cron / manual / chained; mcp_tool / cli_command / ai_agent action flavours) | [agent-tasks-workflow](references/agent-tasks-workflow.md) |
 | **Data apps** (create / deploy / start / stop / password / delete; the §9 redeploy contract) | [data-app-workflow](references/data-app-workflow.md) |
 | Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
 | **Storage column types** (native types, NOT NULL, DEFAULT, branch materialize) | [storage-types-workflow](references/storage-types-workflow.md) |

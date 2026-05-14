@@ -15,6 +15,7 @@ from .commands.data_app import data_app_app
 from .commands.doctor import doctor_command
 from .commands.encrypt import encrypt_app
 from .commands.flow import flow_app
+from .commands.http_client import http_app
 from .commands.init import init_command
 from .commands.job import job_app
 from .commands.kai import kai_app
@@ -25,6 +26,7 @@ from .commands.project import project_app
 from .commands.repl import repl_command
 from .commands.schedule import schedule_app
 from .commands.search import search_command
+from .commands.serve import serve_command
 from .commands.sharing import sharing_app
 from .commands.storage import storage_app
 from .commands.sync import sync_app
@@ -45,6 +47,7 @@ from .services.deep_lineage_service import DeepLineageService
 from .services.doctor_service import DoctorService
 from .services.encrypt_service import EncryptService
 from .services.flow_service import FlowService
+from .services.http_forwarder_service import HttpForwarderService
 from .services.job_service import JobService
 from .services.kai_service import KaiService
 from .services.lineage_service import LineageService
@@ -77,6 +80,7 @@ app.command("update", rich_help_panel=_SETUP)(update_command)
 app.command("changelog", rich_help_panel=_SETUP)(changelog_command)
 app.command("context", rich_help_panel=_SETUP)(context_command)
 app.command("repl", rich_help_panel=_SETUP)(repl_command)
+app.command("serve", rich_help_panel=_SETUP)(serve_command)
 app.add_typer(permissions_app, name="permissions", rich_help_panel=_SETUP)
 
 # -- Project Management --
@@ -113,6 +117,7 @@ app.add_typer(workspace_app, name="workspace", rich_help_panel=_DEV)
 app.add_typer(tool_app, name="tool", rich_help_panel=_DEV)
 app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
 app.add_typer(encrypt_app, name="encrypt", rich_help_panel=_DEV)
+app.add_typer(http_app, name="http", rich_help_panel=_DEV)
 
 
 def apply_firewall_flags(
@@ -329,6 +334,7 @@ def main(
     kai_service = KaiService(config_store=config_store)
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
     version_service = VersionService()
+    http_forwarder_service = HttpForwarderService()
 
     try:
         config = config_store.load()
@@ -386,6 +392,7 @@ def main(
     ctx.obj["kai_service"] = kai_service
     ctx.obj["doctor_service"] = doctor_service
     ctx.obj["version_service"] = version_service
+    ctx.obj["http_forwarder_service"] = http_forwarder_service
 
     # Warn if empty local config shadows global with projects (#104)
     if source == "local" and not json_output and ctx.invoked_subcommand != "init":
@@ -410,7 +417,16 @@ def main(
             pass  # Don't let warning check crash the CLI
 
     # Enforce permissions for top-level commands (sub-app commands use callbacks)
-    _top_level_commands = {"init", "doctor", "version", "update", "changelog", "context", "repl"}
+    _top_level_commands = {
+        "init",
+        "doctor",
+        "version",
+        "update",
+        "changelog",
+        "context",
+        "repl",
+        "serve",
+    }
     _is_help = "--help" in sys.argv or "-h" in sys.argv
 
     # Hint mode on top-level commands — these are all local, no hints available

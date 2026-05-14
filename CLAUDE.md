@@ -387,9 +387,20 @@ kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-di
 
 kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]
 
+kbagent http get PATH [--timeout SECONDS]
+kbagent http post PATH [--body JSON|@file|-] [--timeout SECONDS]
+kbagent http patch PATH [--body JSON|@file|-] [--timeout SECONDS]
+kbagent http delete PATH [--timeout SECONDS]
+# `http` talks to the running `kbagent serve`. Requires KBAGENT_SERVE_URL +
+# KBAGENT_SERVE_TOKEN env vars (auto-injected into AI-agent / cli_command
+# subprocesses by the scheduler). Use this from inside a scheduled agent
+# task instead of forking another `kbagent` CLI process tree.
+
 kbagent kai ping [--project NAME]
+kbagent kai preflight [--project NAME]
 kbagent kai ask --message "question" [--project NAME]
 kbagent kai chat --message "msg" [--chat-id ID] [--project NAME]
+kbagent kai chat-detail --chat-id ID [--project NAME]
 kbagent kai history [--project NAME] [--limit N]
 
 kbagent flow list [--project NAME] [--branch ID] [--with-schedules]
@@ -411,4 +422,5 @@ kbagent doctor [--fix]
 kbagent version
 kbagent update
 kbagent changelog [--limit N]
+kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]
 ```

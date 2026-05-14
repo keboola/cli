@@ -245,6 +245,202 @@ class TestKaiServiceChat:
         assert "Kai chat failed" in exc_info.value.message
 
 
+class TestKaiServicePreflight:
+    """Tests for KaiService.preflight() — non-raising token readiness check."""
+
+    def test_preflight_ok(self, tmp_config_dir: Path) -> None:
+        """preflight returns ok=True when token is master + has agent-chat feature."""
+        service, mock_client = _make_kai_service(tmp_config_dir)
+        mock_client.get_project_info.return_value = {
+            "isMasterToken": True,
+            "description": "owner-token",
+            "owner": {
+                "id": 258,
+                "name": "Production",
+                "features": ["agent-chat", "some-other-flag"],
+            },
+        }
+
+        result = service.preflight("prod")
+
+        assert result["project_alias"] == "prod"
+        assert result["ok"] is True
+        assert result["is_master_token"] is True
+        assert result["has_agent_chat_feature"] is True
+        assert result["token_description"] == "owner-token"
+        assert result["project_id"] == 258
+        assert result["project_name"] == "Production"
+        assert result["error"] is None
+        mock_client.close.assert_called_once()
+
+    def test_preflight_not_master_token(self, tmp_config_dir: Path) -> None:
+        """preflight returns ok=False when token is a custom (non-master) token."""
+        service, mock_client = _make_kai_service(tmp_config_dir)
+        mock_client.get_project_info.return_value = {
+            "isMasterToken": False,
+            "description": "custom-token",
+            "owner": {
+                "id": 258,
+                "name": "Production",
+                "features": ["agent-chat"],
+            },
+        }
+
+        result = service.preflight("prod")
+
+        assert result["ok"] is False
+        assert result["is_master_token"] is False
+        assert result["has_agent_chat_feature"] is True
+        assert "not the project's master" in result["error"]
+
+    def test_preflight_missing_feature(self, tmp_config_dir: Path) -> None:
+        """preflight returns ok=False when the agent-chat feature flag is missing."""
+        service, mock_client = _make_kai_service(tmp_config_dir)
+        mock_client.get_project_info.return_value = {
+            "isMasterToken": True,
+            "description": "owner-token",
+            "owner": {
+                "id": 258,
+                "name": "Production",
+                "features": [],
+            },
+        }
+
+        result = service.preflight("prod")
+
+        assert result["ok"] is False
+        assert result["is_master_token"] is True
+        assert result["has_agent_chat_feature"] is False
+        assert "AI Agent Chat" in result["error"]
+
+    def test_preflight_api_error_is_caught(self, tmp_config_dir: Path) -> None:
+        """preflight returns gracefully with error field set when verify fails."""
+        service, mock_client = _make_kai_service(tmp_config_dir)
+        mock_client.get_project_info.side_effect = KeboolaApiError(
+            message="Invalid token", status_code=401, error_code="AUTH_ERROR"
+        )
+
+        result = service.preflight("prod")
+
+        # preflight NEVER raises — UI relies on this for friendly warnings
+        assert result["ok"] is False
+        assert result["error"] == "Invalid token"
+        assert result["is_master_token"] is False
+        mock_client.close.assert_called_once()
+
+
+class TestKaiServiceGetChatDetail:
+    """Tests for KaiService.get_chat_detail() — full chat transcript."""
+
+    def test_get_chat_detail_success(self, tmp_config_dir: Path) -> None:
+        """get_chat_detail returns a flat message list and chat metadata."""
+        service, _ = _make_kai_service(tmp_config_dir, features=["agent-chat"])
+
+        mock_msg_user = MagicMock()
+        mock_msg_user.id = "msg-1"
+        mock_msg_user.role = "user"
+        mock_msg_user.parts = [{"type": "text", "text": "What is the answer?"}]
+        mock_msg_user.created_at = datetime(2025, 2, 1, 10, 0, 0, tzinfo=UTC)
+
+        mock_msg_assistant = MagicMock()
+        mock_msg_assistant.id = "msg-2"
+        mock_msg_assistant.role = "assistant"
+        # Multi-part text + a tool_call part that must be skipped
+        mock_msg_assistant.parts = [
+            {"type": "text", "text": "The answer "},
+            {"type": "tool_call", "name": "search"},
+            {"type": "text", "text": "is 42."},
+        ]
+        mock_msg_assistant.created_at = datetime(2025, 2, 1, 10, 0, 5, tzinfo=UTC)
+
+        mock_chat_detail = MagicMock()
+        mock_chat_detail.id = "chat-abc"
+        mock_chat_detail.title = "Test chat"
+        mock_chat_detail.created_at = datetime(2025, 2, 1, 10, 0, 0, tzinfo=UTC)
+        mock_chat_detail.messages = [mock_msg_user, mock_msg_assistant]
+
+        mock_kai_client = AsyncMock()
+        mock_kai_client.get_chat.return_value = mock_chat_detail
+        mock_kai_client.__aenter__ = AsyncMock(return_value=mock_kai_client)
+        mock_kai_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.object(service, "_create_kai_client", return_value=mock_kai_client):
+            result = service.get_chat_detail("prod", "chat-abc")
+
+        assert result["project_alias"] == "prod"
+        assert result["chat_id"] == "chat-abc"
+        assert result["title"] == "Test chat"
+        assert result["created_at"] == "2025-02-01T10:00:00+00:00"
+        assert len(result["messages"]) == 2
+        assert result["messages"][0]["role"] == "user"
+        assert result["messages"][0]["content"] == "What is the answer?"
+        # tool_call part skipped, text parts joined into single content
+        assert result["messages"][1]["role"] == "assistant"
+        assert result["messages"][1]["content"] == "The answer is 42."
+
+    def test_get_chat_detail_kai_not_enabled(self, tmp_config_dir: Path) -> None:
+        """get_chat_detail raises KAI_NOT_ENABLED when feature flag is missing."""
+        service, _ = _make_kai_service(tmp_config_dir, features=[])
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.get_chat_detail("prod", "chat-abc")
+
+        assert exc_info.value.error_code == "KAI_NOT_ENABLED"
+
+    def test_get_chat_detail_kai_error(self, tmp_config_dir: Path) -> None:
+        """get_chat_detail wraps KaiError into KeboolaApiError(KAI_ERROR)."""
+        from kai_client import KaiError
+
+        service, _ = _make_kai_service(tmp_config_dir, features=["agent-chat"])
+
+        mock_kai_client = AsyncMock()
+        mock_kai_client.get_chat.side_effect = KaiError(message="Chat not found")
+        mock_kai_client.__aenter__ = AsyncMock(return_value=mock_kai_client)
+        mock_kai_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch.object(service, "_create_kai_client", return_value=mock_kai_client),
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            service.get_chat_detail("prod", "missing")
+
+        assert exc_info.value.error_code == "KAI_ERROR"
+        assert "Chat not found" in exc_info.value.message
+
+    def test_get_chat_detail_skips_empty_user_message(self, tmp_config_dir: Path) -> None:
+        """Legacy user messages with no text parts are skipped, not surfaced as empty."""
+        service, _ = _make_kai_service(tmp_config_dir, features=["agent-chat"])
+
+        empty_user = MagicMock()
+        empty_user.role = "user"
+        # No text parts — only a tool_call shape (legacy chat where text lived elsewhere)
+        empty_user.parts = [{"type": "tool_call", "name": "search"}]
+
+        normal_user = MagicMock()
+        normal_user.id = "msg-2"
+        normal_user.role = "user"
+        normal_user.parts = [{"type": "text", "text": "hi"}]
+        normal_user.created_at = None
+
+        mock_chat = MagicMock()
+        mock_chat.id = "c"
+        mock_chat.title = None
+        mock_chat.created_at = None
+        mock_chat.messages = [empty_user, normal_user]
+
+        mock_kai_client = AsyncMock()
+        mock_kai_client.get_chat.return_value = mock_chat
+        mock_kai_client.__aenter__ = AsyncMock(return_value=mock_kai_client)
+        mock_kai_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.object(service, "_create_kai_client", return_value=mock_kai_client):
+            result = service.get_chat_detail("prod", "c")
+
+        # Empty-content user message dropped; normal one survives
+        assert len(result["messages"]) == 1
+        assert result["messages"][0]["content"] == "hi"
+
+
 class TestKaiServiceHistory:
     """Tests for KaiService.get_history()."""
 

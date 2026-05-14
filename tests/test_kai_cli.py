@@ -619,6 +619,251 @@ class TestKaiHistoryCli:
         assert "--limit" in output
 
 
+class TestKaiPreflightCli:
+    """Tests for `kbagent kai preflight` command."""
+
+    def test_kai_preflight_ok_json(self, tmp_config_dir: Path) -> None:
+        """kai preflight --json returns ok=True payload when Kai is enabled."""
+        setup_single_project(tmp_config_dir)
+
+        mock_service = MagicMock(spec=KaiService)
+        mock_service.resolve_alias.return_value = "prod"
+        mock_service.preflight.return_value = {
+            "project_alias": "prod",
+            "ok": True,
+            "is_master_token": True,
+            "has_agent_chat_feature": True,
+            "token_description": "owner-token",
+            "project_id": 258,
+            "project_name": "Production",
+            "error": None,
+        }
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.kai.get_service",
+                lambda ctx, name: mock_service,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "kai",
+                    "preflight",
+                    "--project",
+                    "prod",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["ok"] is True
+        assert output["data"]["is_master_token"] is True
+        assert output["data"]["has_agent_chat_feature"] is True
+        assert output["data"]["project_id"] == 258
+
+    def test_kai_preflight_not_ready_human(self, tmp_config_dir: Path) -> None:
+        """kai preflight in human mode shows 'Kai is NOT ready' + reason on failure."""
+        setup_single_project(tmp_config_dir)
+
+        mock_service = MagicMock(spec=KaiService)
+        mock_service.resolve_alias.return_value = "prod"
+        mock_service.preflight.return_value = {
+            "project_alias": "prod",
+            "ok": False,
+            "is_master_token": False,
+            "has_agent_chat_feature": True,
+            "token_description": "custom",
+            "project_id": 258,
+            "project_name": "Production",
+            "error": "the configured token is not the project's master token",
+        }
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.kai.get_service",
+                lambda ctx, name: mock_service,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "kai",
+                    "preflight",
+                    "--project",
+                    "prod",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = _strip_ansi(result.output)
+        assert "Kai is NOT ready" in output
+        assert "master token" in output  # the reason
+
+    def test_kai_preflight_help(self) -> None:
+        """kai preflight --help shows usage information."""
+        result = runner.invoke(app, ["kai", "preflight", "--help"])
+
+        assert result.exit_code == 0
+        output = _strip_ansi(result.output)
+        assert "configured token can use Kai" in output
+        assert "--project" in output
+
+
+class TestKaiChatDetailCli:
+    """Tests for `kbagent kai chat-detail` command."""
+
+    def test_kai_chat_detail_json(self, tmp_config_dir: Path) -> None:
+        """kai chat-detail --json returns the full transcript as structured JSON."""
+        setup_single_project(tmp_config_dir)
+
+        mock_service = MagicMock(spec=KaiService)
+        mock_service.resolve_alias.return_value = "prod"
+        mock_service.get_chat_detail.return_value = {
+            "project_alias": "prod",
+            "chat_id": "chat-abc",
+            "title": "Test chat",
+            "created_at": "2025-02-01T10:00:00+00:00",
+            "messages": [
+                {
+                    "id": "msg-1",
+                    "role": "user",
+                    "content": "Question?",
+                    "created_at": "2025-02-01T10:00:00+00:00",
+                },
+                {
+                    "id": "msg-2",
+                    "role": "assistant",
+                    "content": "Answer.",
+                    "created_at": "2025-02-01T10:00:05+00:00",
+                },
+            ],
+        }
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.kai.get_service",
+                lambda ctx, name: mock_service,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "kai",
+                    "chat-detail",
+                    "--chat-id",
+                    "chat-abc",
+                    "--project",
+                    "prod",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["chat_id"] == "chat-abc"
+        assert len(output["data"]["messages"]) == 2
+        assert output["data"]["messages"][0]["role"] == "user"
+        mock_service.get_chat_detail.assert_called_once_with("prod", "chat-abc")
+
+    def test_kai_chat_detail_human(self, tmp_config_dir: Path) -> None:
+        """kai chat-detail in human mode shows title + messages by role."""
+        setup_single_project(tmp_config_dir)
+
+        mock_service = MagicMock(spec=KaiService)
+        mock_service.resolve_alias.return_value = "prod"
+        mock_service.get_chat_detail.return_value = {
+            "project_alias": "prod",
+            "chat_id": "chat-abc",
+            "title": "Pipeline debug",
+            "created_at": "2025-02-01T10:00:00+00:00",
+            "messages": [
+                {"role": "user", "content": "What is broken?", "created_at": None},
+                {"role": "assistant", "content": "Run XYZ.", "created_at": None},
+            ],
+        }
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.kai.get_service",
+                lambda ctx, name: mock_service,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "kai",
+                    "chat-detail",
+                    "--chat-id",
+                    "chat-abc",
+                    "--project",
+                    "prod",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = _strip_ansi(result.output)
+        assert "Pipeline debug" in output
+        assert "What is broken?" in output
+        assert "Run XYZ." in output
+
+    def test_kai_chat_detail_empty_messages(self, tmp_config_dir: Path) -> None:
+        """kai chat-detail in human mode shows '(no messages)' when chat is empty."""
+        setup_single_project(tmp_config_dir)
+
+        mock_service = MagicMock(spec=KaiService)
+        mock_service.resolve_alias.return_value = "prod"
+        mock_service.get_chat_detail.return_value = {
+            "project_alias": "prod",
+            "chat_id": "chat-empty",
+            "title": None,
+            "created_at": None,
+            "messages": [],
+        }
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.kai.get_service",
+                lambda ctx, name: mock_service,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "kai",
+                    "chat-detail",
+                    "--chat-id",
+                    "chat-empty",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = _strip_ansi(result.output)
+        assert "(no messages)" in output
+
+    def test_kai_chat_detail_help(self) -> None:
+        """kai chat-detail --help shows usage information."""
+        result = runner.invoke(app, ["kai", "chat-detail", "--help"])
+
+        assert result.exit_code == 0
+        output = _strip_ansi(result.output)
+        assert "full message history" in output
+        assert "--chat-id" in output
+
+
 class TestKaiConfigError:
     """Tests for ConfigError handling across kai commands."""
 

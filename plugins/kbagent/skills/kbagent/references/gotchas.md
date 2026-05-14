@@ -1,5 +1,34 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## `kbagent http` works only inside `kbagent serve` subprocesses (since v0.40.0)
+
+- `kbagent http get/post/patch/delete <PATH>` is a thin self-call client
+  against the running `kbagent serve`. It requires both
+  `KBAGENT_SERVE_URL` and `KBAGENT_SERVE_TOKEN` env vars; without them it
+  refuses with exit code 2 -- the command has **no meaningful target**
+  outside a serve subprocess context. Do not try to run it from an
+  interactive shell unless you exported these env vars yourself.
+- **Auto-injection from `kbagent serve`:** when the scheduler dispatches a
+  scheduled agent task (action types `cli_command` and `ai_agent`), the
+  subprocess env is overlaid with `KBAGENT_CONFIG_DIR`,
+  `KBAGENT_SERVE_URL`, and `KBAGENT_SERVE_TOKEN`. This means:
+  - An AI agent (claude / codex / gemini) can call `kbagent http get
+    /projects` directly -- it talks to the live serve, sees the same
+    Keboola tokens the operator configured, never the global
+    `~/.config/keboola-agent-cli/` config.
+  - Forking another `kbagent <cmd>` CLI also reads the aligned config
+    (via `KBAGENT_CONFIG_DIR`) -- no more "expirovaný token" surprises
+    where the child process loaded a different `config.json` than the
+    parent serve.
+- **Manage-token operations still require human interaction.**
+  `KBAGENT_CONFIG_DIR` propagation does NOT bypass the `--allow-env-manage-token`
+  default-deny (see entry "Manage token: env var is ignored..."). An AI
+  subprocess that hits an expired storage token cannot refresh it
+  autonomously -- it must surface the issue and ask for human intervention.
+- **Browse the OpenAPI to discover endpoints:** `kbagent http get
+  /openapi.json` returns the full schema, which lets the AI pick the
+  right route + body shape without hard-coded knowledge.
+
 ## `kbagent config new --push` is one-shot remote create; default is scaffold-only (since v0.33.0)
 
 - **Pre-v0.33.0**, `kbagent config new` was scaffold-only -- it wrote

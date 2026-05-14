@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>kbagent ・ NERD UI for Keboola</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--
+      Anti-FOUC theme bootstrap: read the saved preference (or system pref)
+      synchronously BEFORE React mounts, so the very first paint already has
+      the correct ``dark`` class on <html>. ThemeProvider then takes over and
+      keeps localStorage + DOM in sync going forward.
+    -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("kbagent.theme");
+          var theme =
+            saved === "light" || saved === "dark"
+              ? saved
+              : window.matchMedia &&
+                  window.matchMedia("(prefers-color-scheme: light)").matches
+                ? "light"
+                : "dark";
+          if (theme === "dark") document.documentElement.classList.add("dark");
+        } catch (e) {
+          document.documentElement.classList.add("dark");
+        }
+      })();
+    </script>
+  </head>
+  <body class="font-mono antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -97,8 +97,10 @@ OPERATION_REGISTRY: dict[str, str] = {
     "tool.call": "write",
     # Kai (Keboola AI Assistant)
     "kai.ping": "read",
+    "kai.preflight": "read",
     "kai.ask": "read",
     "kai.chat": "write",
+    "kai.chat-detail": "read",
     "kai.history": "read",
     # Component discovery
     "component.list": "read",
@@ -150,6 +152,13 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.describe-batch": "write",
     # Encryption
     "encrypt.values": "write",
+    # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
+    # Categorised by the underlying HTTP method: GET = read, mutating verbs
+    # = write. The serve's own routes enforce their own permissions on top.
+    "http.get": "read",
+    "http.post": "write",
+    "http.patch": "write",
+    "http.delete": "destructive",
     # Sync / git workflow
     "sync.init": "read",
     "sync.pull": "read",
@@ -181,6 +190,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "changelog": "read",
     "context": "read",
     "repl": "read",
+    "serve": "admin",
     # Permissions (always allowed -- listed for completeness)
     "permissions.list": "read",
     "permissions.show": "read",
