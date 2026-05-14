@@ -275,6 +275,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Creating new configurations | [scaffold-workflow](references/scaffold-workflow.md) |
 | MCP tools (multi-project read/write) | [mcp-workflow](references/mcp-workflow.md) |
 | Workspace SQL debugging | [workspace-workflow](references/workspace-workflow.md) |
+| **Agent Tasks** (schedule AI agents inside `kbagent serve` -- cron / manual / chained; mcp_tool / cli_command / ai_agent action flavours) | [agent-tasks-workflow](references/agent-tasks-workflow.md) |
 | **Data apps** (create / deploy / start / stop / password / delete; the §9 redeploy contract) | [data-app-workflow](references/data-app-workflow.md) |
 | Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
 | **Storage column types** (native types, NOT NULL, DEFAULT, branch materialize) | [storage-types-workflow](references/storage-types-workflow.md) |
