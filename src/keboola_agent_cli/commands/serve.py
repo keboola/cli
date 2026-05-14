@@ -119,17 +119,30 @@ def serve_command(
     The server prints a bearer token on startup. Set ``KBAGENT_SERVE_TOKEN``
     in advance to pin a value (useful for the Node BFF dev workflow).
     """
+    # Probe the optional server extras up front so users get a friendly
+    # install hint instead of a Python traceback. We catch BOTH imports
+    # (uvicorn AND the FastAPI surface that ``..server`` pulls in) because
+    # a partial install (one extra present, the other not) was producing
+    # the legacy "ModuleNotFoundError: No module named 'fastapi'" raw
+    # traceback in 0.40.0 -- the previous guard only watched uvicorn.
     try:
         import uvicorn
-    except ImportError:  # pragma: no cover
+
+        from ..server import create_app
+    except ModuleNotFoundError as exc:  # pragma: no cover
+        missing = exc.name or "server extras"
         typer.echo(
-            "FastAPI/uvicorn not installed. Reinstall kbagent with the 'server' extra:\n"
-            "  uv pip install -e '.[server]'",
+            f"\nkbagent serve requires the optional 'server' extras "
+            f"(missing: {missing}).\n\n"
+            "Reinstall with the [server] extras:\n\n"
+            "  # If you installed via uv tool install (recommended for end users):\n"
+            "  uv tool install --force --with 'keboola-agent-cli[server]' \\\n"
+            "    git+https://github.com/padak/keboola_agent_cli\n\n"
+            "  # If you have a local checkout (development):\n"
+            "  uv pip install -e '.[server]'\n",
             err=True,
         )
         raise typer.Exit(code=1) from None
-
-    from ..server import create_app
 
     auth_token = os.environ.get(ENV_AUTH_TOKEN) or secrets.token_urlsafe(32)
     os.environ[ENV_AUTH_TOKEN] = auth_token
