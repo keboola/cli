@@ -204,6 +204,10 @@ def serve_command(
             "  set on GET /. Token never enters the JS heap or the URL.\n"
             f"  For curl / scripts: Authorization: Bearer {auth_token}\n"
             "\n"
+            "  For `kbagent http` in another terminal (bash/zsh):\n"
+            f"    export KBAGENT_SERVE_URL=http://{host}:{port}\n"
+            f"    export KBAGENT_SERVE_TOKEN={auth_token}\n"
+            "\n"
         )
     else:
         sys.stdout.write(
@@ -216,6 +220,10 @@ def serve_command(
             "\n"
             f"  Set {ENV_AUTH_TOKEN}={auth_token} for the Node BFF.\n"
             "  Tip: `kbagent serve --ui` mounts the React SPA on the same port.\n"
+            "\n"
+            "  For `kbagent http` in another terminal (bash/zsh):\n"
+            f"    export KBAGENT_SERVE_URL=http://{host}:{port}\n"
+            f"    export KBAGENT_SERVE_TOKEN={auth_token}\n"
             "\n"
         )
     sys.stdout.flush()

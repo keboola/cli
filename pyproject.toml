@@ -1,6 +1,6 @@
 [project]
 name = "keboola-agent-cli"
-version = "0.40.1"
+version = "0.40.2"
 description = "AI-friendly CLI for managing Keboola projects"
 readme = "README.md"
 requires-python = ">=3.12"

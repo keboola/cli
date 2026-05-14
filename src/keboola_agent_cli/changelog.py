@@ -8,6 +8,9 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.40.2": [
+        "UX: `kbagent serve --ui` startup banner now prints copy-paste-able `export KBAGENT_SERVE_URL=... ; export KBAGENT_SERVE_TOKEN=...` lines so you can call `kbagent http get /projects` from another terminal without grepping the previous banner for the token. The plain `kbagent serve` (no `--ui`) banner gets the same hint. Closes a paper-cut where `kbagent http` printed `requires KBAGENT_SERVE_URL and KBAGENT_SERVE_TOKEN env vars` but the serve banner didn't tell you how to set them.",
+    ],
     "0.40.1": [
         "Fix: `kbagent serve --ui` now shows a friendly install hint instead of a Python traceback when the optional 'server' extras (FastAPI, uvicorn) are missing. The 0.40.0 guard only caught the `uvicorn` import; the FastAPI import inside `server/__init__.py` would still surface as a raw `ModuleNotFoundError: No module named 'fastapi'`. Both imports are now wrapped in a single guard that names the missing module and prints the correct reinstall command for both `uv tool install` (end users) and `uv pip install -e` (development).",
     ],
