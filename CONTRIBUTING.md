@@ -335,6 +335,7 @@ When adding a new command (e.g., `kbagent storage create-foo`), you must update 
   - [ ] **Exception -- infrastructure-level commands.** `--hint` only makes sense for commands that wrap a Keboola API client (Storage / Queue / Manage / AI Service / MCP). Commands that exist purely to manage kbagent itself, or to forward HTTP to another kbagent instance, are **deliberately excluded**: `doctor`, `context`, `init`, `serve`, `version`, `update`, `changelog`, `permissions`, and `http` (the four self-call verbs `http get/post/patch/delete` pass straight through `HttpForwarderService` to a running `kbagent serve` -- there is no Keboola client to mimic, and an `httpx.Client` recipe is already the canonical generic form). If you are adding a *new* command in this infrastructure category, skip the hint definition and note the exception in the PR description so reviewers don't file a BLOCKING finding against this rule.
 - [ ] **Permission registration** in `permissions.py` (`OPERATION_REGISTRY` dict)
 - [ ] **Service wiring** in `cli.py` if adding a new service class
+- [ ] **HTTP API endpoint** in `src/keboola_agent_cli/server/routers/<group>.py` -- `kbagent serve` exposes the CLI as a REST API so external applications (Web UI, scheduled AI agents, Slack bots, Streamlit dashboards, CI pipelines) can call the platform without forking CLI subprocesses. The current convention is **1:1**: every command in a group has a matching endpoint in that group's router (e.g. `commands/flow.py` has 8 commands, `server/routers/flows.py` has 8 routes). If you add a new command, add the corresponding route. **Skip allowed** only for genuinely terminal-only commands (interactive prompts, Rich-rendered output that has no useful JSON shape, `doctor`/`init`/`update`-style infrastructure that manages kbagent itself rather than Keboola). Document any skip in the PR description with a one-line reason so reviewers don't flag it.
 
 ### Documentation changes (mandatory!)
 
@@ -404,6 +405,7 @@ release checklist below.
 | `pyproject.toml` (`version`) | Every release | -- (single source of truth) |
 | `src/keboola_agent_cli/changelog.py` | Every release | YES (`make changelog-check`) |
 | `src/keboola_agent_cli/commands/context.py` (`AGENT_CONTEXT`) | Adding/removing/renaming commands; significant flag changes | NO |
+| `src/keboola_agent_cli/server/routers/<group>.py` | Adding/removing/renaming commands -- `kbagent serve` mirrors the CLI 1:1 for external consumers (Web UI, scheduled agents, third-party apps). Skip only for terminal-only / kbagent-infrastructure commands; document skip in PR | NO -- callers get HTTP 404 instead of "command works in CLI but not via API" silent gap |
 | `CLAUDE.md` (`## All CLI Commands`) | Adding/removing/renaming commands | NO |
 | `plugins/kbagent/.claude-plugin/plugin.json` | Every release (auto-synced) | YES (`make version-check`; pre-commit auto-stages) |
 | `plugins/kbagent/.claude-plugin/CLAUDE.md` | Changing delegation strategy / when-to-delegate rules | NO |
