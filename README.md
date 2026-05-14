@@ -38,6 +38,18 @@ Every run is recorded as a persisted timeline (JSONL on disk, `0600`) with autho
 
 Build the agent once, schedule it, walk away — the platform handles auth, scheduling, history, cost reporting, and report rendering.
 
+### Get started
+
+The scheduler runs **inside `kbagent serve`** -- the same single Python process that hosts the Web UI. If you already installed kbagent with the `[server]` extras (see [Web UI](#web-ui-optional) above), you're set; otherwise:
+
+```bash
+uv tool install --with 'keboola-agent-cli[server]' 'git+https://github.com/padak/keboola_agent_cli'
+kbagent serve --ui
+# Open the URL printed at startup -> sidebar "Agent Tasks" -> "+ New task".
+```
+
+Keep `kbagent serve` running for the scheduler to fire CRON triggers. Run history is persisted (JSONL on disk), so closing the server doesn't lose past runs -- it just pauses future scheduling until you restart. Architecture detail and the full endpoint reference live in [`docs/web-server.md`](docs/web-server.md).
+
 ## For AI agents
 
 This CLI is built AI-first. Every command outputs structured JSON (`--json`), errors include machine-readable codes, and the permission firewall enforces safety at the code level -- not via prompt instructions.
