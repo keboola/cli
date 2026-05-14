@@ -542,6 +542,26 @@ class VersionService:
         return " | ".join(parts)
 
     @staticmethod
+    def _has_server_extras() -> bool:
+        """Detect whether the current install was created with ``[server]`` extras.
+
+        The detection probe is ``importlib.util.find_spec('fastapi')``: FastAPI
+        is pulled in *only* by the optional ``[server]`` extra (declared in
+        ``pyproject.toml``'s ``[project.optional-dependencies]`` table), so its
+        presence is a reliable proxy for "user originally installed with
+        ``--with 'keboola-agent-cli[server]'``".
+
+        Without this check, ``uv tool install --upgrade git+...`` re-resolves
+        the tool environment from scratch and drops anything the original
+        ``--with`` introduced -- which is how a user who ran ``kbagent serve
+        --ui`` happily yesterday gets ``ModuleNotFoundError: No module named
+        'fastapi'`` after an auto-update today.
+        """
+        import importlib.util
+
+        return importlib.util.find_spec("fastapi") is not None
+
+    @staticmethod
     def _update_kbagent() -> dict[str, Any]:
         """Run the kbagent self-upgrade subprocess (or short-circuit)."""
         old_version = __version__
@@ -556,21 +576,52 @@ class VersionService:
                 "message": f"kbagent v{old_version} is already up to date.",
             }
 
-        # Try uv tool install --upgrade first, fall back to pip.
+        # Preserve [server] extras across upgrades. ``uv tool install --upgrade``
+        # re-resolves the tool environment from the source spec alone, so unless
+        # ``--with 'keboola-agent-cli[server]'`` is passed each time, the FastAPI
+        # + uvicorn extras the user originally installed get silently dropped.
+        # We pair ``--with`` with ``--force`` (rather than ``--upgrade``) because
+        # ``uv tool install`` rejects ``--upgrade`` together with ``--with`` when
+        # the additional spec resolves to a different version than the existing
+        # tool environment -- ``--force`` is the documented way to reapply both.
+        has_server = VersionService._has_server_extras()
         uv_path = shutil.which("uv")
         if uv_path:
-            cmd = [uv_path, "tool", "install", "--upgrade", KBAGENT_INSTALL_SOURCE]
+            if has_server:
+                cmd = [
+                    uv_path,
+                    "tool",
+                    "install",
+                    "--force",
+                    "--with",
+                    "keboola-agent-cli[server]",
+                    KBAGENT_INSTALL_SOURCE,
+                ]
+            else:
+                cmd = [uv_path, "tool", "install", "--upgrade", KBAGENT_INSTALL_SOURCE]
         else:
             pip_path = shutil.which("pip")
             if pip_path is None:
+                with_flag = "--with 'keboola-agent-cli[server]' " if has_server else ""
                 return {
                     "updated": False,
                     "current_version": old_version,
                     "latest_version": kbagent_latest,
-                    "message": "Neither 'uv' nor 'pip' found on PATH. "
-                    f"Install manually: uv tool install --upgrade {KBAGENT_INSTALL_SOURCE}",
+                    "message": (
+                        "Neither 'uv' nor 'pip' found on PATH. "
+                        f"Install manually: uv tool install --upgrade {with_flag}"
+                        f"{KBAGENT_INSTALL_SOURCE}"
+                    ),
                 }
-            cmd = [pip_path, "install", "--upgrade", KBAGENT_INSTALL_SOURCE]
+            # pip extras syntax: the [server] suffix attaches to the project
+            # name in the PEP 508 spec; for git+ URLs we wrap with the project
+            # name on the left of the URL.
+            install_spec = (
+                f"keboola-agent-cli[server] @ {KBAGENT_INSTALL_SOURCE}"
+                if has_server
+                else KBAGENT_INSTALL_SOURCE
+            )
+            cmd = [pip_path, "install", "--upgrade", install_spec]
 
         try:
             result = subprocess.run(
