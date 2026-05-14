@@ -1,0 +1,1980 @@
+"""Service-layer tests for ``SemanticLayerService``.
+
+Covers every business operation: model resolution, list/show/validate/export/diff
+reads, create/delete/add/edit/remove writes, import/promote/build orchestration,
+and the encrypt-token helper.
+
+Each test injects a ``unittest.mock.MagicMock`` as the metastore client factory
+so we verify orchestration (envelope shape, call order, error propagation)
+without touching HTTP. The pattern mirrors ``test_data_app_service.py``.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
+from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.services.semantic_layer_service import (
+    CONSTRAINT_NAME_RE,
+    CONSTRAINT_SEVERITIES,
+    CONSTRAINT_TYPES,
+    SemanticLayerService,
+    _classify_field_role,
+    _derive_fqn,
+)
+
+TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+
+
+# ---------------------------------------------------------------------------
+# Fixtures / helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_store(tmp_path: Path, alias: str = "prod") -> ConfigStore:
+    """Build a ConfigStore with a single project registered."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    store = ConfigStore(config_dir=config_dir)
+    store.add_project(
+        alias,
+        ProjectConfig(
+            stack_url="https://connection.keboola.com",
+            token=TEST_TOKEN,
+            project_name=alias,
+            project_id=5725,
+        ),
+    )
+    return store
+
+
+def _make_store_two(tmp_path: Path) -> ConfigStore:
+    """Build a ConfigStore with two projects (for promote tests)."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    store = ConfigStore(config_dir=config_dir)
+    for alias in ("source", "target"):
+        store.add_project(
+            alias,
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=TEST_TOKEN,
+                project_name=alias,
+                project_id=1000 if alias == "source" else 2000,
+            ),
+        )
+    return store
+
+
+def _make_service(
+    store: ConfigStore,
+    *,
+    metastore_mock: MagicMock | None = None,
+) -> tuple[SemanticLayerService, MagicMock]:
+    """Wire a SemanticLayerService with a mocked metastore client factory."""
+    mock = metastore_mock or MagicMock()
+    service = SemanticLayerService(
+        config_store=store,
+        metastore_client_factory=lambda url, token: mock,
+    )
+    return service, mock
+
+
+def _model_item(
+    uuid: str = "u-model",
+    name: str = "default",
+    description: str = "",
+    sql_dialect: str = "Snowflake",
+) -> dict[str, Any]:
+    return {
+        "type": "semantic-model",
+        "id": uuid,
+        "attributes": {
+            "name": name,
+            "description": description,
+            "sql_dialect": sql_dialect,
+        },
+    }
+
+
+def _child_item(
+    item_type: str,
+    item_id: str,
+    attrs: dict[str, Any],
+) -> dict[str, Any]:
+    return {"type": item_type, "id": item_id, "attributes": dict(attrs)}
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers
+# ---------------------------------------------------------------------------
+
+
+class TestDeriveFqn:
+    def test_simple_two_segment_table_id(self) -> None:
+        assert _derive_fqn("out.c-gold.FACT_X") == '"KEBOOLA"."out.c-gold"."FACT_X"'
+
+    def test_three_segment_table_id(self) -> None:
+        assert _derive_fqn("in.c-raw.users") == '"KEBOOLA"."in.c-raw"."users"'
+
+    def test_invalid_single_segment_raises(self) -> None:
+        with pytest.raises(KeboolaApiError) as excinfo:
+            _derive_fqn("nodots")
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+
+class TestClassifyFieldRole:
+    """Role heuristic for `add dataset --deep-fields`."""
+
+    def test_pk_prefix_is_key(self) -> None:
+        assert _classify_field_role("PK_USER_ID", "NUMBER") == "key"
+
+    def test_fk_prefix_is_key(self) -> None:
+        assert _classify_field_role("FK_ORDER_ID", "NUMBER") == "key"
+
+    def test_date_suffix_is_timestamp(self) -> None:
+        assert _classify_field_role("ORDER_DATE", "TIMESTAMP_TZ") == "timestamp"
+
+    def test_date_prefix_is_timestamp(self) -> None:
+        assert _classify_field_role("DATE_ORDER", "TIMESTAMP_TZ") == "timestamp"
+
+    def test_numeric_with_measure_token_is_measure(self) -> None:
+        assert _classify_field_role("AMOUNT_USD", "NUMBER") == "measure"
+
+    def test_numeric_without_measure_token_is_dimension(self) -> None:
+        assert _classify_field_role("USER_ID", "NUMBER") == "dimension"
+
+    def test_string_with_measure_token_is_dimension(self) -> None:
+        # measure tokens require a numeric basetype
+        assert _classify_field_role("AMOUNT_LABEL", "STRING") == "dimension"
+
+    def test_plain_dimension_default(self) -> None:
+        assert _classify_field_role("USER_NAME", "STRING") == "dimension"
+
+
+# ---------------------------------------------------------------------------
+# Model resolution
+# ---------------------------------------------------------------------------
+
+
+class TestResolveModel:
+    def test_single_model_no_selector_returns_it(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = [_model_item("u1", "only")]
+        result = service.list_models("prod")
+        assert len(result["models"]) == 1
+        assert result["models"][0]["name"] == "only"
+
+    def test_ambiguous_models_raises_config_error(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = [
+            _model_item("u1", "a"),
+            _model_item("u2", "b"),
+        ]
+        with pytest.raises(ConfigError) as excinfo:
+            service.show_model("prod", model_name_or_uuid=None)
+        assert "specify --model" in excinfo.value.message
+        assert "a" in excinfo.value.message and "b" in excinfo.value.message
+
+    def test_no_models_raises_config_error(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        with pytest.raises(ConfigError) as excinfo:
+            service.show_model("prod")
+        assert "no semantic-layer models" in excinfo.value.message.lower()
+
+    def test_resolve_by_exact_uuid(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("u1", "a"), _model_item("u2", "b")]
+            return []
+
+        mock.list_items.side_effect = _list
+        result = service.show_model("prod", model_name_or_uuid="u2")
+        assert result["model"]["id"] == "u2"
+
+    def test_resolve_by_name(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("u1", "alpha"), _model_item("u2", "beta")]
+            return []
+
+        mock.list_items.side_effect = _list
+        result = service.show_model("prod", model_name_or_uuid="beta")
+        assert result["model"]["id"] == "u2"
+
+    def test_not_found_raises_with_available_names(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("u1", "alpha"), _model_item("u2", "beta")]
+            return []
+
+        mock.list_items.side_effect = _list
+        with pytest.raises(ConfigError) as excinfo:
+            service.show_model("prod", model_name_or_uuid="ghost")
+        assert "alpha" in excinfo.value.message
+        assert "beta" in excinfo.value.message
+
+
+# ---------------------------------------------------------------------------
+# list_models / create_model / delete_model
+# ---------------------------------------------------------------------------
+
+
+class TestListModels:
+    def test_returns_shape(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = [
+            _model_item("u1", "a", "first", "Snowflake"),
+            _model_item("u2", "b", "second", "Snowflake"),
+        ]
+        result = service.list_models("prod")
+        assert result["project"] == "prod"
+        assert result["models"][0] == {
+            "id": "u1",
+            "name": "a",
+            "description": "first",
+            "sql_dialect": "Snowflake",
+        }
+        mock.close.assert_called_once()
+
+    def test_empty_project(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        result = service.list_models("prod")
+        assert result["models"] == []
+
+
+class TestCreateModel:
+    def test_happy_path(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.post_item.return_value = {
+            "type": "semantic-model",
+            "id": "new-uuid",
+            "attributes": {"name": "m", "sql_dialect": "Snowflake"},
+        }
+        result = service.create_model("prod", name="m", description="d", sql_dialect="Snowflake")
+        assert result["model"]["id"] == "new-uuid"
+        mock.post_item.assert_called_once()
+        _, kwargs = mock.post_item.call_args
+        # data should include description (truthy)
+        assert kwargs["data"]["description"] == "d"
+        assert kwargs["data"]["sql_dialect"] == "Snowflake"
+
+    def test_omits_empty_description(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.post_item.return_value = _model_item("x", "m")
+        service.create_model("prod", name="m")
+        _, kwargs = mock.post_item.call_args
+        assert "description" not in kwargs["data"]
+
+
+class TestDeleteModel:
+    def test_lists_children_before_delete(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("u1", "doomed")]
+            if item_type == "semantic-metric":
+                return [_child_item("semantic-metric", "m1", {"name": "x"})]
+            return []
+
+        mock.list_items.side_effect = _list
+        result = service.delete_model("prod", model_name_or_uuid="doomed")
+        assert result["deleted"]["id"] == "u1"
+        assert result["deleted"]["name"] == "doomed"
+        # delete_item was called for the model
+        mock.delete_item.assert_called_once_with("semantic-model", "u1")
+        # counts in orphaned_children
+        assert result["orphaned_children"]["metrics"] == 1
+
+
+# ---------------------------------------------------------------------------
+# show
+# ---------------------------------------------------------------------------
+
+
+class TestShowModel:
+    def _setup(self, tmp_path: Path) -> tuple[SemanticLayerService, MagicMock]:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U1", "default")]
+            if item_type == "semantic-dataset":
+                return [_child_item("semantic-dataset", "d1", {"name": "ds_a"})]
+            if item_type == "semantic-metric":
+                return [_child_item("semantic-metric", "m1", {"name": "rev"})]
+            if item_type == "semantic-relationship":
+                return [_child_item("semantic-relationship", "r1", {"name": "r"})]
+            if item_type == "semantic-constraint":
+                return [_child_item("semantic-constraint", "c1", {"name": "c"})]
+            if item_type == "semantic-glossary":
+                return [_child_item("semantic-glossary", "g1", {"term": "GMV"})]
+            return []
+
+        mock.list_items.side_effect = _list
+        return service, mock
+
+    def test_returns_envelope_with_all_types(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path)
+        result = service.show_model("prod")
+        assert result["project"] == "prod"
+        assert result["model"] == {"id": "U1", "name": "default"}
+        assert len(result["datasets"]) == 1
+        assert result["datasets"][0]["id"] == "d1"
+        assert "metrics" in result
+        assert "relationships" in result
+        assert "constraints" in result
+        assert "glossary" in result
+
+    def test_filters_to_one_type(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path)
+        result = service.show_model("prod", type_filter="metric")
+        assert "metrics" in result
+        # other types filtered out
+        for k in ("datasets", "relationships", "constraints", "glossary"):
+            assert k not in result
+
+    def test_rejects_unknown_type_filter(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.show_model("prod", type_filter="notathing")
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_empty_model(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "lone")]
+            return []
+
+        mock.list_items.side_effect = _list
+        result = service.show_model("prod")
+        for k in ("datasets", "metrics", "relationships", "constraints", "glossary"):
+            assert result[k] == []
+
+    def test_meta_keys_not_leaked(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "lone")]
+            if item_type == "semantic-dataset":
+                return [
+                    {
+                        "type": "semantic-dataset",
+                        "id": "d1",
+                        "attributes": {"name": "x"},
+                        "meta": {"createdAt": "2020"},
+                    }
+                ]
+            return []
+
+        mock.list_items.side_effect = _list
+        result = service.show_model("prod")
+        # 'meta' key from server shape must not appear on the per-item dict
+        assert "meta" not in result["datasets"][0]
+
+
+# ---------------------------------------------------------------------------
+# validate (basic + deep)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateBasic:
+    """Basic validation checks (no API calls beyond the show fetch)."""
+
+    def _service_with(
+        self, tmp_path: Path, by_type: dict[str, list[dict[str, Any]]]
+    ) -> SemanticLayerService:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            return list(by_type.get(item_type, []))
+
+        mock.list_items.side_effect = _list
+        return service
+
+    def test_clean_model_is_valid(self, tmp_path: Path) -> None:
+        service = self._service_with(
+            tmp_path,
+            {
+                "semantic-dataset": [
+                    _child_item("semantic-dataset", "d1", {"name": "ds", "tableId": "out.c.t"})
+                ],
+                "semantic-metric": [
+                    _child_item(
+                        "semantic-metric",
+                        "m1",
+                        {"name": "rev", "sql": "COUNT(*)", "dataset": "out.c.t"},
+                    )
+                ],
+                "semantic-constraint": [
+                    _child_item(
+                        "semantic-constraint",
+                        "c1",
+                        {"name": "rev_warning", "metrics": ["rev"], "constraintType": "inequality"},
+                    )
+                ],
+            },
+        )
+        result = service.validate_model("prod")
+        assert result["valid"] is True
+        assert result["errors"] == []
+
+    def test_duplicate_names(self, tmp_path: Path) -> None:
+        service = self._service_with(
+            tmp_path,
+            {
+                "semantic-metric": [
+                    _child_item("semantic-metric", "m1", {"name": "rev"}),
+                    _child_item("semantic-metric", "m2", {"name": "rev"}),
+                ],
+            },
+        )
+        result = service.validate_model("prod")
+        errors = [e for e in result["errors"] if e["type"] == "DUPLICATE"]
+        assert errors and "rev" in errors[0]["item"]
+
+    def test_dangling_relationship(self, tmp_path: Path) -> None:
+        service = self._service_with(
+            tmp_path,
+            {
+                "semantic-dataset": [
+                    _child_item("semantic-dataset", "d1", {"name": "a", "tableId": "out.c.a"})
+                ],
+                "semantic-relationship": [
+                    _child_item(
+                        "semantic-relationship",
+                        "r1",
+                        {"name": "r", "from": "out.c.a", "to": "out.c.MISSING"},
+                    )
+                ],
+            },
+        )
+        result = service.validate_model("prod")
+        errors = [e for e in result["errors"] if e["type"] == "DANGLING_RELATIONSHIP"]
+        assert errors
+
+    def test_dangling_metric(self, tmp_path: Path) -> None:
+        service = self._service_with(
+            tmp_path,
+            {
+                "semantic-dataset": [
+                    _child_item("semantic-dataset", "d1", {"name": "a", "tableId": "out.c.a"})
+                ],
+                "semantic-metric": [
+                    _child_item(
+                        "semantic-metric",
+                        "m1",
+                        {"name": "rev", "sql": "x", "dataset": "out.c.GONE"},
+                    )
+                ],
+            },
+        )
+        result = service.validate_model("prod")
+        errors = [e for e in result["errors"] if e["type"] == "DANGLING_METRIC"]
+        assert errors
+
+    def test_sum_on_pct_warning(self, tmp_path: Path) -> None:
+        service = self._service_with(
+            tmp_path,
+            {
+                "semantic-metric": [
+                    _child_item(
+                        "semantic-metric",
+                        "m1",
+                        {"name": "bad", "sql": 'SUM("t"."PCT")', "dataset": "x"},
+                    )
+                ],
+            },
+        )
+        result = service.validate_model("prod")
+        warns = [w for w in result["warnings"] if w["type"] == "SUM_ON_PCT"]
+        assert warns
+
+    def test_constraint_orphan(self, tmp_path: Path) -> None:
+        service = self._service_with(
+            tmp_path,
+            {
+                "semantic-metric": [_child_item("semantic-metric", "m1", {"name": "rev"})],
+                "semantic-constraint": [
+                    _child_item(
+                        "semantic-constraint",
+                        "c1",
+                        {"name": "orph_warning", "metrics": ["rev", "MISSING"]},
+                    )
+                ],
+            },
+        )
+        result = service.validate_model("prod")
+        errors = [e for e in result["errors"] if e["type"] == "CONSTRAINT_ORPHAN"]
+        assert errors
+
+    def test_severity_suffix_warning(self, tmp_path: Path) -> None:
+        service = self._service_with(
+            tmp_path,
+            {
+                "semantic-metric": [_child_item("semantic-metric", "m1", {"name": "rev"})],
+                "semantic-constraint": [
+                    _child_item(
+                        "semantic-constraint",
+                        "c1",
+                        {"name": "no_suffix", "metrics": ["rev"]},
+                    )
+                ],
+            },
+        )
+        result = service.validate_model("prod")
+        warns = [w for w in result["warnings"] if w["type"] == "SEVERITY_SUFFIX"]
+        assert warns
+
+
+class TestValidateDeep:
+    """Deep validation -- fetches Snowflake schemas via StorageService."""
+
+    def test_phantom_field(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        ds_attrs = {
+            "name": "ds",
+            "tableId": "out.c.t",
+            "fields": [{"name": "REAL"}, {"name": "GHOST"}],
+        }
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-dataset":
+                return [_child_item("semantic-dataset", "d1", ds_attrs)]
+            return []
+
+        mock.list_items.side_effect = _list
+
+        with patch(
+            "keboola_agent_cli.services.semantic_layer_service.StorageService"
+        ) as MockStorageCls:
+            inst = MockStorageCls.return_value
+            inst.get_table_detail.return_value = {
+                "columns": ["REAL"],
+                "column_details": [{"name": "REAL", "type": "STRING"}],
+            }
+            result = service.validate_model("prod", deep=True)
+        errors = [e for e in result["errors"] if e["type"] == "PHANTOM_FIELD"]
+        assert any("GHOST" in e["item"] for e in errors)
+
+    def test_metric_phantom_column_ref(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-dataset":
+                return [_child_item("semantic-dataset", "d1", {"name": "ds", "tableId": "out.c.t"})]
+            if item_type == "semantic-metric":
+                return [
+                    _child_item(
+                        "semantic-metric",
+                        "m1",
+                        {"name": "rev", "sql": 'SUM("schema"."GHOST_COL")', "dataset": "out.c.t"},
+                    )
+                ]
+            return []
+
+        mock.list_items.side_effect = _list
+        with patch(
+            "keboola_agent_cli.services.semantic_layer_service.StorageService"
+        ) as MockStorageCls:
+            inst = MockStorageCls.return_value
+            inst.get_table_detail.return_value = {
+                "columns": ["REAL"],
+                "column_details": [{"name": "REAL", "type": "NUMBER"}],
+            }
+            result = service.validate_model("prod", deep=True)
+        errors = [e for e in result["errors"] if e["type"] == "METRIC_PHANTOM"]
+        assert errors
+
+    def test_agg_on_string(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-dataset":
+                return [_child_item("semantic-dataset", "d1", {"name": "ds", "tableId": "out.c.t"})]
+            if item_type == "semantic-metric":
+                return [
+                    _child_item(
+                        "semantic-metric",
+                        "m1",
+                        {
+                            "name": "agg_bad",
+                            "sql": 'SUM("schema"."NAME")',
+                            "dataset": "out.c.t",
+                        },
+                    )
+                ]
+            return []
+
+        mock.list_items.side_effect = _list
+        with patch(
+            "keboola_agent_cli.services.semantic_layer_service.StorageService"
+        ) as MockStorageCls:
+            inst = MockStorageCls.return_value
+            inst.get_table_detail.return_value = {
+                "columns": ["NAME"],
+                "column_details": [{"name": "NAME", "type": "STRING"}],
+            }
+            result = service.validate_model("prod", deep=True)
+        errors = [e for e in result["errors"] if e["type"] == "AGG_ON_STRING"]
+        assert errors
+
+
+# ---------------------------------------------------------------------------
+# export
+# ---------------------------------------------------------------------------
+
+
+class TestExportModel:
+    def _setup(self, tmp_path: Path) -> tuple[SemanticLayerService, MagicMock]:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "exp_model")]
+            if item_type == "semantic-dataset":
+                return [
+                    _child_item("semantic-dataset", "d1", {"name": "ds_a", "tableId": "out.c.t"})
+                ]
+            if item_type == "semantic-metric":
+                return [_child_item("semantic-metric", "m1", {"name": "rev"})]
+            if item_type == "semantic-relationship":
+                return [_child_item("semantic-relationship", "r1", {"name": "r"})]
+            if item_type == "semantic-constraint":
+                return [_child_item("semantic-constraint", "c1", {"name": "c_warning"})]
+            if item_type == "semantic-glossary":
+                return [_child_item("semantic-glossary", "g1", {"term": "GMV"})]
+            return []
+
+        mock.list_items.side_effect = _list
+        return service, mock
+
+    def test_export_envelope_shape(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path)
+        out_path = tmp_path / "export.json"
+        result = service.export_model("prod", output_path=out_path)
+        assert result["project"] == "prod"
+        assert "exported_at" in result
+        for k in ("datasets", "metrics", "relationships", "constraints", "glossary"):
+            assert k in result
+            assert result["counts"][k] == 1
+        assert result["path"] == str(out_path)
+
+    def test_export_writes_file_with_correct_permissions(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path)
+        out_path = tmp_path / "snap.json"
+        service.export_model("prod", output_path=out_path)
+        assert out_path.is_file()
+        # Permissions: world-readable per spec
+        mode = out_path.stat().st_mode & 0o777
+        assert mode == 0o644
+        # Content is valid JSON with expected keys
+        payload = json.loads(out_path.read_text())
+        assert payload["datasets"][0]["id"] == "d1"
+        assert payload["model"]["id"] == "U"
+
+    def test_export_default_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        service, _ = self._setup(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        result = service.export_model("prod")
+        path = Path(result["path"])
+        assert path.parent == tmp_path
+        assert path.name.startswith("sl_export_exp_model_")
+        assert path.suffix == ".json"
+
+
+# ---------------------------------------------------------------------------
+# diff
+# ---------------------------------------------------------------------------
+
+
+class TestDiff:
+    def _service_two_sides(
+        self,
+        tmp_path: Path,
+        *,
+        a_metrics: list[dict[str, Any]],
+        b_metrics: list[dict[str, Any]],
+    ) -> SemanticLayerService:
+        """Build a service whose mocked client returns different shapes per project alias.
+
+        Since the factory builds one client per project resolution, we keep a
+        single MagicMock but rotate its `side_effect` between calls by inspecting
+        which alias's stack URL was used.  Simpler: just inject the SAME
+        responses both times, then drive diff via project-vs-file.
+        """
+        store = _make_store_two(tmp_path)
+        service, mock = _make_service(store)
+
+        # Default list returns the A side; we'll diff project A vs a snapshot
+        # file holding B.
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U_A", "ma")]
+            if item_type == "semantic-metric":
+                return list(a_metrics)
+            return []
+
+        mock.list_items.side_effect = _list
+
+        # Write the B side as a snapshot file.
+        snap = tmp_path / "b.json"
+        snap.write_text(
+            json.dumps(
+                {
+                    "exported_at": "2020-01-01T00:00:00Z",
+                    "project": "target",
+                    "model": {"id": "U_B", "name": "mb"},
+                    "datasets": [],
+                    "metrics": b_metrics,
+                    "relationships": [],
+                    "constraints": [],
+                    "glossary": [],
+                }
+            )
+        )
+        self._snap = snap
+        return service
+
+    def test_added_removed_changed(self, tmp_path: Path) -> None:
+        a_metrics = [
+            _child_item("semantic-metric", "m1", {"name": "a", "sql": "1"}),
+            _child_item("semantic-metric", "m2", {"name": "b", "sql": "1"}),  # changed
+        ]
+        b_metrics = [
+            _child_item("semantic-metric", "m2", {"name": "b", "sql": "2"}),  # changed
+            _child_item("semantic-metric", "m3", {"name": "c", "sql": "1"}),  # new in B
+        ]
+        service = self._service_two_sides(tmp_path, a_metrics=a_metrics, b_metrics=b_metrics)
+        result = service.diff(project_a="source", file_b=self._snap)
+        metrics = result["metrics"]
+        # A had a, b; B has b, c -> added=[c], removed=[a], changed=[b]
+        assert metrics["added"] == ["c"]
+        assert metrics["removed"] == ["a"]
+        assert metrics["changed"] == [{"name": "b", "diff_keys": ["sql"]}]
+
+    def test_identical_after_strip(self, tmp_path: Path) -> None:
+        """modelUUID + timestamps differ; structural content matches → no change."""
+        a_metrics = [
+            _child_item(
+                "semantic-metric",
+                "m1",
+                {"name": "a", "sql": "1", "modelUUID": "U_A", "createdAt": "2020"},
+            )
+        ]
+        b_metrics = [
+            _child_item(
+                "semantic-metric",
+                "m1",
+                {"name": "a", "sql": "1", "modelUUID": "U_B", "createdAt": "2025"},
+            )
+        ]
+        service = self._service_two_sides(tmp_path, a_metrics=a_metrics, b_metrics=b_metrics)
+        result = service.diff(project_a="source", file_b=self._snap)
+        assert result["metrics"]["changed"] == []
+
+    def test_glossary_uses_term_key(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "x")]
+            if item_type == "semantic-glossary":
+                return [_child_item("semantic-glossary", "g1", {"term": "GMV", "definition": "v1"})]
+            return []
+
+        mock.list_items.side_effect = _list
+
+        # Right side: a snapshot with a different definition for the same term.
+        snap = tmp_path / "right.json"
+        snap.write_text(
+            json.dumps(
+                {
+                    "model": {"id": "U", "name": "x"},
+                    "datasets": [],
+                    "metrics": [],
+                    "relationships": [],
+                    "constraints": [],
+                    "glossary": [
+                        _child_item("semantic-glossary", "g1", {"term": "GMV", "definition": "v2"})
+                    ],
+                }
+            )
+        )
+        result = service.diff(project_a="prod", file_b=snap)
+        assert result["glossary"]["changed"][0]["term"] == "GMV"
+
+    def test_file_vs_file(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ = _make_service(store)
+        f_left = tmp_path / "L.json"
+        f_right = tmp_path / "R.json"
+        f_left.write_text(
+            json.dumps(
+                {
+                    "model": {"id": "U", "name": "x"},
+                    "datasets": [],
+                    "metrics": [_child_item("semantic-metric", "m", {"name": "rev", "sql": "1"})],
+                    "relationships": [],
+                    "constraints": [],
+                    "glossary": [],
+                }
+            )
+        )
+        f_right.write_text(
+            json.dumps(
+                {
+                    "model": {"id": "U", "name": "x"},
+                    "datasets": [],
+                    "metrics": [_child_item("semantic-metric", "m", {"name": "rev", "sql": "2"})],
+                    "relationships": [],
+                    "constraints": [],
+                    "glossary": [],
+                }
+            )
+        )
+        result = service.diff(file_a=f_left, file_b=f_right)
+        assert result["metrics"]["changed"] == [{"name": "rev", "diff_keys": ["sql"]}]
+
+
+# ---------------------------------------------------------------------------
+# add_* operations
+# ---------------------------------------------------------------------------
+
+
+class TestAddDataset:
+    def test_fqn_derivation(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "default")]
+            return []
+
+        mock.list_items.side_effect = _list
+        mock.post_item.return_value = {"id": "d1", "attributes": {"name": "fact_x"}}
+        service.add_dataset(
+            "prod",
+            None,
+            name="fact_x",
+            table_id="out.c-gold.FACT_X",
+        )
+        _, kwargs = mock.post_item.call_args
+        assert kwargs["data"]["fqn"] == '"KEBOOLA"."out.c-gold"."FACT_X"'
+        assert kwargs["data"]["modelUUID"] == "U"
+
+    def test_deep_fields_role_heuristics(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "default")]
+            return []
+
+        mock.list_items.side_effect = _list
+        mock.post_item.return_value = {"id": "d1", "attributes": {"name": "x"}}
+        with patch(
+            "keboola_agent_cli.services.semantic_layer_service.StorageService"
+        ) as MockStorageCls:
+            inst = MockStorageCls.return_value
+            inst.get_table_detail.return_value = {
+                "column_details": [
+                    {"name": "PK_USER_ID", "type": "NUMBER"},
+                    {"name": "ORDER_DATE", "type": "TIMESTAMP_TZ"},
+                    {"name": "AMOUNT_USD", "type": "NUMBER"},
+                    {"name": "USER_NAME", "type": "STRING"},
+                ]
+            }
+            service.add_dataset(
+                "prod",
+                None,
+                name="x",
+                table_id="out.c-g.X",
+                deep_fields=True,
+            )
+        _, kwargs = mock.post_item.call_args
+        fields = {f["name"]: f["role"] for f in kwargs["data"]["fields"]}
+        assert fields["PK_USER_ID"] == "key"
+        assert fields["ORDER_DATE"] == "timestamp"
+        assert fields["AMOUNT_USD"] == "measure"
+        assert fields["USER_NAME"] == "dimension"
+
+
+class TestAddMetric:
+    def _ds_list_factory(self, dataset_tids: list[str]):
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "default")]
+            if item_type == "semantic-dataset":
+                return [
+                    _child_item("semantic-dataset", f"d{i}", {"name": f"d{i}", "tableId": tid})
+                    for i, tid in enumerate(dataset_tids)
+                ]
+            return []
+
+        return _list
+
+    def test_happy_path_dataset_in_model(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.side_effect = self._ds_list_factory(["out.c.t"])
+        mock.post_item.return_value = {"id": "m1", "attributes": {"name": "rev"}}
+        result = service.add_metric(
+            "prod",
+            None,
+            name="rev",
+            sql="COUNT(*)",
+            dataset="out.c.t",
+            assume_yes=False,
+        )
+        assert result["id"] == "m1"
+        _, kwargs = mock.post_item.call_args
+        assert kwargs["item_type"] == "semantic-metric" if "item_type" in kwargs else True
+        assert kwargs["data"]["modelUUID"] == "U"
+        assert kwargs["data"]["dataset"] == "out.c.t"
+
+    def test_dataset_not_in_model_non_tty_requires_yes(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.side_effect = self._ds_list_factory(["out.c.OTHER"])
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.add_metric(
+                "prod",
+                None,
+                name="rev",
+                sql="x",
+                dataset="out.c.MISSING",
+                assume_yes=False,
+                is_tty=False,
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_dataset_not_in_model_yes_bypasses(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.side_effect = self._ds_list_factory(["out.c.OTHER"])
+        mock.post_item.return_value = {"id": "m1", "attributes": {"name": "rev"}}
+        result = service.add_metric(
+            "prod",
+            None,
+            name="rev",
+            sql="x",
+            dataset="out.c.MISSING",
+            assume_yes=True,
+        )
+        assert result["id"] == "m1"
+
+
+class TestAddRelationship:
+    def test_rejects_invalid_type(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ = _make_service(store)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.add_relationship(
+                "prod",
+                None,
+                name="r",
+                from_="a",
+                to="b",
+                on="a.id=b.id",
+                type_="full_outer",
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_happy_path(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            return []
+
+        mock.list_items.side_effect = _list
+        mock.post_item.return_value = {"id": "r1"}
+        service.add_relationship(
+            "prod",
+            None,
+            name="users_to_orders",
+            from_="out.c.users",
+            to="out.c.orders",
+            on="users.id = orders.user_id",
+            type_="left",
+        )
+        _, kwargs = mock.post_item.call_args
+        assert kwargs["data"]["type"] == "left"
+        assert kwargs["data"]["modelUUID"] == "U"
+
+
+class TestAddConstraint:
+    def _setup(
+        self, tmp_path: Path, metric_names: list[str]
+    ) -> tuple[SemanticLayerService, MagicMock]:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-metric":
+                return [
+                    _child_item("semantic-metric", f"m{i}", {"name": n})
+                    for i, n in enumerate(metric_names)
+                ]
+            return []
+
+        mock.list_items.side_effect = _list
+        mock.post_item.return_value = {"id": "c1"}
+        return service, mock
+
+    def test_rejects_bad_name_uppercase(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path, ["rev"])
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.add_constraint(
+                "prod",
+                None,
+                name="BadName",
+                constraint_type="inequality",
+                rule="x > 0",
+                metrics=["rev"],
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_rejects_bad_name_dashes(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path, ["rev"])
+        with pytest.raises(KeboolaApiError):
+            service.add_constraint(
+                "prod",
+                None,
+                name="bad-name",
+                constraint_type="inequality",
+                rule="x",
+                metrics=["rev"],
+            )
+
+    def test_rejects_leading_digit(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path, ["rev"])
+        with pytest.raises(KeboolaApiError):
+            service.add_constraint(
+                "prod",
+                None,
+                name="1bad",
+                constraint_type="inequality",
+                rule="x",
+                metrics=["rev"],
+            )
+
+    def test_accepts_valid_name(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path, ["rev"])
+        # Must not raise
+        service.add_constraint(
+            "prod",
+            None,
+            name="good_name_warning",
+            constraint_type="inequality",
+            rule="x",
+            metrics=["rev"],
+        )
+
+    def test_rejects_unknown_constraint_type(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path, ["rev"])
+        with pytest.raises(KeboolaApiError):
+            service.add_constraint(
+                "prod",
+                None,
+                name="ok_warning",
+                constraint_type="fancy",
+                rule="x",
+                metrics=["rev"],
+            )
+
+    def test_rejects_unknown_severity(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path, ["rev"])
+        with pytest.raises(KeboolaApiError):
+            service.add_constraint(
+                "prod",
+                None,
+                name="ok_warning",
+                constraint_type="inequality",
+                rule="x",
+                metrics=["rev"],
+                severity="extreme",
+            )
+
+    def test_rejects_missing_metric_reference(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path, ["rev"])
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.add_constraint(
+                "prod",
+                None,
+                name="ok_warning",
+                constraint_type="inequality",
+                rule="x",
+                metrics=["NONEXISTENT"],
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+
+class TestAddGlossary:
+    def test_happy_path(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            return []
+
+        mock.list_items.side_effect = _list
+        mock.post_item.return_value = {"id": "g1", "attributes": {"term": "GMV"}}
+        service.add_glossary("prod", None, term="GMV", definition="gross merchandise value")
+        _, kwargs = mock.post_item.call_args
+        # name parameter (envelope key) must equal the term
+        assert kwargs["name"] == "GMV"
+        assert kwargs["data"]["term"] == "GMV"
+        assert kwargs["data"]["modelUUID"] == "U"
+
+
+# ---------------------------------------------------------------------------
+# edit_* operations (DELETE+POST + rollback + cascade)
+# ---------------------------------------------------------------------------
+
+
+class TestEditMetric:
+    def test_rename_cascades_constraints(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        original = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
+        c_attrs = {"name": "rev_warning", "metrics": ["rev"]}
+        constraint = _child_item("semantic-constraint", "c1", c_attrs)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-metric":
+                return [original]
+            if item_type == "semantic-constraint":
+                return [constraint]
+            return []
+
+        mock.list_items.side_effect = _list
+        mock.post_item.side_effect = [
+            {"id": "m_new", "attributes": {"name": "revenue"}},
+            {"id": "c_new", "attributes": dict(c_attrs, name="rev_warning")},
+        ]
+
+        result = service.edit_metric(
+            "prod",
+            None,
+            current_name="rev",
+            new_name="revenue",
+            assume_yes=True,
+        )
+        assert result["updated"]["id"] == "m_new"
+        # delete called twice: once for the old metric, once for the cascade
+        assert mock.delete_item.call_count == 2
+        # cascade list populated
+        assert result["cascaded_constraints"][0]["status"] == "updated"
+
+    def test_description_only_change_no_cascade(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        original = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-metric":
+                return [original]
+            return []
+
+        mock.list_items.side_effect = _list
+        mock.post_item.return_value = {"id": "m_new", "attributes": {"name": "rev"}}
+
+        result = service.edit_metric(
+            "prod",
+            None,
+            current_name="rev",
+            new_description="updated desc",
+        )
+        assert result["updated"]["id"] == "m_new"
+        # Only one delete: the metric itself.
+        assert mock.delete_item.call_count == 1
+        assert result["cascaded_constraints"] == []
+
+    def test_metric_not_found(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            return []
+
+        mock.list_items.side_effect = _list
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.edit_metric("prod", None, current_name="ghost", new_sql="1")
+        assert excinfo.value.error_code == ErrorCode.NOT_FOUND
+
+    def test_rollback_on_post_failure(self, tmp_path: Path) -> None:
+        """When POST after DELETE fails, the original item is re-POSTed."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        original = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-metric":
+                return [original]
+            return []
+
+        mock.list_items.side_effect = _list
+        # First POST (the actual edit) fails; second POST (rollback) succeeds.
+        mock.post_item.side_effect = [
+            KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR),
+            {"id": "restored", "attributes": {"name": "rev"}},
+        ]
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.edit_metric("prod", None, current_name="rev", new_sql="2")
+        details = excinfo.value.details or {}
+        rollback = details.get("rollback") or {}
+        assert rollback.get("status") == "succeeded"
+
+
+class TestEditDataset:
+    def test_not_found(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            return []
+
+        mock.list_items.side_effect = _list
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.edit_dataset("prod", None, current_name="ghost", new_description="x")
+        assert excinfo.value.error_code == ErrorCode.NOT_FOUND
+
+
+class TestEditConstraint:
+    def test_rejects_bad_new_name(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ = _make_service(store)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.edit_constraint(
+                "prod",
+                None,
+                current_name="ok_warning",
+                new_name="UPPER",
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_rejects_bad_new_type(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ = _make_service(store)
+        with pytest.raises(KeboolaApiError):
+            service.edit_constraint(
+                "prod",
+                None,
+                current_name="ok_warning",
+                new_constraint_type="bogus",
+            )
+
+
+class TestEditRelationship:
+    def test_updates_endpoint(self, tmp_path: Path) -> None:
+        """Happy path: --new-from rewrites the source tableId via DELETE+POST."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-relationship":
+                return [
+                    _child_item(
+                        "semantic-relationship",
+                        "r1",
+                        {
+                            "name": "fact_to_dim",
+                            "from": "out.c.fact",
+                            "to": "out.c.dim",
+                            "on": "fact.id = dim.id",
+                            "type": "left",
+                        },
+                    )
+                ]
+            return []
+
+        mock.list_items.side_effect = _list
+        mock.post_item.return_value = {
+            "id": "r2",
+            "attributes": {"name": "fact_to_dim", "from": "out.c.fact_v2"},
+        }
+        result = service.edit_relationship(
+            "prod",
+            None,
+            current_name="fact_to_dim",
+            new_from="out.c.fact_v2",
+        )
+        mock.delete_item.assert_called_once_with("semantic-relationship", "r1")
+        # The POST payload retains the unchanged endpoints but rewrites `from`.
+        post_kwargs = mock.post_item.call_args.kwargs
+        assert post_kwargs["data"]["from"] == "out.c.fact_v2"
+        assert post_kwargs["data"]["to"] == "out.c.dim"
+        assert result["rollback"] is None
+        assert result["cascaded_constraints"] == []
+
+    def test_rejects_bad_new_type(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ = _make_service(store)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.edit_relationship(
+                "prod",
+                None,
+                current_name="x",
+                new_type="bogus",
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_not_found(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            return []
+
+        mock.list_items.side_effect = _list
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.edit_relationship("prod", None, current_name="ghost", new_to="x")
+        assert excinfo.value.error_code == ErrorCode.NOT_FOUND
+
+
+class TestEditGlossary:
+    def test_updates_definition(self, tmp_path: Path) -> None:
+        """Happy path: --new-definition rewrites the definition; term unchanged."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-glossary":
+                return [
+                    _child_item(
+                        "semantic-glossary",
+                        "g1",
+                        {"term": "MRR", "definition": "Monthly Recurring Revenue"},
+                    )
+                ]
+            return []
+
+        mock.list_items.side_effect = _list
+        mock.post_item.return_value = {
+            "id": "g2",
+            "attributes": {"term": "MRR", "definition": "Updated def"},
+        }
+        result = service.edit_glossary(
+            "prod",
+            None,
+            current_term="MRR",
+            new_definition="Updated def",
+        )
+        mock.delete_item.assert_called_once_with("semantic-glossary", "g1")
+        post_kwargs = mock.post_item.call_args.kwargs
+        assert post_kwargs["data"]["term"] == "MRR"
+        assert post_kwargs["data"]["definition"] == "Updated def"
+        assert result["rollback"] is None
+
+    def test_rename_term(self, tmp_path: Path) -> None:
+        """--new-term rewrites the term identity."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-glossary":
+                return [_child_item("semantic-glossary", "g1", {"term": "MRR"})]
+            return []
+
+        mock.list_items.side_effect = _list
+        mock.post_item.return_value = {"id": "g2", "attributes": {"term": "RECURRING_REVENUE"}}
+        service.edit_glossary(
+            "prod",
+            None,
+            current_term="MRR",
+            new_term="RECURRING_REVENUE",
+        )
+        post_kwargs = mock.post_item.call_args.kwargs
+        assert post_kwargs["data"]["term"] == "RECURRING_REVENUE"
+        assert post_kwargs["name"] == "RECURRING_REVENUE"
+
+    def test_not_found(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            return []
+
+        mock.list_items.side_effect = _list
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.edit_glossary("prod", None, current_term="ghost", new_definition="x")
+        assert excinfo.value.error_code == ErrorCode.NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# remove (preview + delete)
+# ---------------------------------------------------------------------------
+
+
+class TestRemove:
+    def test_preview_lists_orphans(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-metric":
+                return [_child_item("semantic-metric", "m1", {"name": "rev"})]
+            if item_type == "semantic-constraint":
+                return [
+                    _child_item(
+                        "semantic-constraint",
+                        "c1",
+                        {"name": "rev_warning", "metrics": ["rev"]},
+                    )
+                ]
+            return []
+
+        mock.list_items.side_effect = _list
+        preview = service.preview_remove("prod", None, kind="metric", name="rev")
+        assert len(preview["orphaned_constraints"]) == 1
+        assert preview["orphaned_constraints"][0]["name"] == "rev_warning"
+
+    def test_remove_invokes_delete(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-metric":
+                return [_child_item("semantic-metric", "m1", {"name": "rev"})]
+            return []
+
+        mock.list_items.side_effect = _list
+        result = service.remove_item("prod", None, kind="metric", name="rev")
+        mock.delete_item.assert_called_once_with("semantic-metric", "m1")
+        assert result["removed"]["name"] == "rev"
+
+    def test_remove_unknown_kind(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ = _make_service(store)
+        with pytest.raises(KeboolaApiError):
+            service.remove_item("prod", None, kind="bogus", name="x")
+
+    def test_remove_not_found(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            return []
+
+        mock.list_items.side_effect = _list
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.remove_item("prod", None, kind="metric", name="ghost")
+        assert excinfo.value.error_code == ErrorCode.NOT_FOUND
+
+    def test_remove_relationship(self, tmp_path: Path) -> None:
+        """Removing a relationship: DELETE only, no orphan check (leaf entity)."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-relationship":
+                return [_child_item("semantic-relationship", "r1", {"name": "fact_to_dim"})]
+            return []
+
+        mock.list_items.side_effect = _list
+        result = service.remove_item("prod", None, kind="relationship", name="fact_to_dim")
+        mock.delete_item.assert_called_once_with("semantic-relationship", "r1")
+        assert result["removed"]["name"] == "fact_to_dim"
+        assert result["orphaned_constraints"] == []
+
+    def test_remove_glossary_uses_term_identity(self, tmp_path: Path) -> None:
+        """Removing glossary: identity key is `term`, not `name`."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-glossary":
+                return [_child_item("semantic-glossary", "g1", {"term": "MRR"})]
+            return []
+
+        mock.list_items.side_effect = _list
+        result = service.remove_item("prod", None, kind="glossary", name="MRR")
+        mock.delete_item.assert_called_once_with("semantic-glossary", "g1")
+        assert result["removed"]["name"] == "MRR"
+        assert result["orphaned_constraints"] == []
+
+    def test_preview_remove_glossary_not_found_uses_term(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-glossary":
+                # Only term `MRR` exists -- lookup by `OTHER` must miss.
+                return [_child_item("semantic-glossary", "g1", {"term": "MRR"})]
+            return []
+
+        mock.list_items.side_effect = _list
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.preview_remove("prod", None, kind="glossary", name="OTHER")
+        assert excinfo.value.error_code == ErrorCode.NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# import_snapshot
+# ---------------------------------------------------------------------------
+
+
+def _write_snapshot(path: Path, *, datasets=None, metrics=None, constraints=None) -> None:
+    payload = {
+        "model": {"id": "src-uuid", "name": "src"},
+        "datasets": datasets or [],
+        "metrics": metrics or [],
+        "relationships": [],
+        "constraints": constraints or [],
+        "glossary": [],
+    }
+    path.write_text(json.dumps(payload))
+
+
+class TestImportSnapshot:
+    def test_skip_on_conflict_default(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "target")]
+            if item_type == "semantic-dataset":
+                return [_child_item("semantic-dataset", "d1", {"name": "fact_x"})]
+            return []
+
+        mock.list_items.side_effect = _list
+        snap = tmp_path / "s.json"
+        _write_snapshot(
+            snap,
+            datasets=[
+                _child_item("semantic-dataset", "src-d1", {"name": "fact_x", "tableId": "out.c.t"})
+            ],
+        )
+        result = service.import_snapshot("prod", snap)
+        assert result["imported"]["datasets"]["skipped"] == 1
+        assert result["imported"]["datasets"]["created"] == 0
+        mock.post_item.assert_not_called()
+
+    def test_overwrite_deletes_then_posts(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "target")]
+            if item_type == "semantic-dataset":
+                return [_child_item("semantic-dataset", "d1", {"name": "fact_x"})]
+            return []
+
+        mock.list_items.side_effect = _list
+        mock.post_item.return_value = {"id": "new"}
+        snap = tmp_path / "s.json"
+        _write_snapshot(
+            snap,
+            datasets=[
+                _child_item("semantic-dataset", "src-d1", {"name": "fact_x", "tableId": "out.c.t"})
+            ],
+        )
+        result = service.import_snapshot("prod", snap, overwrite=True)
+        assert result["imported"]["datasets"]["overwritten"] == 1
+        mock.delete_item.assert_called_with("semantic-dataset", "d1")
+        mock.post_item.assert_called()
+
+    def test_dry_run_no_writes(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "target")]
+            return []
+
+        mock.list_items.side_effect = _list
+        snap = tmp_path / "s.json"
+        _write_snapshot(
+            snap,
+            datasets=[
+                _child_item("semantic-dataset", "x", {"name": "new_ds", "tableId": "out.c.t"})
+            ],
+        )
+        result = service.import_snapshot("prod", snap, dry_run=True)
+        assert result["imported"]["datasets"]["created"] == 1
+        mock.post_item.assert_not_called()
+        mock.delete_item.assert_not_called()
+
+    def test_dependency_order(self, tmp_path: Path) -> None:
+        """Push order: datasets -> metrics -> relationships -> glossary -> constraints."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "target")]
+            return []
+
+        mock.list_items.side_effect = _list
+        mock.post_item.return_value = {"id": "x"}
+        snap = tmp_path / "s.json"
+        snap.write_text(
+            json.dumps(
+                {
+                    "model": {"id": "src", "name": "src"},
+                    "datasets": [
+                        _child_item("semantic-dataset", "d", {"name": "ds", "tableId": "out.c.t"})
+                    ],
+                    "metrics": [_child_item("semantic-metric", "m", {"name": "rev"})],
+                    "relationships": [],
+                    "constraints": [_child_item("semantic-constraint", "c", {"name": "c_w"})],
+                    "glossary": [_child_item("semantic-glossary", "g", {"term": "GMV"})],
+                }
+            )
+        )
+        service.import_snapshot("prod", snap)
+        type_call_order = [
+            c.kwargs["item_type"] if "item_type" in c.kwargs else c.args[0]
+            for c in mock.post_item.call_args_list
+        ]
+        # Order: dataset first, constraint last
+        assert type_call_order[0] == "semantic-dataset"
+        assert type_call_order[-1] == "semantic-constraint"
+
+    def test_invalid_json_file(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ = _make_service(store)
+        snap = tmp_path / "broken.json"
+        snap.write_text("{not valid json")
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.import_snapshot("prod", snap)
+        assert excinfo.value.error_code == ErrorCode.INVALID_FORMAT
+
+    def test_import_rejects_unknown_types_filter(self, tmp_path: Path) -> None:
+        """`--types BOGUS` raises VALIDATION_ERROR instead of silently no-opping.
+
+        Iter-3: closes the silent-filter bug where typo'd type names
+        (e.g. ``--types metric`` instead of ``metrics``) filtered every type
+        out and emitted zero imports without an error.
+        """
+        from keboola_agent_cli.services.semantic_layer_service import _validate_types_filter
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            _validate_types_filter(["BOGUS"])
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert "BOGUS" in excinfo.value.message
+
+    def test_validate_types_filter_accepts_valid_subset(self) -> None:
+        from keboola_agent_cli.services.semantic_layer_service import _validate_types_filter
+
+        assert _validate_types_filter(["datasets", "metrics"]) == {"datasets", "metrics"}
+        assert _validate_types_filter(None) is None
+        assert _validate_types_filter([]) is None
+
+
+# ---------------------------------------------------------------------------
+# promote_model
+# ---------------------------------------------------------------------------
+
+
+class TestPromoteModel:
+    def test_classification_new_changed_identical(self, tmp_path: Path) -> None:
+        store = _make_store_two(tmp_path)
+
+        src_mock = MagicMock()
+        tgt_mock = MagicMock()
+        clients = {0: src_mock, 1: tgt_mock}
+        call_idx = {"i": 0}
+
+        def _factory(url: str, token: str) -> MagicMock:
+            c = clients[call_idx["i"]]
+            call_idx["i"] += 1
+            return c
+
+        service = SemanticLayerService(
+            config_store=store,
+            metastore_client_factory=_factory,
+        )
+
+        def _src_list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U_S", "src")]
+            if item_type == "semantic-metric":
+                return [
+                    _child_item(
+                        "semantic-metric", "m1", {"name": "a", "sql": "1", "modelUUID": "U_S"}
+                    ),
+                    _child_item(
+                        "semantic-metric", "m2", {"name": "b", "sql": "2", "modelUUID": "U_S"}
+                    ),  # changed
+                    _child_item(
+                        "semantic-metric", "m3", {"name": "c", "sql": "3", "modelUUID": "U_S"}
+                    ),  # new
+                ]
+            return []
+
+        def _tgt_list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U_T", "tgt")]
+            if item_type == "semantic-metric":
+                return [
+                    _child_item(
+                        "semantic-metric", "tm1", {"name": "a", "sql": "1", "modelUUID": "U_T"}
+                    ),  # identical
+                    _child_item(
+                        "semantic-metric", "tm2", {"name": "b", "sql": "OLD", "modelUUID": "U_T"}
+                    ),  # will change
+                    _child_item(
+                        "semantic-metric", "tm9", {"name": "z", "sql": "9", "modelUUID": "U_T"}
+                    ),  # target-only
+                ]
+            return []
+
+        src_mock.list_items.side_effect = _src_list
+        tgt_mock.list_items.side_effect = _tgt_list
+
+        result = service.promote_model(from_project="source", to_project="target", dry_run=True)
+        metrics = result["metrics"]
+        assert metrics["new"] == 1  # c
+        assert metrics["overwritten"] == 1  # b
+        assert metrics["identical"] == 1  # a
+        # Target-only items not touched
+        tgt_mock.delete_item.assert_not_called()
+
+    def test_both_clients_closed_even_on_error(self, tmp_path: Path) -> None:
+        store = _make_store_two(tmp_path)
+
+        src_mock = MagicMock()
+        tgt_mock = MagicMock()
+        clients = {0: src_mock, 1: tgt_mock}
+        call_idx = {"i": 0}
+
+        def _factory(url: str, token: str) -> MagicMock:
+            c = clients[call_idx["i"]]
+            call_idx["i"] += 1
+            return c
+
+        service = SemanticLayerService(
+            config_store=store,
+            metastore_client_factory=_factory,
+        )
+
+        # src_client raises during resolve
+        src_mock.list_items.side_effect = RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            service.promote_model(from_project="source", to_project="target")
+        src_mock.close.assert_called_once()
+        tgt_mock.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# build_model
+# ---------------------------------------------------------------------------
+
+
+class TestBuildModel:
+    def test_heuristic_fallback(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        mock.post_item.side_effect = [
+            {"id": "new-model"},  # the model
+            {"id": "d1"},  # dataset
+            {"id": "m1"},  # metric (count(*))
+            {"id": "g1"},  # glossary
+        ]
+        with patch(
+            "keboola_agent_cli.services.semantic_layer_service.StorageService"
+        ) as MockStorageCls:
+            inst = MockStorageCls.return_value
+            inst.get_table_detail.return_value = {
+                "display_name": "fact_orders",
+                "column_details": [{"name": "AMOUNT", "type": "NUMBER"}],
+            }
+            result = service.build_model("prod", table_ids=["out.c.t"])
+        assert result["fallback_used"] == "heuristic"
+        assert len(result["generated"]["datasets"]) == 1
+        assert len(result["generated"]["metrics"]) == 1
+        assert len(result["generated"]["glossary"]) == 1
+        assert result["validated"] is True
+
+    def test_dry_run_skips_post(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        with patch(
+            "keboola_agent_cli.services.semantic_layer_service.StorageService"
+        ) as MockStorageCls:
+            inst = MockStorageCls.return_value
+            inst.get_table_detail.return_value = {
+                "column_details": [{"name": "X", "type": "NUMBER"}],
+            }
+            result = service.build_model("prod", table_ids=["out.c.t"], dry_run=True)
+        assert result["dry_run"] is True
+        mock.post_item.assert_not_called()
+
+    def test_empty_table_ids_rejected(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ = _make_service(store)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.build_model("prod", table_ids=[])
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_fqn_derived_for_each_dataset(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ = _make_service(store)
+        with patch(
+            "keboola_agent_cli.services.semantic_layer_service.StorageService"
+        ) as MockStorageCls:
+            inst = MockStorageCls.return_value
+            inst.get_table_detail.return_value = {
+                "column_details": [{"name": "X", "type": "NUMBER"}],
+            }
+            result = service.build_model(
+                "prod",
+                table_ids=["out.c-bk.tab"],
+                dry_run=True,
+            )
+        ds = result["generated"]["datasets"][0]
+        assert ds["fqn"] == '"KEBOOLA"."out.c-bk"."tab"'
+
+
+# ---------------------------------------------------------------------------
+# encrypt_token
+# ---------------------------------------------------------------------------
+
+
+class TestEncryptToken:
+    def test_uses_project_token_and_returns_envelope(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ = _make_service(store)
+        # Patch the symbol where it's BOUND (semantic_layer_service imports
+        # EncryptService at module load now, so the patch must target the
+        # rebound name in the consumer module, not the source module).
+        with patch(
+            "keboola_agent_cli.services.semantic_layer_service.EncryptService"
+        ) as MockEncryptCls:
+            instance = MockEncryptCls.return_value
+            instance.encrypt.return_value = {"#metastore_token": "KBC::ProjectSecureGKMS::cipher"}
+            result = service.encrypt_token("prod", "keboola.ex-db-snowflake")
+        instance.encrypt.assert_called_once()
+        _, kwargs = instance.encrypt.call_args
+        # Validate the payload key + the actual stored token are passed.
+        assert kwargs["component_id"] == "keboola.ex-db-snowflake"
+        assert kwargs["input_data"] == {"#metastore_token": TEST_TOKEN}
+        assert kwargs["alias"] == "prod"
+        # Returned envelope contains expected fields.
+        assert result["component_id"] == "keboola.ex-db-snowflake"
+        assert result["project"] == "prod"
+        assert result["encrypted"]["#metastore_token"].startswith("KBC::")
+
+
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+
+class TestModuleConstants:
+    def test_constraint_name_regex(self) -> None:
+        assert CONSTRAINT_NAME_RE.match("rev_critical")
+        assert CONSTRAINT_NAME_RE.match("a")
+        assert not CONSTRAINT_NAME_RE.match("BadName")
+        assert not CONSTRAINT_NAME_RE.match("1bad")
+        assert not CONSTRAINT_NAME_RE.match("bad-name")
+
+    def test_constraint_types_complete(self) -> None:
+        assert set(CONSTRAINT_TYPES) == {
+            "inequality",
+            "equality",
+            "range",
+            "composition",
+            "exclusion",
+            "temporal",
+            "conditional",
+        }
+
+    def test_constraint_severities(self) -> None:
+        assert set(CONSTRAINT_SEVERITIES) == {"error", "warning", "info"}

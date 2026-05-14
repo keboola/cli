@@ -1,5 +1,127 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## Semantic-layer constraint `rule` is a STRING, not an object (since v0.41.0)
+
+- The `sl-builder` skill docs (in `04_AI_Kit/ai-kit/`) describe range
+  constraints with `ruleExpression: {bounds: {min: 0, max: 100}}` --
+  that is **WRONG** against the live metastore. Probed 2026-05-14
+  against `e2e-1143`: the API rejects the object shape with HTTP 400
+  / `"got object, want string"`.
+- The correct shape is a single SQL-ish string expression:
+  ```json
+  {"name": "revenue_non_negative", "constraintType": "inequality",
+   "rule": "value >= 0", "metrics": ["revenue"], "severity": "warning"}
+  ```
+  Other examples: `"value BETWEEN 0 AND 100"` (range),
+  `"value IS NOT NULL"` (equality/existence), `"prev_value <= value"`
+  (temporal monotonic).
+- The `constraintType` enum is a CLOSED list:
+  `inequality | equality | range | composition | exclusion | temporal | conditional`.
+  It classifies the SHAPE of the constraint -- the actual expression is
+  always a string.
+- `kbagent semantic-layer add constraint --rule "..."` enforces the
+  string contract at the CLI layer; if a user pastes a `{bounds: ...}`
+  object the CLI exits 2 / `VALIDATION_ERROR` with a hint pointing at
+  this gotcha.
+
+## Constraint name regex `^[a-z][a-z0-9_]*$` AND the 3-vs-4 severity split (since v0.41.0)
+
+- Constraint NAMES must match `^[a-z][a-z0-9_]*$`: lowercase ASCII,
+  digits, underscores; must start with a letter. UPPERCASE, hyphens,
+  dots, or leading digits get rejected with HTTP 400.
+- The 4-band health convention (`<name>_critical / _warning / _healthy
+  / _review`) lives in the NAME SUFFIX. That suffix is what shows up
+  downstream in `DIM_METRIC_THRESHOLD` joins on `CODE_CONSTRAINT`
+  derivations -- it is **not** the same as the API `severity` field.
+- The API `severity` field is a SEPARATE closed 3-value enum
+  (`error | warning | info`).
+- Typical pairing: a `_critical`-suffixed constraint typically carries
+  `severity: "error"`; a `_warning`-suffixed one `severity: "warning"`;
+  `_healthy` and `_review` typically carry `severity: "info"`. There is
+  no automatic mapping in the API -- the operator sets both
+  independently. kbagent's `semantic-layer validate` emits a warning
+  when the suffix and the severity drift (e.g. a `_critical`-suffixed
+  constraint with `severity: "info"`).
+- `kbagent semantic-layer add constraint --severity` only accepts the
+  3 API values; the 4-band band lives in `--name` suffix.
+
+## Metric rename auto-cascades through `CODE_METRIC` (since v0.41.0)
+
+- `kbagent semantic-layer edit metric --new-name NEW` does DELETE+POST
+  on the metric and ALSO DELETE+POST on every constraint whose
+  `metrics[]` referenced the old name (POST new with `metrics[]`
+  updated to the new name). The metastore has no PATCH endpoint, so
+  every "edit" is a delete-then-create.
+- The `CODE_METRIC` derived value (used in downstream SQL joins on
+  `DIM_METRIC_THRESHOLD` / `FACT_METRIC_*` lookups) is computed via
+  ```python
+  re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")
+  ```
+  Renaming a metric from `revenue_growth` to `revenue_growth_qoq`
+  changes `CODE_METRIC` from `REVENUE_GROWTH` to `REVENUE_GROWTH_QOQ`.
+  Downstream SQL joining on `CODE_METRIC = 'REVENUE_GROWTH'` silently
+  drops the row after the rename.
+- kbagent `edit metric` ALWAYS prints the old/new CODE_METRIC values
+  and the list of affected constraints, and requires Y/N confirm
+  unless `--yes` is set. The CODE_METRIC change line is printed even
+  with `--yes` -- treat it as a contract change that needs explicit
+  audit of downstream SQL.
+- On POST failure (e.g. the new name violates a constraint), the
+  service re-POSTs `original_attrs` to restore the pre-edit state
+  and reports rollback success/failure explicitly in the response
+  envelope's `rollback` field. If rollback itself fails, the model
+  is left in a partial state -- surface that to the operator and
+  recommend running `semantic-layer validate` immediately.
+
+## Removing a metric corrupts `DIM_METRIC_THRESHOLD` downstream (since v0.41.0)
+
+- `kbagent semantic-layer remove metric --name N` runs a pre-deletion
+  scan listing every constraint whose `metrics[]` includes N. Each
+  such constraint becomes ORPHANED after the delete: it remains in
+  the model but references a metric that no longer exists.
+- Downstream impact: the typical Keboola semantic-layer pipeline
+  pushes constraints into `DIM_METRIC_THRESHOLD` keyed by
+  `CODE_METRIC` derived from the metric name. After an orphan, the
+  threshold row points at a non-existent metric -- joins on
+  `CODE_METRIC` from `FACT_METRIC_VALUES` silently drop the row (or
+  crash on strict joins, depending on the pipeline).
+- The orphan warning is ALWAYS printed (even with `--yes`) and lists
+  the orphaned constraint names plus their `metrics[]` content.
+  Non-TTY invocations without `--yes` refuse with exit 2 -- the
+  warning is non-suppressible.
+- Recommended recovery: either remove the orphaned constraints FIRST
+  (so `metrics[]` shrinks to a list of still-existing metrics), or
+  use `edit metric --new-name <archived_*>` for a SOFT-DELETE that
+  keeps the constraint refs valid (and the CODE_METRIC alive in
+  historical comparisons).
+
+## `semantic-layer build` is a HEURISTIC fallback, not full AI (since v0.41.0)
+
+- The kbagent AI Service client (`ai_client.py`) only exposes
+  `get_component_detail` and `suggest_components` as of v0.41.0 --
+  no arbitrary-JSON endpoint. So `kbagent semantic-layer build`
+  falls back to a DETERMINISTIC heuristic builder that synthesises:
+  one dataset per `--tables` entry (FQN auto-derived from
+  `tableId`; `fields[]` role-classified via the same PK_/FK_/*_DATE/
+  *_DT/numeric-amount-name heuristics as `add dataset --deep-fields`),
+  one `COUNT(*)` metric per dataset, one glossary entry per table.
+  No relationships, no constraints.
+- The response envelope carries `fallback_used: "heuristic"` so
+  callers can detect the mode. Treat the output as a "best starting
+  scaffold" and immediately follow up with `add metric`, `add
+  relationship`, `add constraint` for real business logic.
+- The push loop walks ALL FIVE child types in dependency order
+  (datasets -> metrics -> relationships -> glossary -> constraints).
+  This FIXES the long-standing `sl-build` skill bug where
+  `semantic-constraint` was silently dropped from the push loop --
+  the skill iterated only 4 of the 5 types.
+- The full AI-assisted greenfield wizard (schema discovery, SQL
+  analysis, LLM-generated metrics with rich business logic and
+  paired range constraints) still lives in the `sl-build` skill in
+  `04_AI_Kit/ai-kit/`. Bridge to that skill when the heuristic is
+  not enough; the two are interoperable via the same metastore
+  contract.
+
 ## `kbagent http` works only inside `kbagent serve` subprocesses (since v0.40.0)
 
 - `kbagent http get/post/patch/delete <PATH>` is a thin self-call client

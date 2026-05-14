@@ -160,6 +160,15 @@ def check_cli_permission(ctx: typer.Context, group_name: str) -> None:
 
             if HintRegistry.get(cli_command) is not None:
                 return  # Hint exists — let the command function handle it
+            # Sub-app descent: allow the parent callback to pass control to a
+            # nested sub-app's callback when *any* descendant under the
+            # composed prefix has a hint definition registered. Without this,
+            # multi-level command groups (e.g. `semantic-layer add metric`)
+            # would always exit at the parent callback with "No --hint"
+            # because the parent prefix itself is never registered as a leaf.
+            prefix = cli_command + "."
+            if any(key.startswith(prefix) for key in HintRegistry.all_commands()):
+                return
             # No hint registered for this command
             typer.echo(
                 f"No --hint available for '{group_name} {subcommand}'.",

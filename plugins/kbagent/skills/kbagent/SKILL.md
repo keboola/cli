@@ -38,7 +38,18 @@ description: >
   invite user, invite member, project invitation, manage members,
   list members, remove member, change role, project role,
   bulk invite, invite from CSV, project access, member management,
-  manage token prompt, --allow-env-manage-token, KBC_MANAGE_API_TOKEN.
+  manage token prompt, --allow-env-manage-token, KBC_MANAGE_API_TOKEN,
+  semantic-layer, semantic layer, semantic-layer model, metastore,
+  semantic-metric, semantic-dataset, semantic-relationship,
+  semantic-constraint, semantic-glossary, add metric, edit metric,
+  rename metric, remove metric, validate model, validate semantic layer,
+  promote model, semantic-layer build, semantic-layer export,
+  semantic-layer diff, semantic-layer import, semantic-layer token,
+  metric SQL, dataset FQN, constraint rule, threshold constraint,
+  4-band health, _critical _warning _healthy _review, CODE_METRIC,
+  DIM_METRIC_THRESHOLD, dangling metric FK, orphaned constraint,
+  phantom field, AGG on STRING, SUM on PCT, deep validate,
+  sl, kbagent sl, semantic layer wizard, sl-build, sl-add, sl-edit.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -231,6 +242,58 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Remove the branch mapping for the current git branch | `kbagent sync branch-unlink` |
 | Show the branch mapping status for the current git branch | `kbagent sync branch-status` |
 | Encrypt #-prefixed secret values for a Keboola component | `kbagent encrypt values --project PROJECT --component-id COMPONENT-ID --input INPUT-DATA` |
+| Encrypt the project's storage token for transformation `user_properties` | `kbagent semantic-layer token --project PROJECT --component-id COMPONENT-ID` |
+| Build a semantic-layer model from a list of storage tables (non-interactive) | `kbagent semantic-layer build --project PROJECT` |
+| Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent semantic-layer promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
+| Replay a snapshot into a project. | `kbagent semantic-layer import --project PROJECT --file FILE` |
+| Show the entities in a semantic-layer model | `kbagent semantic-layer show --project PROJECT` |
+| Snapshot a semantic-layer model to a self-describing JSON file | `kbagent semantic-layer export --project PROJECT` |
+| Diff two semantic-layer snapshots (project↔project, project↔file, file↔file) | `kbagent semantic-layer diff` |
+| Validate a semantic-layer model | `kbagent semantic-layer validate --project PROJECT` |
+| List all semantic-layer models in a project | `kbagent semantic-layer model list --project PROJECT` |
+| Create a new semantic-layer model | `kbagent semantic-layer model create --project PROJECT --name NAME` |
+| Delete a semantic-layer model. | `kbagent semantic-layer model delete --project PROJECT --model MODEL` |
+| Add a metric to a semantic-layer model | `kbagent semantic-layer add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
+| Add a dataset (FQN derived from tableId) | `kbagent semantic-layer add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
+| Add a relationship between two datasets | `kbagent semantic-layer add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
+| Add a constraint | `kbagent semantic-layer add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
+| Add a glossary term | `kbagent semantic-layer add glossary --project PROJECT --term TERM` |
+| Edit a metric. | `kbagent semantic-layer edit metric --project PROJECT --name NAME` |
+| Edit a dataset (no cascade — metric.dataset uses tableId, not name) | `kbagent semantic-layer edit dataset --project PROJECT --name NAME` |
+| Edit a constraint (DELETE+POST, with local validators) | `kbagent semantic-layer edit constraint --project PROJECT --name NAME` |
+| Edit a relationship (DELETE+POST). | `kbagent semantic-layer edit relationship --project PROJECT --name NAME` |
+| Edit a glossary term. | `kbagent semantic-layer edit glossary --project PROJECT --term TERM` |
+| Remove a metric. | `kbagent semantic-layer remove metric --project PROJECT --name NAME` |
+| Remove a dataset | `kbagent semantic-layer remove dataset --project PROJECT --name NAME` |
+| Remove a constraint | `kbagent semantic-layer remove constraint --project PROJECT --name NAME` |
+| Remove a relationship. | `kbagent semantic-layer remove relationship --project PROJECT --name NAME` |
+| Remove a glossary term. | `kbagent semantic-layer remove glossary --project PROJECT --term TERM` |
+| Encrypt the project's storage token for transformation `user_properties` | `kbagent sl token --project PROJECT --component-id COMPONENT-ID` |
+| Build a semantic-layer model from a list of storage tables (non-interactive) | `kbagent sl build --project PROJECT` |
+| Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent sl promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
+| Replay a snapshot into a project. | `kbagent sl import --project PROJECT --file FILE` |
+| Show the entities in a semantic-layer model | `kbagent sl show --project PROJECT` |
+| Snapshot a semantic-layer model to a self-describing JSON file | `kbagent sl export --project PROJECT` |
+| Diff two semantic-layer snapshots (project↔project, project↔file, file↔file) | `kbagent sl diff` |
+| Validate a semantic-layer model | `kbagent sl validate --project PROJECT` |
+| List all semantic-layer models in a project | `kbagent sl model list --project PROJECT` |
+| Create a new semantic-layer model | `kbagent sl model create --project PROJECT --name NAME` |
+| Delete a semantic-layer model. | `kbagent sl model delete --project PROJECT --model MODEL` |
+| Add a metric to a semantic-layer model | `kbagent sl add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
+| Add a dataset (FQN derived from tableId) | `kbagent sl add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
+| Add a relationship between two datasets | `kbagent sl add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
+| Add a constraint | `kbagent sl add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
+| Add a glossary term | `kbagent sl add glossary --project PROJECT --term TERM` |
+| Edit a metric. | `kbagent sl edit metric --project PROJECT --name NAME` |
+| Edit a dataset (no cascade — metric.dataset uses tableId, not name) | `kbagent sl edit dataset --project PROJECT --name NAME` |
+| Edit a constraint (DELETE+POST, with local validators) | `kbagent sl edit constraint --project PROJECT --name NAME` |
+| Edit a relationship (DELETE+POST). | `kbagent sl edit relationship --project PROJECT --name NAME` |
+| Edit a glossary term. | `kbagent sl edit glossary --project PROJECT --term TERM` |
+| Remove a metric. | `kbagent sl remove metric --project PROJECT --name NAME` |
+| Remove a dataset | `kbagent sl remove dataset --project PROJECT --name NAME` |
+| Remove a constraint | `kbagent sl remove constraint --project PROJECT --name NAME` |
+| Remove a relationship. | `kbagent sl remove relationship --project PROJECT --name NAME` |
+| Remove a glossary term. | `kbagent sl remove glossary --project PROJECT --term TERM` |
 | GET an endpoint on the running kbagent serve | `kbagent http get <PATH>` |
 | POST to an endpoint on the running kbagent serve | `kbagent http post <PATH>` |
 | PATCH an endpoint on the running kbagent serve | `kbagent http patch <PATH>` |
@@ -289,6 +352,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Variables (attach to any config)** | [variables-workflow](references/variables-workflow.md) |
 | Reading synced data | [reading-synced-data](references/reading-synced-data.md) |
 | SQL migration (input mapping removal) | [sql-migration-workflow](references/sql-migration-workflow.md) |
+| **Semantic layer (metastore)** -- models, metrics, datasets, constraints, glossary; validate / export / diff / promote / build / token | [semantic-layer-workflow](references/semantic-layer-workflow.md) |
 | Response parsing gotchas | [gotchas](references/gotchas.md) |
 
 ## First-time setup

@@ -134,7 +134,10 @@ class ClientRenderer:
             client_types.add(step.client.client_type)
 
         needs_os = (
-            "storage" in client_types or "manage" in client_types or "data_science" in client_types
+            "storage" in client_types
+            or "manage" in client_types
+            or "data_science" in client_types
+            or "metastore" in client_types
         )
         if needs_os:
             lines.append("import os")
@@ -150,6 +153,8 @@ class ClientRenderer:
             lines.append("from keboola_agent_cli.data_science_client import DataScienceClient")
         if "manage" in client_types:
             lines.append("from keboola_agent_cli.manage_client import ManageClient")
+        if "metastore" in client_types:
+            lines.append("from keboola_agent_cli.metastore_client import MetastoreClient")
         if "mcp" in client_types:
             lines.append("from keboola_agent_cli.config_store import ConfigStore")
             lines.append("from keboola_agent_cli.services.mcp_service import McpService")
@@ -183,6 +188,20 @@ class ClientRenderer:
             lines.append('    token=os.environ["KBC_MANAGE_API_TOKEN"],')
             lines.append(")")
 
+        if "metastore" in client_types:
+            url_comment = ""
+            if stack_url:
+                project = params.get("project")
+                if project:
+                    proj_label = project[0] if isinstance(project, list) else project
+                    safe_label = _escape_for_python_string(str(proj_label))
+                    url_comment = f"  # from project '{safe_label}'"
+            lines.append("# Derives metastore.{stack-suffix} from the stack URL internally.")
+            lines.append("metastore_client = MetastoreClient(")
+            lines.append(f'    stack_url="{url}",{url_comment}')
+            lines.append('    token=os.environ["KBC_STORAGE_TOKEN"],')
+            lines.append(")")
+
         if "mcp" in client_types:
             config_dir_str = str(config_dir) if config_dir else "/path/to/.kbagent"
             lines.append("# MCP tools require ConfigStore (they go through keboola-mcp-server)")
@@ -198,6 +217,8 @@ class ClientRenderer:
             close_vars.append("ds_client")
         if "manage" in client_types:
             close_vars.append("manage_client")
+        if "metastore" in client_types:
+            close_vars.append("metastore_client")
 
         indent = "    " if close_vars else ""
         lines.append("")
@@ -222,6 +243,7 @@ class ClientRenderer:
                 "storage": "client",
                 "data_science": "ds_client",
                 "manage": "manage_client",
+                "metastore": "metastore_client",
                 "mcp": "mcp_service",
             }
             client_var = client_var_map.get(step.client.client_type, "client")

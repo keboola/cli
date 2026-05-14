@@ -27,7 +27,7 @@ test-integration: ## Run integration tests only
 	uv run pytest tests/ -v -m integration
 
 test-e2e: ## Run E2E tests (E2E_API_TOKEN and E2E_URL required)
-	uv run pytest tests/test_e2e.py -v -s --tb=long
+	uv run pytest tests/test_e2e.py tests/test_server_semantic_layer_routes_e2e.py -v -s --tb=long
 
 test-e2e-invite: ## Run project invite E2E (E2E_MANAGE_TOKEN + E2E_INVITE_PROJECT_ID required)
 	uv run pytest tests/test_e2e.py -v -s --tb=long -m e2e_invite

@@ -152,6 +152,54 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.describe-batch": "write",
     # Encryption
     "encrypt.values": "write",
+    # Semantic layer (metastore) — new in 0.41.0
+    "semantic-layer.show": "read",
+    "semantic-layer.validate": "read",
+    "semantic-layer.export": "read",
+    "semantic-layer.diff": "read",
+    # The `model` sub-app: the parent `semantic-layer` callback fires first
+    # with ctx.invoked_subcommand == "model" and synthesizes operation key
+    # ``semantic-layer.model``. We expose that key at the LEAST-privileged
+    # leaf risk (read) so the parent permits descent — the model sub-app's
+    # own callback then runs with the per-leaf keys below and enforces the
+    # actual gate. Without the parent-level key the fail-closed default
+    # treats ``semantic-layer.model`` as ``write`` and denies even
+    # ``model list`` under ``--deny-writes``.
+    "semantic-layer.model": "read",
+    "semantic-layer.model.list": "read",
+    "semantic-layer.model.create": "write",
+    "semantic-layer.model.delete": "destructive",
+    # The add/edit/remove sub-apps: same parent-callback pattern as `model`
+    # above -- the parent semantic-layer callback fires with the collapsed
+    # key, then the sub-app callback composes per-leaf operation keys via
+    # the standard ``check_cli_permission`` helper. Every leaf inside one
+    # sub-app shares the same risk class (add=write, edit=write,
+    # remove=destructive), so the per-leaf keys all carry that class.
+    "semantic-layer.add": "write",
+    "semantic-layer.add.metric": "write",
+    "semantic-layer.add.dataset": "write",
+    "semantic-layer.add.relationship": "write",
+    "semantic-layer.add.constraint": "write",
+    "semantic-layer.add.glossary": "write",
+    "semantic-layer.edit": "write",
+    "semantic-layer.edit.metric": "write",
+    "semantic-layer.edit.dataset": "write",
+    "semantic-layer.edit.constraint": "write",
+    "semantic-layer.edit.relationship": "write",
+    "semantic-layer.edit.glossary": "write",
+    "semantic-layer.import": "write",
+    "semantic-layer.promote": "write",
+    "semantic-layer.build": "write",
+    # `token --encrypt` calls EncryptService, same blast radius as
+    # `encrypt.values` which is `write`. Classified `write` for parity:
+    # users opting out via --deny-writes block both consistently.
+    "semantic-layer.token": "write",
+    "semantic-layer.remove": "destructive",
+    "semantic-layer.remove.metric": "destructive",
+    "semantic-layer.remove.dataset": "destructive",
+    "semantic-layer.remove.constraint": "destructive",
+    "semantic-layer.remove.relationship": "destructive",
+    "semantic-layer.remove.glossary": "destructive",
     # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
     # Categorised by the underlying HTTP method: GET = read, mutating verbs
     # = write. The serve's own routes enforce their own permissions on top.

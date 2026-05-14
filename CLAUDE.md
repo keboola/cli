@@ -214,7 +214,7 @@ All three inherit from `BaseHttpClient` (`http_base.py`) which provides shared r
     - `plugins/kbagent/skills/kbagent/SKILL.md` -- description triggers and workflow links (the auto-generated table is CI-checked, the rest is not)
     - `plugins/kbagent/skills/kbagent/references/commands-reference.md`
     - `plugins/kbagent/skills/kbagent/references/gotchas.md` (every new gotcha **MUST** be tagged with `(since vX.Y.Z)`)
-    - `plugins/kbagent/skills/kbagent/references/<topic>-workflow.md`
+    - `plugins/kbagent/skills/kbagent/references/<topic>-workflow.md` (e.g. `semantic-layer-workflow.md`, `workspace-workflow.md`, `sync-workflow.md`)
 
     Forgetting any of these does not fail tests or lint -- it ships an AI agent that quietly recommends commands that do not exist on the user's installed kbagent version, or refuses commands that do. Treat the change as **not done** until every applicable file has been updated.
 
@@ -386,6 +386,34 @@ kbagent component detail --component-id ID [--project NAME]
 kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR] [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run]
 
 kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]
+
+kbagent semantic-layer model list --project P
+kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake]
+kbagent semantic-layer model delete --project P --model M [--yes]
+kbagent semantic-layer show --project P [--model M] [--type dataset|metric|relationship|constraint|glossary]
+kbagent semantic-layer validate --project P [--model M] [--deep]
+kbagent semantic-layer export --project P [--model M] [--output PATH]
+kbagent semantic-layer diff (--project-a A | --file-a PATH) (--project-b B | --file-b PATH) [--model-a M] [--model-b M]
+kbagent semantic-layer add metric --project P [--model M] --name N --sql SQL --dataset TABLE_ID [--description D] [--yes]
+kbagent semantic-layer add dataset --project P [--model M] --name N --table-id TABLE_ID [--description D] [--grain G] [--primary-key COL ...] [--deep-fields]
+kbagent semantic-layer add relationship --project P [--model M] --name N --from TABLE_ID --to TABLE_ID --on EXPR [--type left|inner]
+kbagent semantic-layer add constraint --project P [--model M] --name N --constraint-type inequality|equality|range|composition|exclusion|temporal|conditional --rule "EXPR" --metrics M1,M2 [--severity error|warning|info]
+kbagent semantic-layer add glossary --project P [--model M] --term TERM [--definition D]
+kbagent semantic-layer edit metric --project P [--model M] --name N [--new-name N2] [--new-sql SQL] [--new-dataset TABLE_ID] [--new-description D] [--yes]
+kbagent semantic-layer edit dataset --project P [--model M] --name N [--new-name N2] [--new-description D] [--new-grain G]
+kbagent semantic-layer edit constraint --project P [--model M] --name N [--new-name N2] [--new-rule "EXPR"] [--new-constraint-type T] [--new-severity error|warning|info] [--new-metrics M1,M2]
+kbagent semantic-layer edit relationship --project P [--model M] --name N [--new-name N2] [--new-from TABLE_ID] [--new-to TABLE_ID] [--new-on EXPR] [--new-type left|inner]
+kbagent semantic-layer edit glossary --project P [--model M] --term TERM [--new-term TERM2] [--new-definition D] [--yes]
+kbagent semantic-layer remove metric --project P [--model M] --name N [--yes]
+kbagent semantic-layer remove dataset --project P [--model M] --name N [--yes]
+kbagent semantic-layer remove constraint --project P [--model M] --name N [--yes]
+kbagent semantic-layer remove relationship --project P [--model M] --name N [--yes]
+kbagent semantic-layer remove glossary --project P [--model M] --term TERM [--yes]
+kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite]
+kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes]
+kbagent semantic-layer build --project P [--model M] --tables T,T,... [--name N] [--dry-run] [--output PATH]
+kbagent semantic-layer token --encrypt --project P --component-id C
+# Alias: `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
 
 kbagent http get PATH [--timeout SECONDS]
 kbagent http post PATH [--body JSON|@file|-] [--timeout SECONDS]

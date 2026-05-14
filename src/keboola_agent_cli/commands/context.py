@@ -756,6 +756,92 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     --input accepts: inline JSON, @file.json (from file), or - (from stdin).
     Already-encrypted values (KBC:: prefix) pass through unchanged.
 
+### Semantic Layer (Metastore) (since v0.41.0)
+
+Manage Keboola metastore models: datasets, metrics, relationships, constraints,
+glossary terms. Metastore URL derived from stack URL by replacing `connection.`
+with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
+`kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
+
+  kbagent semantic-layer model list --project P
+    List all semantic-layer models in a project.
+
+  kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake]
+    Create a new model (default sql-dialect: Snowflake).
+
+  kbagent semantic-layer model delete --project P --model M [--yes]
+    Delete a model. Fails if the model still has child entities.
+
+  kbagent semantic-layer show --project P [--model M] [--type T]
+    Show a model's entities. --type filter: dataset|metric|relationship|constraint|glossary.
+    Without --type prints a per-type count summary.
+
+  kbagent semantic-layer validate --project P [--model M] [--deep]
+    Basic structural checks (duplicates, dangling refs, sum-on-pct,
+    constraint orphans, severity-suffix). --deep adds parallel Snowflake
+    column-existence checks for phantom fields, phantom column refs, and
+    AGG-on-STRING via in-process StorageService.
+
+  kbagent semantic-layer export --project P [--model M] [--output PATH]
+    Snapshot the model to a self-describing JSON file. Default path:
+    ./sl_export_{{model_name}}_{{YYYYMMDD_HHMMSS}}.json.
+
+  kbagent semantic-layer diff (--project-a A | --file-a P) (--project-b B | --file-b P) [--model-a M] [--model-b M]
+    Three-way diff: project<->project, project<->file, file<->file. Output
+    groups changes per entity type: added, removed, changed (with diff_keys).
+
+  kbagent semantic-layer add metric|dataset|relationship|constraint|glossary ...
+    Add one entity. Dataset auto-derives `fqn` from --table-id; --deep-fields
+    fetches the storage schema and synthesises role-classified fields
+    (PK_/FK_->key, *_DATE/*_DT->timestamp, numeric amount/value/rate->measure,
+    else dimension). Constraint name regex `^[a-z][a-z0-9_]*$`, severity is
+    error|warning|info (the 4-band health convention lives in the NAME suffix
+    `_critical/_warning/_healthy/_review`, not the API severity). `--rule` is
+    a STRING expression (e.g. "value >= 0"), NEVER an object.
+
+  kbagent semantic-layer edit metric|dataset|constraint|relationship|glossary ...
+    DELETE+POST (no PATCH on metastore). Metric rename cascades through every
+    constraint referencing the old name (DELETE old + POST new with updated
+    metrics[]); CODE_METRIC warning shown
+    (re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")). On POST failure,
+    rollback re-POSTs original_attrs and reports success/failure explicitly.
+    --yes skips the confirm prompt. `edit relationship` accepts --new-from /
+    --new-to / --new-on / --new-type (left|inner). `edit glossary` accepts
+    --new-term (destructive cascade; requires --yes in non-TTY) / --new-definition.
+
+  kbagent semantic-layer remove metric|dataset|constraint|relationship|glossary ...
+    Destructive. `remove metric` pre-scans constraints whose metrics[] includes
+    the target; warns about dangling DIM_METRIC_THRESHOLD refs. --yes skips the
+    prompt but the orphan warning is always printed. Non-TTY without --yes
+    refuses with exit 2. `remove relationship` and `remove glossary` are leaf
+    removes -- no orphan-check (those entities aren't referenced by others).
+    `remove glossary` identifies the entity by --term, not --name.
+
+  kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite]
+    Replay a snapshot. Default: skip on conflict. --overwrite opts into
+    DELETE+POST. Dependency-ordered push (datasets -> metrics -> relationships
+    -> glossary -> constraints).
+
+  kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types ...] [--dry-run] [--yes]
+    Cross-project copy with modelUUID rewrite. Classifies items NEW / IDENTICAL
+    / CHANGED (deep-equality after stripping modelUUID + timestamps).
+    Additive + overwrite only -- NEVER deletes target items absent from source.
+
+  kbagent semantic-layer build --project P [--model M] --tables T,T,... [--dry-run] [--output PATH]
+    Non-interactive heuristic builder. AI caveat: the ai_client has no
+    arbitrary-JSON endpoint, so `build` falls back to a deterministic
+    heuristic (one dataset + one COUNT(*) metric + one glossary entry per
+    table; FQN derived; fields[] role-classified). Response carries
+    `fallback_used: "heuristic"`. Push loop iterates all 5 child types in
+    dependency order (fixes the long-standing sl-build skill bug where
+    semantic-constraint was silently dropped).
+
+  kbagent semantic-layer token --encrypt --project P --component-id C
+    Encrypt the project's storage token for transformation `user_properties`.
+    Builds {{"#metastore_token": <token>}} and delegates to EncryptService.
+    --encrypt is currently required; other modes refused with USAGE_ERROR.
+
+
 ### Self-call HTTP (inside `kbagent serve` subprocesses)
 
   kbagent http get PATH [--timeout SECONDS]

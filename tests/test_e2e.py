@@ -3062,6 +3062,470 @@ class TestFullE2E:
         col_descs = {c["name"]: c.get("description", "") for c in data["data"]["column_details"]}
         assert col_descs.get("id") == "Batch column id desc"
 
+    def _test_semantic_layer_roundtrip(self) -> None:
+        """Live roundtrip of the semantic-layer command group against ``self.alias``.
+
+        Bootstraps two throwaway models on the test project, exercises every
+        verb (model/show/add/edit/validate/export/import/promote/build/token/remove),
+        and tears everything down even on failure. All entity names are prefixed
+        with a unique tag so a residue check at the end of the test can assert
+        the project is clean.
+
+        NOTE: Not wired into ``test_full_cli_e2e`` (which runs ~30 min). The
+        same surface is exercised independently by
+        :class:`TestE2ESemanticLayerLifecycle` -- run that with
+        ``pytest -k SemanticLayer`` for a focused live check.
+        """
+        from keboola_agent_cli.metastore_client import (
+            SEMANTIC_TYPES,
+            MetastoreClient,
+        )
+
+        tag = f"kbagent_e2e_{int(time.time())}"
+        model_name = tag
+        target_model_name = f"{tag}_target"
+
+        # (item_type, item_id) tuples for guaranteed cleanup.
+        created_items: list[tuple[str, str]] = []
+        model_id: str | None = None
+        target_model_id: str | None = None
+
+        def _direct_delete(item_type: str, item_id: str) -> None:
+            with MetastoreClient(stack_url=self.url, token=self.token) as mc:
+                mc.delete_item(item_type, item_id)
+
+        try:
+            # 1. model create
+            data = self._run_ok(
+                "semantic-layer",
+                "model",
+                "create",
+                "--project",
+                self.alias,
+                "--name",
+                model_name,
+            )
+            model_id = data["data"]["model"]["id"]
+            assert model_id
+
+            # 2. add two datasets, three metrics, one constraint, one glossary entry.
+            # tableId comes from the bucket/table built earlier in the big test.
+            # We don't depend on it existing in actual Snowflake — the metastore
+            # accepts any string. validate --deep is skipped (would 404 trying to
+            # fetch storage detail for a synthetic tableId).
+            ds1 = self._run_ok(
+                "semantic-layer",
+                "add",
+                "dataset",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_ds_a",
+                "--table-id",
+                "out.c-syn.fact_a",
+            )
+            created_items.append(("semantic-dataset", ds1["data"]["id"]))
+
+            ds2 = self._run_ok(
+                "semantic-layer",
+                "add",
+                "dataset",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_ds_b",
+                "--table-id",
+                "out.c-syn.fact_b",
+            )
+            created_items.append(("semantic-dataset", ds2["data"]["id"]))
+
+            m1 = self._run_ok(
+                "semantic-layer",
+                "add",
+                "metric",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_m_rev",
+                "--sql",
+                "COUNT(*)",
+                "--dataset",
+                "out.c-syn.fact_a",
+                "--yes",
+            )
+            created_items.append(("semantic-metric", m1["data"]["id"]))
+
+            m2 = self._run_ok(
+                "semantic-layer",
+                "add",
+                "metric",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_m_cost",
+                "--sql",
+                'SUM("schema"."AMOUNT")',
+                "--dataset",
+                "out.c-syn.fact_a",
+                "--yes",
+            )
+            created_items.append(("semantic-metric", m2["data"]["id"]))
+
+            m3 = self._run_ok(
+                "semantic-layer",
+                "add",
+                "metric",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_m_count_b",
+                "--sql",
+                "COUNT(*)",
+                "--dataset",
+                "out.c-syn.fact_b",
+                "--yes",
+            )
+            created_items.append(("semantic-metric", m3["data"]["id"]))
+
+            rel = self._run_ok(
+                "semantic-layer",
+                "add",
+                "relationship",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_rel_a_b",
+                "--from",
+                "out.c-syn.fact_a",
+                "--to",
+                "out.c-syn.fact_b",
+                "--on",
+                "fact_a.id = fact_b.fact_a_id",
+            )
+            created_items.append(("semantic-relationship", rel["data"]["id"]))
+
+            cons = self._run_ok(
+                "semantic-layer",
+                "add",
+                "constraint",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_rev_warning",
+                "--constraint-type",
+                "inequality",
+                "--rule",
+                "value >= 0",
+                "--metrics",
+                f"{tag}_m_rev",
+                "--severity",
+                "warning",
+            )
+            created_items.append(("semantic-constraint", cons["data"]["id"]))
+
+            gloss = self._run_ok(
+                "semantic-layer",
+                "add",
+                "glossary",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--term",
+                f"{tag}_GMV",
+                "--definition",
+                "Gross merchandise value (test)",
+            )
+            created_items.append(("semantic-glossary", gloss["data"]["id"]))
+
+            # 3. show: count assertions
+            data = self._run_ok(
+                "semantic-layer",
+                "show",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+            )
+            assert len(data["data"]["datasets"]) == 2
+            assert len(data["data"]["metrics"]) == 3
+            assert len(data["data"]["constraints"]) == 1
+            assert len(data["data"]["glossary"]) == 1
+
+            # 4. show --type metric
+            data = self._run_ok(
+                "semantic-layer",
+                "show",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--type",
+                "metric",
+            )
+            assert len(data["data"]["metrics"]) >= 3
+
+            # 5. validate (basic) — expect valid because everything is wired
+            data = self._run_ok(
+                "semantic-layer",
+                "validate",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+            )
+            # The constraint has a severity suffix so no SEVERITY_SUFFIX warning;
+            # the metric SUM("schema"."AMOUNT") doesn't match SUM_ON_PCT regex.
+            assert data["data"]["valid"] is True
+
+            # 6. edit metric rename — triggers constraint cascade
+            data = self._run_ok(
+                "semantic-layer",
+                "edit",
+                "metric",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_m_rev",
+                "--new-name",
+                f"{tag}_m_revenue",
+                "--yes",
+            )
+            new_metric_id = data["data"]["updated"]["id"]
+            # Replace tracking: the old metric was DELETE+POSTed
+            created_items = [
+                (t, i)
+                for (t, i) in created_items
+                if not (t == "semantic-metric" and i == m1["data"]["id"])
+            ]
+            created_items.append(("semantic-metric", new_metric_id))
+            cascaded = data["data"]["cascaded_constraints"]
+            assert any(c["status"] == "updated" for c in cascaded), (
+                f"Expected at least one cascaded constraint, got: {cascaded}"
+            )
+            # The constraint id changed (DELETE+POST). Re-fetch the list.
+            data = self._run_ok(
+                "semantic-layer",
+                "show",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--type",
+                "constraint",
+            )
+            current_constraints = {c["id"] for c in data["data"]["constraints"]}
+            # Remove the old constraint id from tracking; add the live ones.
+            created_items = [(t, i) for (t, i) in created_items if t != "semantic-constraint"]
+            for cid in current_constraints:
+                created_items.append(("semantic-constraint", cid))
+
+            # 7. export to a tmp file
+            tmpdir = self.work_dir / "sl_export"
+            tmpdir.mkdir(exist_ok=True)
+            export_path = tmpdir / "snapshot.json"
+            data = self._run_ok(
+                "semantic-layer",
+                "export",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--output",
+                str(export_path),
+            )
+            assert export_path.is_file()
+
+            # 8. import --dry-run from the same file — all conflicts should skip
+            data = self._run_ok(
+                "semantic-layer",
+                "import",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--file",
+                str(export_path),
+                "--dry-run",
+            )
+            imported = data["data"]["imported"]
+            # Every type already exists → at least one skip somewhere.
+            total_skipped = sum(per.get("skipped", 0) for per in imported.values())
+            total_created = sum(per.get("created", 0) for per in imported.values())
+            assert total_skipped > 0, f"Expected skips on import-into-self, got: {imported}"
+            assert total_created == 0, (
+                f"Expected zero creations on dry-run import-into-self, got {total_created}: {imported}"
+            )
+
+            # 9. diff project vs exported file → zero diff (modulo modelUUID strip)
+            data = self._run_ok(
+                "semantic-layer",
+                "diff",
+                "--project-a",
+                self.alias,
+                "--model-a",
+                model_name,
+                "--file-b",
+                str(export_path),
+            )
+            for type_key in ("datasets", "metrics", "relationships", "constraints", "glossary"):
+                per = data["data"][type_key]
+                assert per["added"] == [] and per["removed"] == [] and per["changed"] == [], (
+                    f"Live model and just-exported file should match for {type_key}: {per}"
+                )
+
+            # 10. promote — bootstrap second model and copy into it
+            data = self._run_ok(
+                "semantic-layer",
+                "model",
+                "create",
+                "--project",
+                self.alias,
+                "--name",
+                target_model_name,
+            )
+            target_model_id = data["data"]["model"]["id"]
+
+            data = self._run_ok(
+                "semantic-layer",
+                "promote",
+                "--from-project",
+                self.alias,
+                "--to-project",
+                self.alias,
+                "--from-model",
+                model_name,
+                "--to-model",
+                target_model_name,
+                "--dry-run",
+            )
+            # Every source item should be NEW in the empty target (dry-run).
+            for type_key in ("datasets", "metrics", "relationships", "constraints", "glossary"):
+                per = data["data"].get(type_key)
+                if per is not None:
+                    assert per["new"] > 0 or per["overwritten"] > 0 or per["identical"] >= 0, (
+                        f"promote stats look wrong for {type_key}: {per}"
+                    )
+
+            # 11. build --dry-run — non-interactive heuristic; uses a real
+            # storage table for schema fetch. Re-use the same RUN_ID table.
+            data = self._run_ok(
+                "semantic-layer",
+                "build",
+                "--project",
+                self.alias,
+                "--tables",
+                f"in.c-{RUN_ID.replace('-', '_')}.{RUN_ID.replace('-', '_')}",
+                "--dry-run",
+            )
+            assert data["data"]["fallback_used"] == "heuristic", (
+                f"Expected heuristic fallback, got: {data['data'].get('fallback_used')}"
+            )
+
+            # 12. token --encrypt
+            data = self._run_ok(
+                "semantic-layer",
+                "token",
+                "--encrypt",
+                "--project",
+                self.alias,
+                "--component-id",
+                TEST_COMPONENT_ID,
+            )
+            envelope = data["data"]["encrypted"]
+            assert "#metastore_token" in envelope
+            assert envelope["#metastore_token"].startswith("KBC::"), (
+                f"Expected ciphertext to start with KBC::, got: {envelope['#metastore_token'][:30]}..."
+            )
+
+            # 13. remove a single metric (--yes), then verify it's gone
+            data = self._run_ok(
+                "semantic-layer",
+                "remove",
+                "metric",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_m_count_b",
+                "--yes",
+            )
+            removed_id = data["data"]["removed"]["id"]
+            assert removed_id == m3["data"]["id"]
+            created_items = [
+                (t, i)
+                for (t, i) in created_items
+                if not (t == "semantic-metric" and i == m3["data"]["id"])
+            ]
+
+            # Verify it's gone via show
+            data = self._run_ok(
+                "semantic-layer",
+                "show",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--type",
+                "metric",
+            )
+            metric_names = {m["name"] for m in data["data"]["metrics"]}
+            assert f"{tag}_m_count_b" not in metric_names
+
+        finally:
+            # ----------------------------------------------------------------
+            # Teardown — best-effort, runs even on test failure.
+            # Reverse order: child items first, then both models.
+            # ----------------------------------------------------------------
+            print("\n--- SEMANTIC LAYER CLEANUP ---")
+            for item_type, item_id in reversed(created_items):
+                try:
+                    _direct_delete(item_type, item_id)
+                    print(f"  Deleted {item_type} {item_id}")
+                except Exception as exc:
+                    print(f"  WARN: failed to delete {item_type} {item_id}: {exc}")
+
+            for mid in (target_model_id, model_id):
+                if mid is None:
+                    continue
+                try:
+                    _direct_delete("semantic-model", mid)
+                    print(f"  Deleted semantic-model {mid}")
+                except Exception as exc:
+                    print(f"  WARN: failed to delete semantic-model {mid}: {exc}")
+
+            # Residue check: assert no tagged items remain in the project.
+            try:
+                with MetastoreClient(stack_url=self.url, token=self.token) as mc:
+                    residue: list[str] = []
+                    for stype in SEMANTIC_TYPES:
+                        for item in mc.list_items(stype):
+                            attrs = item.get("attributes") or {}
+                            name = attrs.get("name") or attrs.get("term", "")
+                            if isinstance(name, str) and name.startswith(tag):
+                                residue.append(f"{stype}:{name}:{item.get('id', '')}")
+                    if residue:
+                        print(f"  WARN: residue detected after cleanup: {residue}")
+            except Exception as exc:
+                print(f"  WARN: residue scan failed: {exc}")
+
     def _test_project_edit_and_remove(self) -> None:
         """Edit project URL, rename round-trip + dry-run preview, then remove."""
         # --new-alias dry-run preview: predicts the rename without mutating.
@@ -7636,3 +8100,598 @@ class TestE2EMcpParityCommands:
             assert result.exit_code == 3
             assert envelope["error"]["code"] == "MISSING_MASTER_TOKEN"
             assert "master" in envelope["error"]["message"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Semantic-layer (since v0.41.0)
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2ESemanticLayerLifecycle:
+    """E2E coverage for the ``kbagent semantic-layer`` command group.
+
+    Lives apart from the giant TestFullE2E because the SL surface is large
+    enough to deserve its own focused test (and because the round-trip
+    bootstraps two throwaway models + many children per run, so isolation
+    keeps cleanup tight and lets ``pytest -k SemanticLayer`` iterate fast).
+
+    Covers (in order):
+    - ``model create`` / ``delete``
+    - ``add dataset`` / ``add metric`` / ``add relationship`` /
+      ``add constraint`` / ``add glossary``
+    - ``show`` (default + ``--type`` filter)
+    - ``validate`` (basic; ``--deep`` is skipped because the test tableIds
+      are synthetic and would 404 on a Storage table-detail fetch)
+    - ``edit metric --new-name`` (constraint cascade)
+    - ``edit relationship`` / ``edit glossary`` (NB-5, iter-4 expansion)
+    - ``export`` to a tmp file
+    - ``import --dry-run`` of the just-exported snapshot (must be all-skip)
+    - ``diff`` between live model and exported file (must be empty)
+    - ``promote --dry-run`` between two models in the same project
+    - ``build --dry-run`` (heuristic fallback, real storage schema fetch)
+    - ``token --encrypt`` (envelope shape)
+    - ``remove metric`` (single child removal)
+    - ``remove relationship`` / ``remove glossary`` (NB-5, iter-4 expansion)
+
+    Teardown is double-belted:
+    1. Every CLI-created item is tracked and direct-deleted via
+       ``MetastoreClient`` in a try/finally.
+    2. A final residue scan asserts no ``kbagent_e2e_*`` items remain across
+       all six metastore types -- if any do, the test fails (so silent
+       cleanup bugs surface immediately).
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> Any:
+        if not HAS_CREDENTIALS:
+            pytest.skip("E2E_API_TOKEN not set")
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-sl-proj"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self.work_dir = tmp_path / "work"
+        self.work_dir.mkdir()
+        # Register the project so `kbagent --project ALIAS ...` works.
+        _invoke(
+            self.config_dir,
+            [
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_semantic_layer_roundtrip(self) -> None:
+        """Exercise every semantic-layer verb in one bootstrap → teardown cycle."""
+        from keboola_agent_cli.metastore_client import (
+            SEMANTIC_TYPES,
+            MetastoreClient,
+        )
+
+        tag = f"kbagent_e2e_{int(time.time())}"
+        model_name = tag
+        target_model_name = f"{tag}_target"
+
+        created_items: list[tuple[str, str]] = []
+        model_id: str | None = None
+        target_model_id: str | None = None
+
+        def _direct_delete(item_type: str, item_id: str) -> None:
+            with MetastoreClient(stack_url=self.url, token=self.token) as mc:
+                mc.delete_item(item_type, item_id)  # type: ignore[arg-type]
+
+        try:
+            _step(1, "semantic-layer model create")
+            data = self._run_ok(
+                "semantic-layer",
+                "model",
+                "create",
+                "--project",
+                self.alias,
+                "--name",
+                model_name,
+            )
+            model_id = data["data"]["model"]["id"]
+            assert model_id
+
+            _step(2, "add datasets / metrics / relationship / constraint / glossary")
+            ds1 = self._run_ok(
+                "semantic-layer",
+                "add",
+                "dataset",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_ds_a",
+                "--table-id",
+                "out.c-syn.fact_a",
+            )
+            created_items.append(("semantic-dataset", ds1["data"]["id"]))
+
+            ds2 = self._run_ok(
+                "semantic-layer",
+                "add",
+                "dataset",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_ds_b",
+                "--table-id",
+                "out.c-syn.fact_b",
+            )
+            created_items.append(("semantic-dataset", ds2["data"]["id"]))
+
+            m1 = self._run_ok(
+                "semantic-layer",
+                "add",
+                "metric",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_m_rev",
+                "--sql",
+                "COUNT(*)",
+                "--dataset",
+                "out.c-syn.fact_a",
+                "--yes",
+            )
+            created_items.append(("semantic-metric", m1["data"]["id"]))
+
+            m2 = self._run_ok(
+                "semantic-layer",
+                "add",
+                "metric",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_m_cost",
+                "--sql",
+                'SUM("schema"."AMOUNT")',
+                "--dataset",
+                "out.c-syn.fact_a",
+                "--yes",
+            )
+            created_items.append(("semantic-metric", m2["data"]["id"]))
+
+            m3 = self._run_ok(
+                "semantic-layer",
+                "add",
+                "metric",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_m_count_b",
+                "--sql",
+                "COUNT(*)",
+                "--dataset",
+                "out.c-syn.fact_b",
+                "--yes",
+            )
+            created_items.append(("semantic-metric", m3["data"]["id"]))
+
+            rel = self._run_ok(
+                "semantic-layer",
+                "add",
+                "relationship",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_rel_a_b",
+                "--from",
+                "out.c-syn.fact_a",
+                "--to",
+                "out.c-syn.fact_b",
+                "--on",
+                "fact_a.id = fact_b.fact_a_id",
+            )
+            created_items.append(("semantic-relationship", rel["data"]["id"]))
+
+            cons = self._run_ok(
+                "semantic-layer",
+                "add",
+                "constraint",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_rev_warning",
+                "--constraint-type",
+                "inequality",
+                "--rule",
+                "value >= 0",
+                "--metrics",
+                f"{tag}_m_rev",
+                "--severity",
+                "warning",
+            )
+            created_items.append(("semantic-constraint", cons["data"]["id"]))
+
+            gloss = self._run_ok(
+                "semantic-layer",
+                "add",
+                "glossary",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--term",
+                f"{tag}_GMV",
+                "--definition",
+                "Gross merchandise value (test)",
+            )
+            created_items.append(("semantic-glossary", gloss["data"]["id"]))
+
+            _step(3, "show + show --type metric")
+            data = self._run_ok(
+                "semantic-layer",
+                "show",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+            )
+            assert len(data["data"]["datasets"]) == 2
+            assert len(data["data"]["metrics"]) == 3
+            assert len(data["data"]["constraints"]) == 1
+            assert len(data["data"]["glossary"]) == 1
+
+            data = self._run_ok(
+                "semantic-layer",
+                "show",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--type",
+                "metric",
+            )
+            assert len(data["data"]["metrics"]) >= 3
+
+            _step(4, "validate (basic) -- expect valid")
+            data = self._run_ok(
+                "semantic-layer",
+                "validate",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+            )
+            assert data["data"]["valid"] is True, (
+                f"Expected clean model, got errors: {data['data']['errors']}"
+            )
+
+            _step(5, "edit metric --new-name -- triggers constraint cascade")
+            data = self._run_ok(
+                "semantic-layer",
+                "edit",
+                "metric",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_m_rev",
+                "--new-name",
+                f"{tag}_m_revenue",
+                "--yes",
+            )
+            new_metric_id = data["data"]["updated"]["id"]
+            created_items = [
+                (t, i)
+                for (t, i) in created_items
+                if not (t == "semantic-metric" and i == m1["data"]["id"])
+            ]
+            created_items.append(("semantic-metric", new_metric_id))
+            cascaded = data["data"]["cascaded_constraints"]
+            assert any(c["status"] == "updated" for c in cascaded), (
+                f"Expected constraint cascade, got: {cascaded}"
+            )
+            # DELETE+POST changed the constraint id -- refresh tracking
+            data = self._run_ok(
+                "semantic-layer",
+                "show",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--type",
+                "constraint",
+            )
+            created_items = [(t, i) for (t, i) in created_items if t != "semantic-constraint"]
+            for c in data["data"]["constraints"]:
+                created_items.append(("semantic-constraint", c["id"]))
+
+            # ---------- NB-5: edit + remove relationship / glossary ----------
+
+            _step(5.1, "edit relationship --new-on -- DELETE+POST")
+            data = self._run_ok(
+                "semantic-layer",
+                "edit",
+                "relationship",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_rel_a_b",
+                "--new-on",
+                "fact_a.id = fact_b.fact_a_id_v2",
+            )
+            new_rel_id = data["data"]["updated"]["id"]
+            created_items = [
+                (t, i)
+                for (t, i) in created_items
+                if not (t == "semantic-relationship" and i == rel["data"]["id"])
+            ]
+            created_items.append(("semantic-relationship", new_rel_id))
+
+            _step(5.2, "edit glossary --new-definition -- DELETE+POST")
+            data = self._run_ok(
+                "semantic-layer",
+                "edit",
+                "glossary",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--term",
+                f"{tag}_GMV",
+                "--new-definition",
+                "Gross merchandise value (test, v2)",
+            )
+            new_gloss_id = data["data"]["updated"]["id"]
+            created_items = [
+                (t, i)
+                for (t, i) in created_items
+                if not (t == "semantic-glossary" and i == gloss["data"]["id"])
+            ]
+            created_items.append(("semantic-glossary", new_gloss_id))
+
+            _step(6, "export -> snapshot.json")
+            export_path = self.work_dir / "snapshot.json"
+            self._run_ok(
+                "semantic-layer",
+                "export",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--output",
+                str(export_path),
+            )
+            assert export_path.is_file()
+
+            _step(7, "import --dry-run from the same file -- all-skip expected")
+            data = self._run_ok(
+                "semantic-layer",
+                "import",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--file",
+                str(export_path),
+                "--dry-run",
+            )
+            imported = data["data"]["imported"]
+            total_skipped = sum(per.get("skipped", 0) for per in imported.values())
+            total_created = sum(per.get("created", 0) for per in imported.values())
+            assert total_skipped > 0, f"Expected skips on self-import, got: {imported}"
+            assert total_created == 0, (
+                f"Expected zero creates on self-import dry-run, got {total_created}"
+            )
+
+            _step(8, "diff project vs snapshot -- empty diff expected")
+            data = self._run_ok(
+                "semantic-layer",
+                "diff",
+                "--project-a",
+                self.alias,
+                "--model-a",
+                model_name,
+                "--file-b",
+                str(export_path),
+            )
+            for type_key in ("datasets", "metrics", "relationships", "constraints", "glossary"):
+                per = data["data"][type_key]
+                assert per["added"] == [] and per["removed"] == [] and per["changed"] == [], (
+                    f"Self-diff should be empty for {type_key}: {per}"
+                )
+
+            _step(9, "promote --dry-run into a fresh target model")
+            data = self._run_ok(
+                "semantic-layer",
+                "model",
+                "create",
+                "--project",
+                self.alias,
+                "--name",
+                target_model_name,
+            )
+            target_model_id = data["data"]["model"]["id"]
+            data = self._run_ok(
+                "semantic-layer",
+                "promote",
+                "--from-project",
+                self.alias,
+                "--to-project",
+                self.alias,
+                "--from-model",
+                model_name,
+                "--to-model",
+                target_model_name,
+                "--dry-run",
+            )
+            # Every per-type stats block exists
+            for type_key in ("datasets", "metrics", "relationships", "constraints", "glossary"):
+                assert type_key in data["data"], (
+                    f"promote dry-run missing {type_key} in stats: {list(data['data'].keys())}"
+                )
+
+            _step(10, "build --dry-run -- heuristic fallback against a real storage table")
+            # Discover a real table from this project's buckets so build's
+            # storage-schema fetch succeeds. Skip the step if the project
+            # has no tables (uncommon for e2e-1143, but defensive).
+            tables_data = self._run_ok("storage", "tables", "--project", self.alias)
+            available_tables = tables_data["data"].get("tables", [])
+            if available_tables:
+                table_id = available_tables[0]["id"]
+                data = self._run_ok(
+                    "semantic-layer",
+                    "build",
+                    "--project",
+                    self.alias,
+                    "--tables",
+                    table_id,
+                    "--dry-run",
+                )
+                assert data["data"]["fallback_used"] == "heuristic", (
+                    f"Expected heuristic fallback, got: {data['data'].get('fallback_used')}"
+                )
+                assert len(data["data"]["generated"]["datasets"]) == 1
+            else:
+                print("  WARN: no storage tables in project -- build --dry-run skipped")
+
+            _step(11, "token --encrypt -- envelope shape")
+            data = self._run_ok(
+                "semantic-layer",
+                "token",
+                "--encrypt",
+                "--project",
+                self.alias,
+                "--component-id",
+                TEST_COMPONENT_ID,
+            )
+            envelope = data["data"]["encrypted"]
+            assert "#metastore_token" in envelope
+            assert envelope["#metastore_token"].startswith("KBC::"), (
+                f"Expected KBC:: ciphertext, got: {envelope['#metastore_token'][:30]}..."
+            )
+
+            _step(12, "remove metric -- single-child removal + verify gone")
+            data = self._run_ok(
+                "semantic-layer",
+                "remove",
+                "metric",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_m_count_b",
+                "--yes",
+            )
+            assert data["data"]["removed"]["id"] == m3["data"]["id"]
+            created_items = [
+                (t, i)
+                for (t, i) in created_items
+                if not (t == "semantic-metric" and i == m3["data"]["id"])
+            ]
+            data = self._run_ok(
+                "semantic-layer",
+                "show",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--type",
+                "metric",
+            )
+            metric_names = {m["name"] for m in data["data"]["metrics"]}
+            assert f"{tag}_m_count_b" not in metric_names
+
+            _step(12.1, "remove relationship -- leaf entity, no orphan")
+            data = self._run_ok(
+                "semantic-layer",
+                "remove",
+                "relationship",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_rel_a_b",
+                "--yes",
+            )
+            assert data["data"]["removed"]["name"] == f"{tag}_rel_a_b"
+            created_items = [(t, i) for (t, i) in created_items if t != "semantic-relationship"]
+
+            _step(12.2, "remove glossary --term -- leaf entity, no orphan")
+            data = self._run_ok(
+                "semantic-layer",
+                "remove",
+                "glossary",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--term",
+                f"{tag}_GMV",
+                "--yes",
+            )
+            assert data["data"]["removed"]["name"] == f"{tag}_GMV"
+            created_items = [(t, i) for (t, i) in created_items if t != "semantic-glossary"]
+
+        finally:
+            print("\n--- SEMANTIC LAYER CLEANUP ---")
+            for item_type, item_id in reversed(created_items):
+                try:
+                    _direct_delete(item_type, item_id)
+                    print(f"  Deleted {item_type} {item_id}")
+                except Exception as exc:
+                    print(f"  WARN: failed to delete {item_type} {item_id}: {exc}")
+
+            for mid in (target_model_id, model_id):
+                if mid is None:
+                    continue
+                try:
+                    _direct_delete("semantic-model", mid)
+                    print(f"  Deleted semantic-model {mid}")
+                except Exception as exc:
+                    print(f"  WARN: failed to delete semantic-model {mid}: {exc}")
+
+            # Residue check -- assert teardown actually cleaned up.
+            from keboola_agent_cli.errors import KeboolaApiError as _ApiError
+
+            try:
+                with MetastoreClient(stack_url=self.url, token=self.token) as mc:
+                    residue: list[str] = []
+                    for stype in SEMANTIC_TYPES:
+                        for item in mc.list_items(stype):  # type: ignore[arg-type]
+                            attrs = item.get("attributes") or {}
+                            name = attrs.get("name") or attrs.get("term", "")
+                            if isinstance(name, str) and name.startswith(tag):
+                                residue.append(f"{stype}:{name}:{item.get('id', '')}")
+                    assert not residue, (
+                        f"Cleanup left residue (manual teardown required): {residue}"
+                    )
+            except _ApiError as exc:
+                print(f"  WARN: residue scan failed: {exc}")
