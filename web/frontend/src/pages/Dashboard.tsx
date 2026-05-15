@@ -1,9 +1,10 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   Bot,
   Heart,
   Network,
+  Play,
   PlayCircle,
   Send,
   Sparkles,
@@ -207,18 +208,7 @@ export function DashboardPage() {
               ) : null}
               <ul className="space-y-1">
                 {tasks.slice(0, 5).map((t) => (
-                  <li
-                    key={t.id}
-                    className="flex items-center gap-2 text-xs py-1 border-b border-zinc-200 dark:border-zinc-900/40"
-                  >
-                    <span
-                      className={`w-2 h-2 rounded-full ${
-                        t.enabled ? "bg-keboola animate-pulse" : "bg-zinc-700"
-                      }`}
-                    />
-                    <span className="flex-1 truncate text-zinc-700 dark:text-zinc-300">{t.name}</span>
-                    <span className="font-mono text-[10px] text-zinc-500">{t.cron}</span>
-                  </li>
+                  <ScheduledAgentRow key={t.id} task={t} />
                 ))}
               </ul>
             </div>
@@ -376,5 +366,53 @@ function SuggestedAction({
       <span className="text-zinc-700 dark:text-zinc-300">{text}</span>
       <span className="ml-auto text-zinc-500 dark:text-zinc-600">→</span>
     </button>
+  );
+}
+
+/**
+ * One row in the dashboard's Scheduled agents tile (#292). The Run button
+ * fires the persisted task via POST /agents/{id}/run (blocking, same
+ * machinery as the cron trigger) and invalidates the ["agents"] query on
+ * completion so the row's last-run status refreshes inline. We deliberately
+ * use the blocking endpoint instead of the SSE /run/stream one: the tile
+ * is a glance-and-move-on surface, not a live progress viewer — users who
+ * want to watch tool_use events use the full Run drawer on the Agents page.
+ */
+function ScheduledAgentRow({ task }: { task: AgentTask }) {
+  const qc = useQueryClient();
+  const runMu = useMutation({
+    mutationFn: () => api.post(`/agents/${task.id}/run`, {}),
+    onSettled: () => {
+      // Refresh the tile (and any agent-runs lists on other pages) so
+      // last_run_at and the status pill flip from stale to current.
+      qc.invalidateQueries({ queryKey: ["agents"] });
+      qc.invalidateQueries({ queryKey: ["agent-runs", task.id] });
+    },
+  });
+  return (
+    <li className="flex items-center gap-2 text-xs py-1 border-b border-zinc-200 dark:border-zinc-900/40">
+      <span
+        className={`w-2 h-2 rounded-full ${
+          task.enabled ? "bg-keboola animate-pulse" : "bg-zinc-700"
+        }`}
+      />
+      <span className="flex-1 truncate text-zinc-700 dark:text-zinc-300">{task.name}</span>
+      <span className="font-mono text-[10px] text-zinc-500">{task.cron}</span>
+      <button
+        type="button"
+        className="nerd-btn text-[10px] py-0.5 px-1.5 flex items-center gap-1 hover:text-keboola hover:border-keboola/60"
+        onClick={() => runMu.mutate()}
+        disabled={runMu.isPending}
+        title={`Trigger '${task.name}' now (outside the cron schedule)`}
+      >
+        {runMu.isPending ? (
+          <span className="text-keboola">running…</span>
+        ) : (
+          <>
+            <Play className="w-3 h-3" /> run
+          </>
+        )}
+      </button>
+    </li>
   );
 }
