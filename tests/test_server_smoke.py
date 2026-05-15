@@ -149,25 +149,32 @@ def test_semantic_layer_diff_rejects_neither_side(client: TestClient) -> None:
     assert res.status_code == 422
 
 
-def test_semantic_layer_items_unknown_kind_post_404(client: TestClient) -> None:
-    """POST /items/{kind} with an unsupported kind returns 404."""
+def test_semantic_layer_items_unknown_kind_post_422(client: TestClient) -> None:
+    """POST /items/{kind} with an unsupported kind returns 422.
+
+    FastAPI rejects unknown ``kind`` path values at the framework layer
+    via the ``ItemKind`` ``Literal`` alias, before reaching the handler.
+    """
     res = client.post(
         "/semantic-layer/items/widget",
         headers={"Authorization": "Bearer test-token"},
         json={"project": "x", "name": "n"},
     )
-    assert res.status_code == 404
-    assert "kind" in res.json()["error"]["message"].lower()
+    assert res.status_code == 422
 
 
-def test_semantic_layer_items_unknown_kind_put_404(client: TestClient) -> None:
-    """PUT /items/{kind}/{name} with an unsupported kind returns 404."""
+def test_semantic_layer_items_unknown_kind_put_422(client: TestClient) -> None:
+    """PUT /items/{kind}/{name} with an unsupported kind returns 422.
+
+    FastAPI rejects unknown ``kind`` path values at the framework layer
+    via the ``ItemKind`` ``Literal`` alias, before reaching the handler.
+    """
     res = client.put(
         "/semantic-layer/items/widget/n",
         headers={"Authorization": "Bearer test-token"},
         json={"project": "x"},
     )
-    assert res.status_code == 404
+    assert res.status_code == 422
 
 
 def test_semantic_layer_models_missing_project_returns_4xx(client: TestClient) -> None:

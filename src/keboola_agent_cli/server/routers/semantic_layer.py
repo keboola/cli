@@ -1,7 +1,14 @@
-"""Semantic-layer endpoints — 1:1 mapping of the ``kbagent semantic-layer`` CLI.
+"""Semantic-layer endpoints — 14 routes covering 26 CLI subcommands.
 
 Mirrors the per-subcommand surface of
 :class:`keboola_agent_cli.services.semantic_layer_service.SemanticLayerService`.
+The 15 ``add.*``/``edit.*``/``remove.*`` CLI leaves collapse into three
+``{kind}``-parameterized routes (``POST/PUT/DELETE /items/{kind}``) for
+RESTful semantics; per-kind Pydantic body validation happens inside the
+handler. This is a deliberate departure from the CONTRIBUTING.md "1:1
+endpoint per command" guideline — the parameterization preserves
+discoverability while keeping the route count manageable.
+
 Pattern: Pydantic body models for routes that the CLI flags with multiple
 options, query parameters for read endpoints. ``--yes`` is implicit on
 every REST destructive call (the body / DELETE request IS the confirmation).
@@ -9,6 +16,9 @@ every REST destructive call (the body / DELETE request IS the confirmation).
 
 from __future__ import annotations
 
+import contextlib
+import json as _json
+import tempfile
 from pathlib import Path
 from typing import Any, Literal
 
@@ -261,7 +271,6 @@ def export(
     # transient path. Simpler: route through the service and let the
     # caller ignore the `path` field. Using a tmp-dir export keeps the
     # service contract intact while avoiding pollution of the CWD.
-    import tempfile
 
     with tempfile.TemporaryDirectory(prefix="kbagent-sl-export-") as tmp:
         out = Path(tmp) / "snapshot.json"
@@ -282,9 +291,6 @@ def diff(body: DiffRequest, registry: ServiceRegistry = Depends(get_registry)) -
     ``file_b``). When a file side is set we serialize it to a temp file so
     the existing service contract (``Path``) keeps working.
     """
-    import contextlib
-    import json as _json
-    import tempfile
 
     def _write_tmp(payload: dict[str, Any]) -> Path:
         # `delete=False` is required because we close the handle before
@@ -328,7 +334,7 @@ def diff(body: DiffRequest, registry: ServiceRegistry = Depends(get_registry)) -
 
 @router.post("/items/{kind}")
 def add_item(
-    kind: str,
+    kind: ItemKind,
     body: dict[str, Any],
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
@@ -336,6 +342,8 @@ def add_item(
 
     Per-kind Pydantic body validation is done downstream by binding the
     raw body to the right model before delegating to the service.
+    FastAPI rejects unknown ``kind`` values at the framework layer (422)
+    via the :data:`ItemKind` ``Literal`` alias.
     """
     svc = registry.semantic_layer
     if kind == "metric":
@@ -403,7 +411,7 @@ def add_item(
 
 @router.put("/items/{kind}/{name}")
 def edit_item(
-    kind: str,
+    kind: ItemKind,
     name: str,
     body: dict[str, Any],
     registry: ServiceRegistry = Depends(get_registry),
@@ -411,7 +419,8 @@ def edit_item(
     """Edit an entity. ``name`` is the current identifier; new-* fields live in the body.
 
     For ``kind="glossary"``, ``name`` is the current ``term`` (not a stored
-    field called ``name``).
+    field called ``name``). FastAPI rejects unknown ``kind`` values at the
+    framework layer (422) via the :data:`ItemKind` ``Literal`` alias.
     """
     svc = registry.semantic_layer
     if kind == "metric":
@@ -481,7 +490,7 @@ def edit_item(
 
 @router.delete("/items/{kind}/{name}")
 def remove_item(
-    kind: str,
+    kind: ItemKind,
     name: str,
     project: str,
     model: str | None = None,
@@ -489,7 +498,9 @@ def remove_item(
 ) -> dict[str, Any]:
     """Remove a child entity (``--yes`` implicit on REST).
 
-    For ``kind="glossary"``, ``name`` is the term to remove.
+    For ``kind="glossary"``, ``name`` is the term to remove. FastAPI
+    rejects unknown ``kind`` values at the framework layer (422) via the
+    :data:`ItemKind` ``Literal`` alias.
     """
     return registry.semantic_layer.remove_item(
         alias=project, model_name_or_uuid=model, kind=kind, name=name

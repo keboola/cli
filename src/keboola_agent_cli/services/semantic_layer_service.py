@@ -35,7 +35,6 @@ from ._semantic_layer_crud import scan_orphan_constraints as _scan_orphan_constr
 from ._semantic_layer_crud import validate_constraint_attrs as _validate_constraint_attrs
 from ._semantic_layer_internals import build_export_snapshot as _build_export_snapshot
 from ._semantic_layer_internals import collect_side_from_file
-from ._semantic_layer_internals import compare_attrs as _compare_attrs_helper
 from ._semantic_layer_internals import default_export_path as _default_export_path
 from ._semantic_layer_internals import diff_one_type as _diff_one_type_helper
 from ._semantic_layer_internals import fetch_table_schemas as _fetch_table_schemas
@@ -302,6 +301,9 @@ class SemanticLayerService(BaseService):
             for future in future_to_type:
                 try:
                     results[future_to_type[future]] = future.result()
+                # Future.result() re-raises arbitrary worker exceptions
+                # (KeboolaApiError, httpx errors, etc.); collect and
+                # surface the first one rather than masking the others.
                 except Exception as exc:
                     errors.append(exc)
             if errors:
@@ -389,7 +391,7 @@ class SemanticLayerService(BaseService):
 
         errors: list[dict[str, str]] = []
         warnings: list[dict[str, str]] = []
-        self._validate_basic(
+        _validate_basic_helper(
             datasets=datasets,
             metrics=metrics,
             relationships=relationships,
@@ -419,32 +421,10 @@ class SemanticLayerService(BaseService):
 
     # -- validate internals --------------------------------------------
 
-    @staticmethod
-    def _validate_basic(
-        *,
-        datasets: list[dict[str, Any]],
-        metrics: list[dict[str, Any]],
-        relationships: list[dict[str, Any]],
-        constraints: list[dict[str, Any]],
-        glossary: list[dict[str, Any]],
-        errors: list[dict[str, str]],
-        warnings: list[dict[str, str]],
-    ) -> None:
-        """Pure in-memory validation (no API calls).
-
-        Thin delegate to :func:`._semantic_layer_internals.validate_basic`
-        -- the heavy lifting lives in the internals module so this file
-        stays under the CONTRIBUTING.md services budget.
-        """
-        _validate_basic_helper(
-            datasets=datasets,
-            metrics=metrics,
-            relationships=relationships,
-            constraints=constraints,
-            glossary=glossary,
-            errors=errors,
-            warnings=warnings,
-        )
+    # Pure in-memory validation lives in
+    # :func:`._semantic_layer_internals.validate_basic` (imported above as
+    # ``_validate_basic_helper``); call it directly from ``validate_model``
+    # / ``build_model`` rather than via a thin wrapper.
 
     def _validate_deep(
         self,
@@ -568,7 +548,7 @@ class SemanticLayerService(BaseService):
             ("constraints", "name"),
             ("glossary", "term"),
         ):
-            result[type_key] = self._diff_one_type(
+            result[type_key] = _diff_one_type_helper(
                 left["data"].get(type_key, []),
                 right["data"].get(type_key, []),
                 id_key=id_key,
@@ -601,23 +581,9 @@ class SemanticLayerService(BaseService):
             )
         return collect_side_from_file(file)
 
-    def _diff_one_type(
-        self,
-        left: list[dict[str, Any]],
-        right: list[dict[str, Any]],
-        *,
-        id_key: str,
-    ) -> dict[str, Any]:
-        """Thin wrapper around :func:`._semantic_layer_internals.diff_one_type`."""
-        return _diff_one_type_helper(left, right, id_key=id_key)
-
-    def _compare_attrs(
-        self,
-        a: dict[str, Any],
-        b: dict[str, Any],
-    ) -> list[str]:
-        """Thin wrapper around :func:`._semantic_layer_internals.compare_attrs`."""
-        return _compare_attrs_helper(a, b)
+    # Per-type diff lives in :func:`._semantic_layer_internals.diff_one_type`
+    # (imported above as ``_diff_one_type_helper``); call it directly.
+    # ``compare_attrs`` is used inside that helper and not separately here.
 
     # ------------------------------------------------------------------
     # Phase 4 — Model lifecycle (create / delete)
@@ -661,8 +627,11 @@ class SemanticLayerService(BaseService):
             client.delete_item("semantic-model", model_uuid)
         finally:
             client.close()
+        # Pluralise the bare keys (semantic-dataset -> "datasets", etc.).
+        # The naive ``key + "s"`` rule produces "glossarys" for the one
+        # already-plural type; fold it back to "glossary" so the wire shape
+        # matches the rest of the codebase (see ``_PLURAL_BY_TYPE`` above).
         counts = {k.replace("semantic-", "") + "s": len(v) for k, v in children.items()}
-        # "semantic-glossary" -> "glossarys" — normalise the only odd one.
         counts.setdefault("glossary", counts.pop("glossarys", 0))
         return {
             "project": alias,
@@ -1403,16 +1372,20 @@ class SemanticLayerService(BaseService):
         )
         schemas_by_tid, fetch_errors = _fetch_table_schemas(storage, alias, table_ids)
 
-        # Generate model JSON (heuristic).
-        generated = self._heuristic_generate_model(
+        # Generate model JSON (heuristic). The internals helper takes the
+        # FQN-derivation and role-classification callables as kwargs so its
+        # module stays free of import-time coupling to this module.
+        generated = _heuristic_generate_helper(
             schemas=schemas_by_tid,
             model_name=model_name or "kbagent_build_model",
+            derive_fqn=_derive_fqn,
+            classify_role=_classify_field_role,
         )
 
         # Validate locally.
         errors: list[dict[str, str]] = []
         warnings: list[dict[str, str]] = []
-        self._validate_basic(
+        _validate_basic_helper(
             datasets=generated["datasets"],
             metrics=generated["metrics"],
             relationships=generated["relationships"],
@@ -1466,25 +1439,6 @@ class SemanticLayerService(BaseService):
             return result
         finally:
             client.close()
-
-    @staticmethod
-    def _heuristic_generate_model(
-        *,
-        schemas: dict[str, dict[str, Any]],
-        model_name: str,
-    ) -> dict[str, Any]:
-        """Thin delegate to :func:`._semantic_layer_internals.heuristic_generate_model`.
-
-        Passes the module's FQN-derivation and role-classification
-        helpers so the internals module stays free of import-time
-        coupling to this module's regex constants.
-        """
-        return _heuristic_generate_helper(
-            schemas=schemas,
-            model_name=model_name,
-            derive_fqn=_derive_fqn,
-            classify_role=_classify_field_role,
-        )
 
     # ------------------------------------------------------------------
     # Phase 8 — token --encrypt
