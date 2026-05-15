@@ -89,6 +89,17 @@ export function ProjectsPage() {
                 </span>
               ),
             },
+            {
+              header: "Org",
+              cell: (p) =>
+                p.org_name ? (
+                  <span className="text-zinc-700 dark:text-zinc-300">{p.org_name}</span>
+                ) : (
+                  <span className="text-zinc-400" title="Org info unavailable — re-register via `kbagent org setup` to populate.">
+                    —
+                  </span>
+                ),
+            },
             { header: "Project", cell: (p) => <span>{p.project_name}</span> },
             {
               header: "ID",

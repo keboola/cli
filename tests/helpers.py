@@ -16,6 +16,8 @@ def make_mock_client(
     project_name: str = "Test Project",
     project_id: int = 1234,
     token_description: str = "My Token",
+    org_id: int | None = None,
+    org_name: str | None = None,
 ) -> MagicMock:
     """Create a mock KeboolaClient that returns a successful verify_token response.
 
@@ -29,6 +31,8 @@ def make_mock_client(
         project_id=project_id,
         project_name=project_name,
         owner_name=project_name,
+        org_id=org_id,
+        org_name=org_name,
     )
     return mock_client
 

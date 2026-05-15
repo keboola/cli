@@ -293,6 +293,44 @@ class TestListProjects:
         prod = next(p for p in result if p["alias"] == "prod")
         assert prod["is_default"] is True
 
+    def test_list_projects_includes_org_info(self, tmp_config_dir: Path) -> None:
+        """When verify_token returns organization info, it's propagated to list_projects."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        mock_client = make_mock_client(org_id=438, org_name="Keboola Demo")
+        service = ProjectService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        service.add_project(
+            alias="demo",
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        )
+
+        result = service.list_projects()
+        assert result[0]["org_id"] == 438
+        assert result[0]["org_name"] == "Keboola Demo"
+
+    def test_list_projects_org_missing_yields_none(self, tmp_config_dir: Path) -> None:
+        """Projects added without org info expose org_id/org_name as None (UI fallback to '—')."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        mock_client = make_mock_client()  # no org info
+        service = ProjectService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        service.add_project(
+            alias="prod",
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        )
+
+        result = service.list_projects()
+        assert result[0]["org_id"] is None
+        assert result[0]["org_name"] is None
+
     def test_list_projects_token_never_fully_shown(self, tmp_config_dir: Path) -> None:
         """list_projects never returns the full token."""
         store = ConfigStore(config_dir=tmp_config_dir)

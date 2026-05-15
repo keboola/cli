@@ -221,6 +221,7 @@ class KeboolaClient(BaseHttpClient):
         data = response.json()
 
         owner = data.get("owner", {})
+        org = owner.get("organization") or {}
         response = TokenVerifyResponse(
             token_id=str(data.get("id", "")),
             token_description=data.get("description", ""),
@@ -229,6 +230,8 @@ class KeboolaClient(BaseHttpClient):
             owner_name=owner.get("name", ""),
             default_backend=owner.get("defaultBackend", "snowflake"),
             features=owner.get("features", []),
+            org_id=org.get("id"),
+            org_name=org.get("name") or None,
         )
         # Refresh the features cache on every successful verify so explicit
         # callers stay consistent with the cached view used by has_feature().

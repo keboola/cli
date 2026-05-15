@@ -20,6 +20,14 @@ class ProjectConfig(BaseModel):
         default=None,
         description="Active development branch ID (None = main/production branch)",
     )
+    org_id: int | None = Field(
+        default=None,
+        description="Organization ID (populated via `org setup` or when verify_token returns it)",
+    )
+    org_name: str | None = Field(
+        default=None,
+        description="Organization name (populated via `org setup` or when verify_token returns it)",
+    )
 
     @field_validator("stack_url")
     @classmethod
@@ -104,6 +112,14 @@ class TokenVerifyResponse(BaseModel):
     features: list[str] = Field(
         default_factory=list,
         description="Project feature flags (e.g. agent-chat, storage-types)",
+    )
+    org_id: int | None = Field(
+        default=None,
+        description="Organization ID parsed from owner.organization (when present)",
+    )
+    org_name: str | None = Field(
+        default=None,
+        description="Organization name parsed from owner.organization (when present)",
     )
 
 

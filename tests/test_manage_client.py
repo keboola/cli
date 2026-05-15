@@ -296,6 +296,25 @@ class TestCreateProjectToken:
         client.close()
 
 
+class TestGetOrganization:
+    """Tests for get_organization()."""
+
+    def test_returns_organization_details(self, httpx_mock) -> None:
+        """get_organization returns id + name (used by org setup to populate org_name)."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/organizations/438",
+            json={"id": 438, "name": "Keboola Demo"},
+            status_code=200,
+        )
+
+        client = ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN)
+        result = client.get_organization(438)
+
+        assert result["id"] == 438
+        assert result["name"] == "Keboola Demo"
+        client.close()
+
+
 class TestGetProject:
     """Tests for get_project()."""
 

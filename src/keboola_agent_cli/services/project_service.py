@@ -62,6 +62,8 @@ class ProjectService(BaseService):
             token=token,
             project_name=token_info.project_name,
             project_id=token_info.project_id,
+            org_id=token_info.org_id,
+            org_name=token_info.org_name,
         )
 
         self._config_store.add_project(alias, project)
@@ -72,6 +74,8 @@ class ProjectService(BaseService):
             "project_id": token_info.project_id,
             "stack_url": stack_url,
             "token": mask_token(token),
+            "org_id": token_info.org_id,
+            "org_name": token_info.org_name,
         }
 
     def remove_project(self, alias: str) -> dict[str, str]:
@@ -588,6 +592,8 @@ class ProjectService(BaseService):
                     "token": mask_token(project.token),
                     "is_default": alias == config.default_project,
                     "active_branch_id": project.active_branch_id,
+                    "org_id": project.org_id,
+                    "org_name": project.org_name,
                 }
             )
         return result

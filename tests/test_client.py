@@ -53,6 +53,35 @@ class TestVerifyToken:
         assert result.project_id == 1234
         assert result.token_description == "My test token"
         assert result.token_id == "12345"
+        # Owner without organization sub-object yields None org fields.
+        assert result.org_id is None
+        assert result.org_name is None
+        client.close()
+
+    def test_verify_token_extracts_organization(self, httpx_mock) -> None:
+        """When owner.organization is present, org_id and org_name are parsed."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json={
+                "id": "12345",
+                "description": "tok",
+                "owner": {
+                    "id": 1234,
+                    "name": "Test Project",
+                    "organization": {"id": 438, "name": "Keboola Demo"},
+                },
+            },
+            status_code=200,
+        )
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        )
+        result = client.verify_token()
+
+        assert result.org_id == 438
+        assert result.org_name == "Keboola Demo"
         client.close()
 
     def test_verify_token_401_error(self, httpx_mock) -> None:
