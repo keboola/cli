@@ -187,6 +187,7 @@ class BuildRequest(BaseModel):
     tables: list[str]
     name: str | None = None
     dry_run: bool = False
+    keep_on_failure: bool = False
 
 
 class TokenEncryptRequest(BaseModel):
@@ -546,6 +547,7 @@ def build(body: BuildRequest, registry: ServiceRegistry = Depends(get_registry))
         model_name=body.name,
         model_name_or_uuid=body.model,
         dry_run=body.dry_run,
+        keep_on_failure=body.keep_on_failure,
     )
 
 

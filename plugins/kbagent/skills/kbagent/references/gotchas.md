@@ -1,5 +1,16 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+<!--
+Versioning convention:
+- `## Title (since vX.Y.Z)` -- standalone section header for a behavior that
+  was introduced in vX.Y.Z and has not changed since.
+- `(updated vX.Y.Z -- closes #N)` -- sub-bullet inside an existing
+  `(since v...)` section, marking that the original behavior was refined or
+  extended in vX.Y.Z. The "since" tag on the parent header stays at the
+  introduction version so version-floor scanning still finds the original
+  behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
+-->
+
 ## Web UI `Kai Chat` is gone — replaced by `Local AI` (since v0.41.9)
 
 The web UI dashboard tile / left-nav entry previously labelled **Kai
@@ -132,6 +143,22 @@ events and emits a final `done` SSE frame mirroring the same record.
   envelope's `rollback` field. If rollback itself fails, the model
   is left in a partial state -- surface that to the operator and
   recommend running `semantic-layer validate` immediately.
+- **Partial-state envelope signal (updated v0.41.10 -- closes #294)**:
+  the cascade has per-item rollback only (each constraint DELETE+POST
+  rolls back individually), NOT whole-operation atomicity. If the
+  metric rename succeeds but M of N dependent constraints fail to
+  repoint, the response envelope sets `partial_state: true` and
+  `recovery_hint: "<text pointing at validate + manual re-cascade>"`
+  at the TOP level (previously the partial-state condition was
+  buried inside `cascaded_constraints[i].status == 'failed'`).
+  Human-mode CLI prints a bright red `PARTIAL STATE` banner above
+  the per-entry list. Atomic two-phase commit was intentionally NOT
+  implemented: the metastore has no PATCH endpoint, so every
+  cascade 'stage' is itself a DELETE+POST that can fail; true
+  atomicity would require side-staging every cascade item, which is
+  disproportionate for a rename. Recovery recipe: `kbagent
+  semantic-layer validate` to surface the dangling refs, then
+  re-run each failed cascade via `edit constraint --new-metrics ...`.
 
 ## Removing a metric corrupts `DIM_METRIC_THRESHOLD` downstream (since v0.41.0)
 
@@ -181,6 +208,26 @@ events and emits a final `done` SSE frame mirroring the same record.
   `04_AI_Kit/ai-kit/`. Bridge to that skill when the heuristic is
   not enough; the two are interoperable via the same metastore
   contract.
+- **Rollback + `--keep-on-failure` (updated v0.41.10 -- closes #295)**:
+  the push loop now tracks every successfully-POSTed child in order
+  and, on any subsequent POST failure, walks that list in REVERSE
+  PUSH_ORDER calling `client.delete_item` per child. If the model
+  itself was created during this call (caller did NOT pass `--model`),
+  it is DELETEd last. Each cleanup DELETE is wrapped in its own
+  try/except so a partial cleanup failure never masks the original
+  error. The wrapped `KeboolaApiError` carries `details.rollback =
+  {attempted, posted_children, deleted, failed_deletes,
+  model_created_here, model_deleted, model_delete_error, model_uuid}`.
+  Before v0.41.10, a build failing mid-push left the model + N
+  successful children in the metastore; retry returned
+  ALREADY_EXISTS and `model delete` refused while children existed,
+  forcing per-child manual teardown. **`--keep-on-failure` flag**
+  (mirrors `data-app create --keep-on-failure`) preserves the
+  partial state for forensic inspection -- the wrapped error then
+  carries `details.rollback.attempted=False, reason='keep_on_failure'`
+  instead of running cleanup. When caller passes `--model EXISTING`
+  the model itself is NEVER deleted on rollback (only the children
+  WE POSTed during this call get torn down).
 
 ## `kbagent http` works only inside `kbagent serve` subprocesses (since v0.40.0)
 

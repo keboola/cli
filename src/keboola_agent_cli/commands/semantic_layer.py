@@ -440,6 +440,15 @@ def semantic_layer_build(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Print the generated JSON + validation, no POST."
     ),
+    keep_on_failure: bool = typer.Option(
+        False,
+        "--keep-on-failure",
+        help=(
+            "Keep partially-pushed model + children on failure (forensics). "
+            "Default: rollback in reverse PUSH_ORDER + delete the model if "
+            "we created it."
+        ),
+    ),
     output: Path | None = typer.Option(
         None, "--output", help="Also write the generated JSON to this file."
     ),
@@ -462,6 +471,7 @@ def semantic_layer_build(
             tables=tables or "",
             name=name,
             dry_run=dry_run,
+            keep_on_failure=keep_on_failure,
             output=str(output) if output else "",
         )
         return
@@ -490,6 +500,7 @@ def semantic_layer_build(
         model_name=name,
         model_name_or_uuid=model,
         dry_run=dry_run,
+        keep_on_failure=keep_on_failure,
         output_path=output,
     )
     formatter.output(result, _print_build_result)

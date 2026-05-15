@@ -1340,6 +1340,7 @@ class SemanticLayerService(BaseService):
         model_name: str | None = None,
         model_name_or_uuid: str | None = None,
         dry_run: bool = False,
+        keep_on_failure: bool = False,
         output_path: Path | None = None,
     ) -> dict[str, Any]:
         """Build (or update) a semantic-layer model from a list of tableIds.
@@ -1359,6 +1360,12 @@ class SemanticLayerService(BaseService):
         If validation surfaces any errors, the operation is refused with
         VALIDATION_ERROR + the full error list in details so callers can
         iterate.
+
+        On push failure, ``push_built_model`` rolls back every successfully
+        POSTed child in reverse PUSH_ORDER and deletes the model itself if
+        we created it during this call (issue #295). Pass
+        ``keep_on_failure=True`` to skip cleanup and preserve the partial
+        state for forensic inspection (mirrors ``data-app create``).
         """
         if not table_ids:
             raise KeboolaApiError(
@@ -1402,6 +1409,7 @@ class SemanticLayerService(BaseService):
         result: dict[str, Any] = {
             "project": alias,
             "dry_run": dry_run,
+            "keep_on_failure": keep_on_failure,
             "fallback_used": "heuristic",  # no AI endpoint shipped yet
             "fetch_errors": fetch_errors,
             "generated": generated,
@@ -1433,6 +1441,7 @@ class SemanticLayerService(BaseService):
                 generated=generated,
                 model_name_or_uuid=model_name_or_uuid,
                 resolve_model_fn=self._resolve_model,
+                keep_on_failure=keep_on_failure,
             )
             result["model"] = {"id": model_uuid, "item": model_item}
             result["created"] = counts

@@ -808,6 +808,13 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     --yes skips the confirm prompt. `edit relationship` accepts --new-from /
     --new-to / --new-on / --new-type (left|inner). `edit glossary` accepts
     --new-term (destructive cascade; requires --yes in non-TTY) / --new-definition.
+    Partial-state envelope (since v0.41.10): when metric rename succeeds but
+    one or more dependent constraints fail to repoint, the response sets
+    `partial_state: true` at the top level + `recovery_hint: "<text>"`
+    pointing at `semantic-layer validate` + manual `edit constraint
+    --new-metrics ...`. Human-mode CLI prints a red `PARTIAL STATE` banner
+    above the per-entry list. `edit_simple` (no-cascade variants) carries
+    `partial_state: false, recovery_hint: null` for envelope uniformity.
 
   kbagent semantic-layer remove metric|dataset|constraint|relationship|glossary ...
     Destructive. `remove metric` pre-scans constraints whose metrics[] includes
@@ -827,14 +834,17 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     / CHANGED (deep-equality after stripping modelUUID + timestamps).
     Additive + overwrite only -- NEVER deletes target items absent from source.
 
-  kbagent semantic-layer build --project P [--model M] --tables T,T,... [--dry-run] [--output PATH]
+  kbagent semantic-layer build --project P [--model M] --tables T,T,... [--dry-run] [--keep-on-failure] [--output PATH]
     Non-interactive heuristic builder. AI caveat: the ai_client has no
     arbitrary-JSON endpoint, so `build` falls back to a deterministic
     heuristic (one dataset + one COUNT(*) metric + one glossary entry per
     table; FQN derived; fields[] role-classified). Response carries
     `fallback_used: "heuristic"`. Push loop iterates all 5 child types in
     dependency order (fixes the long-standing sl-build skill bug where
-    semantic-constraint was silently dropped).
+    semantic-constraint was silently dropped). On push failure rolls back
+    every successfully-POSTed child in reverse order + deletes the model
+    if we created it (since v0.41.10); pass --keep-on-failure to preserve
+    the partial state for forensic inspection (mirrors data-app create).
 
   kbagent semantic-layer token --encrypt --project P --component-id C
     Encrypt the project's storage token for transformation `user_properties`.
