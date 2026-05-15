@@ -16,6 +16,7 @@ export type PageId =
   | "flows"
   | "schedules"
   | "lineage"
+  | "semantic-layer"
   | "sharing"
   | "data-apps"
   | "components"

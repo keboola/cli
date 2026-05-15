@@ -66,6 +66,12 @@ const SECTIONS: Array<{
       // Lineage page has both "Sharing graph" + "Deep lineage" tabs --
       // the standalone Sharing entry would be a duplicate.
       { id: "lineage", label: "Lineage", icon: Network },
+      // Semantic layer ("metastore") sits under Insights with Lineage:
+      // both are about understanding the data, not editing it. The
+      // page itself supports full CRUD on metrics / datasets /
+      // relationships / constraints / glossary plus the workflow
+      // operations (validate, export, diff, promote, import, build).
+      { id: "semantic-layer", label: "Semantic Layer", icon: Database },
     ],
   },
   {
