@@ -56,6 +56,11 @@ class SqlHelperRequest(BaseModel):
     draft_sql: str = ""
     bucket_ids: list[str] = []
     extra_args: list[str] = []
+    # When set, the helper is fixing a failed query: the goal is short
+    # ("Fix this query"), draft_sql holds the failing SQL, and failed_error
+    # is the warehouse error message. The meta-prompt switches mode so the
+    # AI focuses on the error instead of writing from scratch.
+    failed_error: str = ""
 
 
 @router.get("")
@@ -169,6 +174,7 @@ async def improve_sql_stream(
         schema=body.schema_name,
         draft_sql=body.draft_sql,
         bucket_ids=body.bucket_ids or None,
+        failed_error=body.failed_error or None,
     )
     params: dict[str, Any] = {
         "cli": body.cli,
@@ -189,6 +195,12 @@ async def improve_sql_stream(
                 "project": body.project,
                 "backend": body.backend,
                 "goal_preview": goal[:200],
+                # Surface the full meta-prompt so the UI's "Show prompt"
+                # transparency panel can render exactly what claude saw —
+                # users debugging a bad suggestion need this to tell whether
+                # the goal was misunderstood or whether the AI just ignored
+                # the workspace context.
+                "meta_prompt": meta_prompt,
             },
         )
         try:

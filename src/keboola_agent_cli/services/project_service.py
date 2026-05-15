@@ -598,6 +598,52 @@ class ProjectService(BaseService):
             )
         return result
 
+    def _backfill_org_info(
+        self,
+        successes: list[tuple[str, dict[str, Any], bool]],
+    ) -> None:
+        """Persist newly-discovered org info for projects that lack it.
+
+        Runs serially after the parallel status check so we never write to the
+        config JSON from multiple worker threads. A single ``load() -> mutate
+        -> save()`` pass updates every alias whose stored org info is empty
+        but verify_token just returned a populated organization.
+
+        No-op when no project needs an update -- common steady-state once the
+        backfill has run once.
+        """
+        # Build the update set first; skip the file write entirely if empty.
+        updates: dict[str, tuple[int | None, str | None]] = {}
+        for _alias, status_entry, _flag in successes:
+            if status_entry.get("status") != "ok":
+                continue
+            alias = status_entry["alias"]
+            new_id = status_entry.get("org_id")
+            new_name = status_entry.get("org_name")
+            if new_id is None and not new_name:
+                continue  # verify_token didn't return org info -- nothing to backfill
+            current = self._config_store.get_project(alias)
+            if current is None:
+                continue
+            if current.org_id is not None and current.org_name:
+                continue  # already populated; skip
+            updates[alias] = (new_id, new_name)
+
+        if not updates:
+            return
+
+        # Single transactional pass: load once, mutate all in-memory, save once.
+        config = self._config_store.load()
+        for alias, (new_id, new_name) in updates.items():
+            if alias not in config.projects:
+                continue
+            project = config.projects[alias]
+            if project.org_id is None and new_id is not None:
+                project.org_id = new_id
+            if not project.org_name and new_name:
+                project.org_name = new_name
+        self._config_store.save(config)
+
     def _check_project_status(
         self, alias: str, project: ProjectConfig
     ) -> tuple[str, dict[str, Any]] | tuple[str, dict[str, str]]:
@@ -627,6 +673,11 @@ class ProjectService(BaseService):
             status_entry["response_time_ms"] = round(elapsed * 1000)
             status_entry["project_name"] = token_info.project_name
             status_entry["project_id"] = token_info.project_id
+            # Carry org info through to the aggregator so get_status() can
+            # opportunistically backfill projects registered before owner.
+            # organization was being captured (e.g. before #290).
+            status_entry["org_id"] = token_info.org_id
+            status_entry["org_name"] = token_info.org_name
             return (alias, status_entry, True)
         except KeboolaApiError as exc:
             elapsed = time.monotonic() - start_time
@@ -670,6 +721,12 @@ class ProjectService(BaseService):
         results: list[dict[str, Any]] = []
         for _alias, status_entry, _flag in successes:
             results.append(status_entry)
+
+        # Opportunistic org-info backfill: projects registered before #290 have
+        # org_id/org_name=None in config.json even though verify_token now
+        # returns them. Apply updates serially here -- _run_parallel uses worker
+        # threads and concurrent ConfigStore writes would race on the JSON file.
+        self._backfill_org_info(successes)
 
         # Convert unexpected errors to status entries
         for error in errors:

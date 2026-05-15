@@ -454,7 +454,16 @@ function CreateWorkspaceDrawer({
 }
 
 interface BucketsResp {
-  buckets: Array<{ project_alias: string; id: string }>;
+  // Trimmed view of the Bucket type — only the fields the SQL editor's
+  // sidebar uses. is_linked + source_* are surfaced so the tree can flag
+  // cross-project buckets (whose SQL must use the source-project DB FQN).
+  buckets: Array<{
+    project_alias: string;
+    id: string;
+    is_linked?: boolean;
+    source_project_id?: number | null;
+    source_project_name?: string;
+  }>;
 }
 interface TablesResp {
   tables: Array<{ project_alias: string; id: string; bucket_id: string }>;
@@ -477,6 +486,10 @@ SELECT current_timestamp() AS now;`);
   // The AI CLI choice is persisted on the SqlEditorDrawer (not the panel)
   // so the user's pick survives toggling the helper open/closed.
   const [aiCli, setAiCli] = useState<"claude" | "codex" | "gemini">("claude");
+  // Imperative seed for the SQL helper: bumped when the user clicks
+  // "Send to AI for fix" so the helper opens pre-filled with the failed
+  // query + warehouse error.
+  const [helperRequest, setHelperRequest] = useState<HelperRequest | null>(null);
 
   // Fetch buckets + tables from the workspace's project so users can click
   // them into the editor (Storage Explorer pattern from Keboola UI).
@@ -586,6 +599,8 @@ SELECT current_timestamp() AS now;`);
                 <BucketNode
                   key={b.id}
                   bucketId={b.id}
+                  isLinked={b.is_linked ?? false}
+                  sourceProjectName={b.source_project_name}
                   tables={tablesByBucket.get(b.id) ?? []}
                   onPick={insertTable}
                 />
@@ -605,6 +620,8 @@ SELECT current_timestamp() AS now;`);
             draftSql={sql}
             bucketIds={(bucketsQ.data?.buckets ?? []).map((b) => b.id)}
             onApply={(generatedSql) => setSql(generatedSql)}
+            request={helperRequest}
+            onRequestConsumed={() => setHelperRequest(null)}
           />
           <div className="border border-zinc-200 dark:border-zinc-800 rounded">
             <Editor
@@ -629,6 +646,24 @@ SELECT current_timestamp() AS now;`);
                   Hint: {hint}
                 </div>
               ) : null}
+              {/* Fast path out of a broken query: hand the failing SQL +
+                  warehouse error to the AI helper. The seed nonce ensures
+                  repeated clicks always retrigger the panel even when the
+                  query / error are unchanged. */}
+              <button
+                type="button"
+                className="nerd-btn text-xs hover:text-neon-pink hover:border-neon-pink/60 flex items-center gap-1"
+                onClick={() =>
+                  setHelperRequest({
+                    seed: Date.now(),
+                    goal: "Fix this SQL — diagnose the warehouse error and return a corrected query. Pay attention to linked-bucket FQNs and column names.",
+                    failedError: error,
+                  })
+                }
+                title={`Open the AI SQL helper in fix mode using ${aiCli}`}
+              >
+                <Sparkles className="w-3 h-3" /> Send to {aiCli} for fix
+              </button>
             </div>
           ) : null}
           {result ? <SqlResults result={result} /> : null}
@@ -640,10 +675,14 @@ SELECT current_timestamp() AS now;`);
 
 function BucketNode({
   bucketId,
+  isLinked,
+  sourceProjectName,
   tables,
   onPick,
 }: {
   bucketId: string;
+  isLinked: boolean;
+  sourceProjectName?: string;
   tables: string[];
   onPick: (tableId: string) => void;
 }) {
@@ -657,6 +696,18 @@ function BucketNode({
       >
         <span className="text-zinc-500 dark:text-zinc-600">{open ? "▾" : "▸"}</span>
         <span className="font-mono text-accent truncate">{bucketId}</span>
+        {isLinked ? (
+          <span
+            className="nerd-pill-amber text-[9px] flex-shrink-0"
+            title={
+              sourceProjectName
+                ? `Linked from project '${sourceProjectName}'. Tables live in the source project's DB — use 'kbagent storage bucket-detail' for the correct SQL FQN.`
+                : "Linked bucket — tables live in the source project's DB. Use 'kbagent storage bucket-detail' for the correct SQL FQN."
+            }
+          >
+            linked
+          </span>
+        ) : null}
         <span className="text-[10px] text-zinc-500 dark:text-zinc-600 ml-auto">{tables.length}</span>
       </button>
       {open && tables.length > 0 ? (
@@ -767,6 +818,19 @@ function CsvTable({ csv }: { csv: string }) {
  *   keeps the claude/codex/gemini subprocess alive while waiting for an
  *   SSE consumer that will never return.
  */
+/**
+ * Imperative request from the parent ``SqlEditorDrawer`` to open the helper
+ * pre-filled with a goal (and, in fix-mode, the warehouse error message).
+ * Wraps two correlated bits of state — the seed nonce and its payload —
+ * into a single prop so the helper's effect dependency is well-defined.
+ */
+interface HelperRequest {
+  /** Monotonic nonce. Bump to retrigger even if goal/error are unchanged. */
+  seed: number;
+  goal: string;
+  failedError?: string;
+}
+
 function SqlHelperPanel({
   cli,
   onCliChange,
@@ -777,6 +841,8 @@ function SqlHelperPanel({
   draftSql,
   bucketIds,
   onApply,
+  request,
+  onRequestConsumed,
 }: {
   cli: "claude" | "codex" | "gemini";
   onCliChange: (c: "claude" | "codex" | "gemini") => void;
@@ -787,6 +853,10 @@ function SqlHelperPanel({
   draftSql: string;
   bucketIds: string[];
   onApply: (sql: string) => void;
+  /** Optional imperative seed from parent (e.g. "Send to AI for fix" button). */
+  request?: HelperRequest | null;
+  /** Called after the panel consumes a request, so parent can clear it. */
+  onRequestConsumed?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [goal, setGoal] = useState("");
@@ -795,13 +865,40 @@ function SqlHelperPanel({
   const [livePreview, setLivePreview] = useState("");
   const [finalSql, setFinalSql] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Transparency state — surfaced in collapsible panels so users can see
+  // what the AI actually received (#287). Captured at init time (meta_prompt)
+  // and accumulated during streaming (activity log for tool calls + stderr).
+  const [metaPrompt, setMetaPrompt] = useState<string | null>(null);
+  const [activityLog, setActivityLog] = useState<string[]>([]);
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [showActivity, setShowActivity] = useState(true);
+  // Fix mode: warehouse error from a failed query run. When non-empty the
+  // helper switches to "diagnose and fix this SQL" framing in the backend.
+  const [failedError, setFailedError] = useState<string>("");
   const handleRef = useRef<SsePostHandle | null>(null);
+
+  // Imperative seed from parent: pre-fill goal + error and pop the helper
+  // open so the user can click Generate. We key on `request.seed` so a
+  // repeat-click of "Send to AI for fix" with the same error still
+  // re-opens the panel.
+  useEffect(() => {
+    if (!request) return;
+    setOpen(true);
+    setGoal(request.goal);
+    setFailedError(request.failedError ?? "");
+    onRequestConsumed?.();
+  }, [request, onRequestConsumed]);
 
   const reset = () => {
     setLivePreview("");
     setFinalSql(null);
     setError(null);
     setElapsed(0);
+    setMetaPrompt(null);
+    setActivityLog([]);
+    // failedError is intentionally NOT cleared here -- the parent controls
+    // it via `request`, and clearing on each generate cycle would drop the
+    // fix-mode framing if the user clicks Regenerate.
   };
 
   const start = () => {
@@ -832,27 +929,70 @@ function SqlHelperPanel({
         workspace_id: workspaceId,
         draft_sql: draftSql,
         bucket_ids: bucketIds,
+        failed_error: failedError,
       },
       {
-        init: () => {
-          /* the running indicator already covers this */
+        init: (d) => {
+          // Capture the full meta-prompt for the "Show prompt" panel so
+          // users can see exactly what context the AI received.
+          const data = (d ?? {}) as Record<string, unknown>;
+          if (typeof data.meta_prompt === "string") {
+            setMetaPrompt(data.meta_prompt);
+          }
         },
         stdout: (d) => {
           const data = (d ?? {}) as Record<string, unknown>;
-          // Claude stream-json: assistant turns carry message.content[].text.
+          // Claude stream-json: assistant turns carry message.content[]
+          // blocks of either "text" (free-form reasoning / output) or
+          // "tool_use" (a CLI call the AI decided to make, e.g. running
+          // `kbagent storage bucket-detail` to resolve a linked bucket).
+          // We render text into the live preview and surface tool_use as
+          // a one-line "→ Bash: ..." in the activity log so the user can
+          // watch the AI's discovery work in real time.
           if (data.type === "assistant" && typeof data.message === "object") {
             const msg = data.message as Record<string, unknown>;
             const content = msg.content;
             if (Array.isArray(content)) {
               for (const block of content) {
-                if (
-                  block &&
-                  typeof block === "object" &&
-                  (block as Record<string, unknown>).type === "text" &&
-                  typeof (block as Record<string, unknown>).text === "string"
-                ) {
-                  assistantText += (block as Record<string, unknown>).text as string;
+                if (!block || typeof block !== "object") continue;
+                const b = block as Record<string, unknown>;
+                if (b.type === "text" && typeof b.text === "string") {
+                  assistantText += b.text;
                   setLivePreview(assistantText);
+                } else if (b.type === "tool_use") {
+                  const toolName = typeof b.name === "string" ? b.name : "tool";
+                  const input = b.input;
+                  const argsPreview =
+                    typeof input === "object" && input !== null
+                      ? (() => {
+                          const obj = input as Record<string, unknown>;
+                          // For Bash, surface the command verbatim. For other
+                          // tools, dump the first 200 chars of JSON.
+                          if (typeof obj.command === "string") return obj.command;
+                          if (typeof obj.description === "string") return obj.description;
+                          return JSON.stringify(obj).slice(0, 200);
+                        })()
+                      : "";
+                  setActivityLog((prev) => [...prev, `→ ${toolName}: ${argsPreview}`]);
+                }
+              }
+            }
+          } else if (data.type === "user" && typeof data.message === "object") {
+            // Tool results come back as user messages. We log just a one-line
+            // status (success / error) instead of the full payload so the
+            // activity panel stays scannable.
+            const msg = data.message as Record<string, unknown>;
+            const content = msg.content;
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (!block || typeof block !== "object") continue;
+                const b = block as Record<string, unknown>;
+                if (b.type === "tool_result") {
+                  const isErr = b.is_error === true;
+                  setActivityLog((prev) => [
+                    ...prev,
+                    `  ${isErr ? "✗" : "✓"} tool result${isErr ? " (error)" : ""}`,
+                  ]);
                 }
               }
             }
@@ -862,8 +1002,13 @@ function SqlHelperPanel({
             setLivePreview(assistantText);
           }
         },
-        stderr: () => {
-          /* progress notes — ignored for the preview pane */
+        stderr: (d) => {
+          // Most stderr is progress noise; we attribute it to activity only
+          // if it carries a non-empty `raw` line. Keeps the panel focused.
+          const data = (d ?? {}) as Record<string, unknown>;
+          if (typeof data.raw === "string" && data.raw.trim()) {
+            setActivityLog((prev) => [...prev, `  ⚠ ${data.raw}`]);
+          }
         },
         done: (d) => {
           const data = (d ?? {}) as Record<string, unknown>;
@@ -938,6 +1083,14 @@ function SqlHelperPanel({
         <div className="text-xs font-bold text-neon-pink flex items-center gap-1">
           <Sparkles className="w-3 h-3" />
           AI SQL helper · {cli}
+          {failedError ? (
+            <span
+              className="ml-2 nerd-pill-amber"
+              title="Helper is in fix-mode: the warehouse error from your last Run will be passed to the AI."
+            >
+              fix mode
+            </span>
+          ) : null}
         </div>
         <button
           type="button"
@@ -947,6 +1100,7 @@ function SqlHelperPanel({
             setOpen(false);
             reset();
             setGoal("");
+            setFailedError("");
           }}
           title="Close the helper without applying"
         >
@@ -1015,6 +1169,57 @@ function SqlHelperPanel({
       </div>
 
       {error ? <ErrorBox message={error} /> : null}
+
+      {/* Transparency: full meta-prompt that the AI received. Collapsed by
+          default — most users only open it when an AI suggestion looks off. */}
+      {metaPrompt ? (
+        <div className="border border-zinc-200 dark:border-zinc-800 rounded">
+          <button
+            type="button"
+            className="w-full text-left px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-500 hover:text-keboola flex items-center gap-1"
+            onClick={() => setShowPrompt((v) => !v)}
+            title="See exactly what context the AI received"
+          >
+            <span>{showPrompt ? "▾" : "▸"}</span>
+            <span>Prompt sent to {cli}</span>
+            <span className="ml-auto text-zinc-400">{metaPrompt.length} chars</span>
+          </button>
+          {showPrompt ? (
+            <pre
+              className="nerd-code whitespace-pre-wrap text-[11px] text-zinc-600 dark:text-zinc-400 border-t border-zinc-200 dark:border-zinc-800"
+              style={{ maxHeight: "240px", overflow: "auto" }}
+            >
+              {metaPrompt}
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* Activity log: tool_use calls (kbagent CLI invocations) + tool
+          results. Surfaces "→ Bash: kbagent storage bucket-detail ..." in
+          real time so users can watch the AI's discovery. */}
+      {activityLog.length > 0 ? (
+        <div className="border border-zinc-200 dark:border-zinc-800 rounded">
+          <button
+            type="button"
+            className="w-full text-left px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-500 hover:text-keboola flex items-center gap-1"
+            onClick={() => setShowActivity((v) => !v)}
+            title="See what tools the AI is calling"
+          >
+            <span>{showActivity ? "▾" : "▸"}</span>
+            <span>Activity</span>
+            <span className="ml-auto text-zinc-400">{activityLog.length} events</span>
+          </button>
+          {showActivity ? (
+            <pre
+              className="nerd-code whitespace-pre-wrap text-[11px] text-zinc-600 dark:text-zinc-400 border-t border-zinc-200 dark:border-zinc-800"
+              style={{ maxHeight: "200px", overflow: "auto" }}
+            >
+              {activityLog.join("\n")}
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
 
       {running && livePreview ? (
         <div>

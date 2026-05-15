@@ -164,6 +164,61 @@ class TestBuildSqlHelperMetaPrompt:
         assert "kbagent workspace query" in prompt
         assert "kbagent storage table-detail" in prompt
 
+    def test_fix_mode_when_failed_error_set(self) -> None:
+        """When the user clicks 'Send to AI for fix' the helper pivots from
+        ``write SQL for goal`` to ``fix this failing SQL``: the prompt must
+        carry both the failing query AND the warehouse error verbatim so
+        the AI can correlate them with schema discovery output.
+        """
+        prompt = build_sql_helper_meta_prompt(
+            goal="Fix this SQL",
+            project="demo",
+            backend="snowflake",
+            schema="WORKSPACE_X",
+            draft_sql='SELECT * FROM "in.c-shared"."t";',
+            failed_error="SQL compilation error: Object 'IN.C-SHARED.T' does not exist",
+        )
+        assert "FAILED QUERY" in prompt
+        assert "WAREHOUSE ERROR" in prompt
+        assert "Object 'IN.C-SHARED.T' does not exist" in prompt
+        # The draft must NOT be labelled "refine this draft" in fix mode -- that
+        # framing pushes the AI to keep the broken query as a starting point.
+        assert "refine this, don't throw it away" not in prompt
+
+    def test_fix_mode_with_empty_draft(self) -> None:
+        """Edge case: error came back but the editor was cleared between Run
+        and 'Send to AI'. The prompt must still convey both error and the
+        absence of a query, not silently fall back to 'write from scratch'.
+        """
+        prompt = build_sql_helper_meta_prompt(
+            goal="Fix this SQL",
+            project="demo",
+            backend="snowflake",
+            schema="s",
+            draft_sql="",
+            failed_error="Table not found",
+        )
+        assert "Table not found" in prompt
+        assert "query body empty" in prompt
+
+    def test_linked_bucket_warning_present(self) -> None:
+        """Without explicit linked-bucket guidance the AI generates SQL like
+        ``"in.c-shared"."table"`` for linked buckets, which silently fails
+        with "table not found" at run time. The meta-prompt forces the AI
+        to call ``bucket-detail`` and use the returned ``sql_path`` so
+        cross-project paths come out correct (e.g. Snowflake's
+        ``"KBC_USE4_340"."out.c-shared"."t"``).
+        """
+        prompt = build_sql_helper_meta_prompt(
+            goal="g",
+            project="demo",
+            backend="snowflake",
+            schema="s",
+        )
+        assert "LINKED BUCKETS" in prompt
+        assert "kbagent storage bucket-detail" in prompt
+        assert "sql_path" in prompt
+
 
 # ---------------------------------------------------------------------
 # clean_sql_helper_response

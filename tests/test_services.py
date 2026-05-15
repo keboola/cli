@@ -436,6 +436,92 @@ class TestGetStatus:
         assert bad_entry["error_code"] == "INVALID_TOKEN"
         assert "Token expired" in bad_entry["error"]
 
+    def test_status_backfills_org_info_for_legacy_projects(self, tmp_config_dir: Path) -> None:
+        """Projects registered before #290 had org_id/org_name=None in config.
+
+        When verify_token now returns owner.organization, get_status() should
+        backfill the config so subsequent /projects responses show the org
+        column populated (instead of '—').
+        """
+        store = ConfigStore(config_dir=tmp_config_dir)
+        mock_client = make_mock_client(org_id=438, org_name="Keboola Demo")
+        service = ProjectService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        # Simulate a legacy config: project written without org info.
+        store.add_project(
+            "legacy",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-legacy-tokenValue1234567890",
+                project_name="Legacy Project",
+                project_id=100,
+                # org_id, org_name intentionally omitted -> default None
+            ),
+        )
+        assert store.get_project("legacy").org_id is None
+
+        service.get_status()
+
+        refreshed = store.get_project("legacy")
+        assert refreshed.org_id == 438
+        assert refreshed.org_name == "Keboola Demo"
+
+    def test_status_no_backfill_when_org_info_already_set(self, tmp_config_dir: Path) -> None:
+        """Projects with org info already populated must not be re-written."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        # Mock returns a DIFFERENT org_name; we should NOT overwrite the stored one.
+        mock_client = make_mock_client(org_id=999, org_name="Should Not Win")
+        service = ProjectService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        store.add_project(
+            "with-org",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-token-tokenValue1234567890",
+                project_name="P",
+                project_id=100,
+                org_id=438,
+                org_name="Already Set",
+            ),
+        )
+
+        service.get_status()
+
+        refreshed = store.get_project("with-org")
+        assert refreshed.org_id == 438
+        assert refreshed.org_name == "Already Set"
+
+    def test_status_no_backfill_when_verify_returns_no_org(self, tmp_config_dir: Path) -> None:
+        """Stack without owner.organization in verify_token must leave org=None."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        mock_client = make_mock_client()  # no org info
+        service = ProjectService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        store.add_project(
+            "no-org-stack",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-token-tokenValue1234567890",
+                project_name="P",
+                project_id=100,
+            ),
+        )
+
+        service.get_status()
+
+        refreshed = store.get_project("no-org-stack")
+        assert refreshed.org_id is None
+        assert refreshed.org_name is None
+
     def test_status_specific_project(self, tmp_config_dir: Path) -> None:
         """get_status with specific alias only checks that project."""
         store = ConfigStore(config_dir=tmp_config_dir)

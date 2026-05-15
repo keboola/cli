@@ -503,6 +503,18 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
       .render(runId, code)
       .then(({ svg }) => {
         if (cancelled || !ref.current) return;
+        // Mermaid's text-size guard does NOT throw — it returns a "soft
+        // error" SVG with the failure rendered as a <text> element. Detect
+        // the marker substring before mounting so the banner kicks in
+        // instead of silently embedding a useless red box. (Confirmed
+        // against mermaid 10.x output; future versions may shift wording
+        // slightly, so we match a case-insensitive substring not the exact
+        // phrase.)
+        if (/maximum text size/i.test(svg)) {
+          setError("Maximum text size in diagram exceeded");
+          ref.current.innerHTML = "";
+          return;
+        }
         ref.current.innerHTML = svg;
         setError(null);
       })

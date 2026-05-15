@@ -227,6 +227,7 @@ def build_sql_helper_meta_prompt(
     draft_sql: str = "",
     bucket_ids: list[str] | None = None,
     serve_url: str | None = None,
+    failed_error: str | None = None,
 ) -> str:
     """Compose the meta-prompt sent to the AI CLI by the workspace SQL helper.
 
@@ -240,13 +241,28 @@ def build_sql_helper_meta_prompt(
     INFORMATION_SCHEMA, Snowflake's CURRENT_SCHEMA() default, etc. The
     bucket list (when supplied) gives the AI a starting catalog without
     burning a tool call.
+
+    When ``failed_error`` is provided the helper switches to "fix mode": the
+    user just ran ``draft_sql`` and the warehouse rejected it. The prompt
+    pivots from "write SQL for goal" to "diagnose and fix this SQL", and the
+    error text is surfaced verbatim so the AI can match it against schema
+    discovery output (e.g. linked-bucket FQN mistakes).
     """
     goal_clean = goal.strip()
-    draft_block = (
-        f"USER'S CURRENT DRAFT (refine this, don't throw it away):\n{draft_sql.strip()}"
-        if draft_sql.strip()
-        else "USER'S CURRENT DRAFT: (empty -- write the query from scratch.)"
-    )
+    if failed_error and failed_error.strip():
+        # Fix mode: existing SQL is the input, error explains why it failed.
+        draft_block = (
+            "FAILED QUERY (this is the SQL the user just ran -- it broke):\n"
+            f"{draft_sql.strip() or '(query body empty — recover from the error message alone.)'}\n\n"
+            "WAREHOUSE ERROR:\n"
+            f"{failed_error.strip()}"
+        )
+    elif draft_sql.strip():
+        draft_block = (
+            f"USER'S CURRENT DRAFT (refine this, don't throw it away):\n{draft_sql.strip()}"
+        )
+    else:
+        draft_block = "USER'S CURRENT DRAFT: (empty -- write the query from scratch.)"
     bucket_block = (
         "VISIBLE BUCKETS (already loaded in the editor sidebar):\n"
         + "\n".join(f"  - {b}" for b in bucket_ids[:50])
@@ -284,6 +300,19 @@ USER'S GOAL (plain English):
 {bucket_block}
 
 {backend_hint}
+
+LINKED BUCKETS (cross-project, CRITICAL for correctness):
+- A workspace mounts ONLY the project's own database/dataset by default.
+  Linked buckets (shared from another project) live in a DIFFERENT database
+  on Snowflake or a different GCP project on BigQuery. Querying them with
+  just `"in.c-foo"."table"` will fail with "table not found".
+- ALWAYS call `kbagent storage bucket-detail --project {project} --bucket-id <id>`
+  for EVERY bucket you reference, and use the returned `sql_path` field —
+  it's pre-quoted for the bucket's backend (e.g. Snowflake linked:
+  `"KBC_USE4_340"."out.c-out_bamboohr"."employee_snapshot"`).
+- The `--linked` / "Linked From" annotation in `storage buckets` output
+  tells you the bucket is cross-project. If unsure, run `bucket-detail`
+  anyway — it's idempotent and cheap.
 
 DISCOVERY (do this BEFORE guessing column names):
 - Use `kbagent workspace query --project {project} --workspace-id <id> --sql '...'`
