@@ -93,7 +93,7 @@ export function DashboardPage() {
   return (
     <div className="space-y-6">
       <PageTitle
-        title={`${greeting()}, Petr`}
+        title={greeting()}
         description={
           project
             ? `Working in project ${project}. Ask Kai anything below, or jump to a tile.`
