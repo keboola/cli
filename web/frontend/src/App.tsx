@@ -10,8 +10,8 @@ import { DoctorPage } from "./pages/Doctor";
 import { EncryptPage } from "./pages/Encrypt";
 import { FlowsPage } from "./pages/Flows";
 import { JobsPage } from "./pages/Jobs";
-import { KaiPage } from "./pages/Kai";
 import { LineagePage } from "./pages/Lineage";
+import { LocalAiPage } from "./pages/LocalAi";
 import { McpPage } from "./pages/Mcp";
 import { MembersPage } from "./pages/Members";
 import { OrgPage } from "./pages/Org";
@@ -55,8 +55,8 @@ function Router() {
       return <DataAppsPage />;
     case "mcp":
       return <McpPage />;
-    case "kai":
-      return <KaiPage />;
+    case "localai":
+      return <LocalAiPage />;
     case "agents":
       return <AgentsPage />;
     case "search":

@@ -546,6 +546,100 @@ def clean_prompt_helper_response(text: str) -> str:
     return text.strip()
 
 
+def build_local_ai_meta_prompt(
+    *,
+    message: str,
+    project: str | None = None,
+    branch_id: int | None = None,
+    serve_url: str | None = None,
+) -> str:
+    """Compose the meta-prompt for the dashboard Local AI chat (#300).
+
+    This is the most generic of the three helper meta-prompts in this
+    module: it does NOT pin an output shape (unlike SQL helper which
+    must emit raw SQL) and does NOT pin a task shape (unlike the agent
+    prompt helper which rewrites a draft). It simply tells the AI:
+    "you are running inside kbagent serve, you have the kbagent CLI on
+    PATH, here is what the user wants — answer it."
+
+    The user's local Claude / codex / gemini install handles markdown
+    rendering on the UI side, so the prompt encourages markdown output
+    rather than the spartan output contract that the SQL / prompt
+    helpers enforce.
+
+    The kbagent-skill content (workflow knowledge, gotchas, command
+    reference) is NOT inlined verbatim — it is ~70 KB of documentation
+    that would balloon every chat round trip. Instead the AI is told
+    to run ``kbagent context`` to load the full documentation on demand,
+    mirroring how Claude Code's plugin loader bootstraps the skill.
+    """
+    message_clean = message.strip()
+    project_block = (
+        f"- Active project: {project!r} (use `--project {project}` on `kbagent` "
+        "commands; multi-project commands also accept multiple `--project` flags)"
+        if project
+        else "- Active project: (none — multi-project mode. Ask the user to "
+        "pick one if a single-project answer is required, or use explicit "
+        "`--project NAME` flags / `kbagent project list` to discover)"
+    )
+    branch_block = (
+        f"- Active branch: #{branch_id} (use `--branch {branch_id}` where supported)"
+        if branch_id
+        else "- Active branch: main (production)"
+    )
+    serve_block = (
+        f"- `kbagent http get|post /...` reaches the running serve at {serve_url}. "
+        "Env vars `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` are pre-set, so "
+        "this is the fastest path for read queries against the live API."
+        if serve_url
+        else "- `kbagent http get|post /...` reaches the running serve when "
+        "`KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` are set (which they are "
+        "inside this subprocess)."
+    )
+    return f"""\
+You are a Keboola data engineer's AI co-pilot, running inside
+`kbagent serve`. The user types questions in a chat box on the dashboard
+and you answer them by running real `kbagent` commands and summarising
+the results — no guessing, no fabrication.
+
+TOOLS AVAILABLE:
+- `kbagent` CLI is on PATH and pre-configured for the user's workspace
+  (same `config.json` the serve uses; same Keboola projects).
+- Run `kbagent context` FIRST when you need to discover the full command
+  inventory or workflow knowledge. It dumps the kbagent skill (commands,
+  gotchas, workflows) into your context on demand — designed for AI
+  consumption.
+- Add `--json` to ANY command for machine-parseable output (every
+  `kbagent` command supports it).
+{serve_block}
+
+USER CONTEXT:
+{project_block}
+{branch_block}
+
+USER'S MESSAGE:
+{message_clean}
+
+HOW TO ANSWER:
+- If the question is concrete ("list failed jobs", "show config X"),
+  run the relevant `kbagent` command, parse the result, and answer.
+- If the question is open-ended ("what should I clean up?"), discover
+  first (run a relevant `--json` command, scan the result), then
+  summarise with specific findings.
+- Cross-project work is a first-class flag: most commands accept
+  multiple `--project NAME` flags. Don't artificially constrain to a
+  single project unless the question is single-project.
+
+OUTPUT FORMAT:
+- Markdown. Use code blocks for SQL / commands you ran or recommend.
+- Tables when comparing multiple projects / configs / rows.
+- Be concrete: cite specific IDs, project aliases, timestamps. Avoid
+  vague "you might want to..." — say what to run and what to expect.
+- If you cannot answer (Kai-required feature, missing token, blocked
+  by permissions), say so explicitly and name the missing piece.
+"""
+
+
 def _now_utc() -> datetime:
     return datetime.now(UTC).replace(microsecond=0)
 

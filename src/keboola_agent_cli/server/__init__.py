@@ -32,6 +32,7 @@ from .auth import AuthSettings, install_auth
 from .dependencies import ServiceRegistry, install_registry
 from .routers import (
     agents,
+    ai_chat,
     branches,
     components,
     configs,
@@ -220,6 +221,7 @@ def create_app(
     app.include_router(data_apps.router)
     app.include_router(mcp.router)
     app.include_router(kai.router)
+    app.include_router(ai_chat.router)
     app.include_router(encrypt.router)
     app.include_router(search.router)
     app.include_router(semantic_layer.router)
@@ -382,6 +384,7 @@ def _allow_static_through_auth(app: FastAPI) -> None:
             "/data-apps",
             "/mcp",
             "/kai",
+            "/ai",
             "/encrypt",
             "/search",
             "/semantic-layer",

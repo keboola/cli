@@ -58,11 +58,14 @@ export function Drawer({
   const isTailwindClass = width.startsWith("max-w-");
   const widthClass = isTailwindClass ? width : "";
   const widthStyle = isTailwindClass ? undefined : { maxWidth: width };
-  // Near-opaque overlay (90% black-ish) — 70% let the page content under the
-  // drawer bleed through enough to break modality, especially on the agent-task
-  // table where action buttons are right under the click-catch area.
+  // Semi-transparent scrim. The earlier 90% opacity looked like the left half
+  // of the screen had crashed (#286) — Vojta reported the page felt broken,
+  // not modal. Dropping to 50% (light) / 70% (dark) + blur restores the "I
+  // opened a modal on top" depth cue without losing modality. The click-catch
+  // div below is what actually blocks interaction with underlying buttons;
+  // opacity is purely visual signal.
   return createPortal(
-    <div className="fixed inset-0 z-50 flex bg-zinc-950/90 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex bg-zinc-900/50 backdrop-blur-sm dark:bg-black/70">
       <div className="flex-1" onClick={onClose} role="presentation" />
       <aside
         style={widthStyle}

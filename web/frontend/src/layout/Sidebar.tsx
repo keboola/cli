@@ -72,7 +72,7 @@ const SECTIONS: Array<{
     title: "AI / Tools",
     items: [
       { id: "mcp", label: "MCP Tools", icon: Sparkles },
-      { id: "kai", label: "Kai Chat", icon: MessageSquare },
+      { id: "localai", label: "Local AI", icon: MessageSquare },
       { id: "agents", label: "Agent Tasks", icon: Bot },
     ],
   },

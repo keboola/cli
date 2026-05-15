@@ -170,6 +170,23 @@ ENV_KBAGENT_UPSTREAM_STATUS: str = "KBAGENT_UPSTREAM_STATUS"
 # short enough to fail fast on a dead serve.
 HTTP_DEFAULT_TIMEOUT: float = 60.0
 
+# --- AI helper subprocess timeouts (seconds) ---
+# Each of the three stateless AI helpers spawns a local claude / codex /
+# gemini CLI via stream_ai_agent_events; these caps protect against a stuck
+# CLI camping on the SSE connection. Centralised here so they stay
+# governable from one place instead of three router files.
+#
+# - Prompt helper:  rewrite a draft prompt for a scheduled agent. Short
+#   single-turn task, no tool calls expected -> 180s.
+# - SQL helper:     write workspace SQL. May round-trip through
+#   `kbagent storage bucket-detail` + INFORMATION_SCHEMA queries -> 180s.
+# - Chat helper:    generic Local AI co-pilot. Can involve several tool
+#   invocations + a longer summary -> 300s, matching the longest
+#   credible single-turn budget without leaving stuck connections open.
+AI_PROMPT_HELPER_TIMEOUT: float = 180.0
+AI_SQL_HELPER_TIMEOUT: float = 180.0
+AI_CHAT_HELPER_TIMEOUT: float = 300.0
+
 # --- Version Check ---
 VERSION_CHECK_TIMEOUT: float = 4.0  # seconds for fetching latest version from remote
 MCP_PYPI_URL: str = "https://pypi.org/pypi/keboola-mcp-server/json"
