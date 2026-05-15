@@ -646,7 +646,7 @@ class ProjectService(BaseService):
 
     def _check_project_status(
         self, alias: str, project: ProjectConfig
-    ) -> tuple[str, dict[str, Any]] | tuple[str, dict[str, str]]:
+    ) -> tuple[str, dict[str, Any], bool] | tuple[str, dict[str, str]]:
         """Check connectivity for a single project (runs in a worker thread).
 
         Creates its own KeboolaClient, verifies the token, and measures response time.

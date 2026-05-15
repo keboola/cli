@@ -131,7 +131,14 @@ class OrgService:
                     if isinstance(fetched, str) and fetched:
                         org_name = fetched
                 except Exception:
-                    logger.debug("Could not resolve organization name for org_id=%s", org_id)
+                    # Best-effort: org name resolution is optional, but the
+                    # specific exception type matters when something IS wrong
+                    # (403 vs 404 vs network), so log with traceback.
+                    logger.debug(
+                        "Could not resolve organization name for org_id=%s",
+                        org_id,
+                        exc_info=True,
+                    )
 
             # Resolve token owner identity for unique token naming
             owner_name = ""

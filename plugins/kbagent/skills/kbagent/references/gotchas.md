@@ -1415,6 +1415,32 @@ Full CRUD for configuration rows is exposed as a separate `Rows` command panel:
 - `row-delete` is **destructive** (gated behind `--allow-destructive` if the session firewall is on). 404 from the API on a non-existent row surfaces as `NOT_FOUND` exit 1 — deletion is **not** treated as idempotent success.
 - `--json` mode auto-skips the interactive confirmation prompt on `row-delete`; in human mode pass `--yes` to skip.
 
+## `project status` / `project list` expose `org_id` / `org_name`; `org_name` is Manage-API-only (since v0.40.3)
+
+`ProjectConfig` now persists `org_id` (int | None) and `org_name` (str | None);
+both are surfaced verbatim in `kbagent project status` and `kbagent project
+list` JSON output. The two fields are populated from **different sources**:
+
+- **`org_id`** comes from `data.organization.id` at the **top level** of the
+  Storage API `/v2/storage/tokens/verify` response (NOT under `owner`).
+  Populated whenever a project is added / re-verified — including the
+  opportunistic backfill that `/projects/status` performs for projects
+  registered before this release. The API returns the id as a string
+  (e.g. `"73"`); the parser normalises it to int.
+- **`org_name`** is **Manage-API-only**. The Storage API never carries it.
+  It is populated only when the project flows through `kbagent org setup`
+  (which calls `/manage/organizations/{id}`) or when `kbagent project add`
+  runs in a context that has a Manage API token. Projects registered via
+  plain `kbagent project add` (Storage token only) keep `org_name: null`
+  indefinitely.
+
+**AI agent rule of thumb**: when reading `project status` JSON, ALWAYS
+handle `org_name: null` even when `org_id` is set. Do not pattern-match on
+both being present; the asymmetry is the steady state for the majority of
+projects. The web UI Projects table renders `#<org_id>` (e.g. `#73`) as a
+fallback when only the id is known, so any agent producing a human-readable
+project list should do the same — never render the bare null.
+
 ## `config oauth-url` requires a master Storage API token (since v0.30.0)
 
 The OAuth wizard URL embeds a short-lived **child** Storage API token scoped
