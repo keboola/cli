@@ -2805,6 +2805,106 @@ class TestIterPollIntervals:
         assert seq == [STORAGE_JOB_POLL_INTERVAL] * 5
 
 
+class TestExtractQueryJobError:
+    """Tests for _extract_query_job_error -- pulls the real warehouse error
+    out of a failed Query Service job payload.
+
+    Pinned against the real shape observed against
+    ``connection.us-east4.gcp.keboola.com/api/v1/queries/<id>`` for a
+    failed Snowflake compilation: the actionable error lives inside
+    ``statements[i].error`` (a plain string), and the top-level ``error``
+    key is ABSENT on failures.
+    """
+
+    def _import(self):
+        from keboola_agent_cli.client import _extract_query_job_error
+
+        return _extract_query_job_error
+
+    def test_extracts_snowflake_error_from_statement_string(self) -> None:
+        """Reproduces the exact bamboohr case from Vojta's screenshot 24.
+
+        Before this fix the helper emitted 'Query job failed: Query
+        execution failed'; now the Snowflake message comes through and
+        the AI fix-mode prompt has something concrete to work with.
+        """
+        extract = self._import()
+        job = {
+            "queryJobId": "019e2b22-b16c-725a-93e5-262d226fa62f",
+            "status": "failed",
+            "statements": [
+                {
+                    "id": "019e2b22-b16c-7263-8683-f07337c1a4a8",
+                    "query": "SELECT DATE_TRUNC('MONTH', 'not-a-date') AS m",
+                    "status": "failed",
+                    "error": (
+                        "SQL compilation error:\n"
+                        "Function DATE_TRUNC does not support VARCHAR(10) argument type"
+                    ),
+                }
+            ],
+        }
+        msg = extract(job)
+        assert "SQL compilation error" in msg
+        assert "Function DATE_TRUNC does not support VARCHAR(10)" in msg
+        # Single statement -- no "Statement 1:" prefix noise.
+        assert not msg.startswith("Statement 1:")
+
+    def test_prefixes_statement_index_when_multiple(self) -> None:
+        """Multi-statement batches need disambiguation, but only then —
+        the prefix is dead weight on the common single-statement case.
+        """
+        extract = self._import()
+        job = {
+            "status": "failed",
+            "statements": [
+                {"status": "completed", "error": None},
+                {"status": "failed", "error": "syntax error near 'BOGUS'"},
+                {"status": "failed", "error": "table 'foo' does not exist"},
+            ],
+        }
+        msg = extract(job)
+        assert "Statement 2: syntax error" in msg
+        assert "Statement 3: table 'foo' does not exist" in msg
+        # Successful statements are skipped.
+        assert "Statement 1" not in msg
+
+    def test_handles_dict_shaped_statement_error(self) -> None:
+        """Some Query Service builds wrap the warehouse error in a dict."""
+        extract = self._import()
+        job = {
+            "status": "failed",
+            "statements": [
+                {
+                    "status": "failed",
+                    "error": {"message": "BigQuery: unrecognized name col_x at [3:5]"},
+                }
+            ],
+        }
+        msg = extract(job)
+        assert "unrecognized name col_x" in msg
+
+    def test_falls_back_to_top_level_error_when_no_statements(self) -> None:
+        """Older Query Service responses (or auth-style failures) put the
+        message at the top level. Keep that path working.
+        """
+        extract = self._import()
+        job = {"status": "failed", "error": "workspace credentials expired"}
+        assert extract(job) == "workspace credentials expired"
+
+    def test_top_level_dict_error(self) -> None:
+        extract = self._import()
+        job = {"status": "failed", "error": {"message": "boom"}}
+        assert extract(job) == "boom"
+
+    def test_returns_explicit_fallback_when_nothing_is_set(self) -> None:
+        """The caller embeds this string into a KeboolaApiError message —
+        it must never be empty, even on a malformed Query Service payload.
+        """
+        extract = self._import()
+        assert extract({"status": "failed"}).startswith("Query execution failed (no error details")
+
+
 class TestWaitForQueueJob:
     """Tests for wait_for_queue_job -- strategy dispatch, deadline, failure."""
 

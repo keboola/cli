@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowLeftRight, FolderOpen, Hammer, Network } from "lucide-react";
 import mermaid from "mermaid";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
@@ -488,7 +488,47 @@ function MermaidGraph({
   // renderer can't draw the graph, the user can paste this into
   // mermaid.live or a local renderer.
   const [mermaidCode, setMermaidCode] = useState<string>("");
+  // Filter state — when empty (""), no filter is applied. The picker
+  // dropdowns let users narrow the edge set on the source or target
+  // project alias, which is the main escape hatch when the full graph
+  // hits Mermaid's size guard (#289).
+  const [sourceFilter, setSourceFilter] = useState<string>("");
+  const [targetFilter, setTargetFilter] = useState<string>("");
   const { theme } = useTheme();
+
+  // Build the unique alias lists for the dropdowns. We sort them so the
+  // user can scan alphabetically; "(all)" is rendered separately as the
+  // empty-string option in the JSX, so this list excludes it.
+  const sourceAliases = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of edges) {
+      const alias = e.source_project_alias || `p${e.source_project_id}`;
+      set.add(alias);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [edges]);
+  const targetAliases = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of edges) {
+      const alias = e.target_project_alias || `p${e.target_project_id}`;
+      set.add(alias);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [edges]);
+
+  // Apply both filters. Empty filter strings pass through unconditionally;
+  // when both are set the edges must satisfy BOTH (AND, not OR) — that's
+  // how users isolate a specific project-to-project pair.
+  const filteredEdges = useMemo(() => {
+    if (!sourceFilter && !targetFilter) return edges;
+    return edges.filter((e) => {
+      const src = e.source_project_alias || `p${e.source_project_id}`;
+      const dst = e.target_project_alias || `p${e.target_project_id}`;
+      if (sourceFilter && src !== sourceFilter) return false;
+      if (targetFilter && dst !== targetFilter) return false;
+      return true;
+    });
+  }, [edges, sourceFilter, targetFilter]);
 
   useEffect(() => {
     if (!ref.current) return;
@@ -510,7 +550,7 @@ function MermaidGraph({
         .replace(/>/g, "&gt;");
 
     const lines = ["graph LR"];
-    for (const e of edges) {
+    for (const e of filteredEdges) {
       const src = e.source_project_alias || `p${e.source_project_id}`;
       const dst = e.target_project_alias || `p${e.target_project_id}`;
       const srcId = `n_${slug(src)}_${slug(e.source_bucket_id)}`;
@@ -521,6 +561,15 @@ function MermaidGraph({
     }
     const code = lines.join("\n");
     setMermaidCode(code);
+
+    if (filteredEdges.length === 0) {
+      // Avoid handing Mermaid an empty graph — it would render a single
+      // placeholder node which is confusing in this "I filtered too hard"
+      // context. Show our own empty-state instead.
+      ref.current.innerHTML = "";
+      setError(null);
+      return;
+    }
 
     mermaid
       .render(runId, code)
@@ -553,7 +602,7 @@ function MermaidGraph({
       const orphan = document.getElementById(runId);
       orphan?.remove();
     };
-  }, [edges, theme]);
+  }, [filteredEdges, theme]);
 
   if (edges.length === 0) {
     return (
@@ -568,12 +617,69 @@ function MermaidGraph({
   // accept a generic substring match in case the message wording shifts.
   const isOversize = !!error && /maximum text size/i.test(error);
 
+  const filtered = !!sourceFilter || !!targetFilter;
+
   return (
     <div className="nerd-card">
-      <h3 className="text-keboola font-bold text-sm mb-3">Diagram</h3>
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h3 className="text-keboola font-bold text-sm">Diagram</h3>
+        {/* Filter toolbar: two pickers + edge counter. Lets the user narrow
+            the graph down to a specific source / target project pair so the
+            embedded renderer never needs to fight a 250+-edge graph (#289). */}
+        <div className="flex items-center gap-2 text-xs flex-wrap">
+          <label className="flex items-center gap-1 text-zinc-500">
+            <span className="text-[10px] uppercase tracking-wider">Source:</span>
+            <select
+              className="nerd-input text-xs py-0.5"
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+              title="Filter edges by source project"
+            >
+              <option value="">(all {sourceAliases.length})</option>
+              {sourceAliases.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1 text-zinc-500">
+            <span className="text-[10px] uppercase tracking-wider">Target:</span>
+            <select
+              className="nerd-input text-xs py-0.5"
+              value={targetFilter}
+              onChange={(e) => setTargetFilter(e.target.value)}
+              title="Filter edges by target project"
+            >
+              <option value="">(all {targetAliases.length})</option>
+              {targetAliases.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          </label>
+          {filtered ? (
+            <button
+              type="button"
+              className="nerd-btn text-xs hover:text-keboola"
+              onClick={() => {
+                setSourceFilter("");
+                setTargetFilter("");
+              }}
+              title="Clear both filters"
+            >
+              clear
+            </button>
+          ) : null}
+          <span className="text-zinc-500 text-[10px]">
+            {filteredEdges.length}/{edges.length} edges
+          </span>
+        </div>
+      </div>
       {isOversize ? (
         <OversizeBanner
-          edgeCount={edges.length}
+          edgeCount={filteredEdges.length}
           mermaidCode={mermaidCode}
           onOpenDeepLineage={onOpenDeepLineage}
         />
@@ -581,7 +687,21 @@ function MermaidGraph({
         <div className="text-red-600 text-xs mb-2 dark:text-red-400">{error}</div>
       ) : null}
       {!isOversize ? (
-        <div ref={ref} className="overflow-auto" style={{ minHeight: 280 }} />
+        filteredEdges.length === 0 ? (
+          <div className="text-center py-6 text-xs text-zinc-500">
+            No edges match the current filter.
+          </div>
+        ) : (
+          // Fixed-height scrollable viewport so the diagram never pushes
+          // the page layout — scrolling stays INSIDE the box (#289).
+          // Mermaid renders the SVG with its natural size; we let it
+          // overflow horizontally + vertically and the user pans inside.
+          <div
+            ref={ref}
+            className="overflow-auto border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-950/40"
+            style={{ height: "600px" }}
+          />
+        )
       ) : null}
     </div>
   );
