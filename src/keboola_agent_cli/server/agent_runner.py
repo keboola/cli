@@ -204,6 +204,178 @@ _PROMPT_RESPONSE_PREAMBLES = (
     "prompt:",
 )
 
+# Same idea for the SQL helper; the AI is told to emit only SQL but routinely
+# starts with "Here's the SQL:" or wraps the body in ```sql fences.
+_SQL_RESPONSE_PREAMBLES = (
+    "here is the sql:",
+    "here's the sql:",
+    "here is a sql:",
+    "here's a sql:",
+    "here is the query:",
+    "here's the query:",
+    "sql:",
+    "query:",
+)
+
+
+def build_sql_helper_meta_prompt(
+    *,
+    goal: str,
+    project: str,
+    backend: str,
+    schema: str,
+    draft_sql: str = "",
+    bucket_ids: list[str] | None = None,
+    serve_url: str | None = None,
+) -> str:
+    """Compose the meta-prompt sent to the AI CLI by the workspace SQL helper.
+
+    The AI is asked to produce a single polished SQL statement (or a small
+    statement batch) that runs against the user's Keboola workspace. It is
+    explicitly instructed to discover table / column shape via
+    INFORMATION_SCHEMA using the kbagent CLI before guessing column names.
+
+    Backend-specific hints are folded in so claude doesn't have to "know" the
+    quirks: BigQuery's backticked dataset paths and per-dataset
+    INFORMATION_SCHEMA, Snowflake's CURRENT_SCHEMA() default, etc. The
+    bucket list (when supplied) gives the AI a starting catalog without
+    burning a tool call.
+    """
+    goal_clean = goal.strip()
+    draft_block = (
+        f"USER'S CURRENT DRAFT (refine this, don't throw it away):\n{draft_sql.strip()}"
+        if draft_sql.strip()
+        else "USER'S CURRENT DRAFT: (empty -- write the query from scratch.)"
+    )
+    bucket_block = (
+        "VISIBLE BUCKETS (already loaded in the editor sidebar):\n"
+        + "\n".join(f"  - {b}" for b in bucket_ids[:50])
+        if bucket_ids
+        else "VISIBLE BUCKETS: (none preloaded -- discover via INFORMATION_SCHEMA.)"
+    )
+    if len(bucket_ids or []) > 50:
+        bucket_block += f"\n  ... and {len(bucket_ids or []) - 50} more (truncated)"
+
+    backend_hint = _sql_helper_backend_hint(backend, schema)
+    serve_hint = (
+        f"SERVE CONTEXT: kbagent serve is reachable at {serve_url}; the AI agent\n"
+        "shell has KBAGENT_SERVE_URL + KBAGENT_SERVE_TOKEN env vars pre-set, so\n"
+        "`kbagent http get /...` is the fastest discovery path."
+        if serve_url
+        else "SERVE CONTEXT: assume `kbagent` CLI is available on PATH."
+    )
+
+    return f"""\
+You are a senior data engineer writing SQL for a Keboola workspace. Your
+output will be pasted into the workspace SQL editor verbatim and executed
+through the Keboola Query Service against project '{project}'. The Query
+Service runs SELECT only -- it rejects SHOW / DESCRIBE / DDL / DML.
+
+WORKSPACE CONTEXT:
+- Project alias: {project}
+- Backend: {backend}
+- Default schema: {schema}
+
+USER'S GOAL (plain English):
+{goal_clean}
+
+{draft_block}
+
+{bucket_block}
+
+{backend_hint}
+
+DISCOVERY (do this BEFORE guessing column names):
+- Use `kbagent workspace query --project {project} --workspace-id <id> --sql '...'`
+  with an INFORMATION_SCHEMA query to confirm table + column names exist.
+- Alternative: `kbagent storage table-detail --project {project} --table-id <id>`
+  returns the full column list for a Storage table without spinning up a query.
+{serve_hint}
+
+REQUIREMENTS for the returned SQL:
+- Match the user's goal precisely; do not invent columns.
+- Be a single SELECT statement (or a tiny CTE batch) -- nothing destructive.
+- Qualify tables explicitly when joining across buckets so the result is
+  unambiguous after the workspace is reused.
+- Add a brief 1-line `-- comment` at the top describing what the query
+  returns (purpose + key filters), but no other prose.
+
+OUTPUT CONTRACT (critical):
+- Output ONLY the SQL. Plain text.
+- Do NOT wrap the SQL in ```sql fences.
+- Do NOT prefix with "Here's the SQL:" / "Rewritten query:" / similar.
+- Do NOT append commentary after the SQL.
+"""
+
+
+def _sql_helper_backend_hint(backend: str, schema: str) -> str:
+    """Emit backend-specific INFORMATION_SCHEMA recipes for the meta-prompt.
+
+    Keboola Workspaces run on three backends; each has different table-catalog
+    surface area, so the meta-prompt embeds the exact INFORMATION_SCHEMA query
+    the AI should run for discovery. Without this hint claude routinely
+    invents Snowflake-style queries when the workspace is BigQuery.
+    """
+    backend_lc = (backend or "").lower()
+    if backend_lc == "bigquery":
+        return (
+            "BACKEND HINT (BigQuery):\n"
+            f"- Workspace schema is the dataset `{schema}`.\n"
+            f"- Backtick-quote dataset + table names: `\\`{schema}\\`.\\`<table>\\``.\n"
+            f"- Discovery: SELECT table_name FROM `{schema}.INFORMATION_SCHEMA.TABLES`;\n"
+            f"- Columns: SELECT column_name, data_type FROM "
+            f"`{schema}.INFORMATION_SCHEMA.COLUMNS` WHERE table_name='<table>';"
+        )
+    if backend_lc == "snowflake":
+        return (
+            "BACKEND HINT (Snowflake):\n"
+            f"- Workspace default schema is `{schema}`. Identifiers are case-sensitive\n"
+            f'  when quoted; Keboola Storage tables are quoted ("my-table").\n'
+            f"- Discovery: SELECT TABLE_NAME, ROW_COUNT FROM INFORMATION_SCHEMA.TABLES\n"
+            f"  WHERE TABLE_SCHEMA = CURRENT_SCHEMA();\n"
+            f"- Columns: SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS\n"
+            f"  WHERE TABLE_SCHEMA = CURRENT_SCHEMA() AND TABLE_NAME = '<table>';"
+        )
+    # Unknown / future backend: stay generic so the AI still has a starting point.
+    return (
+        f"BACKEND HINT ({backend or 'unknown'}):\n"
+        f"- Workspace default schema is `{schema}`.\n"
+        "- Discovery: query INFORMATION_SCHEMA.TABLES / COLUMNS following the\n"
+        "  backend's conventions (Snowflake = CURRENT_SCHEMA(), BigQuery = dataset\n"
+        "  path, Postgres = current_schema())."
+    )
+
+
+def clean_sql_helper_response(text: str) -> str:
+    """Strip code fences, preambles, and claude jsonl duplication from SQL output.
+
+    Mirrors :func:`clean_prompt_helper_response` step-for-step but uses the
+    SQL-specific preamble list. Two distinct cleaners (instead of a unified
+    one with a knob) makes the call sites self-documenting and lets future
+    SQL/prompt divergence land without entangling.
+    """
+    text = text.strip()
+    # Step 1: collapse "AB" where A == B (claude jsonl duplication).
+    if text and len(text) % 2 == 0:
+        half = len(text) // 2
+        if text[:half] == text[half:]:
+            text = text[:half].rstrip()
+    # Step 2: strip a single set of leading/trailing code fences. Accept
+    # ```sql or ``` -- the AI uses both interchangeably.
+    if text.startswith("```"):
+        nl = text.find("\n")
+        if nl != -1:
+            text = text[nl + 1 :]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+    # Step 3: strip a preamble like "Here's the SQL:\n\n..." on the first line.
+    lines = text.split("\n", 1)
+    first = lines[0].strip().lower()
+    if any(first == p or first.startswith(p) for p in _SQL_RESPONSE_PREAMBLES):
+        text = lines[1].strip() if len(lines) > 1 else ""
+    return text.strip()
+
 
 def clean_prompt_helper_response(text: str) -> str:
     """Trim surrounding code fences, preambles, and dedup the response.

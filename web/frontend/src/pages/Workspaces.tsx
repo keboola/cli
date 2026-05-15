@@ -12,14 +12,31 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
-import { useState } from "react";
-import { api } from "../api/client";
+import { useEffect, useRef, useState } from "react";
+import { api, ssePost, type SsePostHandle } from "../api/client";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle, TwoPathEmpty } from "../components/Empty";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
 import type { ProjectError, Workspace } from "../types";
+
+/**
+ * AbortError shape detection across browsers (DOMException on standards,
+ * named Error on some shims). Kept inline so a future move of this util
+ * to a shared module doesn't fan out to every page that needs it.
+ */
+function isAbortError(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === "AbortError") return true;
+  if (err instanceof Error && err.name === "AbortError") return true;
+  return Boolean(
+    err &&
+      typeof err === "object" &&
+      "message" in err &&
+      String((err as { message: unknown }).message).toLowerCase().includes("abort"),
+  );
+}
 
 interface WorkspacesResp {
   workspaces: Workspace[];
@@ -457,6 +474,9 @@ SELECT current_timestamp() AS now;`);
   const [result, setResult] = useState<unknown | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
+  // The AI CLI choice is persisted on the SqlEditorDrawer (not the panel)
+  // so the user's pick survives toggling the helper open/closed.
+  const [aiCli, setAiCli] = useState<"claude" | "codex" | "gemini">("claude");
 
   // Fetch buckets + tables from the workspace's project so users can click
   // them into the editor (Storage Explorer pattern from Keboola UI).
@@ -575,6 +595,17 @@ SELECT current_timestamp() AS now;`);
         </aside>
         {/* Editor + results */}
         <div className="flex-1 space-y-3 min-w-0">
+          <SqlHelperPanel
+            cli={aiCli}
+            onCliChange={setAiCli}
+            project={workspace.project_alias}
+            workspaceId={workspace.id}
+            backend={workspace.backend}
+            schemaName={workspace.schema}
+            draftSql={sql}
+            bucketIds={(bucketsQ.data?.buckets ?? []).map((b) => b.id)}
+            onApply={(generatedSql) => setSql(generatedSql)}
+          />
           <div className="border border-zinc-200 dark:border-zinc-800 rounded">
             <Editor
               height="280px"
@@ -714,6 +745,324 @@ function CsvTable({ csv }: { csv: string }) {
       {body.length > 200 ? (
         <div className="text-xs text-zinc-500 px-3 py-1">
           ... {body.length - 200} more rows
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Inline AI helper for the workspace SQL editor (#287).
+ *
+ * Modeled on Agents.tsx > PromptHelperPanel — same SSE protocol (init /
+ * stdout / stderr / done), same claude / codex / gemini CLI selector, same
+ * "live preview while streaming → final suggestion → Apply / Discard"
+ * workflow. The differences:
+ *
+ * - Endpoint is /workspaces/sql/improve/stream (workspace-grounded
+ *   meta-prompt: backend, schema, visible buckets are passed in).
+ * - The `done` payload carries `sql` (not `prompt`); `onApply` replaces
+ *   the editor body with it instead of a prompt textarea.
+ * - The cancel-on-unmount cleanup is mandatory — without it, the backend
+ *   keeps the claude/codex/gemini subprocess alive while waiting for an
+ *   SSE consumer that will never return.
+ */
+function SqlHelperPanel({
+  cli,
+  onCliChange,
+  project,
+  workspaceId,
+  backend,
+  schemaName,
+  draftSql,
+  bucketIds,
+  onApply,
+}: {
+  cli: "claude" | "codex" | "gemini";
+  onCliChange: (c: "claude" | "codex" | "gemini") => void;
+  project: string;
+  workspaceId: number;
+  backend: string;
+  schemaName: string;
+  draftSql: string;
+  bucketIds: string[];
+  onApply: (sql: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [goal, setGoal] = useState("");
+  const [running, setRunning] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [livePreview, setLivePreview] = useState("");
+  const [finalSql, setFinalSql] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const handleRef = useRef<SsePostHandle | null>(null);
+
+  const reset = () => {
+    setLivePreview("");
+    setFinalSql(null);
+    setError(null);
+    setElapsed(0);
+  };
+
+  const start = () => {
+    if (!goal.trim()) {
+      setError("Describe the query you want first (e.g. 'top 10 customers by revenue last 30 days').");
+      return;
+    }
+    if (handleRef.current) {
+      handleRef.current.abort();
+      handleRef.current = null;
+    }
+    reset();
+    setRunning(true);
+    const startMs = Date.now();
+    const tick = setInterval(
+      () => setElapsed(Math.round((Date.now() - startMs) / 1000)),
+      500,
+    );
+    let assistantText = "";
+    const handle = ssePost(
+      "/workspaces/sql/improve/stream",
+      {
+        cli,
+        goal,
+        project,
+        backend,
+        schema_name: schemaName,
+        workspace_id: workspaceId,
+        draft_sql: draftSql,
+        bucket_ids: bucketIds,
+      },
+      {
+        init: () => {
+          /* the running indicator already covers this */
+        },
+        stdout: (d) => {
+          const data = (d ?? {}) as Record<string, unknown>;
+          // Claude stream-json: assistant turns carry message.content[].text.
+          if (data.type === "assistant" && typeof data.message === "object") {
+            const msg = data.message as Record<string, unknown>;
+            const content = msg.content;
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (
+                  block &&
+                  typeof block === "object" &&
+                  (block as Record<string, unknown>).type === "text" &&
+                  typeof (block as Record<string, unknown>).text === "string"
+                ) {
+                  assistantText += (block as Record<string, unknown>).text as string;
+                  setLivePreview(assistantText);
+                }
+              }
+            }
+          } else if (typeof data.raw === "string") {
+            // codex / gemini stream raw text lines (no jsonl).
+            assistantText += (assistantText ? "\n" : "") + data.raw;
+            setLivePreview(assistantText);
+          }
+        },
+        stderr: () => {
+          /* progress notes — ignored for the preview pane */
+        },
+        done: (d) => {
+          const data = (d ?? {}) as Record<string, unknown>;
+          if (data.status === "error") {
+            setError(String(data.error ?? "AI helper failed"));
+            return;
+          }
+          const cleaned = typeof data.sql === "string" ? data.sql.trim() : "";
+          if (!cleaned) {
+            setError("AI returned an empty query. Refine the goal and regenerate.");
+            return;
+          }
+          setFinalSql(cleaned);
+        },
+        message: () => {
+          /* unknown event — ignore */
+        },
+      },
+    );
+    handleRef.current = handle;
+    handle.done
+      .catch((err) => {
+        if (isAbortError(err)) return;
+        setError((err as Error).message);
+      })
+      .finally(() => {
+        clearInterval(tick);
+        setRunning(false);
+        handleRef.current = null;
+      });
+  };
+
+  const cancel = () => {
+    if (handleRef.current) {
+      handleRef.current.abort();
+      handleRef.current = null;
+    }
+    setRunning(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (handleRef.current) {
+        handleRef.current.abort();
+        handleRef.current = null;
+      }
+    };
+  }, []);
+
+  if (!open) {
+    return (
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className="nerd-btn text-xs flex items-center gap-1 hover:text-neon-pink hover:border-neon-pink/60"
+          onClick={() => setOpen(true)}
+          title={`Let ${cli} write the SQL for you`}
+        >
+          <Sparkles className="w-3 h-3" />
+          Help me write this SQL
+        </button>
+        <span className="text-xs text-zinc-500">
+          uses {cli} with your workspace context (project, backend, visible buckets) baked in
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="nerd-card border-neon-pink/40 dark:border-neon-pink/40 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-bold text-neon-pink flex items-center gap-1">
+          <Sparkles className="w-3 h-3" />
+          AI SQL helper · {cli}
+        </div>
+        <button
+          type="button"
+          className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 flex items-center gap-1"
+          onClick={() => {
+            cancel();
+            setOpen(false);
+            reset();
+            setGoal("");
+          }}
+          title="Close the helper without applying"
+        >
+          <X className="w-3 h-3" /> close
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500">CLI:</span>
+        {(["claude", "codex", "gemini"] as const).map((c) => (
+          <button
+            key={c}
+            type="button"
+            className={`nerd-btn text-xs ${cli === c ? "border-neon-pink text-neon-pink" : ""}`}
+            onClick={() => onCliChange(c)}
+            disabled={running}
+          >
+            {c}
+          </button>
+        ))}
+      </div>
+
+      <label className="text-xs text-zinc-400 block">
+        What query do you need?
+        <textarea
+          className="nerd-input w-full mt-1 h-20"
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
+          placeholder="e.g. Top 10 customers by total revenue in the last 30 days, joined with their country from in.c-customers."
+          disabled={running}
+        />
+      </label>
+
+      {draftSql.trim() ? (
+        <div className="text-xs text-zinc-500">
+          Existing SQL in the editor will be passed to the AI as a starting point ({draftSql.trim().length} chars).
+        </div>
+      ) : null}
+
+      <div className="flex gap-2 items-center flex-wrap">
+        {running ? (
+          <button
+            type="button"
+            className="nerd-btn hover:text-red-400 hover:border-red-700"
+            onClick={cancel}
+            title="Abort the AI helper"
+          >
+            <X className="w-3 h-3 inline mr-1" />
+            cancel ({elapsed}s)
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="nerd-btn hover:text-neon-pink hover:border-neon-pink/60"
+            onClick={start}
+            disabled={!goal.trim()}
+            title="Ask the AI to write the SQL"
+          >
+            <Sparkles className="w-3 h-3 inline mr-1" />
+            {finalSql ? "Regenerate" : "Generate SQL"}
+          </button>
+        )}
+        {!running && finalSql ? (
+          <span className="text-xs text-zinc-500">generated in {elapsed}s</span>
+        ) : null}
+      </div>
+
+      {error ? <ErrorBox message={error} /> : null}
+
+      {running && livePreview ? (
+        <div>
+          <div className="text-xs text-zinc-500 mb-1">live output:</div>
+          <pre
+            className="nerd-code whitespace-pre-wrap text-xs text-zinc-600 dark:text-zinc-400"
+            style={{ maxHeight: "200px", overflow: "auto" }}
+          >
+            {livePreview}
+          </pre>
+        </div>
+      ) : null}
+
+      {finalSql ? (
+        <div className="space-y-2">
+          <div className="text-xs text-zinc-500">AI suggestion:</div>
+          <pre
+            className="nerd-code whitespace-pre-wrap text-zinc-800 dark:text-zinc-200 border-neon-pink/30"
+            style={{ maxHeight: "320px", overflow: "auto" }}
+          >
+            {finalSql}
+          </pre>
+          <div className="flex gap-2 flex-wrap">
+            <button
+              type="button"
+              className="nerd-btn hover:text-keboola hover:border-keboola/60"
+              onClick={() => {
+                onApply(finalSql);
+                setOpen(false);
+                reset();
+                setGoal("");
+              }}
+              title="Replace the editor's SQL with this suggestion"
+            >
+              ✓ Use this SQL
+            </button>
+            <button
+              type="button"
+              className="nerd-btn hover:text-red-400 hover:border-red-700"
+              onClick={() => {
+                setFinalSql(null);
+                setLivePreview("");
+              }}
+              title="Throw away this suggestion (keeps the helper open)"
+            >
+              ✗ Discard
+            </button>
+          </div>
         </div>
       ) : null}
     </div>
