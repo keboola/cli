@@ -20,7 +20,7 @@ export type PageId =
   | "data-apps"
   | "components"
   | "mcp"
-  | "kai"
+  | "localai"
   | "agents"
   | "search"
   | "encrypt"
@@ -38,6 +38,12 @@ interface UIState {
   setBranchId: (b: number | null) => void;
   manageToken: string | null;
   setManageToken: (t: string | null) => void;
+  // Hand-off slot: the Dashboard hero "Ask <cli>" box drops a message here
+  // when the user hits Send, then navigates to the Local AI page. The
+  // Local AI page reads this on mount, auto-sends, and clears the slot.
+  // Avoids re-typing while keeping all chat plumbing on a single page.
+  pendingLocalAiMessage: string | null;
+  setPendingLocalAiMessage: (m: string | null) => void;
 }
 
 const UIStateContext = createContext<UIState | null>(null);
@@ -47,10 +53,22 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
   const [project, setProject] = useState<string | null>(null);
   const [branchId, setBranchId] = useState<number | null>(null);
   const [manageToken, setManageToken] = useState<string | null>(null);
+  const [pendingLocalAiMessage, setPendingLocalAiMessage] = useState<string | null>(null);
 
   return (
     <UIStateContext.Provider
-      value={{ page, setPage, project, setProject, branchId, setBranchId, manageToken, setManageToken }}
+      value={{
+        page,
+        setPage,
+        project,
+        setProject,
+        branchId,
+        setBranchId,
+        manageToken,
+        setManageToken,
+        pendingLocalAiMessage,
+        setPendingLocalAiMessage,
+      }}
     >
       {children}
     </UIStateContext.Provider>

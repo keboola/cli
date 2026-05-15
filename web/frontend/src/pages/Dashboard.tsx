@@ -40,9 +40,8 @@ function greeting(): string {
 }
 
 export function DashboardPage() {
-  const { project, setPage } = useUIState();
-  const [kaiInput, setKaiInput] = useState("");
-  const [kaiResponse, setKaiResponse] = useState<string | null>(null);
+  const { project, setPage, setPendingLocalAiMessage } = useUIState();
+  const [aiInput, setAiInput] = useState("");
 
   const projectsQ = useQuery<{ projects: Project[] }>({
     queryKey: ["projects"],
@@ -67,15 +66,19 @@ export function DashboardPage() {
     enabled: !!project,
   });
 
-  const kaiMu = useMutation({
-    mutationFn: () =>
-      api.post<{ response?: string; message?: string }>("/kai/chat", {
-        message: kaiInput,
-        project,
-      }),
-    onSuccess: (data) => setKaiResponse(data.response ?? data.message ?? ""),
-    onError: (err) => setKaiResponse(`Error: ${(err as Error).message}`),
-  });
+  /**
+   * Hand the typed message off to the Local AI page (#300). Dashboard
+   * hero stays minimal — full chat plumbing lives on /localai. User
+   * types → presses Send → navigates with the message pre-loaded; the
+   * Local AI page auto-fires the request on mount.
+   */
+  const sendToLocalAi = () => {
+    const msg = aiInput.trim();
+    if (!msg) return;
+    setPendingLocalAiMessage(msg);
+    setAiInput("");
+    setPage("localai");
+  };
 
   const projects = projectsQ.data?.projects ?? [];
   const tasks = agentsQ.data?.tasks ?? [];
@@ -97,17 +100,19 @@ export function DashboardPage() {
         title={greeting()}
         description={
           project
-            ? `Working in project ${project}. Ask Kai anything below, or jump to a tile.`
-            : "Pick a project in the top bar to scope per-project tiles."
+            ? `Working in project ${project}. Ask the local AI anything below, or jump to a tile.`
+            : "Pick a project in the top bar to scope per-project tiles, or ask cross-project below."
         }
       />
 
-      {/* Big Kai prompt -- the hero on Keboola UI dashboard. */}
+      {/* Hero "ask the local AI" prompt. Hands off to the Local AI page
+          via UIState.pendingLocalAiMessage; full chat plumbing lives
+          there, this stays a tiny launchpad. */}
       <form
         className="nerd-card border-keboola/30 bg-white dark:bg-zinc-900/40"
         onSubmit={(e) => {
           e.preventDefault();
-          if (kaiInput.trim()) kaiMu.mutate();
+          sendToLocalAi();
         }}
       >
         <div className="flex items-center gap-3">
@@ -116,26 +121,21 @@ export function DashboardPage() {
             className="flex-1 bg-transparent border-0 focus:outline-none text-sm placeholder-zinc-500 dark:placeholder-zinc-600"
             placeholder={
               project
-                ? `Ask Kai anything about ${project}...`
-                : "Pick a project first to ask Kai..."
+                ? `Ask the local AI about ${project}…`
+                : "Ask the local AI anything across your Keboola projects…"
             }
-            value={kaiInput}
-            onChange={(e) => setKaiInput(e.target.value)}
-            disabled={!project || kaiMu.isPending}
+            value={aiInput}
+            onChange={(e) => setAiInput(e.target.value)}
           />
           <button
             type="submit"
             className="nerd-btn flex items-center gap-1 hover:text-keboola"
-            disabled={!project || !kaiInput.trim() || kaiMu.isPending}
+            disabled={!aiInput.trim()}
+            title="Open Local AI with this question (uses claude / codex / gemini on your machine)"
           >
-            <Send className="w-3 h-3" /> {kaiMu.isPending ? "asking..." : "Ask"}
+            <Send className="w-3 h-3" /> Ask
           </button>
         </div>
-        {kaiResponse ? (
-          <div className="mt-4 p-3 bg-zinc-50 dark:bg-zinc-950 rounded border border-zinc-200 dark:border-zinc-800 text-xs whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">
-            {kaiResponse}
-          </div>
-        ) : null}
       </form>
 
       {/* Stats row */}

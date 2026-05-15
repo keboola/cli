@@ -1,5 +1,65 @@
 # Gotchas -- Response Parsing and Common Pitfalls
 
+## Web UI `Kai Chat` is gone — replaced by `Local AI` (since v0.41.9)
+
+The web UI dashboard tile / left-nav entry previously labelled **Kai
+Chat** has been replaced by **Local AI** (PR #301, follow-up to #291
+closed-wontfix and #288 closed-wontfix). The new tile is backed by
+`POST /ai/chat/stream`, a third instance of the same stateless-helper
+pattern as `POST /agents/prompt/improve/stream` and
+`POST /workspaces/sql/improve/stream`. It spawns the user's local
+`claude` / `codex` / `gemini` CLI with a meta-prompt grounding it as
+a kbagent co-pilot.
+
+**Why the swap:**
+
+- Kai requires a **master** Storage API token. `kbagent org setup`
+  generates non-master tokens by default for security reasons, so any
+  project registered via that path had its Kai tile broken.
+- Kai is per-project; cross-project work (lineage, migration assistant,
+  multi-project comparison) was structurally impossible inside Kai.
+- The local AI uses any Storage token kbagent already has AND handles
+  multi-project flags natively (`--project NAME`).
+
+**What stays:**
+
+- `POST /kai/chat` and the rest of the `/kai/*` backend endpoints
+  remain available for HTTP callers that explicitly want Kai's
+  per-project session-state API. Only the dashboard UI tile + left
+  nav entry was swapped. `kbagent kai ping|preflight|ask|chat`
+  CLI commands are unchanged.
+
+**Implication for AI agents:**
+
+- If your script targets the web UI (e.g. screen-scraping or Playwright
+  automation), the page id changed from `kai` to `localai` in
+  `UIState.page` and the route from `KaiPage` to `LocalAiPage`. The
+  endpoint flipped from `POST /kai/chat` (blocking JSON) to
+  `POST /ai/chat/stream` (SSE) -- different wire protocol, different
+  envelope.
+
+## Dashboard `▶ run` button on scheduled agents uses BLOCKING `/agents/{id}/run`, NOT the SSE stream (since v0.41.9)
+
+The dashboard's Scheduled agents tile gained an inline `▶ run` button
+per row (issue #292). It fires `POST /agents/{task_id}/run` -- the
+blocking variant -- and invalidates the `['agents']` query cache on
+completion so the row's `last_run_at` + status pill refresh inline.
+
+The Agents PAGE (`/agents`) uses a different code path: when its `▶`
+button fires, it opens the Run drawer that streams via
+`POST /agents/{task_id}/run/stream` (SSE with late-attach support).
+
+**Pick the right endpoint:**
+
+- Need live tool_use / token-cost / `stream-json` events as they
+  arrive? Use `/agents/{id}/run/stream`.
+- Just need "fire and forget; tell me when it's done; let me move on"?
+  Use `/agents/{id}/run`. This is what the dashboard tile uses.
+
+Both endpoints persist the same `AgentRun` record on disk; the blocking
+endpoint returns it once the run completes, the SSE endpoint streams
+events and emits a final `done` SSE frame mirroring the same record.
+
 ## Semantic-layer constraint `rule` is a STRING, not an object (since v0.41.0)
 
 - The `sl-builder` skill docs (in `04_AI_Kit/ai-kit/`) describe range
