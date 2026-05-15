@@ -243,6 +243,49 @@ class TestPerformUpdate:
         mock_run.side_effect = sp.TimeoutExpired(cmd="uv", timeout=120)
         assert _perform_update("2.0.0") is False
 
+    @patch(
+        "keboola_agent_cli.services.version_service.has_server_extras",
+        return_value=True,
+    )
+    @patch("shutil.which", return_value="/usr/local/bin/uv")
+    @patch("subprocess.run")
+    def test_update_preserves_server_extras(self, mock_run, mock_which, mock_has_server):
+        """Bug fix (v0.41.1): startup auto-update must preserve [server] extras.
+
+        Before v0.41.1, ``_perform_update`` ran a bare
+        ``uv tool install --upgrade git+...`` which silently dropped the
+        FastAPI + uvicorn extras a user originally installed with
+        ``--with 'keboola-agent-cli[server]'`` -- so a user who had
+        ``kbagent serve --ui`` working would lose it on the next startup
+        auto-update. Now ``_perform_update`` delegates to
+        :func:`build_kbagent_upgrade_command`, which pairs ``--with`` and
+        ``--force`` when ``fastapi`` is importable.
+        """
+        mock_run.return_value = MagicMock(returncode=0)
+        assert _perform_update("2.0.0") is True
+        argv = mock_run.call_args[0][0]
+        # uv tool install --force --with 'keboola-agent-cli[server]' git+...
+        assert "--force" in argv
+        assert "--with" in argv
+        assert "keboola-agent-cli[server]" in argv
+        # Must NOT pass --upgrade in this branch (uv rejects --upgrade + --with).
+        assert "--upgrade" not in argv
+
+    @patch(
+        "keboola_agent_cli.services.version_service.has_server_extras",
+        return_value=False,
+    )
+    @patch("shutil.which", return_value="/usr/local/bin/uv")
+    @patch("subprocess.run")
+    def test_update_without_server_extras_uses_upgrade(self, mock_run, mock_which, mock_has_server):
+        """No-extras install keeps the simpler ``--upgrade`` form."""
+        mock_run.return_value = MagicMock(returncode=0)
+        assert _perform_update("2.0.0") is True
+        argv = mock_run.call_args[0][0]
+        assert "--upgrade" in argv
+        assert "--with" not in argv
+        assert "keboola-agent-cli[server]" not in argv
+
 
 # ---------------------------------------------------------------------------
 # _re_exec
