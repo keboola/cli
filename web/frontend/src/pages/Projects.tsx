@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Plus, RefreshCw, Trash2, XCircle } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError, api } from "../api/client";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
@@ -20,6 +20,14 @@ export function ProjectsPage() {
     queryKey: ["projects-status"],
     queryFn: () => api.get("/projects/status"),
   });
+
+  // /projects/status performs an opportunistic backfill of org_id/org_name
+  // on the backend for projects registered before #290. Invalidate the
+  // /projects cache once status finishes so the ORG column picks up the
+  // freshly persisted values without the user having to reload the page.
+  useEffect(() => {
+    if (statusQ.data) qc.invalidateQueries({ queryKey: ["projects"] });
+  }, [statusQ.data, qc]);
 
   const removeMu = useMutation({
     mutationFn: (alias: string) => api.delete(`/projects/${encodeURIComponent(alias)}`),

@@ -334,6 +334,12 @@ OUTPUT CONTRACT (critical):
 - Do NOT wrap the SQL in ```sql fences.
 - Do NOT prefix with "Here's the SQL:" / "Rewritten query:" / similar.
 - Do NOT append commentary after the SQL.
+- Do NOT emit "★ Insight ───" blocks, decorative separators, reasoning
+  bullets, or any explanatory commentary BEFORE the SQL. The user's
+  workspace editor pastes your entire response verbatim — any prose
+  before the SELECT statement breaks the parse. If a user has set the
+  `explanatory` Claude output style globally, you must override it here
+  and emit raw SQL only.
 """
 
 
@@ -360,10 +366,18 @@ def _sql_helper_backend_hint(backend: str, schema: str) -> str:
             "BACKEND HINT (Snowflake):\n"
             f"- Workspace default schema is `{schema}`. Identifiers are case-sensitive\n"
             f'  when quoted; Keboola Storage tables are quoted ("my-table").\n'
-            f"- Discovery: SELECT TABLE_NAME, ROW_COUNT FROM INFORMATION_SCHEMA.TABLES\n"
-            f"  WHERE TABLE_SCHEMA = CURRENT_SCHEMA();\n"
-            f"- Columns: SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS\n"
-            f"  WHERE TABLE_SCHEMA = CURRENT_SCHEMA() AND TABLE_NAME = '<table>';"
+            "- CRITICAL QUOTING RULE: Snowflake uppercases ANY unquoted identifier.\n"
+            "  Keboola column / table / alias names are lowercase, so EVERY\n"
+            "  identifier you emit MUST be wrapped in double quotes — including\n"
+            '  column aliases (`AS "month"` not `AS month`), table aliases\n'
+            '  (`AS "s"` not `AS s`), and CTE names. Otherwise the result CSV\n'
+            "  comes back with MONTH / EMPLOYEE / EMPLOYEE_COUNT column headers\n"
+            "  instead of the lowercase names the user (and downstream tools)\n"
+            "  expect.\n"
+            "- Discovery: SELECT TABLE_NAME, ROW_COUNT FROM INFORMATION_SCHEMA.TABLES\n"
+            "  WHERE TABLE_SCHEMA = CURRENT_SCHEMA();\n"
+            "- Columns: SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS\n"
+            "  WHERE TABLE_SCHEMA = CURRENT_SCHEMA() AND TABLE_NAME = '<table>';"
         )
     # Unknown / future backend: stay generic so the AI still has a starting point.
     return (
@@ -403,7 +417,87 @@ def clean_sql_helper_response(text: str) -> str:
     first = lines[0].strip().lower()
     if any(first == p or first.startswith(p) for p in _SQL_RESPONSE_PREAMBLES):
         text = lines[1].strip() if len(lines) > 1 else ""
+
+    # Step 4: locate where the actual SQL starts and drop everything before.
+    # Defends against:
+    #  - Czech/English commentary blocks ("★ Insight ───") that claude with
+    #    the explanatory output style emits before the SQL,
+    #  - Multi-paragraph reasoning the AI sometimes adds despite the
+    #    OUTPUT CONTRACT,
+    #  - Loose "Note: " / "Reasoning: " preambles.
+    # Heuristic: find the first non-empty line that either (a) starts with a
+    # SQL keyword or (b) is a `-- ` comment AND a subsequent line within the
+    # next ~20 lines starts with a SQL keyword. The two-stage rule lets a
+    # leading SQL header comment ("-- Monthly headcount: ...") survive while
+    # rejecting `-- claude's chatter` that never resolves into actual SQL.
+    text = _strip_pre_sql_chatter(text)
     return text.strip()
+
+
+# SQL statement keywords that can legally start a Keboola Query Service
+# submission (it's read-only, so DML / DDL would fail anyway -- listing
+# them keeps the extractor permissive enough not to false-negative if a
+# user explicitly asks for one).
+_SQL_KEYWORDS = (
+    "select",
+    "with",
+    "show",
+    "describe",
+    "desc ",
+    "explain",
+    "insert",
+    "update",
+    "delete",
+    "merge",
+    "create",
+    "alter",
+    "drop",
+    "truncate",
+    "use ",
+)
+
+
+def _strip_pre_sql_chatter(text: str) -> str:
+    """Drop prose before the first real SQL line.
+
+    Strategy: scan top-down for the first non-empty line that is either an
+    SQL keyword or a SQL comment immediately followed by SQL. Everything
+    before is preamble (Insight blocks, commentary, decorative separators).
+
+    Returns the original text untouched when no SQL keyword is detectable
+    in the first ~50 non-empty lines -- the helper would rather pass through
+    garbage than silently truncate a valid response that happens to look
+    unusual. Callers display the cleaned text to the user, who will spot
+    the issue.
+    """
+    lines = text.split("\n")
+
+    def is_sql_keyword(line: str) -> bool:
+        return any(line.lstrip().lower().startswith(kw) for kw in _SQL_KEYWORDS)
+
+    # Single-pass: walk non-empty lines, watching for either a direct SQL
+    # keyword OR a `-- comment` that is followed (within 20 lines) by SQL.
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if is_sql_keyword(stripped):
+            return "\n".join(lines[i:]).strip()
+        if stripped.startswith("--") and not stripped.startswith("---"):
+            # Header SQL comment? Peek ahead for SQL within 20 lines.
+            window = lines[i + 1 : i + 21]
+            if any(is_sql_keyword(later.strip()) for later in window if later.strip()):
+                return "\n".join(lines[i:]).strip()
+            # Standalone `-- comment` with no SQL after -- it's prose; keep
+            # scanning past it instead of clipping here.
+            continue
+        # Not a SQL line and not a SQL header comment -- preamble. Keep
+        # scanning; the SQL is likely below.
+        continue
+
+    # Fallback: no SQL keyword found anywhere. Return the text as-is so
+    # the user can at least see what the AI sent.
+    return text
 
 
 def clean_prompt_helper_response(text: str) -> str:

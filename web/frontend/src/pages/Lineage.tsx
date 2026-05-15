@@ -22,10 +22,20 @@ interface SharingResp {
  * light/dark mode. Must be called both on first render and any time the theme
  * flips so previously rendered diagrams pick up the new palette on next render.
  */
+/**
+ * Mermaid's default ``maxTextSize`` is 50 KB. Real Keboola sharing graphs
+ * (multi-org setups with 50+ projects and 250+ edges) routinely break that
+ * limit, so we bump it to ~5 MB. The browser will still struggle with
+ * truly massive graphs — when it does, the OversizeBanner kicks in and
+ * points the user at Deep Lineage / the source-code download.
+ */
+const MERMAID_MAX_TEXT_SIZE = 5_000_000;
+
 function initMermaid(theme: "light" | "dark"): void {
   if (theme === "dark") {
     mermaid.initialize({
       startOnLoad: false,
+      maxTextSize: MERMAID_MAX_TEXT_SIZE,
       theme: "dark",
       themeVariables: {
         background: "#050508",
@@ -38,6 +48,7 @@ function initMermaid(theme: "light" | "dark"): void {
   } else {
     mermaid.initialize({
       startOnLoad: false,
+      maxTextSize: MERMAID_MAX_TEXT_SIZE,
       theme: "default",
       themeVariables: {
         background: "#ffffff",
@@ -78,12 +89,12 @@ export function LineagePage() {
           <Network className="w-3 h-3" /> Deep lineage (from JSON)
         </button>
       </div>
-      {tab === "sharing" ? <SharingTab /> : <DeepLineageTab />}
+      {tab === "sharing" ? <SharingTab onOpenDeepLineage={() => setTab("deep")} /> : <DeepLineageTab />}
     </div>
   );
 }
 
-function SharingTab() {
+function SharingTab({ onOpenDeepLineage }: { onOpenDeepLineage: () => void }) {
   const q = useQuery<SharingResp>({
     queryKey: ["lineage-sharing"],
     queryFn: () => api.get("/lineage/edges"),
@@ -101,7 +112,7 @@ function SharingTab() {
           </div>
           {q.data.edges.length > 0 ? (
             <>
-              <MermaidGraph edges={q.data.edges} />
+              <MermaidGraph edges={q.data.edges} onOpenDeepLineage={onOpenDeepLineage} />
               <DataTable
                 rows={q.data.edges}
                 rowKey={(e) =>
@@ -462,10 +473,21 @@ function Stat({ label, value }: { label: string; value: number }) {
   );
 }
 
-function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
+function MermaidGraph({
+  edges,
+  onOpenDeepLineage,
+}: {
+  edges: LineageEdge[];
+  onOpenDeepLineage: () => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const renderSeq = useRef(0);
   const [error, setError] = useState<string | null>(null);
+  // The Mermaid source code we generated for THIS render. Stashed so the
+  // oversize banner can offer it as a download — even when the embedded
+  // renderer can't draw the graph, the user can paste this into
+  // mermaid.live or a local renderer.
+  const [mermaidCode, setMermaidCode] = useState<string>("");
   const { theme } = useTheme();
 
   useEffect(() => {
@@ -498,6 +520,7 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
       );
     }
     const code = lines.join("\n");
+    setMermaidCode(code);
 
     mermaid
       .render(runId, code)
@@ -549,7 +572,11 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
     <div className="nerd-card">
       <h3 className="text-keboola font-bold text-sm mb-3">Diagram</h3>
       {isOversize ? (
-        <OversizeBanner edgeCount={edges.length} />
+        <OversizeBanner
+          edgeCount={edges.length}
+          mermaidCode={mermaidCode}
+          onOpenDeepLineage={onOpenDeepLineage}
+        />
       ) : error ? (
         <div className="text-red-600 text-xs mb-2 dark:text-red-400">{error}</div>
       ) : null}
@@ -560,25 +587,62 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
   );
 }
 
-function OversizeBanner({ edgeCount }: { edgeCount: number }) {
+function OversizeBanner({
+  edgeCount,
+  mermaidCode,
+  onOpenDeepLineage,
+}: {
+  edgeCount: number;
+  mermaidCode: string;
+  onOpenDeepLineage: () => void;
+}) {
+  const downloadMermaid = () => {
+    // Hand the user the raw Mermaid source so they can paste it into
+    // mermaid.live or a local renderer. The embedded preview can't draw
+    // it, but the source is small enough to ship and any external
+    // renderer (which usually has much higher caps) handles it fine.
+    const blob = new Blob([mermaidCode], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `lineage-sharing-${edgeCount}-edges.mmd`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   return (
-    <div className="border border-neon-amber/40 bg-neon-amber/10 rounded p-4 text-sm space-y-2">
+    <div className="border border-neon-amber/40 bg-neon-amber/10 rounded p-4 text-sm space-y-3">
       <div className="font-bold text-amber-700 dark:text-neon-amber">
         Diagram too large to render here ({edgeCount} edges)
       </div>
       <p className="text-zinc-700 dark:text-zinc-300 text-xs leading-relaxed">
         Mermaid's embedded renderer caps source-text size and rejected this graph.
-        The embedded preview is intentionally lightweight — for real exploration
-        of a large lineage, open the dedicated lineage server which supports
-        zoom, pan, search, and column-level drill-down:
+        Two ways forward — both stay in the UI, no shell required:
       </p>
-      <pre className="nerd-code text-[11px] text-zinc-800 dark:text-zinc-200 select-all">
-        kbagent lineage server --load &lt;path-to-lineage.json&gt;
-      </pre>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={onOpenDeepLineage}
+          className="nerd-btn text-xs hover:text-keboola hover:border-keboola/60"
+          title="Switch to the Deep Lineage tab — supports zoom, pan, search, and column-level drill-down."
+        >
+          → Open Deep Lineage tab
+        </button>
+        <button
+          type="button"
+          onClick={downloadMermaid}
+          disabled={!mermaidCode}
+          className="nerd-btn text-xs hover:text-keboola hover:border-keboola/60"
+          title="Download the raw Mermaid source — paste into mermaid.live or any local renderer with higher size limits."
+        >
+          ⬇ Download Mermaid source ({(mermaidCode.length / 1024).toFixed(0)} KB)
+        </button>
+      </div>
       <p className="text-[11px] text-zinc-500">
-        Tip: the upstream / downstream / column toggles in the sidebar narrow
-        the edge set first — that often brings the diagram back under the
-        embedded renderer's limit.
+        Tip: filter the edge table below first — narrowing the set often
+        brings the diagram back under the embedded renderer's limit.
       </p>
     </div>
   );

@@ -265,6 +265,78 @@ class TestCleanSqlHelperResponse:
         # The two halves aren't equal -- the function must leave it alone.
         assert clean_sql_helper_response(raw) == raw
 
+    def test_strips_insight_blocks_before_sql(self) -> None:
+        """Users with the 'explanatory' Claude output style get ``★ Insight``
+        blocks before the SQL. Without this strip, the AI's commentary
+        lands verbatim in the SQL editor and the query fails to parse.
+        Reproduces the bamboohr case from Vojta's run.
+        """
+        raw = (
+            "`★ Insight ─────────────────────────────────`\n"
+            "- Bucket `in.c-foo` je **linked** z jiného projektu.\n"
+            '- Použijeme plnou Snowflake cestu `"KBC_USE4_340"."out.c-foo"."t"`.\n'
+            "`────────────────────────────────────────────`\n"
+            "\n"
+            "-- Monthly headcount from BambooHR employee snapshots\n"
+            'SELECT TO_CHAR("snapshot_date", \'YYYY-MM\') AS "month",\n'
+            '       COUNT(DISTINCT "employee_id") AS "n"\n'
+            'FROM "KBC_USE4_340"."out.c-foo"."employee_snapshot"\n'
+            'GROUP BY "month";'
+        )
+        out = clean_sql_helper_response(raw)
+        assert out.startswith("-- Monthly headcount")
+        assert "★ Insight" not in out
+        assert "Použijeme" not in out  # Czech commentary stripped
+        assert 'SELECT TO_CHAR("snapshot_date"' in out
+        assert out.endswith(";")
+
+    def test_strips_plain_prose_before_sql(self) -> None:
+        """No Insight blocks, just a chatty AI that ignores the OUTPUT
+        CONTRACT and prefixes a paragraph of reasoning. The cleaner must
+        still pick out the actual SQL.
+        """
+        raw = (
+            "Let me think through this query. We need monthly headcounts,\n"
+            "so we'll group by month and count distinct employees.\n"
+            "\n"
+            'SELECT month, COUNT(*) FROM "employees" GROUP BY month;'
+        )
+        out = clean_sql_helper_response(raw)
+        assert out.startswith("SELECT month")
+
+    def test_keeps_header_comment_when_sql_follows(self) -> None:
+        """A leading ``-- comment`` that introduces real SQL must survive.
+        The previous broken behavior was to drop everything starting with
+        ``--`` because the cleaner couldn't tell prose from a SQL header.
+        """
+        raw = "-- Headcount per month (last snapshot of each month)\nSELECT 1;"
+        # Header comment + SQL one line below stays intact.
+        assert clean_sql_helper_response(raw) == raw
+
+    def test_preserves_text_when_no_sql_keyword_anywhere(self) -> None:
+        """If the AI completely failed to produce SQL the cleaner passes
+        the response through unchanged so the user can see what happened
+        instead of getting an empty editor.
+        """
+        raw = "I cannot write this query because the table doesn't exist."
+        assert clean_sql_helper_response(raw) == raw
+
+    def test_with_cte_treated_as_sql_start(self) -> None:
+        """``WITH ... AS (...)`` CTE queries must be recognized as SQL
+        starts — claude routinely emits CTEs for multi-step queries.
+        """
+        raw = (
+            "Here's the approach:\n"
+            "\n"
+            "WITH latest AS (\n"
+            '  SELECT * FROM "t" QUALIFY ROW_NUMBER() OVER (...) = 1\n'
+            ")\n"
+            "SELECT * FROM latest;"
+        )
+        out = clean_sql_helper_response(raw)
+        assert out.startswith("WITH latest AS")
+        assert "Here's the approach" not in out
+
 
 # ---------------------------------------------------------------------
 # POST /workspaces/sql/improve/stream
