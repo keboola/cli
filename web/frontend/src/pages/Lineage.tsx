@@ -528,13 +528,46 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
     );
   }
 
+  // Mermaid trips its hardcoded text-size guard around ~50 KB of source.
+  // The error message is "Maximum text size in diagram exceeded"; we also
+  // accept a generic substring match in case the message wording shifts.
+  const isOversize = !!error && /maximum text size/i.test(error);
+
   return (
     <div className="nerd-card">
       <h3 className="text-keboola font-bold text-sm mb-3">Diagram</h3>
-      {error ? (
+      {isOversize ? (
+        <OversizeBanner edgeCount={edges.length} />
+      ) : error ? (
         <div className="text-red-600 text-xs mb-2 dark:text-red-400">{error}</div>
       ) : null}
-      <div ref={ref} className="overflow-auto" style={{ minHeight: 280 }} />
+      {!isOversize ? (
+        <div ref={ref} className="overflow-auto" style={{ minHeight: 280 }} />
+      ) : null}
+    </div>
+  );
+}
+
+function OversizeBanner({ edgeCount }: { edgeCount: number }) {
+  return (
+    <div className="border border-neon-amber/40 bg-neon-amber/10 rounded p-4 text-sm space-y-2">
+      <div className="font-bold text-amber-700 dark:text-neon-amber">
+        Diagram too large to render here ({edgeCount} edges)
+      </div>
+      <p className="text-zinc-700 dark:text-zinc-300 text-xs leading-relaxed">
+        Mermaid's embedded renderer caps source-text size and rejected this graph.
+        The embedded preview is intentionally lightweight — for real exploration
+        of a large lineage, open the dedicated lineage server which supports
+        zoom, pan, search, and column-level drill-down:
+      </p>
+      <pre className="nerd-code text-[11px] text-zinc-800 dark:text-zinc-200 select-all">
+        kbagent lineage server --load &lt;path-to-lineage.json&gt;
+      </pre>
+      <p className="text-[11px] text-zinc-500">
+        Tip: the upstream / downstream / column toggles in the sidebar narrow
+        the edge set first — that often brings the diagram back under the
+        embedded renderer's limit.
+      </p>
     </div>
   );
 }
