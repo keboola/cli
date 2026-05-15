@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowLeftRight, FolderOpen, Hammer, Network } from "lucide-react";
 import mermaid from "mermaid";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
@@ -22,10 +22,20 @@ interface SharingResp {
  * light/dark mode. Must be called both on first render and any time the theme
  * flips so previously rendered diagrams pick up the new palette on next render.
  */
+/**
+ * Mermaid's default ``maxTextSize`` is 50 KB. Real Keboola sharing graphs
+ * (multi-org setups with 50+ projects and 250+ edges) routinely break that
+ * limit, so we bump it to ~5 MB. The browser will still struggle with
+ * truly massive graphs — when it does, the OversizeBanner kicks in and
+ * points the user at Deep Lineage / the source-code download.
+ */
+const MERMAID_MAX_TEXT_SIZE = 5_000_000;
+
 function initMermaid(theme: "light" | "dark"): void {
   if (theme === "dark") {
     mermaid.initialize({
       startOnLoad: false,
+      maxTextSize: MERMAID_MAX_TEXT_SIZE,
       theme: "dark",
       themeVariables: {
         background: "#050508",
@@ -38,6 +48,7 @@ function initMermaid(theme: "light" | "dark"): void {
   } else {
     mermaid.initialize({
       startOnLoad: false,
+      maxTextSize: MERMAID_MAX_TEXT_SIZE,
       theme: "default",
       themeVariables: {
         background: "#ffffff",
@@ -78,12 +89,12 @@ export function LineagePage() {
           <Network className="w-3 h-3" /> Deep lineage (from JSON)
         </button>
       </div>
-      {tab === "sharing" ? <SharingTab /> : <DeepLineageTab />}
+      {tab === "sharing" ? <SharingTab onOpenDeepLineage={() => setTab("deep")} /> : <DeepLineageTab />}
     </div>
   );
 }
 
-function SharingTab() {
+function SharingTab({ onOpenDeepLineage }: { onOpenDeepLineage: () => void }) {
   const q = useQuery<SharingResp>({
     queryKey: ["lineage-sharing"],
     queryFn: () => api.get("/lineage/edges"),
@@ -101,7 +112,7 @@ function SharingTab() {
           </div>
           {q.data.edges.length > 0 ? (
             <>
-              <MermaidGraph edges={q.data.edges} />
+              <MermaidGraph edges={q.data.edges} onOpenDeepLineage={onOpenDeepLineage} />
               <DataTable
                 rows={q.data.edges}
                 rowKey={(e) =>
@@ -462,11 +473,62 @@ function Stat({ label, value }: { label: string; value: number }) {
   );
 }
 
-function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
+function MermaidGraph({
+  edges,
+  onOpenDeepLineage,
+}: {
+  edges: LineageEdge[];
+  onOpenDeepLineage: () => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const renderSeq = useRef(0);
   const [error, setError] = useState<string | null>(null);
+  // The Mermaid source code we generated for THIS render. Stashed so the
+  // oversize banner can offer it as a download — even when the embedded
+  // renderer can't draw the graph, the user can paste this into
+  // mermaid.live or a local renderer.
+  const [mermaidCode, setMermaidCode] = useState<string>("");
+  // Filter state — when empty (""), no filter is applied. The picker
+  // dropdowns let users narrow the edge set on the source or target
+  // project alias, which is the main escape hatch when the full graph
+  // hits Mermaid's size guard (#289).
+  const [sourceFilter, setSourceFilter] = useState<string>("");
+  const [targetFilter, setTargetFilter] = useState<string>("");
   const { theme } = useTheme();
+
+  // Build the unique alias lists for the dropdowns. We sort them so the
+  // user can scan alphabetically; "(all)" is rendered separately as the
+  // empty-string option in the JSX, so this list excludes it.
+  const sourceAliases = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of edges) {
+      const alias = e.source_project_alias || `p${e.source_project_id}`;
+      set.add(alias);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [edges]);
+  const targetAliases = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of edges) {
+      const alias = e.target_project_alias || `p${e.target_project_id}`;
+      set.add(alias);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [edges]);
+
+  // Apply both filters. Empty filter strings pass through unconditionally;
+  // when both are set the edges must satisfy BOTH (AND, not OR) — that's
+  // how users isolate a specific project-to-project pair.
+  const filteredEdges = useMemo(() => {
+    if (!sourceFilter && !targetFilter) return edges;
+    return edges.filter((e) => {
+      const src = e.source_project_alias || `p${e.source_project_id}`;
+      const dst = e.target_project_alias || `p${e.target_project_id}`;
+      if (sourceFilter && src !== sourceFilter) return false;
+      if (targetFilter && dst !== targetFilter) return false;
+      return true;
+    });
+  }, [edges, sourceFilter, targetFilter]);
 
   useEffect(() => {
     if (!ref.current) return;
@@ -488,7 +550,7 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
         .replace(/>/g, "&gt;");
 
     const lines = ["graph LR"];
-    for (const e of edges) {
+    for (const e of filteredEdges) {
       const src = e.source_project_alias || `p${e.source_project_id}`;
       const dst = e.target_project_alias || `p${e.target_project_id}`;
       const srcId = `n_${slug(src)}_${slug(e.source_bucket_id)}`;
@@ -498,11 +560,33 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
       );
     }
     const code = lines.join("\n");
+    setMermaidCode(code);
+
+    if (filteredEdges.length === 0) {
+      // Avoid handing Mermaid an empty graph — it would render a single
+      // placeholder node which is confusing in this "I filtered too hard"
+      // context. Show our own empty-state instead.
+      ref.current.innerHTML = "";
+      setError(null);
+      return;
+    }
 
     mermaid
       .render(runId, code)
       .then(({ svg }) => {
         if (cancelled || !ref.current) return;
+        // Mermaid's text-size guard does NOT throw — it returns a "soft
+        // error" SVG with the failure rendered as a <text> element. Detect
+        // the marker substring before mounting so the banner kicks in
+        // instead of silently embedding a useless red box. (Confirmed
+        // against mermaid 10.x output; future versions may shift wording
+        // slightly, so we match a case-insensitive substring not the exact
+        // phrase.)
+        if (/maximum text size/i.test(svg)) {
+          setError("Maximum text size in diagram exceeded");
+          ref.current.innerHTML = "";
+          return;
+        }
         ref.current.innerHTML = svg;
         setError(null);
       })
@@ -518,7 +602,7 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
       const orphan = document.getElementById(runId);
       orphan?.remove();
     };
-  }, [edges, theme]);
+  }, [filteredEdges, theme]);
 
   if (edges.length === 0) {
     return (
@@ -528,13 +612,158 @@ function MermaidGraph({ edges }: { edges: LineageEdge[] }) {
     );
   }
 
+  // Mermaid trips its hardcoded text-size guard around ~50 KB of source.
+  // The error message is "Maximum text size in diagram exceeded"; we also
+  // accept a generic substring match in case the message wording shifts.
+  const isOversize = !!error && /maximum text size/i.test(error);
+
+  const filtered = !!sourceFilter || !!targetFilter;
+
   return (
     <div className="nerd-card">
-      <h3 className="text-keboola font-bold text-sm mb-3">Diagram</h3>
-      {error ? (
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h3 className="text-keboola font-bold text-sm">Diagram</h3>
+        {/* Filter toolbar: two pickers + edge counter. Lets the user narrow
+            the graph down to a specific source / target project pair so the
+            embedded renderer never needs to fight a 250+-edge graph (#289). */}
+        <div className="flex items-center gap-2 text-xs flex-wrap">
+          <label className="flex items-center gap-1 text-zinc-500">
+            <span className="text-[10px] uppercase tracking-wider">Source:</span>
+            <select
+              className="nerd-input text-xs py-0.5"
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+              title="Filter edges by source project"
+            >
+              <option value="">(all {sourceAliases.length})</option>
+              {sourceAliases.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1 text-zinc-500">
+            <span className="text-[10px] uppercase tracking-wider">Target:</span>
+            <select
+              className="nerd-input text-xs py-0.5"
+              value={targetFilter}
+              onChange={(e) => setTargetFilter(e.target.value)}
+              title="Filter edges by target project"
+            >
+              <option value="">(all {targetAliases.length})</option>
+              {targetAliases.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          </label>
+          {filtered ? (
+            <button
+              type="button"
+              className="nerd-btn text-xs hover:text-keboola"
+              onClick={() => {
+                setSourceFilter("");
+                setTargetFilter("");
+              }}
+              title="Clear both filters"
+            >
+              clear
+            </button>
+          ) : null}
+          <span className="text-zinc-500 text-[10px]">
+            {filteredEdges.length}/{edges.length} edges
+          </span>
+        </div>
+      </div>
+      {isOversize ? (
+        <OversizeBanner
+          edgeCount={filteredEdges.length}
+          mermaidCode={mermaidCode}
+          onOpenDeepLineage={onOpenDeepLineage}
+        />
+      ) : error ? (
         <div className="text-red-600 text-xs mb-2 dark:text-red-400">{error}</div>
       ) : null}
-      <div ref={ref} className="overflow-auto" style={{ minHeight: 280 }} />
+      {!isOversize ? (
+        filteredEdges.length === 0 ? (
+          <div className="text-center py-6 text-xs text-zinc-500">
+            No edges match the current filter.
+          </div>
+        ) : (
+          // Fixed-height scrollable viewport so the diagram never pushes
+          // the page layout — scrolling stays INSIDE the box (#289).
+          // Mermaid renders the SVG with its natural size; we let it
+          // overflow horizontally + vertically and the user pans inside.
+          <div
+            ref={ref}
+            className="overflow-auto border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-950/40"
+            style={{ height: "600px" }}
+          />
+        )
+      ) : null}
+    </div>
+  );
+}
+
+function OversizeBanner({
+  edgeCount,
+  mermaidCode,
+  onOpenDeepLineage,
+}: {
+  edgeCount: number;
+  mermaidCode: string;
+  onOpenDeepLineage: () => void;
+}) {
+  const downloadMermaid = () => {
+    // Hand the user the raw Mermaid source so they can paste it into
+    // mermaid.live or a local renderer. The embedded preview can't draw
+    // it, but the source is small enough to ship and any external
+    // renderer (which usually has much higher caps) handles it fine.
+    const blob = new Blob([mermaidCode], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `lineage-sharing-${edgeCount}-edges.mmd`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="border border-neon-amber/40 bg-neon-amber/10 rounded p-4 text-sm space-y-3">
+      <div className="font-bold text-amber-700 dark:text-neon-amber">
+        Diagram too large to render here ({edgeCount} edges)
+      </div>
+      <p className="text-zinc-700 dark:text-zinc-300 text-xs leading-relaxed">
+        Mermaid's embedded renderer caps source-text size and rejected this graph.
+        Two ways forward — both stay in the UI, no shell required:
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={onOpenDeepLineage}
+          className="nerd-btn text-xs hover:text-keboola hover:border-keboola/60"
+          title="Switch to the Deep Lineage tab — supports zoom, pan, search, and column-level drill-down."
+        >
+          → Open Deep Lineage tab
+        </button>
+        <button
+          type="button"
+          onClick={downloadMermaid}
+          disabled={!mermaidCode}
+          className="nerd-btn text-xs hover:text-keboola hover:border-keboola/60"
+          title="Download the raw Mermaid source — paste into mermaid.live or any local renderer with higher size limits."
+        >
+          ⬇ Download Mermaid source ({(mermaidCode.length / 1024).toFixed(0)} KB)
+        </button>
+      </div>
+      <p className="text-[11px] text-zinc-500">
+        Tip: filter the edge table below first — narrowing the set often
+        brings the diagram back under the embedded renderer's limit.
+      </p>
     </div>
   );
 }

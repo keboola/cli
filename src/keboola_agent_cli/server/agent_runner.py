@@ -204,6 +204,310 @@ _PROMPT_RESPONSE_PREAMBLES = (
     "prompt:",
 )
 
+# Same idea for the SQL helper; the AI is told to emit only SQL but routinely
+# starts with "Here's the SQL:" or wraps the body in ```sql fences.
+_SQL_RESPONSE_PREAMBLES = (
+    "here is the sql:",
+    "here's the sql:",
+    "here is a sql:",
+    "here's a sql:",
+    "here is the query:",
+    "here's the query:",
+    "sql:",
+    "query:",
+)
+
+
+def build_sql_helper_meta_prompt(
+    *,
+    goal: str,
+    project: str,
+    backend: str,
+    schema: str,
+    draft_sql: str = "",
+    bucket_ids: list[str] | None = None,
+    serve_url: str | None = None,
+    failed_error: str | None = None,
+) -> str:
+    """Compose the meta-prompt sent to the AI CLI by the workspace SQL helper.
+
+    The AI is asked to produce a single polished SQL statement (or a small
+    statement batch) that runs against the user's Keboola workspace. It is
+    explicitly instructed to discover table / column shape via
+    INFORMATION_SCHEMA using the kbagent CLI before guessing column names.
+
+    Backend-specific hints are folded in so claude doesn't have to "know" the
+    quirks: BigQuery's backticked dataset paths and per-dataset
+    INFORMATION_SCHEMA, Snowflake's CURRENT_SCHEMA() default, etc. The
+    bucket list (when supplied) gives the AI a starting catalog without
+    burning a tool call.
+
+    When ``failed_error`` is provided the helper switches to "fix mode": the
+    user just ran ``draft_sql`` and the warehouse rejected it. The prompt
+    pivots from "write SQL for goal" to "diagnose and fix this SQL", and the
+    error text is surfaced verbatim so the AI can match it against schema
+    discovery output (e.g. linked-bucket FQN mistakes).
+    """
+    goal_clean = goal.strip()
+    if failed_error and failed_error.strip():
+        # Fix mode: existing SQL is the input, error explains why it failed.
+        draft_block = (
+            "FAILED QUERY (this is the SQL the user just ran -- it broke):\n"
+            f"{draft_sql.strip() or '(query body empty — recover from the error message alone.)'}\n\n"
+            "WAREHOUSE ERROR:\n"
+            f"{failed_error.strip()}"
+        )
+    elif draft_sql.strip():
+        draft_block = (
+            f"USER'S CURRENT DRAFT (refine this, don't throw it away):\n{draft_sql.strip()}"
+        )
+    else:
+        draft_block = "USER'S CURRENT DRAFT: (empty -- write the query from scratch.)"
+    bucket_block = (
+        "VISIBLE BUCKETS (already loaded in the editor sidebar):\n"
+        + "\n".join(f"  - {b}" for b in bucket_ids[:50])
+        if bucket_ids
+        else "VISIBLE BUCKETS: (none preloaded -- discover via INFORMATION_SCHEMA.)"
+    )
+    if len(bucket_ids or []) > 50:
+        bucket_block += f"\n  ... and {len(bucket_ids or []) - 50} more (truncated)"
+
+    backend_hint = _sql_helper_backend_hint(backend, schema)
+    serve_hint = (
+        f"SERVE CONTEXT: kbagent serve is reachable at {serve_url}; the AI agent\n"
+        "shell has KBAGENT_SERVE_URL + KBAGENT_SERVE_TOKEN env vars pre-set, so\n"
+        "`kbagent http get /...` is the fastest discovery path."
+        if serve_url
+        else "SERVE CONTEXT: assume `kbagent` CLI is available on PATH."
+    )
+
+    return f"""\
+You are a senior data engineer writing SQL for a Keboola workspace. Your
+output will be pasted into the workspace SQL editor verbatim and executed
+through the Keboola Query Service against project '{project}'. The Query
+Service runs SELECT only -- it rejects SHOW / DESCRIBE / DDL / DML.
+
+WORKSPACE CONTEXT:
+- Project alias: {project}
+- Backend: {backend}
+- Default schema: {schema}
+
+USER'S GOAL (plain English):
+{goal_clean}
+
+{draft_block}
+
+{bucket_block}
+
+{backend_hint}
+
+MANDATORY FIRST STEP — resolve every bucket FQN (cross-project hazard):
+- A workspace mounts ONLY the project's own database / dataset. Linked
+  buckets (shared from another project) live in a DIFFERENT Snowflake
+  database OR a different GCP project on BigQuery. Writing the obvious
+  `"in.c-foo"."table"` against a linked bucket WILL fail with
+  "Schema 'KBC_USE4_<workspace_project>.\"in.c-foo\"' does not exist".
+- BEFORE you write a single line of SQL, for EVERY bucket in the VISIBLE
+  BUCKETS list above that you intend to reference, run:
+      kbagent storage bucket-detail --project {project} --bucket-id <id>
+  Read the `sql_path` field on the table you need and use it VERBATIM.
+  The path is already correctly quoted for the bucket's backend, e.g.
+  Snowflake linked → `"KBC_USE4_340"."out.c-out_bamboohr"."employee_snapshot"`.
+- This step is NOT optional even if you "already know the columns" from
+  `table-detail` — `table-detail` gives you column names, NOT the
+  correct database. Skipping `bucket-detail` is the single most common
+  cause of broken queries in this helper. Always run it. It is cheap
+  and idempotent.
+- Workflow order, no exceptions:
+    1. `bucket-detail` for each bucket you reference → record `sql_path`.
+    2. `table-detail` (or an INFORMATION_SCHEMA query) for column names.
+    3. ONLY THEN write the SQL, using the recorded `sql_path` values.
+
+COLUMN DISCOVERY (after step 1 above):
+- `kbagent workspace query --project {project} --workspace-id <id> --sql '...'`
+  with an INFORMATION_SCHEMA query confirms table + column names exist.
+- Alternative: `kbagent storage table-detail --project {project} --table-id <id>`
+  returns the full column list for a Storage table without a query roundtrip.
+{serve_hint}
+
+REQUIREMENTS for the returned SQL:
+- Match the user's goal precisely; do not invent columns.
+- Be a single SELECT statement (or a tiny CTE batch) -- nothing destructive.
+- Qualify tables explicitly when joining across buckets so the result is
+  unambiguous after the workspace is reused.
+- Add a brief 1-line `-- comment` at the top describing what the query
+  returns (purpose + key filters), but no other prose.
+
+OUTPUT CONTRACT (critical):
+- Output ONLY the SQL. Plain text.
+- Do NOT wrap the SQL in ```sql fences.
+- Do NOT prefix with "Here's the SQL:" / "Rewritten query:" / similar.
+- Do NOT append commentary after the SQL.
+- Do NOT emit "★ Insight ───" blocks, decorative separators, reasoning
+  bullets, or any explanatory commentary BEFORE the SQL. The user's
+  workspace editor pastes your entire response verbatim — any prose
+  before the SELECT statement breaks the parse. If a user has set the
+  `explanatory` Claude output style globally, you must override it here
+  and emit raw SQL only.
+"""
+
+
+def _sql_helper_backend_hint(backend: str, schema: str) -> str:
+    """Emit backend-specific INFORMATION_SCHEMA recipes for the meta-prompt.
+
+    Keboola Workspaces run on three backends; each has different table-catalog
+    surface area, so the meta-prompt embeds the exact INFORMATION_SCHEMA query
+    the AI should run for discovery. Without this hint claude routinely
+    invents Snowflake-style queries when the workspace is BigQuery.
+    """
+    backend_lc = (backend or "").lower()
+    if backend_lc == "bigquery":
+        return (
+            "BACKEND HINT (BigQuery):\n"
+            f"- Workspace schema is the dataset `{schema}`.\n"
+            f"- Backtick-quote dataset + table names: `\\`{schema}\\`.\\`<table>\\``.\n"
+            f"- Discovery: SELECT table_name FROM `{schema}.INFORMATION_SCHEMA.TABLES`;\n"
+            f"- Columns: SELECT column_name, data_type FROM "
+            f"`{schema}.INFORMATION_SCHEMA.COLUMNS` WHERE table_name='<table>';"
+        )
+    if backend_lc == "snowflake":
+        return (
+            "BACKEND HINT (Snowflake):\n"
+            f"- Workspace default schema is `{schema}`. Identifiers are case-sensitive\n"
+            f'  when quoted; Keboola Storage tables are quoted ("my-table").\n'
+            "- CRITICAL QUOTING RULE: Snowflake uppercases ANY unquoted identifier.\n"
+            "  Keboola column / table / alias names are lowercase, so EVERY\n"
+            "  identifier you emit MUST be wrapped in double quotes — including\n"
+            '  column aliases (`AS "month"` not `AS month`), table aliases\n'
+            '  (`AS "s"` not `AS s`), and CTE names. Otherwise the result CSV\n'
+            "  comes back with MONTH / EMPLOYEE / EMPLOYEE_COUNT column headers\n"
+            "  instead of the lowercase names the user (and downstream tools)\n"
+            "  expect.\n"
+            "- Discovery: SELECT TABLE_NAME, ROW_COUNT FROM INFORMATION_SCHEMA.TABLES\n"
+            "  WHERE TABLE_SCHEMA = CURRENT_SCHEMA();\n"
+            "- Columns: SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS\n"
+            "  WHERE TABLE_SCHEMA = CURRENT_SCHEMA() AND TABLE_NAME = '<table>';"
+        )
+    # Unknown / future backend: stay generic so the AI still has a starting point.
+    return (
+        f"BACKEND HINT ({backend or 'unknown'}):\n"
+        f"- Workspace default schema is `{schema}`.\n"
+        "- Discovery: query INFORMATION_SCHEMA.TABLES / COLUMNS following the\n"
+        "  backend's conventions (Snowflake = CURRENT_SCHEMA(), BigQuery = dataset\n"
+        "  path, Postgres = current_schema())."
+    )
+
+
+def clean_sql_helper_response(text: str) -> str:
+    """Strip code fences, preambles, and claude jsonl duplication from SQL output.
+
+    Mirrors :func:`clean_prompt_helper_response` step-for-step but uses the
+    SQL-specific preamble list. Two distinct cleaners (instead of a unified
+    one with a knob) makes the call sites self-documenting and lets future
+    SQL/prompt divergence land without entangling.
+    """
+    text = text.strip()
+    # Step 1: collapse "AB" where A == B (claude jsonl duplication).
+    if text and len(text) % 2 == 0:
+        half = len(text) // 2
+        if text[:half] == text[half:]:
+            text = text[:half].rstrip()
+    # Step 2: strip a single set of leading/trailing code fences. Accept
+    # ```sql or ``` -- the AI uses both interchangeably.
+    if text.startswith("```"):
+        nl = text.find("\n")
+        if nl != -1:
+            text = text[nl + 1 :]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+    # Step 3: strip a preamble like "Here's the SQL:\n\n..." on the first line.
+    lines = text.split("\n", 1)
+    first = lines[0].strip().lower()
+    if any(first == p or first.startswith(p) for p in _SQL_RESPONSE_PREAMBLES):
+        text = lines[1].strip() if len(lines) > 1 else ""
+
+    # Step 4: locate where the actual SQL starts and drop everything before.
+    # Defends against:
+    #  - Czech/English commentary blocks ("★ Insight ───") that claude with
+    #    the explanatory output style emits before the SQL,
+    #  - Multi-paragraph reasoning the AI sometimes adds despite the
+    #    OUTPUT CONTRACT,
+    #  - Loose "Note: " / "Reasoning: " preambles.
+    # Heuristic: find the first non-empty line that either (a) starts with a
+    # SQL keyword or (b) is a `-- ` comment AND a subsequent line within the
+    # next ~20 lines starts with a SQL keyword. The two-stage rule lets a
+    # leading SQL header comment ("-- Monthly headcount: ...") survive while
+    # rejecting `-- claude's chatter` that never resolves into actual SQL.
+    text = _strip_pre_sql_chatter(text)
+    return text.strip()
+
+
+# SQL statement keywords that can legally start a Keboola Query Service
+# submission (it's read-only, so DML / DDL would fail anyway -- listing
+# them keeps the extractor permissive enough not to false-negative if a
+# user explicitly asks for one).
+_SQL_KEYWORDS = (
+    "select",
+    "with",
+    "show",
+    "describe",
+    "desc ",
+    "explain",
+    "insert",
+    "update",
+    "delete",
+    "merge",
+    "create",
+    "alter",
+    "drop",
+    "truncate",
+    "use ",
+)
+
+
+def _strip_pre_sql_chatter(text: str) -> str:
+    """Drop prose before the first real SQL line.
+
+    Strategy: scan top-down for the first non-empty line that is either an
+    SQL keyword or a SQL comment immediately followed by SQL. Everything
+    before is preamble (Insight blocks, commentary, decorative separators).
+
+    Returns the original text untouched when no SQL keyword is detectable
+    in the first ~50 non-empty lines -- the helper would rather pass through
+    garbage than silently truncate a valid response that happens to look
+    unusual. Callers display the cleaned text to the user, who will spot
+    the issue.
+    """
+    lines = text.split("\n")
+
+    def is_sql_keyword(line: str) -> bool:
+        return any(line.lstrip().lower().startswith(kw) for kw in _SQL_KEYWORDS)
+
+    # Single-pass: walk non-empty lines, watching for either a direct SQL
+    # keyword OR a `-- comment` that is followed (within 20 lines) by SQL.
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if is_sql_keyword(stripped):
+            return "\n".join(lines[i:]).strip()
+        if stripped.startswith("--") and not stripped.startswith("---"):
+            # Header SQL comment? Peek ahead for SQL within 20 lines.
+            window = lines[i + 1 : i + 21]
+            if any(is_sql_keyword(later.strip()) for later in window if later.strip()):
+                return "\n".join(lines[i:]).strip()
+            # Standalone `-- comment` with no SQL after -- it's prose; keep
+            # scanning past it instead of clipping here.
+            continue
+        # Not a SQL line and not a SQL header comment -- preamble. Keep
+        # scanning; the SQL is likely below.
+        continue
+
+    # Fallback: no SQL keyword found anywhere. Return the text as-is so
+    # the user can at least see what the AI sent.
+    return text
+
 
 def clean_prompt_helper_response(text: str) -> str:
     """Trim surrounding code fences, preambles, and dedup the response.

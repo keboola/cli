@@ -172,6 +172,70 @@ class TestSetupOrganization:
         assert "alpha" in config.projects
         assert "beta" in config.projects
 
+    def test_populates_org_name_from_per_project_payload(self, tmp_path: Path) -> None:
+        """When list_organization_projects payload carries organization.name, use it."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+
+        projects = [
+            {
+                "id": 100,
+                "name": "Alpha",
+                "organization": {"id": 42, "name": "Acme Corp"},
+            },
+        ]
+
+        service = OrgService(
+            config_store=store,
+            manage_client_factory=_make_manage_client(projects),
+            storage_client_factory=_make_storage_client(project_name="Alpha", project_id=100),
+        )
+
+        service.setup_organization(
+            stack_url="https://connection.keboola.com",
+            manage_token="manage-token-123456789012345678",
+            org_id=42,
+        )
+
+        registered = store.load().projects["alpha"]
+        assert registered.org_id == 42
+        assert registered.org_name == "Acme Corp"
+
+    def test_falls_back_to_get_organization_for_name(self, tmp_path: Path) -> None:
+        """When per-project payload omits org name, fetch it via get_organization."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+
+        projects = [{"id": 100, "name": "Alpha"}]  # no organization sub-object
+
+        manage_mock = MagicMock()
+        manage_mock.list_organization_projects.return_value = projects
+        manage_mock.create_project_token.return_value = {
+            "id": "tok-1",
+            "token": "901-99999-generatedToken1234567890ab",
+            "description": "kbagent-cli",
+        }
+        manage_mock.get_organization.return_value = {"id": 42, "name": "Resolved Org"}
+
+        service = OrgService(
+            config_store=store,
+            manage_client_factory=lambda url, token: manage_mock,
+            storage_client_factory=_make_storage_client(project_name="Alpha", project_id=100),
+        )
+
+        service.setup_organization(
+            stack_url="https://connection.keboola.com",
+            manage_token="manage-token-123456789012345678",
+            org_id=42,
+        )
+
+        manage_mock.get_organization.assert_called_once_with(42)
+        registered = store.load().projects["alpha"]
+        assert registered.org_id == 42
+        assert registered.org_name == "Resolved Org"
+
     def test_skip_existing_projects(self, tmp_path: Path) -> None:
         """Already-registered projects are skipped."""
         config_dir = tmp_path / "config"

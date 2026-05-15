@@ -12,6 +12,8 @@ export interface Project {
   token: string; // already masked
   is_default: boolean;
   active_branch_id: number | null;
+  org_id: number | null;
+  org_name: string | null;
 }
 
 export interface ProjectStatus {

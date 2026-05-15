@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Plus, RefreshCw, Trash2, XCircle } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError, api } from "../api/client";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
@@ -20,6 +20,14 @@ export function ProjectsPage() {
     queryKey: ["projects-status"],
     queryFn: () => api.get("/projects/status"),
   });
+
+  // /projects/status performs an opportunistic backfill of org_id/org_name
+  // on the backend for projects registered before #290. Invalidate the
+  // /projects cache once status finishes so the ORG column picks up the
+  // freshly persisted values without the user having to reload the page.
+  useEffect(() => {
+    if (statusQ.data) qc.invalidateQueries({ queryKey: ["projects"] });
+  }, [statusQ.data, qc]);
 
   const removeMu = useMutation({
     mutationFn: (alias: string) => api.delete(`/projects/${encodeURIComponent(alias)}`),
@@ -88,6 +96,38 @@ export function ProjectsPage() {
                   {p.alias} {p.is_default ? <span className="nerd-pill-green">default</span> : null}
                 </span>
               ),
+            },
+            {
+              header: "Org",
+              cell: (p) => {
+                // Org name comes from Manage API (via `org setup`); the
+                // Storage token alone only returns the numeric id. We show
+                // the name when we have it, fall back to "#73" so multi-org
+                // setups are still distinguishable, and only render "—"
+                // when neither is known (very old stacks without
+                // organization in the verify response).
+                if (p.org_name) {
+                  return <span className="text-zinc-700 dark:text-zinc-300">{p.org_name}</span>;
+                }
+                if (p.org_id != null) {
+                  return (
+                    <span
+                      className="text-zinc-500 font-mono"
+                      title={`Organization #${p.org_id}. Name unknown — Storage API only exposes the id. Run \`kbagent org setup --org-id ${p.org_id} --url <stack>\` to populate the name.`}
+                    >
+                      #{p.org_id}
+                    </span>
+                  );
+                }
+                return (
+                  <span
+                    className="text-zinc-400"
+                    title="Org info unavailable — older stacks omit the organization block from /v2/storage/tokens/verify. Use `kbagent org setup` to populate via the Manage API."
+                  >
+                    —
+                  </span>
+                );
+              },
             },
             { header: "Project", cell: (p) => <span>{p.project_name}</span> },
             {

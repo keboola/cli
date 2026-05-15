@@ -221,6 +221,21 @@ class KeboolaClient(BaseHttpClient):
         data = response.json()
 
         owner = data.get("owner", {})
+        # /v2/storage/tokens/verify carries `organization` at the TOP level
+        # (NOT nested under `owner` like I'd previously assumed -- three
+        # rounds of broken backfill traced back to this mismatch). The
+        # payload is minimal -- only `{"id": "73"}` on the GCP us-east4
+        # stack -- so org name has to come from the Manage API path.
+        org = data.get("organization") or {}
+        org_id_raw = org.get("id")
+        # Storage API serializes org id as a string ("73"); normalise to int
+        # so callers and persisted ProjectConfig.org_id can keep its int
+        # type without each consumer doing the cast.
+        org_id: int | None
+        try:
+            org_id = int(org_id_raw) if org_id_raw is not None else None
+        except (TypeError, ValueError):
+            org_id = None
         response = TokenVerifyResponse(
             token_id=str(data.get("id", "")),
             token_description=data.get("description", ""),
@@ -229,6 +244,12 @@ class KeboolaClient(BaseHttpClient):
             owner_name=owner.get("name", ""),
             default_backend=owner.get("defaultBackend", "snowflake"),
             features=owner.get("features", []),
+            org_id=org_id,
+            # Top-level `organization` block does NOT carry a name; that
+            # field is Manage-API-only. Leave None and let the UI show
+            # the id (e.g. "#73") as a fallback until `org setup` fills
+            # in the human-readable name.
+            org_name=None,
         )
         # Refresh the features cache on every successful verify so explicit
         # callers stay consistent with the cached view used by has_feature().
@@ -2666,13 +2687,8 @@ class KeboolaClient(BaseHttpClient):
             if status == "completed":
                 return job
             if status in ("error", "failed"):
-                error_msg = (
-                    job.get("error", {}).get("message", "")
-                    if isinstance(job.get("error"), dict)
-                    else str(job.get("error", "Query execution failed"))
-                )
                 raise KeboolaApiError(
-                    message=f"Query job failed: {error_msg}",
+                    message=f"Query job failed: {_extract_query_job_error(job)}",
                     status_code=500,
                     error_code=ErrorCode.QUERY_JOB_FAILED,
                     retryable=False,
@@ -2685,6 +2701,68 @@ class KeboolaClient(BaseHttpClient):
             error_code=ErrorCode.QUERY_JOB_TIMEOUT,
             retryable=True,
         )
+
+
+def _extract_query_job_error(job: dict[str, Any]) -> str:
+    """Pull the most useful warehouse error message out of a failed Query Service job.
+
+    The Query Service `/api/v1/queries/{id}` response for a failed job carries
+    the actual Snowflake / BigQuery error inside ``statements[i].error`` as a
+    plain string (e.g. "SQL compilation error:\\nFunction DATE_TRUNC does not
+    support VARCHAR(10) argument type"). The top-level ``error`` field is
+    usually ABSENT on failures — the previous extractor read only that and so
+    emitted the useless "Query job failed: Query execution failed" message
+    users were seeing in the SQL editor's red error box (#287).
+
+    Strategy:
+    1. Walk ``statements`` and collect every failed statement's error,
+       prefixed with the statement index so multi-statement batches stay
+       readable. Strings, dicts ({\"message\": "..."}), and unknown shapes
+       are all handled.
+    2. Fall back to top-level ``error`` (string OR dict-with-message) for
+       legacy shapes that don't carry statement-level errors.
+    3. Fall back to the original generic string only when neither is set,
+       so the caller never sees an empty message.
+
+    The returned string is meant to be embedded into a
+    ``KeboolaApiError(message=f"Query job failed: ...")`` and ultimately
+    surfaced to the user (and the AI fix-mode helper, which pivots its
+    meta-prompt on the warehouse text).
+    """
+
+    def _as_text(err: Any) -> str:
+        if isinstance(err, str):
+            return err.strip()
+        if isinstance(err, dict):
+            for key in ("message", "error", "detail"):
+                val = err.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+            return ""
+        return str(err).strip() if err is not None else ""
+
+    statement_errors: list[str] = []
+    for i, stmt in enumerate(job.get("statements") or []):
+        if not isinstance(stmt, dict):
+            continue
+        if stmt.get("status") not in ("error", "failed"):
+            continue
+        text = _as_text(stmt.get("error"))
+        if not text:
+            continue
+        # Single-statement queries don't need the "Statement 1:" prefix —
+        # it adds visual noise in the editor's red box for the common case.
+        prefix = "" if len(job.get("statements") or []) == 1 else f"Statement {i + 1}: "
+        statement_errors.append(f"{prefix}{text}")
+
+    if statement_errors:
+        return "\n".join(statement_errors)
+
+    top_level = _as_text(job.get("error"))
+    if top_level:
+        return top_level
+
+    return "Query execution failed (no error details from Query Service)"
 
 
 # ---------------------------------------------------------------------------

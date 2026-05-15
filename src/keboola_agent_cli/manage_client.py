@@ -76,6 +76,24 @@ class ManageClient(BaseHttpClient):
         response = self._do_request("GET", f"/manage/projects/{project_id}")
         return response.json()
 
+    def get_organization(self, org_id: int) -> dict[str, Any]:
+        """Get organization details by ID.
+
+        Used to resolve the organization name from its ID (e.g. during
+        `org setup`, where only the org_id is known up front).
+
+        Args:
+            org_id: The organization ID.
+
+        Returns:
+            Organization dict with at least 'id' and 'name' fields.
+
+        Raises:
+            KeboolaApiError: On API errors (e.g. 403 if not an org member).
+        """
+        response = self._do_request("GET", f"/manage/organizations/{org_id}")
+        return response.json()
+
     def list_organization_projects(self, org_id: int) -> list[dict[str, Any]]:
         """List all projects in an organization.
 

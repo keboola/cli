@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..dependencies import ServiceRegistry, get_registry
@@ -33,6 +36,31 @@ class FromTransformation(BaseModel):
     component_id: str
     config_id: str
     row_id: str | None = None
+
+
+class SqlHelperRequest(BaseModel):
+    """Input for the /workspaces/sql/improve/stream endpoint.
+
+    Mirrors :class:`PromptHelperRequest` from the agents router but carries
+    workspace-specific context (project, backend, schema, visible buckets)
+    so the meta-prompt the AI receives is grounded in the user's current
+    workspace -- no generic 'write SQL' guesswork.
+    """
+
+    cli: str  # claude | codex | gemini -- same recipe as ai_agent runs
+    goal: str
+    project: str
+    backend: str
+    schema_name: str
+    workspace_id: int | None = None
+    draft_sql: str = ""
+    bucket_ids: list[str] = []
+    extra_args: list[str] = []
+    # When set, the helper is fixing a failed query: the goal is short
+    # ("Fix this query"), draft_sql holds the failing SQL, and failed_error
+    # is the warehouse error message. The meta-prompt switches mode so the
+    # AI focuses on the error instead of writing from scratch.
+    failed_error: str = ""
 
 
 @router.get("")
@@ -105,6 +133,97 @@ def query(
         workspace_id=workspace_id,
         sql=body.sql,
         transactional=body.transactional,
+    )
+
+
+def _sse(event: str, data: dict[str, Any]) -> bytes:
+    """Encode a single SSE frame (event + data)."""
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n".encode()
+
+
+@router.post("/sql/improve/stream")
+async def improve_sql_stream(
+    body: SqlHelperRequest,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> StreamingResponse:
+    """Stream an AI-generated SQL query back to the workspace SQL editor.
+
+    Mirrors /agents/prompt/improve/stream but with a SQL-specific meta-prompt
+    that grounds the AI in the workspace's backend (snowflake/bigquery),
+    default schema, and the visible bucket catalog the editor sidebar has
+    already loaded. The AI is also told how to use INFORMATION_SCHEMA via
+    `kbagent workspace query` for any discovery the bucket hint doesn't cover.
+
+    Same SSE event protocol as the agent prompt helper (init/stdout/stderr/
+    done) so the UI can reuse the streaming progress renderer.
+    """
+    from ..agent_runner import (
+        build_sql_helper_meta_prompt,
+        clean_sql_helper_response,
+        stream_ai_agent_events,
+    )
+
+    goal = body.goal.strip()
+    if not goal:
+        raise HTTPException(status_code=400, detail="goal must not be empty")
+
+    meta_prompt = build_sql_helper_meta_prompt(
+        goal=goal,
+        project=body.project,
+        backend=body.backend,
+        schema=body.schema_name,
+        draft_sql=body.draft_sql,
+        bucket_ids=body.bucket_ids or None,
+        failed_error=body.failed_error or None,
+    )
+    params: dict[str, Any] = {
+        "cli": body.cli,
+        "prompt": meta_prompt,
+        "extra_args": body.extra_args,
+        # SQL helper prompts target ~10-30s for a simple SELECT, up to a minute
+        # when the AI has to round-trip INFORMATION_SCHEMA. 180s cap matches
+        # the prompt helper so a stuck CLI doesn't camp on the connection.
+        "timeout": 180.0,
+    }
+
+    async def gen() -> AsyncIterator[bytes]:
+        yield _sse(
+            "init",
+            {
+                "kind": "sql_helper",
+                "cli": body.cli,
+                "project": body.project,
+                "backend": body.backend,
+                "goal_preview": goal[:200],
+                # Surface the full meta-prompt so the UI's "Show prompt"
+                # transparency panel can render exactly what claude saw —
+                # users debugging a bad suggestion need this to tell whether
+                # the goal was misunderstood or whether the AI just ignored
+                # the workspace context.
+                "meta_prompt": meta_prompt,
+            },
+        )
+        try:
+            async for evt in stream_ai_agent_events(registry, params):
+                if evt["event"] == "done":
+                    raw = str(evt["data"].get("response") or "")
+                    cleaned = clean_sql_helper_response(raw)
+                    enriched = {**evt["data"], "sql": cleaned, "raw_response": raw}
+                    yield _sse("done", enriched)
+                else:
+                    yield _sse(evt["event"], evt["data"])
+        except ValueError as exc:
+            yield _sse("done", {"status": "error", "error": str(exc)})
+        except Exception as exc:
+            yield _sse("done", {"status": "error", "error": str(exc)})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

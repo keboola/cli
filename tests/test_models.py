@@ -38,6 +38,34 @@ class TestProjectConfig:
         )
         assert config.project_name == ""
         assert config.project_id is None
+        assert config.org_id is None
+        assert config.org_name is None
+
+    def test_org_fields_persisted(self) -> None:
+        """Organization fields round-trip through JSON serialization."""
+        config = ProjectConfig(
+            stack_url="https://connection.keboola.com",
+            token="901-token",
+            org_id=438,
+            org_name="Keboola Demo",
+        )
+        restored = ProjectConfig.model_validate_json(config.model_dump_json())
+        assert restored.org_id == 438
+        assert restored.org_name == "Keboola Demo"
+
+    def test_legacy_config_without_org_fields(self) -> None:
+        """Configs persisted before org fields existed still load cleanly."""
+        legacy = json.dumps(
+            {
+                "stack_url": "https://connection.keboola.com",
+                "token": "901-token",
+                "project_name": "Legacy",
+                "project_id": 100,
+            }
+        )
+        restored = ProjectConfig.model_validate_json(legacy)
+        assert restored.org_id is None
+        assert restored.org_name is None
 
     def test_json_round_trip(self) -> None:
         """ProjectConfig can be serialized to JSON and deserialized back."""

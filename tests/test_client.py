@@ -53,6 +53,73 @@ class TestVerifyToken:
         assert result.project_id == 1234
         assert result.token_description == "My test token"
         assert result.token_id == "12345"
+        # Owner without organization sub-object yields None org fields.
+        assert result.org_id is None
+        assert result.org_name is None
+        client.close()
+
+    def test_verify_token_extracts_organization_from_top_level(self, httpx_mock) -> None:
+        """Real Keboola Storage API returns ``organization`` at the TOP level
+        of the verify response (NOT nested under ``owner``) and only carries
+        the id as a string. Org name is Manage-API-only.
+
+        Three rounds of broken backfill traced back to reading
+        ``owner.organization`` instead of ``data.organization``; pin the
+        correct shape here so future refactors can't regress.
+        """
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json={
+                "id": "12345",
+                "description": "tok",
+                "owner": {
+                    "id": 1234,
+                    "name": "Test Project",
+                    # NB: owner does NOT carry organization on real stacks.
+                },
+                # Top-level org block; id is a string ("73") in real responses.
+                "organization": {"id": "438"},
+            },
+            status_code=200,
+        )
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        )
+        result = client.verify_token()
+
+        # String "438" must be normalised to int 438 so persisted
+        # ProjectConfig.org_id keeps its declared int type.
+        assert result.org_id == 438
+        # Storage API never returns org name — only Manage API does. UI
+        # falls back to "#438" until `org setup` fills it in.
+        assert result.org_name is None
+        client.close()
+
+    def test_verify_token_no_organization_block(self, httpx_mock) -> None:
+        """Older stacks omit the top-level ``organization`` key entirely.
+        Both org_id and org_name must come back None — no exception, no
+        crash, just degraded UI.
+        """
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json={
+                "id": "12345",
+                "description": "tok",
+                "owner": {"id": 1234, "name": "Test Project"},
+            },
+            status_code=200,
+        )
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        )
+        result = client.verify_token()
+
+        assert result.org_id is None
+        assert result.org_name is None
         client.close()
 
     def test_verify_token_401_error(self, httpx_mock) -> None:
@@ -2736,6 +2803,106 @@ class TestIterPollIntervals:
 
         seq = list(islice(_iter_poll_intervals("fixed"), 5))
         assert seq == [STORAGE_JOB_POLL_INTERVAL] * 5
+
+
+class TestExtractQueryJobError:
+    """Tests for _extract_query_job_error -- pulls the real warehouse error
+    out of a failed Query Service job payload.
+
+    Pinned against the real shape observed against
+    ``connection.us-east4.gcp.keboola.com/api/v1/queries/<id>`` for a
+    failed Snowflake compilation: the actionable error lives inside
+    ``statements[i].error`` (a plain string), and the top-level ``error``
+    key is ABSENT on failures.
+    """
+
+    def _import(self):
+        from keboola_agent_cli.client import _extract_query_job_error
+
+        return _extract_query_job_error
+
+    def test_extracts_snowflake_error_from_statement_string(self) -> None:
+        """Reproduces the exact bamboohr case from Vojta's screenshot 24.
+
+        Before this fix the helper emitted 'Query job failed: Query
+        execution failed'; now the Snowflake message comes through and
+        the AI fix-mode prompt has something concrete to work with.
+        """
+        extract = self._import()
+        job = {
+            "queryJobId": "019e2b22-b16c-725a-93e5-262d226fa62f",
+            "status": "failed",
+            "statements": [
+                {
+                    "id": "019e2b22-b16c-7263-8683-f07337c1a4a8",
+                    "query": "SELECT DATE_TRUNC('MONTH', 'not-a-date') AS m",
+                    "status": "failed",
+                    "error": (
+                        "SQL compilation error:\n"
+                        "Function DATE_TRUNC does not support VARCHAR(10) argument type"
+                    ),
+                }
+            ],
+        }
+        msg = extract(job)
+        assert "SQL compilation error" in msg
+        assert "Function DATE_TRUNC does not support VARCHAR(10)" in msg
+        # Single statement -- no "Statement 1:" prefix noise.
+        assert not msg.startswith("Statement 1:")
+
+    def test_prefixes_statement_index_when_multiple(self) -> None:
+        """Multi-statement batches need disambiguation, but only then —
+        the prefix is dead weight on the common single-statement case.
+        """
+        extract = self._import()
+        job = {
+            "status": "failed",
+            "statements": [
+                {"status": "completed", "error": None},
+                {"status": "failed", "error": "syntax error near 'BOGUS'"},
+                {"status": "failed", "error": "table 'foo' does not exist"},
+            ],
+        }
+        msg = extract(job)
+        assert "Statement 2: syntax error" in msg
+        assert "Statement 3: table 'foo' does not exist" in msg
+        # Successful statements are skipped.
+        assert "Statement 1" not in msg
+
+    def test_handles_dict_shaped_statement_error(self) -> None:
+        """Some Query Service builds wrap the warehouse error in a dict."""
+        extract = self._import()
+        job = {
+            "status": "failed",
+            "statements": [
+                {
+                    "status": "failed",
+                    "error": {"message": "BigQuery: unrecognized name col_x at [3:5]"},
+                }
+            ],
+        }
+        msg = extract(job)
+        assert "unrecognized name col_x" in msg
+
+    def test_falls_back_to_top_level_error_when_no_statements(self) -> None:
+        """Older Query Service responses (or auth-style failures) put the
+        message at the top level. Keep that path working.
+        """
+        extract = self._import()
+        job = {"status": "failed", "error": "workspace credentials expired"}
+        assert extract(job) == "workspace credentials expired"
+
+    def test_top_level_dict_error(self) -> None:
+        extract = self._import()
+        job = {"status": "failed", "error": {"message": "boom"}}
+        assert extract(job) == "boom"
+
+    def test_returns_explicit_fallback_when_nothing_is_set(self) -> None:
+        """The caller embeds this string into a KeboolaApiError message —
+        it must never be empty, even on a malformed Query Service payload.
+        """
+        extract = self._import()
+        assert extract({"status": "failed"}).startswith("Query execution failed (no error details")
 
 
 class TestWaitForQueueJob:

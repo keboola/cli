@@ -14,14 +14,37 @@ import logging
 import os
 import secrets
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
+
+from ..constants import ENV_CONVERSATION_ID
 
 logger = logging.getLogger(__name__)
 
 ENV_AUTH_TOKEN = "KBAGENT_SERVE_TOKEN"
 ENV_UI_DIST = "KBAGENT_UI_DIST"
+
+
+def _default_conversation_id() -> str:
+    """Generate a conversation ID for a fresh ``kbagent serve`` session.
+
+    Format: ``serve-<UTC-timestamp>-<8 hex>``. The timestamp prefix makes
+    log scanning by start time trivial; the hex suffix disambiguates
+    rapid restarts in the same minute. The ``serve-`` prefix is how
+    observability dashboards filter "human-driven session" vs other
+    integrations.
+
+    Reads ``KBAGENT_CONVERSATION_ID`` and reuses it when present so a
+    caller that pre-set the var (CI, supervisor scripts, debugging across
+    a restart) keeps a stable session ID across kbagent serve restarts.
+    """
+    existing = os.environ.get(ENV_CONVERSATION_ID, "").strip()
+    if existing:
+        return existing
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return f"serve-{stamp}-{secrets.token_hex(4)}"
 
 
 def _autodetect_ui_dist() -> Path | None:
@@ -147,6 +170,14 @@ def serve_command(
     auth_token = os.environ.get(ENV_AUTH_TOKEN) or secrets.token_urlsafe(32)
     os.environ[ENV_AUTH_TOKEN] = auth_token
 
+    # Generate a stable conversation ID for this serve session and export it
+    # to env so child processes (MCP subprocess, AI agent CLI invocations,
+    # scheduled `kbagent http` calls) inherit it and emit X-Conversation-ID
+    # on every Keboola API request. Otherwise observability shows
+    # "Conversation ID not set" in `kbagent doctor`.
+    conversation_id = _default_conversation_id()
+    os.environ[ENV_CONVERSATION_ID] = conversation_id
+
     cors = list(cors_origin) if cors_origin else None
 
     serve_url = f"http://{host}:{port}"
@@ -198,6 +229,7 @@ def serve_command(
             f"  ├─ open:      http://{host}:{port}/\n"
             f"  ├─ api docs:  http://{host}:{port}/docs\n"
             f"  ├─ ui dist:   {resolved_ui_dist}\n"
+            f"  ├─ conv id:   {conversation_id}\n"
             f"  └─ token:     {auth_token}\n"
             "\n"
             "  Browser is auto-authenticated via an HttpOnly kbagent_session cookie\n"
@@ -207,6 +239,7 @@ def serve_command(
             "  For `kbagent http` in another terminal (bash/zsh):\n"
             f"    export KBAGENT_SERVE_URL=http://{host}:{port}\n"
             f"    export KBAGENT_SERVE_TOKEN={auth_token}\n"
+            f"    export KBAGENT_CONVERSATION_ID={conversation_id}\n"
             "\n"
         )
     else:
@@ -216,6 +249,7 @@ def serve_command(
             f"  ├─ host:      http://{host}:{port}\n"
             f"  ├─ docs:      http://{host}:{port}/docs\n"
             f"  ├─ openapi:   http://{host}:{port}/openapi.json\n"
+            f"  ├─ conv id:   {conversation_id}\n"
             f"  └─ token:     {auth_token}\n"
             "\n"
             f"  Set {ENV_AUTH_TOKEN}={auth_token} for the Node BFF.\n"
@@ -224,6 +258,7 @@ def serve_command(
             "  For `kbagent http` in another terminal (bash/zsh):\n"
             f"    export KBAGENT_SERVE_URL=http://{host}:{port}\n"
             f"    export KBAGENT_SERVE_TOKEN={auth_token}\n"
+            f"    export KBAGENT_CONVERSATION_ID={conversation_id}\n"
             "\n"
         )
     sys.stdout.flush()

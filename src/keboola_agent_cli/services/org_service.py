@@ -108,6 +108,7 @@ class OrgService:
             raise ValueError(msg)
 
         manage_client = self._manage_client_factory(stack_url, manage_token)
+        org_name: str | None = None
         try:
             if project_ids:
                 projects, fetch_failed = self._fetch_projects_by_ids(manage_client, project_ids)
@@ -117,6 +118,27 @@ class OrgService:
             else:
                 projects = manage_client.list_organization_projects(org_id)
                 fetch_failed = []
+
+            # Derive org_name: prefer per-project payload, otherwise call Manage API once.
+            for p in projects:
+                candidate = (p.get("organization") or {}).get("name")
+                if isinstance(candidate, str) and candidate:
+                    org_name = candidate
+                    break
+            if not org_name and org_id:
+                try:
+                    fetched = manage_client.get_organization(org_id).get("name")
+                    if isinstance(fetched, str) and fetched:
+                        org_name = fetched
+                except Exception:
+                    # Best-effort: org name resolution is optional, but the
+                    # specific exception type matters when something IS wrong
+                    # (403 vs 404 vs network), so log with traceback.
+                    logger.debug(
+                        "Could not resolve organization name for org_id=%s",
+                        org_id,
+                        exc_info=True,
+                    )
 
             # Resolve token owner identity for unique token naming
             owner_name = ""
@@ -183,6 +205,8 @@ class OrgService:
                     token_description=token_description,
                     owner_name=owner_name,
                     token_expires_in=token_expires_in,
+                    org_id=org_id,
+                    org_name=org_name,
                 )
                 # Re-read to get masked token
                 registered = self._config_store.get_project(alias)
@@ -517,6 +541,8 @@ class OrgService:
         token_description: str,
         owner_name: str = "",
         token_expires_in: int | None = None,
+        org_id: int | None = None,
+        org_name: str | None = None,
     ) -> None:
         """Create a token for a single project, verify it, and register it.
 
@@ -559,12 +585,16 @@ class OrgService:
         finally:
             storage_client.close()
 
-        # Register the project in config
+        # Register the project in config. Org info from token verify wins
+        # (it's the authoritative source); fall back to the values derived
+        # during org setup.
         project_config = ProjectConfig(
             stack_url=stack_url,
             token=storage_token,
             project_name=token_info.project_name,
             project_id=token_info.project_id,
+            org_id=token_info.org_id or org_id,
+            org_name=token_info.org_name or org_name,
         )
         self._config_store.add_project(alias, project_config)
 
