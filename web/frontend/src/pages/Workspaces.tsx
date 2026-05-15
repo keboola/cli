@@ -743,10 +743,13 @@ function SqlResults({ result }: { result: unknown }) {
     <div className="space-y-3">
       {statements.map((stmt, i) => (
         <div key={stmt.statement_id ?? i} className="border border-zinc-200 dark:border-zinc-800 rounded">
-          <div className="px-3 py-2 border-b border-zinc-200 dark:border-zinc-800 text-xs flex justify-between">
+          <div className="px-3 py-2 border-b border-zinc-200 dark:border-zinc-800 text-xs flex items-center justify-between gap-2">
             <span>
               Statement {i + 1} ・ {stmt.status} ・ {stmt.rows_affected} rows
             </span>
+            {stmt.csv_data ? (
+              <ResultExportButtons csv={stmt.csv_data} index={i + 1} />
+            ) : null}
           </div>
           {stmt.csv_data ? (
             <CsvTable csv={stmt.csv_data} />
@@ -755,6 +758,90 @@ function SqlResults({ result }: { result: unknown }) {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * "Download CSV" + "Copy as CSV" buttons rendered in the result-table
+ * header. The result's CSV is already on the client (returned from
+ * /workspaces/.../query), so both actions are pure DOM operations — no
+ * extra backend roundtrip. Filename embeds the statement index so users
+ * can run multiple queries and not collide on the default name.
+ */
+/**
+ * Tiny "copy to clipboard" pill used on AI helper panel headers and the
+ * AI suggestion block (#287). Tracks a transient "copied" state so the
+ * label flashes "✓ copied" for ~1.2s on success, matching the result-
+ * table copy button and the Linear / Slack convention.
+ */
+function CopyTextButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* Clipboard API blocked by browser permissions — silent. */
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className={`nerd-btn text-[10px] ${copied ? "border-keboola text-keboola" : "hover:text-keboola hover:border-keboola/60"}`}
+      title={`Copy ${label} to clipboard`}
+    >
+      {copied ? "✓ copied" : "⧉ copy"}
+    </button>
+  );
+}
+
+function ResultExportButtons({ csv, index }: { csv: string; index: number }) {
+  const [copied, setCopied] = useState(false);
+  const download = () => {
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `query-result-${index}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "")}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(csv);
+      setCopied(true);
+      // 1.2s feedback window matches Linear / Slack copy buttons — short
+      // enough not to confuse rapid copies, long enough to register.
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // Clipboard API can be blocked by browser permissions; fall through
+      // silently rather than crashing the whole panel.
+    }
+  };
+  return (
+    <div className="flex items-center gap-1.5">
+      <button
+        type="button"
+        onClick={download}
+        className="nerd-btn text-[10px] hover:text-keboola hover:border-keboola/60"
+        title="Save the full result as a .csv file"
+      >
+        ⬇ CSV
+      </button>
+      <button
+        type="button"
+        onClick={copy}
+        className={`nerd-btn text-[10px] ${copied ? "border-keboola text-keboola" : "hover:text-keboola hover:border-keboola/60"}`}
+        title="Copy the full result as CSV to the clipboard"
+      >
+        {copied ? "✓ copied" : "⧉ copy"}
+      </button>
     </div>
   );
 }
@@ -1174,16 +1261,19 @@ function SqlHelperPanel({
           default — most users only open it when an AI suggestion looks off. */}
       {metaPrompt ? (
         <div className="border border-zinc-200 dark:border-zinc-800 rounded">
-          <button
-            type="button"
-            className="w-full text-left px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-500 hover:text-keboola flex items-center gap-1"
-            onClick={() => setShowPrompt((v) => !v)}
-            title="See exactly what context the AI received"
-          >
-            <span>{showPrompt ? "▾" : "▸"}</span>
-            <span>Prompt sent to {cli}</span>
-            <span className="ml-auto text-zinc-400">{metaPrompt.length} chars</span>
-          </button>
+          <div className="flex items-center px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-500">
+            <button
+              type="button"
+              className="flex items-center gap-1 hover:text-keboola flex-1 text-left"
+              onClick={() => setShowPrompt((v) => !v)}
+              title="See exactly what context the AI received"
+            >
+              <span>{showPrompt ? "▾" : "▸"}</span>
+              <span>Prompt sent to {cli}</span>
+            </button>
+            <span className="text-zinc-400 mr-2">{metaPrompt.length} chars</span>
+            <CopyTextButton text={metaPrompt} label="prompt" />
+          </div>
           {showPrompt ? (
             <pre
               className="nerd-code whitespace-pre-wrap text-[11px] text-zinc-600 dark:text-zinc-400 border-t border-zinc-200 dark:border-zinc-800"
@@ -1200,16 +1290,19 @@ function SqlHelperPanel({
           real time so users can watch the AI's discovery. */}
       {activityLog.length > 0 ? (
         <div className="border border-zinc-200 dark:border-zinc-800 rounded">
-          <button
-            type="button"
-            className="w-full text-left px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-500 hover:text-keboola flex items-center gap-1"
-            onClick={() => setShowActivity((v) => !v)}
-            title="See what tools the AI is calling"
-          >
-            <span>{showActivity ? "▾" : "▸"}</span>
-            <span>Activity</span>
-            <span className="ml-auto text-zinc-400">{activityLog.length} events</span>
-          </button>
+          <div className="flex items-center px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-500">
+            <button
+              type="button"
+              className="flex items-center gap-1 hover:text-keboola flex-1 text-left"
+              onClick={() => setShowActivity((v) => !v)}
+              title="See what tools the AI is calling"
+            >
+              <span>{showActivity ? "▾" : "▸"}</span>
+              <span>Activity</span>
+            </button>
+            <span className="text-zinc-400 mr-2">{activityLog.length} events</span>
+            <CopyTextButton text={activityLog.join("\n")} label="activity" />
+          </div>
           {showActivity ? (
             <pre
               className="nerd-code whitespace-pre-wrap text-[11px] text-zinc-600 dark:text-zinc-400 border-t border-zinc-200 dark:border-zinc-800"
@@ -1235,7 +1328,10 @@ function SqlHelperPanel({
 
       {finalSql ? (
         <div className="space-y-2">
-          <div className="text-xs text-zinc-500">AI suggestion:</div>
+          <div className="flex items-center justify-between">
+            <div className="text-xs text-zinc-500">AI suggestion:</div>
+            <CopyTextButton text={finalSql} label="SQL" />
+          </div>
           <pre
             className="nerd-code whitespace-pre-wrap text-zinc-800 dark:text-zinc-200 border-neon-pink/30"
             style={{ maxHeight: "320px", overflow: "auto" }}

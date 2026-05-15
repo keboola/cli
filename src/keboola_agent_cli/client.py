@@ -221,7 +221,21 @@ class KeboolaClient(BaseHttpClient):
         data = response.json()
 
         owner = data.get("owner", {})
-        org = owner.get("organization") or {}
+        # /v2/storage/tokens/verify carries `organization` at the TOP level
+        # (NOT nested under `owner` like I'd previously assumed -- three
+        # rounds of broken backfill traced back to this mismatch). The
+        # payload is minimal -- only `{"id": "73"}` on the GCP us-east4
+        # stack -- so org name has to come from the Manage API path.
+        org = data.get("organization") or {}
+        org_id_raw = org.get("id")
+        # Storage API serializes org id as a string ("73"); normalise to int
+        # so callers and persisted ProjectConfig.org_id can keep its int
+        # type without each consumer doing the cast.
+        org_id: int | None
+        try:
+            org_id = int(org_id_raw) if org_id_raw is not None else None
+        except (TypeError, ValueError):
+            org_id = None
         response = TokenVerifyResponse(
             token_id=str(data.get("id", "")),
             token_description=data.get("description", ""),
@@ -230,8 +244,12 @@ class KeboolaClient(BaseHttpClient):
             owner_name=owner.get("name", ""),
             default_backend=owner.get("defaultBackend", "snowflake"),
             features=owner.get("features", []),
-            org_id=org.get("id"),
-            org_name=org.get("name") or None,
+            org_id=org_id,
+            # Top-level `organization` block does NOT carry a name; that
+            # field is Manage-API-only. Leave None and let the UI show
+            # the id (e.g. "#73") as a fallback until `org setup` fills
+            # in the human-readable name.
+            org_name=None,
         )
         # Refresh the features cache on every successful verify so explicit
         # callers stay consistent with the cached view used by has_feature().

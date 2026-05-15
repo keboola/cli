@@ -197,6 +197,10 @@ function ProjectPicker({
                       {p.project_name}
                       {p.org_name ? (
                         <span className="text-zinc-400"> · {p.org_name}</span>
+                      ) : p.org_id != null ? (
+                        // Org name unknown but id is, surface it so users
+                        // with multiple orgs can still tell projects apart.
+                        <span className="text-zinc-400"> · org #{p.org_id}</span>
                       ) : null}
                     </div>
                   </div>

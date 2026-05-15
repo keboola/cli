@@ -99,14 +99,35 @@ export function ProjectsPage() {
             },
             {
               header: "Org",
-              cell: (p) =>
-                p.org_name ? (
-                  <span className="text-zinc-700 dark:text-zinc-300">{p.org_name}</span>
-                ) : (
-                  <span className="text-zinc-400" title="Org info unavailable — re-register via `kbagent org setup` to populate.">
+              cell: (p) => {
+                // Org name comes from Manage API (via `org setup`); the
+                // Storage token alone only returns the numeric id. We show
+                // the name when we have it, fall back to "#73" so multi-org
+                // setups are still distinguishable, and only render "—"
+                // when neither is known (very old stacks without
+                // organization in the verify response).
+                if (p.org_name) {
+                  return <span className="text-zinc-700 dark:text-zinc-300">{p.org_name}</span>;
+                }
+                if (p.org_id != null) {
+                  return (
+                    <span
+                      className="text-zinc-500 font-mono"
+                      title={`Organization #${p.org_id}. Name unknown — Storage API only exposes the id. Run \`kbagent org setup --org-id ${p.org_id} --url <stack>\` to populate the name.`}
+                    >
+                      #{p.org_id}
+                    </span>
+                  );
+                }
+                return (
+                  <span
+                    className="text-zinc-400"
+                    title="Org info unavailable — older stacks omit the organization block from /v2/storage/tokens/verify. Use `kbagent org setup` to populate via the Manage API."
+                  >
                     —
                   </span>
-                ),
+                );
+              },
             },
             { header: "Project", cell: (p) => <span>{p.project_name}</span> },
             {

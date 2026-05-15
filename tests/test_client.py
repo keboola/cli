@@ -58,8 +58,15 @@ class TestVerifyToken:
         assert result.org_name is None
         client.close()
 
-    def test_verify_token_extracts_organization(self, httpx_mock) -> None:
-        """When owner.organization is present, org_id and org_name are parsed."""
+    def test_verify_token_extracts_organization_from_top_level(self, httpx_mock) -> None:
+        """Real Keboola Storage API returns ``organization`` at the TOP level
+        of the verify response (NOT nested under ``owner``) and only carries
+        the id as a string. Org name is Manage-API-only.
+
+        Three rounds of broken backfill traced back to reading
+        ``owner.organization`` instead of ``data.organization``; pin the
+        correct shape here so future refactors can't regress.
+        """
         httpx_mock.add_response(
             url="https://connection.keboola.com/v2/storage/tokens/verify",
             json={
@@ -68,8 +75,10 @@ class TestVerifyToken:
                 "owner": {
                     "id": 1234,
                     "name": "Test Project",
-                    "organization": {"id": 438, "name": "Keboola Demo"},
+                    # NB: owner does NOT carry organization on real stacks.
                 },
+                # Top-level org block; id is a string ("73") in real responses.
+                "organization": {"id": "438"},
             },
             status_code=200,
         )
@@ -80,8 +89,37 @@ class TestVerifyToken:
         )
         result = client.verify_token()
 
+        # String "438" must be normalised to int 438 so persisted
+        # ProjectConfig.org_id keeps its declared int type.
         assert result.org_id == 438
-        assert result.org_name == "Keboola Demo"
+        # Storage API never returns org name — only Manage API does. UI
+        # falls back to "#438" until `org setup` fills it in.
+        assert result.org_name is None
+        client.close()
+
+    def test_verify_token_no_organization_block(self, httpx_mock) -> None:
+        """Older stacks omit the top-level ``organization`` key entirely.
+        Both org_id and org_name must come back None — no exception, no
+        crash, just degraded UI.
+        """
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tokens/verify",
+            json={
+                "id": "12345",
+                "description": "tok",
+                "owner": {"id": 1234, "name": "Test Project"},
+            },
+            status_code=200,
+        )
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+        )
+        result = client.verify_token()
+
+        assert result.org_id is None
+        assert result.org_name is None
         client.close()
 
     def test_verify_token_401_error(self, httpx_mock) -> None:
