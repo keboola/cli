@@ -384,6 +384,7 @@ def _allow_static_through_auth(app: FastAPI) -> None:
             "/data-apps",
             "/mcp",
             "/kai",
+            "/ai",
             "/encrypt",
             "/search",
             "/semantic-layer",

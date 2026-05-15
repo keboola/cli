@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from ...constants import AI_SQL_HELPER_TIMEOUT
 from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
@@ -180,10 +181,7 @@ async def improve_sql_stream(
         "cli": body.cli,
         "prompt": meta_prompt,
         "extra_args": body.extra_args,
-        # SQL helper prompts target ~10-30s for a simple SELECT, up to a minute
-        # when the AI has to round-trip INFORMATION_SCHEMA. 180s cap matches
-        # the prompt helper so a stuck CLI doesn't camp on the connection.
-        "timeout": 180.0,
+        "timeout": AI_SQL_HELPER_TIMEOUT,
     }
 
     async def gen() -> AsyncIterator[bytes]:

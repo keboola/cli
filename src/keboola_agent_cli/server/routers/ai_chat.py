@@ -31,6 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from ...constants import AI_CHAT_HELPER_TIMEOUT
 from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/ai", tags=["ai-chat"])
@@ -90,10 +91,7 @@ async def chat_stream(
         "cli": body.cli,
         "prompt": meta_prompt,
         "extra_args": body.extra_args,
-        # Chat answers should resolve in under a minute typically;
-        # 5-minute cap protects against a stuck CLI camping on the SSE
-        # connection. Aligns with the other helper endpoints.
-        "timeout": 300.0,
+        "timeout": AI_CHAT_HELPER_TIMEOUT,
     }
 
     async def gen() -> AsyncIterator[bytes]:
@@ -114,9 +112,11 @@ async def chat_stream(
         try:
             async for evt in stream_ai_agent_events(registry, params):
                 yield _sse(evt["event"], evt["data"])
-        except ValueError as exc:
-            yield _sse("done", {"status": "error", "error": str(exc)})
         except Exception as exc:
+            # Catch-all: both ValueError (bad CLI / empty prompt) and any
+            # unexpected error need to terminate the SSE stream with a
+            # final ``done`` event so the React side doesn't hang on an
+            # unterminated stream. Body shape is identical in both cases.
             yield _sse("done", {"status": "error", "error": str(exc)})
 
     return StreamingResponse(

@@ -104,6 +104,10 @@ a critical failure.
    AI-agent run timeline persistence (cost / token / per-tool summary
    on every persisted `AgentRun` plus `GET /agents/{id}/runs/{run_id}/events`
    for replay) needs 0.40.0+,
+   `POST /ai/chat/stream` (generic Local AI co-pilot chat backed by the
+   user's local claude / codex / gemini CLI; backs the dashboard
+   Local AI tile that replaces Kai for non-master-token projects)
+   needs 0.41.9+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from ...constants import AI_PROMPT_HELPER_TIMEOUT
 from ..agent_runner import (
     compute_next_run,
     run_task_once,
@@ -525,9 +526,7 @@ async def improve_prompt_stream(
         "cli": body.cli,
         "prompt": meta_prompt,
         "extra_args": body.extra_args,
-        # Helper prompts should finish in <60s; cap aggressively so a stuck
-        # CLI doesn't hold the SSE connection for the default 10 minutes.
-        "timeout": 180.0,
+        "timeout": AI_PROMPT_HELPER_TIMEOUT,
     }
 
     async def gen() -> AsyncIterator[bytes]:
