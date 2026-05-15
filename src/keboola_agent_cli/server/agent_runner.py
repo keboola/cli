@@ -301,24 +301,33 @@ USER'S GOAL (plain English):
 
 {backend_hint}
 
-LINKED BUCKETS (cross-project, CRITICAL for correctness):
-- A workspace mounts ONLY the project's own database/dataset by default.
-  Linked buckets (shared from another project) live in a DIFFERENT database
-  on Snowflake or a different GCP project on BigQuery. Querying them with
-  just `"in.c-foo"."table"` will fail with "table not found".
-- ALWAYS call `kbagent storage bucket-detail --project {project} --bucket-id <id>`
-  for EVERY bucket you reference, and use the returned `sql_path` field —
-  it's pre-quoted for the bucket's backend (e.g. Snowflake linked:
-  `"KBC_USE4_340"."out.c-out_bamboohr"."employee_snapshot"`).
-- The `--linked` / "Linked From" annotation in `storage buckets` output
-  tells you the bucket is cross-project. If unsure, run `bucket-detail`
-  anyway — it's idempotent and cheap.
+MANDATORY FIRST STEP — resolve every bucket FQN (cross-project hazard):
+- A workspace mounts ONLY the project's own database / dataset. Linked
+  buckets (shared from another project) live in a DIFFERENT Snowflake
+  database OR a different GCP project on BigQuery. Writing the obvious
+  `"in.c-foo"."table"` against a linked bucket WILL fail with
+  "Schema 'KBC_USE4_<workspace_project>.\"in.c-foo\"' does not exist".
+- BEFORE you write a single line of SQL, for EVERY bucket in the VISIBLE
+  BUCKETS list above that you intend to reference, run:
+      kbagent storage bucket-detail --project {project} --bucket-id <id>
+  Read the `sql_path` field on the table you need and use it VERBATIM.
+  The path is already correctly quoted for the bucket's backend, e.g.
+  Snowflake linked → `"KBC_USE4_340"."out.c-out_bamboohr"."employee_snapshot"`.
+- This step is NOT optional even if you "already know the columns" from
+  `table-detail` — `table-detail` gives you column names, NOT the
+  correct database. Skipping `bucket-detail` is the single most common
+  cause of broken queries in this helper. Always run it. It is cheap
+  and idempotent.
+- Workflow order, no exceptions:
+    1. `bucket-detail` for each bucket you reference → record `sql_path`.
+    2. `table-detail` (or an INFORMATION_SCHEMA query) for column names.
+    3. ONLY THEN write the SQL, using the recorded `sql_path` values.
 
-DISCOVERY (do this BEFORE guessing column names):
-- Use `kbagent workspace query --project {project} --workspace-id <id> --sql '...'`
-  with an INFORMATION_SCHEMA query to confirm table + column names exist.
+COLUMN DISCOVERY (after step 1 above):
+- `kbagent workspace query --project {project} --workspace-id <id> --sql '...'`
+  with an INFORMATION_SCHEMA query confirms table + column names exist.
 - Alternative: `kbagent storage table-detail --project {project} --table-id <id>`
-  returns the full column list for a Storage table without spinning up a query.
+  returns the full column list for a Storage table without a query roundtrip.
 {serve_hint}
 
 REQUIREMENTS for the returned SQL:

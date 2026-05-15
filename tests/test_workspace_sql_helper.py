@@ -201,13 +201,14 @@ class TestBuildSqlHelperMetaPrompt:
         assert "Table not found" in prompt
         assert "query body empty" in prompt
 
-    def test_linked_bucket_warning_present(self) -> None:
-        """Without explicit linked-bucket guidance the AI generates SQL like
-        ``"in.c-shared"."table"`` for linked buckets, which silently fails
-        with "table not found" at run time. The meta-prompt forces the AI
-        to call ``bucket-detail`` and use the returned ``sql_path`` so
-        cross-project paths come out correct (e.g. Snowflake's
-        ``"KBC_USE4_340"."out.c-shared"."t"``).
+    def test_linked_bucket_mandatory_first_step_present(self) -> None:
+        """The single biggest source of broken SQL from this helper has been
+        the AI calling `table-detail` (column info) but skipping
+        `bucket-detail` (FQN info) on linked buckets, then guessing the
+        workspace project's database. The prompt makes `bucket-detail`
+        a MANDATORY FIRST step with the explicit failure mode spelled
+        out — verbal pressure is the cheapest mitigation, paired with
+        the runtime fix-mode loop for when the AI still ignores it.
         """
         prompt = build_sql_helper_meta_prompt(
             goal="g",
@@ -215,9 +216,17 @@ class TestBuildSqlHelperMetaPrompt:
             backend="snowflake",
             schema="s",
         )
-        assert "LINKED BUCKETS" in prompt
+        # Section header signals "do this before SQL", not just "be aware of".
+        assert "MANDATORY FIRST STEP" in prompt
         assert "kbagent storage bucket-detail" in prompt
         assert "sql_path" in prompt
+        # The specific failure mode the user hit must be quoted so the AI
+        # recognises the pattern when fix-mode hands back a 'Schema does
+        # not exist' error.
+        assert "Schema 'KBC_USE4_" in prompt
+        # Explicit "table-detail is NOT a substitute" beats AI's tendency
+        # to skip steps once it thinks it has enough info.
+        assert "`table-detail` gives you column names, NOT the" in prompt
 
 
 # ---------------------------------------------------------------------
