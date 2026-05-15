@@ -48,6 +48,7 @@ from .routers import (
     projects,
     schedules,
     search,
+    semantic_layer,
     sharing,
     storage,
     workspaces,
@@ -221,6 +222,7 @@ def create_app(
     app.include_router(kai.router)
     app.include_router(encrypt.router)
     app.include_router(search.router)
+    app.include_router(semantic_layer.router)
     app.include_router(org.router)
     app.include_router(agents.router)
 
@@ -382,6 +384,7 @@ def _allow_static_through_auth(app: FastAPI) -> None:
             "/kai",
             "/encrypt",
             "/search",
+            "/semantic-layer",
             "/org",
             "/agents",
             "/members",

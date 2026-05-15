@@ -82,6 +82,20 @@ a critical failure.
    `data-app *` JSON output uses key `app_id` (was bare `id`) on 0.33.0+
    -- pipe with `jq -r '.apps[].app_id'`, not `'.id'`,
    `config new --push` (one-shot remote create) needs 0.33.0+,
+   `semantic-layer` command group needs 0.41.0+:
+     - model lifecycle: `model list / create / delete`
+     - read: `show`, `validate [--deep]`, `export`, `diff`
+     - write: `add metric|dataset|relationship|constraint|glossary`,
+       `edit metric|dataset|constraint|relationship|glossary`,
+       `import`, `promote`, `build`, `token --encrypt`
+     - destructive: `remove metric|dataset|constraint|relationship|glossary`
+     - alias: `kbagent sl ...` is hidden-equivalent to
+       `kbagent semantic-layer ...`
+     - `semantic-layer build` falls back to a deterministic heuristic
+       (one dataset + one COUNT(*) metric + one glossary entry per
+       table) until an AI Service JSON-generation endpoint exists;
+       this is a BEHAVIOR note, not a version gate -- the heuristic
+       is the only path on 0.41.0,
    `kbagent http get/post/patch/delete <PATH>` (self-call against the
    running serve from a scheduled-agent subprocess; reads
    `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` env vars) needs 0.40.0+,
@@ -157,6 +171,17 @@ a critical failure.
 | Call the running `kbagent serve` from a scheduled-agent subprocess | `kbagent http get/post/patch/delete <PATH>` (0.40.0+) -- uses `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` env vars auto-injected by the scheduler. `kbagent http get /openapi.json` to discover endpoints. Treats the live serve as source-of-truth (no stale local config) | forking `kbagent <command>` (also fine -- `KBAGENT_CONFIG_DIR` is propagated so the spawned CLI sees the SAME config the serve uses; no more "I'm in the wrong directory" surprises) | `curl $KBAGENT_SERVE_URL/...` by hand (works, but `kbagent http` adds auth header automatically, structured error mapping, and JSON-mode formatting) |
 | Launch the web UI for an end-user (browser dashboard, no Node BFF) | `kbagent serve --ui [--port PORT] [--ui-dist PATH]` (0.40.0+) -- single-process FastAPI mounts the bundled React SPA at `/`, sets an HttpOnly `kbagent_session` cookie on `GET /` so the browser is auto-authenticated. EventSource SSE works via the same cookie -- no token in URL, JS heap, or access log. Requires the bundled wheel (Node 20+ on the install host) OR `make web-build` from a checkout. CORS origins customisable via `--cors-origin` | `kbagent serve` (plain API) + Vite dev server + Node BFF -- the legacy three-process flow with hot reload, see `web/README.md` "Dev mode" section | inventing a `--token-in-url` flag; running uvicorn directly against `web.frontend.dist` -- the path-rewrite middleware + cookie bootstrap only fire from `kbagent serve --ui` |
 | Schedule / manage Agent Tasks (cron, manual, chained) inside `kbagent serve` | `kbagent http <verb> /agents...` (0.40.0+) -- list `GET /agents`, create `POST /agents`, update `PATCH /agents/{id}`, run-on-demand `POST /agents/{id}/run`, run history `GET /agents/{id}/runs`, replay events `GET /agents/{id}/runs/{run_id}/events`. Three action flavours: `mcp_tool` / `cli_command` / `ai_agent`. **See [agent-tasks-workflow](../skills/kbagent/references/agent-tasks-workflow.md) for full payload schemas and chained-trigger setup** | Web UI sidebar "Agent Tasks" -- preferred for human authoring; UI calls the same REST endpoints | hand-editing `~/.config/keboola-agent-cli/agents.json` (no schema validation, no scheduler reload, easy to break the cron loop) |
+| List models / metrics / entities in a semantic-layer model | `kbagent --json semantic-layer show --project P [--model M] [--type metric\|dataset\|relationship\|constraint\|glossary]` (0.41.0+); `kbagent --json semantic-layer model list --project P` to enumerate models when --model is ambiguous | `kbagent --json tool call get_semantic_layer_*` if the MCP exposes a read tool (none in the kbagent MCP at v0.41.0) | hand-rolled `urllib`/`httpx` loops against `metastore.*.keboola.com` (the `sl-builder` skill's old approach -- bypasses retry/backoff and the kbagent error envelope) |
+| Validate a semantic-layer model (phantom fields, constraint orphans, AGG-on-STRING) | `kbagent --json semantic-layer validate --project P [--model M] [--deep]` (0.41.0+) -- basic = local structural checks (duplicates, dangling refs, sum-on-pct, constraint orphans, severity-suffix); `--deep` adds parallel Snowflake column-existence probes via the in-process StorageService | hand-coded list+filter Python that re-implements the structural checks (loses the `--deep` Snowflake probe) | running validation by spinning up a workspace and SELECT * FROM every dataset (slow, requires workspace creation, no constraint-orphan detection) |
+| Snapshot a semantic-layer model to disk (before destructive edits) | `kbagent semantic-layer export --project P [--model M] [--output PATH]` (0.41.0+) -- self-describing JSON, default `./sl_export_{model_name}_{YYYYMMDD_HHMMSS}.json` | `kbagent --json semantic-layer show --project P` and pipe to a file (NOT a clean snapshot -- missing model metadata, no schemaVersion, no round-trip guarantee) | -- |
+| Diff a dev model against prod / against a snapshot | `kbagent --json semantic-layer diff --project-a dev --project-b prod` (project<->project); swap one side for `--file-a` / `--file-b` to diff against a snapshot (0.41.0+) | export both, run `diff` / `jq` on the JSON manually (no per-type added/removed/changed grouping, no `diff_keys`) | -- |
+| Add a metric / dataset / relationship / constraint / glossary to a model | `kbagent semantic-layer add metric\|dataset\|relationship\|constraint\|glossary --project P [--model M] ...` (0.41.0+) -- five sub-subcommands. For datasets, FQN is auto-derived from `--table-id`; `--deep-fields` synthesises role-classified `fields[]`. For constraints, `--rule` is a **STRING expression** (e.g. `"value >= 0"`), name regex `^[a-z][a-z0-9_]*$`, severity ∈ `error\|warning\|info` (3-level API enum -- the 4-band health convention lives in the NAME suffix `_critical\|_warning\|_healthy\|_review`) | -- | raw `POST metastore.*.keboola.com/v1/api/...` calls inside the `sl-builder` skill (bypasses the duplicate-name 500-to-ALREADY_EXISTS normalization and the constraint-shape validators) |
+| Rename a metric safely (cascade through constraints) | `kbagent semantic-layer edit metric --project P [--model M] --name OLD --new-name NEW` (0.41.0+) -- DELETE+POST with rollback; cascades through every constraint whose `metrics[]` includes the old name (DELETE old + POST new with updated metrics[]); prints the old/new CODE_METRIC value so the operator can audit downstream SQL joins; `--yes` to skip confirm | manual `remove metric` + `add metric` with no cascade (orphans every constraint that referenced the metric, silently breaks `DIM_METRIC_THRESHOLD`) | editing the metric via `tool call update_config` against the metastore (no PATCH on the metastore -- only DELETE+POST works, and rolls back on POST failure only via kbagent) |
+| Remove a metric (with orphan-check) | `kbagent semantic-layer remove metric --project P [--model M] --name N [--yes]` (0.41.0+) -- pre-deletion scan lists constraints that would become orphaned; warning is always printed (even with `--yes`); non-TTY without `--yes` refuses with exit 2 | `kbagent semantic-layer edit metric --new-name <renamed>_DELETED_<ts>` (soft-delete; keeps the constraint refs valid but pollutes the model) | raw `DELETE` against the metastore (skips the orphan warning -- the constraint pointing at the deleted metric stays but creates a dangling FK in `DIM_METRIC_THRESHOLD` downstream) |
+| Restore a model from a snapshot (after accidental destructive edit) | `kbagent semantic-layer import --project P --file PATH --dry-run` to preview classifications, then re-run without `--dry-run` (0.41.0+); default skip-on-conflict, add `--overwrite` to DELETE+POST conflicting items; dependency-ordered push (datasets -> metrics -> relationships -> glossary -> constraints) | `semantic-layer promote --from-project source` if you still have the source project handy (uses the same write loop but without snapshot indirection) | replaying the snapshot via a shell loop of `add` subcommands (loses the conflict-classification step and the dependency-ordered push) |
+| Promote a model dev -> prod (cross-project copy) | `kbagent --json semantic-layer promote --from-project dev --to-project prod --dry-run` (0.41.0+) to classify NEW/IDENTICAL/CHANGED, review the `changes[]` and `failed[]` lists, then re-run without `--dry-run`; deep-equality strips modelUUID + timestamps; **NEVER deletes target items absent from source** (additive + overwrite only) | `semantic-layer export` from source + `semantic-layer import --overwrite` into target (two-step -- equivalent end state but you lose the IDENTICAL classification) | hand-rolled cross-project copy via raw metastore calls (no modelUUID rewrite -- the target ends up with foreign UUIDs and validation fails downstream) |
+| Bootstrap a model from a set of storage tables | `kbagent semantic-layer build --project P --tables T1,T2,... [--dry-run]` (0.41.0+) -- **HEURISTIC fallback only** (no AI Service JSON endpoint as of v0.41.0): synthesises one dataset + one COUNT(*) metric + one glossary entry per table; FQN derived; fields[] role-classified. Response carries `fallback_used: "heuristic"`. Use as a SCAFFOLD, then refine via `add` / `edit` | the `sl-build` skill in `04_AI_Kit/ai-kit` -- full AI-assisted greenfield wizard, schema discovery + SQL analysis + AI generation. Use this when you need richer metrics, relationships, and constraint shapes than the heuristic produces | hand-writing the model JSON from scratch (the `build` heuristic gets you 80% of the way for read-mostly star schemas; only fall back to manual when the heuristic refuses or you need something the skill produces) |
+| Encrypt the storage token for a transformation `user_properties` (so a Python container can reach the metastore) | `kbagent semantic-layer token --encrypt --project P --component-id C` (0.41.0+) -- builds `{"#metastore_token": <token>}` from the project's already-stored Storage token and delegates to the existing EncryptService; output is the encrypted envelope ready to paste into the transformation's `user_properties` block | `kbagent encrypt values --project P --component-id C --input '{"#metastore_token": "<plaintext>"}'` (works but the operator has to manually fetch the token first -- the wrapper avoids that step) | hand-running the Encryption API and pasting plaintext into `user_properties` (no `#` prefix means it sits in the config in plaintext) |
 
 If the table does not cover the user's task, **ask clarifying
 questions** instead of guessing. Returning a targeted question is a
@@ -437,6 +462,32 @@ success, not a failure.
   in stderr, that is the expected default; tell the user to add
   `--allow-env-manage-token` to their invocation, never strip the
   warning by suppressing stderr.
+
+- **Semantic-layer gotchas (since v0.41.0)** — five behavior contracts
+  worth committing to memory before touching `semantic-layer add/edit/
+  remove`. Full prose lives in
+  [`gotchas.md` § Semantic-layer](../skills/kbagent/references/gotchas.md);
+  the short form:
+  - **Constraint `rule` is a STRING**, never `{bounds: {min, max}}`. The
+    sl-builder skill docs are wrong on this. kbagent enforces it.
+  - **Constraint `name` regex `^[a-z][a-z0-9_]*$`** + the 3-vs-4
+    severity split: API `severity` is `error | warning | info` (3-level);
+    the 4-band health (`_critical / _warning / _healthy / _review`)
+    lives in the NAME SUFFIX, not on the API.
+  - **`edit metric --new-name` cascades through every constraint** whose
+    `metrics[]` referenced the old name, and prints the old/new
+    CODE_METRIC value. Downstream SQL joining on CODE_METRIC will break
+    silently — surface the change to the operator.
+  - **`remove metric` orphans constraints** that reference it. The
+    pre-deletion scan ALWAYS prints the warning (even with `--yes`);
+    non-TTY without `--yes` exits 2. Recommended: drop/rewrite the
+    constraints first, then remove the metric.
+  - **`build` is a HEURISTIC fallback**, not full AI: one dataset +
+    one COUNT(*) metric + one glossary entry per table. Response carries
+    `fallback_used: "heuristic"`. Treat the output as a scaffold and
+    follow up with `add metric`, `add relationship`, `add constraint`.
+    The full AI wizard lives in the `sl-build` skill under
+    `04_AI_Kit/ai-kit/`.
 
 ---
 

@@ -312,18 +312,39 @@ class TestOperationRegistryCompleteness:
 
         click_app = typer.main.get_command(cli_module.app)
 
-        missing = []
+        missing: list[str] = []
+
+        def _walk(prefix: str, group: object) -> None:
+            """Recurse into Click sub-apps, building dotted operation keys.
+
+            Each leaf must be covered by EITHER its own entry
+            (``semantic-layer.model.list``) OR a parent prefix entry
+            (``semantic-layer.add`` covers ``add metric/dataset/...``). The
+            parent-prefix form is correct only when every leaf shares the
+            same risk classification.
+            """
+            cmds = getattr(group, "commands", None)
+            if not cmds:
+                # Leaf command — accept either its own key or any ancestor.
+                if prefix in OPERATION_REGISTRY:
+                    return
+                parts = prefix.split(".")
+                for i in range(len(parts) - 1, 0, -1):
+                    if ".".join(parts[:i]) in OPERATION_REGISTRY:
+                        return
+                missing.append(prefix)
+                return
+            for cmd_name, cmd in cmds.items():
+                # Skip hidden aliases (e.g. `sl` for `semantic-layer`).
+                if getattr(cmd, "hidden", False):
+                    continue
+                op = f"{prefix}.{cmd_name}" if prefix else cmd_name
+                _walk(op, cmd)
+
         for group_name, group_cmd in click_app.commands.items():
-            if hasattr(group_cmd, "commands"):
-                # It's a sub-app (Click Group)
-                for cmd_name in group_cmd.commands:
-                    op = f"{group_name}.{cmd_name}"
-                    if op not in OPERATION_REGISTRY:
-                        missing.append(op)
-            else:
-                # Top-level command
-                if group_name not in OPERATION_REGISTRY:
-                    missing.append(group_name)
+            if getattr(group_cmd, "hidden", False):
+                continue
+            _walk(group_name, group_cmd)
 
         assert missing == [], (
             f"Commands missing from OPERATION_REGISTRY: {missing}. "

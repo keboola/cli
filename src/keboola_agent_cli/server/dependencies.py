@@ -32,6 +32,7 @@ from ..services.project_service import ProjectService
 from ..services.repo_validate_service import RepoValidateService
 from ..services.schedule_service import ScheduleService
 from ..services.search_service import SearchService
+from ..services.semantic_layer_service import SemanticLayerService
 from ..services.sharing_service import SharingService
 from ..services.storage_service import StorageService
 from ..services.sync_service import SyncService
@@ -68,6 +69,7 @@ class ServiceRegistry:
     deep_lineage: DeepLineageService = field(init=False)
     sharing: SharingService = field(init=False)
     data_app: DataAppService = field(init=False)
+    semantic_layer: SemanticLayerService = field(init=False)
     repo_validate: RepoValidateService = field(init=False)
     mcp: McpService = field(init=False)
     kai: KaiService = field(init=False)
@@ -95,6 +97,10 @@ class ServiceRegistry:
         self.deep_lineage = DeepLineageService(config_store=cs)
         self.sharing = SharingService(config_store=cs)
         self.data_app = DataAppService(config_store=cs)
+        # SemanticLayerService takes both a storage client_factory (for
+        # validate --deep + add dataset --deep-fields + build) and an
+        # optional metastore_client_factory; the defaults work for both.
+        self.semantic_layer = SemanticLayerService(config_store=cs)
         self.repo_validate = RepoValidateService(config_store=cs)
         self.mcp = McpService(config_store=cs)
         self.kai = KaiService(config_store=cs)

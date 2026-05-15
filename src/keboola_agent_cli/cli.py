@@ -26,6 +26,7 @@ from .commands.project import project_app
 from .commands.repl import repl_command
 from .commands.schedule import schedule_app
 from .commands.search import search_command
+from .commands.semantic_layer import semantic_layer_app
 from .commands.serve import serve_command
 from .commands.sharing import sharing_app
 from .commands.storage import storage_app
@@ -58,6 +59,7 @@ from .services.project_service import ProjectService
 from .services.repo_validate_service import RepoValidateService
 from .services.schedule_service import ScheduleService
 from .services.search_service import SearchService
+from .services.semantic_layer_service import SemanticLayerService
 from .services.sharing_service import SharingService
 from .services.storage_service import StorageService
 from .services.sync_service import SyncService
@@ -117,6 +119,8 @@ app.add_typer(workspace_app, name="workspace", rich_help_panel=_DEV)
 app.add_typer(tool_app, name="tool", rich_help_panel=_DEV)
 app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
 app.add_typer(encrypt_app, name="encrypt", rich_help_panel=_DEV)
+app.add_typer(semantic_layer_app, name="semantic-layer", rich_help_panel=_DEV)
+app.add_typer(semantic_layer_app, name="sl", rich_help_panel=_DEV, hidden=True)
 app.add_typer(http_app, name="http", rich_help_panel=_DEV)
 
 
@@ -330,6 +334,7 @@ def main(
     schedule_service = ScheduleService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
     data_app_service = DataAppService(config_store=config_store)
+    semantic_layer_service = SemanticLayerService(config_store=config_store)
     repo_validate_service = RepoValidateService(config_store=config_store)
     kai_service = KaiService(config_store=config_store)
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
@@ -388,6 +393,7 @@ def main(
     ctx.obj["schedule_service"] = schedule_service
     ctx.obj["workspace_service"] = workspace_service
     ctx.obj["data_app_service"] = data_app_service
+    ctx.obj["semantic_layer_service"] = semantic_layer_service
     ctx.obj["repo_validate_service"] = repo_validate_service
     ctx.obj["kai_service"] = kai_service
     ctx.obj["doctor_service"] = doctor_service
