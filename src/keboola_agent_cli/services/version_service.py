@@ -7,6 +7,7 @@ from the locally installed binary or Python distribution; the latest
 version is resolved from PyPI.
 """
 
+import importlib.util
 import logging
 import re
 import shutil
@@ -36,6 +37,73 @@ MCP_BINARY_NAME = "keboola_mcp_server"
 def _is_uvx_available() -> bool:
     """Check if uvx is available on PATH."""
     return shutil.which("uvx") is not None
+
+
+def has_server_extras() -> bool:
+    """Detect whether the current install was created with ``[server]`` extras.
+
+    The detection probe is ``importlib.util.find_spec('fastapi')``: FastAPI
+    is pulled in *only* by the optional ``[server]`` extra (declared in
+    ``pyproject.toml``'s ``[project.optional-dependencies]`` table), so its
+    presence is a reliable proxy for "user originally installed with
+    ``--with 'keboola-agent-cli[server]'``".
+
+    Used by every kbagent self-upgrade path (``kbagent update`` and the
+    startup auto-update hook) to decide whether to pair ``uv tool install``
+    with ``--with 'keboola-agent-cli[server]'`` -- without that flag, the
+    fresh re-resolution silently drops the FastAPI + uvicorn extras and
+    breaks ``kbagent serve --ui`` for users who originally installed with
+    ``[server]``. (Bug fixed in v0.40.2 for the explicit ``kbagent update``
+    path; extended to the startup auto-update hook in v0.41.1.)
+    """
+    return importlib.util.find_spec("fastapi") is not None
+
+
+def build_kbagent_upgrade_command() -> list[str] | None:
+    """Build the argv command to upgrade kbagent in-place.
+
+    Used by both ``kbagent update`` (explicit) and the startup
+    auto-update hook so the two paths stay byte-for-byte consistent --
+    in particular, both preserve the optional ``[server]`` extras when
+    they were originally installed.
+
+    Returns:
+        Command list ready for :func:`subprocess.run`, or ``None`` if
+        neither ``uv`` nor ``pip`` is on ``PATH`` (in which case the
+        caller surfaces a manual-install hint).
+    """
+    has_server = has_server_extras()
+    uv_path = shutil.which("uv")
+    if uv_path:
+        if has_server:
+            # We pair ``--with`` with ``--force`` (rather than
+            # ``--upgrade``) because ``uv tool install`` rejects
+            # ``--upgrade`` together with ``--with`` when the additional
+            # spec resolves to a different version than the existing
+            # tool environment -- ``--force`` is uv's documented way to
+            # reapply both in one shot.
+            return [
+                uv_path,
+                "tool",
+                "install",
+                "--force",
+                "--with",
+                "keboola-agent-cli[server]",
+                KBAGENT_INSTALL_SOURCE,
+            ]
+        return [uv_path, "tool", "install", "--upgrade", KBAGENT_INSTALL_SOURCE]
+    pip_path = shutil.which("pip")
+    if pip_path is None:
+        return None
+    # pip extras syntax: the [server] suffix attaches to the project
+    # name in the PEP 508 spec; for git+ URLs we wrap with the project
+    # name on the left of the URL.
+    install_spec = (
+        f"keboola-agent-cli[server] @ {KBAGENT_INSTALL_SOURCE}"
+        if has_server
+        else KBAGENT_INSTALL_SOURCE
+    )
+    return [pip_path, "install", "--upgrade", install_spec]
 
 
 def _get_local_mcp_version(timeout: float = MCP_PROBE_TIMEOUT) -> str | None:
@@ -430,6 +498,28 @@ class VersionService:
         mcp_up_to_date = _is_up_to_date(mcp_local, mcp_latest)
         mcp_method = _detect_mcp_install_method()
 
+        # Persist the freshly-fetched versions to the auto-update cache so
+        # the next ``kbagent <anything>`` startup hook sees them instead of
+        # a stale TTL'd entry. Before v0.41.1 this method bypassed the
+        # cache entirely, which meant ``kbagent version`` would show
+        # ``v0.41.0 available`` while a follow-up ``kbagent serve --ui`` on
+        # the same machine still auto-updated to whatever stale version
+        # the cache held (e.g. 0.40.3). Lazy-imported to avoid a circular
+        # import: ``auto_update`` imports from this module at module load.
+        try:
+            from ..auto_update import _write_cache
+
+            _write_cache(
+                latest_version=kbagent_latest,
+                mcp_latest_version=mcp_latest,
+                mcp_install_method=mcp_method,
+            )
+        except Exception:
+            # Cache write is best-effort; never fail the version command
+            # because the cache could not be persisted (read-only HOME,
+            # disk full, permission error, etc.).
+            logger.debug("Could not persist version cache", exc_info=True)
+
         # Map install method to the upgrade command shown to users. Must
         # match what `_perform_mcp_update` actually runs internally -- since
         # v0.30.3 the uvx path promotes to `uv tool install --upgrade`
@@ -542,26 +632,6 @@ class VersionService:
         return " | ".join(parts)
 
     @staticmethod
-    def _has_server_extras() -> bool:
-        """Detect whether the current install was created with ``[server]`` extras.
-
-        The detection probe is ``importlib.util.find_spec('fastapi')``: FastAPI
-        is pulled in *only* by the optional ``[server]`` extra (declared in
-        ``pyproject.toml``'s ``[project.optional-dependencies]`` table), so its
-        presence is a reliable proxy for "user originally installed with
-        ``--with 'keboola-agent-cli[server]'``".
-
-        Without this check, ``uv tool install --upgrade git+...`` re-resolves
-        the tool environment from scratch and drops anything the original
-        ``--with`` introduced -- which is how a user who ran ``kbagent serve
-        --ui`` happily yesterday gets ``ModuleNotFoundError: No module named
-        'fastapi'`` after an auto-update today.
-        """
-        import importlib.util
-
-        return importlib.util.find_spec("fastapi") is not None
-
-    @staticmethod
     def _update_kbagent() -> dict[str, Any]:
         """Run the kbagent self-upgrade subprocess (or short-circuit)."""
         old_version = __version__
@@ -576,52 +646,19 @@ class VersionService:
                 "message": f"kbagent v{old_version} is already up to date.",
             }
 
-        # Preserve [server] extras across upgrades. ``uv tool install --upgrade``
-        # re-resolves the tool environment from the source spec alone, so unless
-        # ``--with 'keboola-agent-cli[server]'`` is passed each time, the FastAPI
-        # + uvicorn extras the user originally installed get silently dropped.
-        # We pair ``--with`` with ``--force`` (rather than ``--upgrade``) because
-        # ``uv tool install`` rejects ``--upgrade`` together with ``--with`` when
-        # the additional spec resolves to a different version than the existing
-        # tool environment -- ``--force`` is the documented way to reapply both.
-        has_server = VersionService._has_server_extras()
-        uv_path = shutil.which("uv")
-        if uv_path:
-            if has_server:
-                cmd = [
-                    uv_path,
-                    "tool",
-                    "install",
-                    "--force",
-                    "--with",
-                    "keboola-agent-cli[server]",
-                    KBAGENT_INSTALL_SOURCE,
-                ]
-            else:
-                cmd = [uv_path, "tool", "install", "--upgrade", KBAGENT_INSTALL_SOURCE]
-        else:
-            pip_path = shutil.which("pip")
-            if pip_path is None:
-                with_flag = "--with 'keboola-agent-cli[server]' " if has_server else ""
-                return {
-                    "updated": False,
-                    "current_version": old_version,
-                    "latest_version": kbagent_latest,
-                    "message": (
-                        "Neither 'uv' nor 'pip' found on PATH. "
-                        f"Install manually: uv tool install --upgrade {with_flag}"
-                        f"{KBAGENT_INSTALL_SOURCE}"
-                    ),
-                }
-            # pip extras syntax: the [server] suffix attaches to the project
-            # name in the PEP 508 spec; for git+ URLs we wrap with the project
-            # name on the left of the URL.
-            install_spec = (
-                f"keboola-agent-cli[server] @ {KBAGENT_INSTALL_SOURCE}"
-                if has_server
-                else KBAGENT_INSTALL_SOURCE
-            )
-            cmd = [pip_path, "install", "--upgrade", install_spec]
+        cmd = build_kbagent_upgrade_command()
+        if cmd is None:
+            with_flag = "--with 'keboola-agent-cli[server]' " if has_server_extras() else ""
+            return {
+                "updated": False,
+                "current_version": old_version,
+                "latest_version": kbagent_latest,
+                "message": (
+                    "Neither 'uv' nor 'pip' found on PATH. "
+                    f"Install manually: uv tool install --upgrade {with_flag}"
+                    f"{KBAGENT_INSTALL_SOURCE}"
+                ),
+            }
 
         try:
             result = subprocess.run(

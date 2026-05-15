@@ -26,7 +26,6 @@ from .constants import (
     AUTO_UPDATE_CHECK_INTERVAL,
     ENV_AUTO_UPDATE,
     ENV_SKIP_UPDATE,
-    KBAGENT_INSTALL_SOURCE,
     MCP_UPGRADE_TIMEOUT,
     VERSION_CACHE_FILENAME,
     VERSION_CHECK_TIMEOUT,
@@ -38,6 +37,7 @@ from .services.version_service import (
     _get_local_mcp_version,
     _is_up_to_date,
     _perform_mcp_update,
+    build_kbagent_upgrade_command,
 )
 
 logger = logging.getLogger(__name__)
@@ -224,7 +224,13 @@ def _should_skip() -> bool:
 def _perform_update(latest_version: str) -> bool:
     """Download and install the latest version.
 
-    Tries uv first, falls back to pip.
+    Delegates to :func:`build_kbagent_upgrade_command` so this path stays
+    byte-for-byte consistent with the explicit ``kbagent update`` command --
+    in particular, the optional ``[server]`` extras are preserved when the
+    install probe (``fastapi`` importable) says they were originally there.
+    Prior to v0.41.1 this path ran a bare ``uv tool install --upgrade`` and
+    silently dropped the extras, breaking ``kbagent serve --ui`` for users
+    who got auto-updated on startup.
 
     Args:
         latest_version: The version being updated to (for logging).
@@ -232,14 +238,9 @@ def _perform_update(latest_version: str) -> bool:
     Returns:
         True if the update succeeded, False otherwise.
     """
-    uv_path = shutil.which("uv")
-    if uv_path:
-        cmd = [uv_path, "tool", "install", "--upgrade", KBAGENT_INSTALL_SOURCE]
-    else:
-        pip_path = shutil.which("pip")
-        if pip_path is None:
-            return False
-        cmd = [pip_path, "install", "--upgrade", KBAGENT_INSTALL_SOURCE]
+    cmd = build_kbagent_upgrade_command()
+    if cmd is None:
+        return False
 
     try:
         result = subprocess.run(

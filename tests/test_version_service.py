@@ -191,6 +191,72 @@ class TestVersionService:
         assert mcp_dep["latest_version"] is None
         assert mcp_dep["up_to_date"] is None  # cannot compare without latest
 
+    @patch("keboola_agent_cli.auto_update._write_cache")
+    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
+    @patch("keboola_agent_cli.services.version_service._is_uvx_available")
+    def test_persists_freshly_fetched_versions_to_cache(
+        self,
+        mock_uvx: MagicMock,
+        mock_mcp_latest: MagicMock,
+        mock_kbagent_latest: MagicMock,
+        mock_write_cache: MagicMock,
+    ) -> None:
+        """Bug fix (v0.41.1): ``get_versions()`` must persist the freshly-fetched
+        ``latest_version`` (and MCP fields) to the auto-update cache.
+
+        Before v0.41.1, ``kbagent version`` bypassed the cache entirely. The
+        symptom: ``kbagent version`` would correctly show ``v0.41.0 available``
+        (live fetch from GitHub), but a follow-up ``kbagent serve --ui`` on the
+        same machine would still auto-update to whatever stale value the
+        1-hour-TTL'd cache held (e.g. 0.40.3). Two commands, two different
+        answers to the same question; users got a kbagent older than what
+        their version check claimed was newest.
+        """
+        mock_uvx.return_value = True
+        mock_kbagent_latest.return_value = "9.9.9"
+        mock_mcp_latest.return_value = "1.99.0"
+
+        svc = VersionService()
+        result = svc.get_versions()
+
+        # Verify the cache write actually happened with the new values.
+        mock_write_cache.assert_called_once()
+        call_kwargs = mock_write_cache.call_args.kwargs
+        assert call_kwargs["latest_version"] == "9.9.9"
+        assert call_kwargs["mcp_latest_version"] == "1.99.0"
+        # mcp_install_method is mocked to "uv_tool" by the autouse fixture.
+        assert call_kwargs["mcp_install_method"] == "uv_tool"
+
+        # And the returned dict still has the same values.
+        assert result["kbagent"]["latest_version"] == "9.9.9"
+        assert result["dependencies"][0]["latest_version"] == "1.99.0"
+
+    @patch("keboola_agent_cli.auto_update._write_cache", side_effect=OSError("disk full"))
+    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
+    @patch("keboola_agent_cli.services.version_service._is_uvx_available")
+    def test_cache_write_failure_does_not_break_get_versions(
+        self,
+        mock_uvx: MagicMock,
+        mock_mcp_latest: MagicMock,
+        mock_kbagent_latest: MagicMock,
+        mock_write_cache: MagicMock,
+    ) -> None:
+        """Cache write is best-effort: a write failure must NOT break the
+        version command. The user sees the version info; the cache just
+        won't be refreshed on this run."""
+        mock_uvx.return_value = True
+        mock_kbagent_latest.return_value = "9.9.9"
+        mock_mcp_latest.return_value = "1.99.0"
+
+        svc = VersionService()
+        result = svc.get_versions()  # must NOT raise
+
+        # The result is still well-formed despite the cache write failing.
+        assert result["kbagent"]["latest_version"] == "9.9.9"
+        assert result["dependencies"][0]["latest_version"] == "1.99.0"
+
 
 # ---------------------------------------------------------------------------
 # _get_local_mcp_version (since v0.30.1)
