@@ -188,14 +188,17 @@ def model_delete(
         alias=project,
         model_name_or_uuid=model,
     )
-    formatter.output(
-        result,
-        lambda c, d: c.print(
-            f"[bold green]Deleted model[/bold green] [cyan]{d['deleted']['name']}[/cyan] "
-            f"([dim]{d['deleted']['id']}[/dim]) "
-            f"+ cascaded {sum(d.get('cascade', {}).get('deleted', {}).values())} child(ren)"
-        ),
-    )
+
+    def _render(console: Console, data: dict) -> None:
+        cascaded = sum(data.get("cascade", {}).get("deleted", {}).values())
+        suffix = f" + cascaded {cascaded} child(ren)" if cascaded else ""
+        console.print(
+            f"[bold green]Deleted model[/bold green] "
+            f"[cyan]{data['deleted']['name']}[/cyan] "
+            f"([dim]{data['deleted']['id']}[/dim]){suffix}"
+        )
+
+    formatter.output(result, _render)
 
 
 # ---------------------------------------------------------------------------

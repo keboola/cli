@@ -156,10 +156,18 @@ will be deleted.
   'cascaded count'. Happy-path JSON consumers always saw zeros on this key
   before — the only way to populate it was the bug.
 
+**Deprecation:** `orphaned_children` is deprecated as of v0.41.11 and
+scheduled for **removal in v0.42.0**. Read `cascade.deleted` instead — it
+carries the same per-type counts plus the explicit `attempted` /
+`parent_deleted` / `failures` fields that disambiguate happy-path from
+partial-failure responses. JSON callers should migrate before the 0.42.0
+bump; the field name is the only thing that changes.
+
 **Implication for AI agents / scripts:** Scripts that called `model delete`
 and then assumed they had to teardown children manually can drop that
 follow-up. Scripts that scraped `orphaned_children` to detect the bug now
-see the same zeros they always wanted.
+see the same zeros they always wanted — but should switch to
+`cascade.deleted` ahead of v0.42.0.
 
 ## Web UI `Kai Chat` is gone — replaced by `Local AI` (since v0.41.9)
 

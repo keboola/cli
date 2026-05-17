@@ -649,10 +649,12 @@ class SemanticLayerService(BaseService):
                     except (KeyboardInterrupt, SystemExit):
                         raise
                     except Exception as exc:
-                        # Broad catch matches push_built_model rollback: a
-                        # non-API exception (httpx transport error, etc.)
-                        # must not abort the cascade or mask sibling
-                        # failures. Collect, log at warning level, continue.
+                        # Broad catch mirrors the rollback semantics in
+                        # `_semantic_layer_internals.push_built_model` (the
+                        # prior-art rationale lives there): a non-API
+                        # exception (httpx transport error, etc.) must not
+                        # abort the cascade or mask sibling failures.
+                        # Collect, log at warning level, continue.
                         err = (
                             exc.message
                             if isinstance(exc, KeboolaApiError)
@@ -718,6 +720,10 @@ class SemanticLayerService(BaseService):
             # children. Same shape, opposite meaning — JSON consumers see
             # zeros instead of leaks on the happy path, which is the
             # behavior they always wanted.
+            # DEPRECATED: scheduled for removal in v0.42.0; new callers
+            # should read `cascade.deleted` (plus `cascade.attempted` /
+            # `cascade.parent_deleted` / `cascade.failures` for the
+            # partial-failure path). See changelog 0.41.11 + gotchas.md.
             "orphaned_children": deleted_counts,
         }
 
