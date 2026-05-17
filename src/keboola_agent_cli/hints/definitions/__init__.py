@@ -1,6 +1,7 @@
 """Hint definitions — import all modules to trigger registration."""
 
 from . import (
+    agent,  # noqa: F401
     branch,  # noqa: F401
     component,  # noqa: F401
     config,  # noqa: F401

@@ -92,6 +92,22 @@ OPERATION_REGISTRY: dict[str, str] = {
     "workspace.query": "write",
     "workspace.from-transformation": "write",
     "workspace.gc": "destructive",
+    # Scheduled agent tasks (kbagent agent ...; touches only local
+    # agents.json + spawns subprocesses via the runner).
+    "agent.list": "read",
+    "agent.show": "read",
+    "agent.create": "write",
+    "agent.update": "write",
+    "agent.delete": "destructive",
+    # Run is classified write -- ai_agent/cli_command actions can mutate
+    # external state via subprocesses; deny-writes should block this.
+    "agent.run": "write",
+    "agent.runs": "read",
+    "agent.run-detail": "read",
+    "agent.run-events": "read",
+    "agent.test": "write",
+    "agent.cron-preview": "read",
+    "agent.prompt-improve": "write",
     # MCP tools
     "tool.list": "read",
     "tool.call": "write",

@@ -464,6 +464,24 @@ kbagent http delete PATH [--timeout SECONDS]
 # subprocesses by the scheduler). Use this from inside a scheduled agent
 # task instead of forking another `kbagent` CLI process tree.
 
+kbagent agent list
+kbagent agent show TASK_ID
+kbagent agent create --name NAME [--description D] [--cron CRON] [--manual] [--enabled/--disabled] (--type ai_agent --cli CLI --prompt P [--extra-arg ARG ...] [--timeout SECONDS] | --type cli_command --argv ARG [--argv ARG ...] [--timeout SECONDS] | --type mcp_tool --tool TOOL [--mcp-project ALIAS] [--mcp-branch ID] [--input JSON|@file|-] [--timeout SECONDS] | --from-file PATH|@path|-) [--trigger-task-id ID --trigger-on success|error|always]
+kbagent agent update TASK_ID [--name N] [--description D] [--cron C] [--enabled/--disabled] [--manual/--auto] [--clear-trigger] [--trigger-task-id ID --trigger-on success|error|always]
+kbagent agent delete TASK_ID [--yes]
+kbagent agent run TASK_ID [--stream] [--runtime-prompt TEXT | --runtime-input JSON|@file|-]
+kbagent agent runs TASK_ID [--limit N]
+kbagent agent run-detail TASK_ID RUN_ID
+kbagent agent run-events TASK_ID RUN_ID
+kbagent agent test (--type ai_agent --cli CLI --prompt P | --type cli_command --argv ARG ... | --type mcp_tool --tool T ... | --from-file PATH) [--name N] [--stream] [--timeout SECONDS]
+kbagent agent cron-preview --cron "0 6 * * 1" [--count N]
+kbagent agent prompt-improve --goal "..." [--draft "..."] [--cli claude|codex|gemini] [--project ALIAS] [--extra-arg X ...] [--stream/--no-stream]
+# `agent` reads/writes <config_dir>/agents.json directly (offline-first, no
+# serve required for CRUD + ad-hoc run). The cron loop that fires scheduled
+# tasks still requires `kbagent serve` running. Three action flavours
+# (ai_agent / cli_command / mcp_tool) mirror the /agents REST surface
+# byte-for-byte.
+
 kbagent kai ping [--project NAME]
 kbagent kai preflight [--project NAME]
 kbagent kai ask --message "question" [--project NAME]

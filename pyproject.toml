@@ -1,6 +1,6 @@
 [project]
 name = "keboola-agent-cli"
-version = "0.43.3"
+version = "0.44.0b1"
 description = "AI-friendly CLI for managing Keboola projects"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,6 +20,7 @@ dependencies = [
     "packaging>=23",
     "prompt-toolkit>=3.0",
     "kai-client>=0.11.0",
+    "croniter>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -28,7 +29,6 @@ server = [
     "uvicorn[standard]>=0.30",
     "sse-starlette>=2.1",
     "python-multipart>=0.0.9",
-    "croniter>=2.0",
 ]
 
 [project.scripts]
