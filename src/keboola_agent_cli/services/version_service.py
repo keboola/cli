@@ -59,13 +59,23 @@ def has_server_extras() -> bool:
     return importlib.util.find_spec("fastapi") is not None
 
 
-def build_kbagent_upgrade_command() -> list[str] | None:
+def build_kbagent_upgrade_command(*, prerelease: bool = False) -> list[str] | None:
     """Build the argv command to upgrade kbagent in-place.
 
     Used by both ``kbagent update`` (explicit) and the startup
     auto-update hook so the two paths stay byte-for-byte consistent --
     in particular, both preserve the optional ``[server]`` extras when
     they were originally installed.
+
+    Args:
+        prerelease: When True, opt into pre-release versions (beta / rc).
+            uv gets ``--prerelease=allow`` (resolver-level opt-in for the
+            entire tool environment), pip gets ``--pre`` (the legacy
+            equivalent). Without this flag, both resolvers reject
+            pre-release version strings like ``0.43.0b1`` even if they
+            are the newest available -- the default-deny behaviour we
+            want for cron-driven auto-update so stable users never
+            silently land on a beta release.
 
     Returns:
         Command list ready for :func:`subprocess.run`, or ``None`` if
@@ -82,7 +92,7 @@ def build_kbagent_upgrade_command() -> list[str] | None:
             # spec resolves to a different version than the existing
             # tool environment -- ``--force`` is uv's documented way to
             # reapply both in one shot.
-            return [
+            cmd = [
                 uv_path,
                 "tool",
                 "install",
@@ -91,7 +101,13 @@ def build_kbagent_upgrade_command() -> list[str] | None:
                 "keboola-agent-cli[server]",
                 KBAGENT_INSTALL_SOURCE,
             ]
-        return [uv_path, "tool", "install", "--upgrade", KBAGENT_INSTALL_SOURCE]
+        else:
+            cmd = [uv_path, "tool", "install", "--upgrade", KBAGENT_INSTALL_SOURCE]
+        if prerelease:
+            # Insert before the source spec so uv parses it as a global
+            # resolver flag (not a positional arg).
+            cmd.insert(-1, "--prerelease=allow")
+        return cmd
     pip_path = shutil.which("pip")
     if pip_path is None:
         return None
@@ -103,7 +119,10 @@ def build_kbagent_upgrade_command() -> list[str] | None:
         if has_server
         else KBAGENT_INSTALL_SOURCE
     )
-    return [pip_path, "install", "--upgrade", install_spec]
+    cmd = [pip_path, "install", "--upgrade", install_spec]
+    if prerelease:
+        cmd.insert(2, "--pre")
+    return cmd
 
 
 def _get_local_mcp_version(timeout: float = MCP_PROBE_TIMEOUT) -> str | None:
@@ -394,16 +413,29 @@ def _perform_mcp_update(
         return False, f"subprocess error: {exc}"
 
 
-def _fetch_kbagent_latest_version(timeout: float = VERSION_CHECK_TIMEOUT) -> str | None:
+def _fetch_kbagent_latest_version(
+    timeout: float = VERSION_CHECK_TIMEOUT, *, include_prerelease: bool = False
+) -> str | None:
     """Fetch latest kbagent version from GitHub releases.
 
     Args:
         timeout: HTTP request timeout in seconds.
+        include_prerelease: When False (default), call ``/releases/latest``
+            which GitHub explicitly defines as "the most recent non-prerelease,
+            non-draft release" -- beta tags marked with ``--prerelease`` are
+            skipped automatically by the API. When True, call ``/releases``
+            (full list), discard drafts, and pick the highest version by
+            PEP 440 ordering. This is the opt-in path behind ``kbagent
+            update --beta`` so users explicitly asking for a beta can get
+            ``0.43.0b1`` even when ``0.42.0`` is the stable.
 
     Returns:
-        Version string like '0.16.0', or None on failure.
+        Version string like '0.16.0' (stable) or '0.43.0b1' (beta), or
+        None on failure.
     """
     try:
+        if include_prerelease:
+            return _fetch_kbagent_latest_prerelease(timeout)
         response = httpx.get(
             f"https://api.github.com/repos/{KBAGENT_GITHUB_REPO}/releases/latest",
             timeout=timeout,
@@ -420,6 +452,45 @@ def _fetch_kbagent_latest_version(timeout: float = VERSION_CHECK_TIMEOUT) -> str
     except (httpx.HTTPError, KeyError, ValueError):
         logger.debug("Failed to fetch latest kbagent version", exc_info=True)
         return None
+
+
+def _fetch_kbagent_latest_prerelease(timeout: float) -> str | None:
+    """Fetch the highest non-draft release (incl. pre-release) from GitHub.
+
+    Pulls up to 30 most recent releases (the API's default page size, plenty
+    for kbagent's release cadence), filters drafts, parses every tag through
+    :class:`packaging.version.Version`, and returns the maximum by PEP 440
+    ordering. Pre-release detection relies on ``Version.is_prerelease`` --
+    PEP 440 normalises ``v0.43.0-beta.1`` and ``0.43.0b1`` to the same
+    canonical form, so the function works for either tag style.
+
+    Returns:
+        Highest-by-version tag (stable OR pre-release), normalised to PEP 440
+        canonical form (e.g. ``"0.43.0b1"``). None on HTTP / parse failure.
+    """
+    response = httpx.get(
+        f"https://api.github.com/repos/{KBAGENT_GITHUB_REPO}/releases",
+        timeout=timeout,
+        follow_redirects=True,
+        headers={"Accept": "application/vnd.github.v3+json"},
+        params={"per_page": 30},
+    )
+    response.raise_for_status()
+    releases = response.json()
+    if not isinstance(releases, list):
+        return None
+    best: Version | None = None
+    for entry in releases:
+        if not isinstance(entry, dict) or entry.get("draft"):
+            continue
+        tag = str(entry.get("tag_name", "")).lstrip("v")
+        try:
+            parsed = Version(tag)
+        except InvalidVersion:
+            continue
+        if best is None or parsed > best:
+            best = parsed
+    return str(best) if best is not None else None
 
 
 def _fetch_mcp_latest_version(timeout: float = VERSION_CHECK_TIMEOUT) -> str | None:
@@ -473,7 +544,7 @@ class VersionService:
     keboola-mcp-server updates.
     """
 
-    def get_versions(self) -> dict[str, Any]:
+    def get_versions(self, *, include_prerelease: bool = False) -> dict[str, Any]:
         """Get version information for kbagent and its dependency.
 
         Both ``kbagent`` and ``keboola-mcp-server`` are auto-updated on
@@ -487,10 +558,17 @@ class VersionService:
         - the install method for MCP (drives which upgrade command runs),
         - the upgrade command shown to the user.
 
+        Args:
+            include_prerelease: When True, ``latest_version`` for kbagent
+                reflects the newest pre-release (beta / rc) if one is more
+                recent than the latest stable; surfaces what ``kbagent
+                update --beta`` would install. MCP's PyPI lookup is not
+                gated (MCP releases do not currently use pre-release tags).
+
         Returns:
             Structured dict with kbagent + MCP version info.
         """
-        kbagent_latest = _fetch_kbagent_latest_version()
+        kbagent_latest = _fetch_kbagent_latest_version(include_prerelease=include_prerelease)
         kbagent_up_to_date = _is_up_to_date(__version__, kbagent_latest)
 
         mcp_local = _get_local_mcp_version()
@@ -559,7 +637,7 @@ class VersionService:
             ],
         }
 
-    def self_update(self) -> dict[str, Any]:
+    def self_update(self, *, include_prerelease: bool = False) -> dict[str, Any]:
         """Update kbagent + keboola-mcp-server to the latest versions.
 
         Two-stage flow (both stages always run -- kbagent up-to-date does
@@ -577,6 +655,14 @@ class VersionService:
            install on first run) the stage still attempts the upgrade --
            a refreshed cache is the desired outcome there.
 
+        Args:
+            include_prerelease: When True (driven by ``kbagent update --beta``
+                or ``KBAGENT_INCLUDE_PRERELEASE=1``), kbagent's version
+                lookup considers pre-release (beta / rc) releases and the
+                install command opts into resolver-level pre-release
+                acceptance. The MCP stage is unaffected -- MCP releases
+                do not use pre-release tags today.
+
         Returns:
             Dict with both stages' results::
 
@@ -591,7 +677,7 @@ class VersionService:
                     "message": str,     # Human-readable single-line summary
                 }
         """
-        kbagent_result = self._update_kbagent()
+        kbagent_result = self._update_kbagent(include_prerelease=include_prerelease)
         mcp_result = self._update_mcp()
 
         any_updated = bool(kbagent_result.get("updated") or mcp_result.get("updated"))
@@ -632,10 +718,18 @@ class VersionService:
         return " | ".join(parts)
 
     @staticmethod
-    def _update_kbagent() -> dict[str, Any]:
-        """Run the kbagent self-upgrade subprocess (or short-circuit)."""
+    def _update_kbagent(*, include_prerelease: bool = False) -> dict[str, Any]:
+        """Run the kbagent self-upgrade subprocess (or short-circuit).
+
+        Args:
+            include_prerelease: When True (driven by ``kbagent update --beta``
+                or ``KBAGENT_INCLUDE_PRERELEASE=1``), the version lookup
+                considers beta / rc releases and the install command
+                propagates ``--prerelease=allow`` so the resolver accepts
+                PEP 440 pre-release tags like ``0.43.0b1``.
+        """
         old_version = __version__
-        kbagent_latest = _fetch_kbagent_latest_version()
+        kbagent_latest = _fetch_kbagent_latest_version(include_prerelease=include_prerelease)
         up_to_date = _is_up_to_date(old_version, kbagent_latest)
 
         if up_to_date is True:
@@ -646,16 +740,17 @@ class VersionService:
                 "message": f"kbagent v{old_version} is already up to date.",
             }
 
-        cmd = build_kbagent_upgrade_command()
+        cmd = build_kbagent_upgrade_command(prerelease=include_prerelease)
         if cmd is None:
             with_flag = "--with 'keboola-agent-cli[server]' " if has_server_extras() else ""
+            pre_flag = "--prerelease=allow " if include_prerelease else ""
             return {
                 "updated": False,
                 "current_version": old_version,
                 "latest_version": kbagent_latest,
                 "message": (
                     "Neither 'uv' nor 'pip' found on PATH. "
-                    f"Install manually: uv tool install --upgrade {with_flag}"
+                    f"Install manually: uv tool install --upgrade {pre_flag}{with_flag}"
                     f"{KBAGENT_INSTALL_SOURCE}"
                 ),
             }

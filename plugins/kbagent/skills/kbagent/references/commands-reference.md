@@ -5,8 +5,8 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 ## Setup & Info
 - `init [--from-global]` -- create local `.kbagent/` workspace in current directory
 - `doctor [--fix]` -- health check for CLI config and MCP server
-- `version` -- show version info and dependency update status
-- `update` -- self-update to latest version
+- `version [--beta]` -- show version info and dependency update status. `--beta` (since v0.42.0) reports the latest pre-release (beta / rc) instead of the latest stable. Env override: `KBAGENT_INCLUDE_PRERELEASE=1`
+- `update [--beta]` -- self-update to latest version. `--beta` (since v0.42.0) opts into pre-release versions (PEP 440 betas / rc, e.g. `0.43.0b1`). Default behaviour: GitHub's `/releases/latest` endpoint filters prereleases server-side, so the startup auto-update hook never silently lands on a beta. Resolver-level opt-in (`--prerelease=allow` for uv, `--pre` for pip) is added automatically when `--beta` is set
 - `changelog [--limit N]` -- show recent changelog (default: last 5 versions). After auto-update, "What's new" is printed automatically. Manual trigger: `KBAGENT_UPDATED_FROM=0.17.0 kbagent version`
 - `context` -- print full CLI reference for AI agents
 

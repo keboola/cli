@@ -447,8 +447,11 @@ kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--projec
 kbagent context
 kbagent init [--from-global]
 kbagent doctor [--fix]
-kbagent version
-kbagent update
+kbagent version [--beta]
+kbagent update [--beta]
+# `--beta` (or env `KBAGENT_INCLUDE_PRERELEASE=1`) opts into pre-release versions
+# (PEP 440 betas/rc, e.g. 0.43.0b1). Default (no flag) is stable-only -- auto-update
+# startup hook never silently lands on a beta.
 kbagent changelog [--limit N]
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]
 ```

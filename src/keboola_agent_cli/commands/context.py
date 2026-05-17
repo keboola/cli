@@ -952,16 +952,24 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
   kbagent doctor [--fix]
     Health checks. --fix auto-installs MCP server binary.
 
-  kbagent version
+  kbagent version [--beta]
     Version info for kbagent + keboola-mcp-server. Reports both the locally
     installed version and the latest available; flags any staleness.
+    --beta (since 0.42.0) reports the latest pre-release (beta / rc) instead
+    of the latest stable. Same env override: KBAGENT_INCLUDE_PRERELEASE=1.
 
-  kbagent update
+  kbagent update [--beta]
     Two-stage upgrade (since 0.30.1): kbagent itself AND keboola-mcp-server.
     The MCP server is detected (uv tool / pip env / uvx) and bumped via the
     matching command. Both stages always run, regardless of whether kbagent
     itself needed an upgrade. The same flow runs automatically on every
     kbagent startup -- the explicit `update` command forces a fresh check.
+    --beta (since 0.42.0) opts into pre-release versions (PEP 440 betas/rc,
+    e.g. 0.43.0b1). Without --beta the auto-update path uses GitHub's
+    /releases/latest endpoint, which excludes prereleases server-side --
+    stable users never silently land on a beta. Set
+    KBAGENT_INCLUDE_PRERELEASE=1 in env to make every update in the session
+    treat betas as installable without re-typing --beta.
 
   kbagent changelog [--limit N]
     Show recent changelog (what changed in each version). Default: last 5 versions.
