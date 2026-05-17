@@ -6,17 +6,22 @@ import {
   GitCompare,
   Info,
   KeyRound,
+  Maximize2,
+  Minimize2,
   Network,
   PackagePlus,
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Send,
   Table as TableIcon,
   Trash2,
   Upload,
   XCircle,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import mermaid from "mermaid";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -1775,11 +1780,50 @@ function RelationshipsERDiagram({
 }) {
   const { theme } = useTheme();
   const ref = useRef<HTMLDivElement | null>(null);
+  const fullscreenRef = useRef<HTMLDivElement | null>(null);
   const renderSeq = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [mermaidCode, setMermaidCode] = useState<string>("");
+  // CSS-transform zoom for the rendered SVG. Step is 1.25x, clamped so the
+  // user can't shrink the diagram to nothing or blow it up past readability.
+  // Initial value is recomputed by the auto-fit pass after every render so
+  // the diagram lands at "as large as comfortably fits the viewport".
+  const [zoom, setZoom] = useState(1);
+  // Tracks whether the user manually adjusted zoom. If true, the auto-fit
+  // pass becomes a no-op so we don't snap their choice back. Reset Zoom
+  // re-arms auto-fit.
+  const [userZoomed, setUserZoomed] = useState(false);
+  // Fullscreen overlay (uses the same Drawer-style portal as the rest of
+  // the page — 95vw / 95vh so the user can finally see all 80 edges).
+  const [fullscreen, setFullscreen] = useState(false);
 
   const limited = relationships.slice(0, ERD_MAX_EDGES);
+
+  // Compute the zoom that fills the active canvas as much as possible
+  // without distorting the diagram. The erDiagram layout is wide-and-short
+  // so `Math.min(fitX, fitY)` (= "the whole graph fits without scrolling")
+  // produces tiny zoom levels with a sea of whitespace below. We pick the
+  // larger of the two -- the diagram fills one axis and the other axis
+  // scrolls if needed. Floor at 1.0 so we never shrink below 100% (the
+  // user asked for "150%-looking" by default, and the screenshot they
+  // shared had the SVG rendering at its natural mermaid size which is the
+  // smallest readable form). Cap at 3x so we don't lose context.
+  const applyAutoFit = () => {
+    const target = fullscreen ? fullscreenRef.current : ref.current;
+    const svgEl = target?.querySelector("svg");
+    const container = target?.parentElement;
+    if (!svgEl || !container) return;
+    const vb = svgEl.getAttribute("viewBox")?.split(/\s+/).map(Number);
+    if (!vb || vb.length !== 4) return;
+    const [, , svgW, svgH] = vb;
+    if (!svgW || !svgH) return;
+    const fitX = (container.clientWidth - 32) / svgW;
+    const fitY = (container.clientHeight - 32) / svgH;
+    // For wide-and-short graphs fitY >> fitX -- pick whichever fills one
+    // axis tightly; the other axis becomes the scrollable direction.
+    const fit = Math.max(fitX, fitY);
+    setZoom(Math.max(1.0, Math.min(3, fit)));
+  };
 
   useEffect(() => {
     if (!ref.current) return;
@@ -1839,30 +1883,146 @@ function RelationshipsERDiagram({
     mermaid
       .render(runId, code)
       .then(({ svg }) => {
-        if (cancelled || !ref.current) return;
-        ref.current.innerHTML = svg;
+        if (cancelled) return;
+        // Strip every inline size constraint mermaid adds (max-width,
+        // explicit width/height attrs) and let CSS take over -- the
+        // container is the source of truth for "how much room do you have"
+        // and the SVG's intrinsic viewBox + preserveAspectRatio handles
+        // the actual scaling so the diagram fills the container without
+        // distortion. Without this strip the SVG lays out at its mermaid-
+        // computed pixel size (~250px tall) which leaves 70% of the 70vh
+        // canvas empty.
+        const adapted = svg
+          .replace(/max-width:[^;"]+;?/g, "")
+          .replace(/\swidth="[^"]+"/, "")
+          .replace(/\sheight="[^"]+"/, "")
+          .replace(
+            /<svg /,
+            '<svg preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%;display:block;" ',
+          );
+        for (const target of [ref.current, fullscreenRef.current]) {
+          if (target) target.innerHTML = adapted;
+        }
         setError(null);
+
+        // Auto-fit zoom: pick the scale that makes the SVG fill the
+        // visible canvas. Mermaid lays the erDiagram out wide-and-short,
+        // so without a fit pass the diagram lives in the top quarter of
+        // the 70vh container and everything below is whitespace.
+        if (!userZoomed) applyAutoFit();
       })
       .catch((err: Error) => {
-        if (cancelled || !ref.current) return;
-        ref.current.innerHTML = "";
+        if (cancelled) return;
+        for (const target of [ref.current, fullscreenRef.current]) {
+          if (target) target.innerHTML = "";
+        }
         setError(err.message);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [datasets, limited, theme]);
+  }, [datasets, limited, theme, fullscreen]);
+
+  const zoomToolbar = (
+    <div className="flex items-center gap-1 text-xs">
+      <button
+        type="button"
+        className="nerd-btn text-xs px-1.5"
+        onClick={() => {
+          setUserZoomed(true);
+          setZoom((z) => Math.max(0.4, z / 1.25));
+        }}
+        title="Zoom out"
+      >
+        <ZoomOut className="w-3 h-3" />
+      </button>
+      <span className="text-[10px] text-zinc-500 min-w-[3rem] text-center font-mono">
+        {Math.round(zoom * 100)}%
+      </span>
+      <button
+        type="button"
+        className="nerd-btn text-xs px-1.5"
+        onClick={() => {
+          setUserZoomed(true);
+          setZoom((z) => Math.min(4, z * 1.25));
+        }}
+        title="Zoom in"
+      >
+        <ZoomIn className="w-3 h-3" />
+      </button>
+      <button
+        type="button"
+        className="nerd-btn text-xs px-1.5"
+        onClick={() => {
+          // Re-arm the auto-fit pass and snap to fit. "Reset" means
+          // "fit to viewport", not "100%" -- 100% leaves the canvas mostly
+          // empty for the typical wide-and-short erDiagram layout.
+          setUserZoomed(false);
+          applyAutoFit();
+        }}
+        title="Fit to viewport"
+      >
+        <RotateCcw className="w-3 h-3" />
+      </button>
+      <button
+        type="button"
+        className="nerd-btn text-xs px-1.5"
+        onClick={() => {
+          setUserZoomed(false); // re-fit after the layout box changes
+          setFullscreen((f) => !f);
+        }}
+        title={fullscreen ? "Exit fullscreen" : "Open in fullscreen"}
+      >
+        {fullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+      </button>
+    </div>
+  );
+
+  // Inline view of the diagram. Zoom is applied as actual width/height
+  // expansion on the SVG host (not CSS transform) so that:
+  //   - the scrollbars in the surrounding container actually let users
+  //     pan around when the diagram exceeds the viewport
+  //   - the content stays centred via preserveAspectRatio="xMidYMid meet"
+  //     and doesn't get pushed off-screen by a top-left transform origin
+  // The minWidth/minHeight 100% guarantees the box always at least fills
+  // the canvas at zoom=1 so the SVG can stretch to fit.
+  const inlinePane = (
+    <div
+      className="w-full overflow-auto border border-zinc-200 dark:border-zinc-900 rounded p-2 bg-white dark:bg-zinc-950"
+      style={{ height: "70vh" }}
+    >
+      <div
+        ref={ref}
+        style={{
+          width: `${zoom * 100}%`,
+          height: `${zoom * 100}%`,
+          minWidth: "100%",
+          minHeight: "100%",
+        }}
+      />
+    </div>
+  );
 
   return (
     <div className="space-y-3">
-      {relationships.length > ERD_MAX_EDGES ? (
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="text-[11px] text-amber-500 flex items-center gap-1">
-          <AlertTriangle className="w-3.5 h-3.5" /> Showing the first {ERD_MAX_EDGES}{" "}
-          of {relationships.length} relationships. Use the dataset filter above to
-          drill into a subgraph.
+          {relationships.length > ERD_MAX_EDGES ? (
+            <>
+              <AlertTriangle className="w-3.5 h-3.5" /> Showing the first{" "}
+              {ERD_MAX_EDGES} of {relationships.length} relationships. Use the
+              dataset filter above to drill into a subgraph.
+            </>
+          ) : (
+            <span className="text-zinc-500">
+              Rendering {limited.length} relationship{limited.length === 1 ? "" : "s"}.
+              Click an edge in the list below to edit it.
+            </span>
+          )}
         </div>
-      ) : null}
+        {zoomToolbar}
+      </div>
 
       {error ? (
         <div className="space-y-2">
@@ -1876,7 +2036,7 @@ function RelationshipsERDiagram({
         </div>
       ) : null}
 
-      <div ref={ref} className="w-full overflow-auto border border-zinc-200 dark:border-zinc-900 rounded p-2" />
+      {inlinePane}
 
       {/* Click-through helper: list every edge so users can hop into the
           edit drawer for any relationship even when SVG hit-testing is
@@ -1902,6 +2062,32 @@ function RelationshipsERDiagram({
           ))}
         </ul>
       </details>
+
+      {fullscreen ? (
+        <Drawer
+          open
+          onClose={() => setFullscreen(false)}
+          title="ER diagram (fullscreen)"
+          subtitle={`${limited.length} relationship${limited.length === 1 ? "" : "s"} · ${Math.round(zoom * 100)}% zoom`}
+          width="95vw"
+          actions={zoomToolbar}
+        >
+          <div
+            className="w-full overflow-auto border border-zinc-200 dark:border-zinc-900 rounded p-2 bg-white dark:bg-zinc-950"
+            style={{ height: "85vh" }}
+          >
+            <div
+              ref={fullscreenRef}
+              style={{
+                width: `${zoom * 100}%`,
+                height: `${zoom * 100}%`,
+                minWidth: "100%",
+                minHeight: "100%",
+              }}
+            />
+          </div>
+        </Drawer>
+      ) : null}
     </div>
   );
 }
