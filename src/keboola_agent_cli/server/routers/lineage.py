@@ -38,7 +38,7 @@ class LineageQuery(BaseModel):
     format: str = "text"
 
 
-@router.get("/edges")
+@router.get("/edges", summary="List cross-project lineage edges")
 def edges(
     project: list[str] | None = Query(None),
     registry: ServiceRegistry = Depends(get_registry),
@@ -47,7 +47,7 @@ def edges(
     return registry.lineage.get_lineage(aliases=project)
 
 
-@router.post("/build")
+@router.post("/build", summary="Build deep column-level lineage")
 def build(body: LineageBuild, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
     """Build deep column-level lineage and write JSON cache to ``output``.
 
@@ -78,7 +78,7 @@ def build(body: LineageBuild, registry: ServiceRegistry = Depends(get_registry))
     return {**result, "output_path": str(output)}
 
 
-@router.post("/show")
+@router.post("/show", summary="Query a built lineage graph")
 def show(body: LineageQuery, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
     """Query a built lineage graph (upstream / downstream walk)."""
     load_path = Path(body.load)
@@ -96,10 +96,11 @@ def show(body: LineageQuery, registry: ServiceRegistry = Depends(get_registry)) 
     raise HTTPException(status_code=400, detail="Provide --upstream or --downstream.")
 
 
-@router.get("/info")
+@router.get("/info", summary="Show lineage cache summary")
 def info(
     load: str = Query(...), registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Return a summary of nodes/edges in a built lineage cache. Mirrors `kbagent lineage info`."""
     load_path = Path(load)
     if not load_path.exists():
         raise HTTPException(status_code=400, detail=f"Lineage cache '{load}' not found.")
@@ -142,7 +143,7 @@ def _rewrite_browser_html(load_path: str) -> str:
     )
 
 
-@router.get("/browser", response_class=HTMLResponse)
+@router.get("/browser", response_class=HTMLResponse, summary="Open lineage browser UI")
 def browser(load: str = Query(...)) -> HTMLResponse:
     """Serve the interactive lineage browser HTML for a JSON cache file."""
     load_path = Path(load)
@@ -151,7 +152,7 @@ def browser(load: str = Query(...)) -> HTMLResponse:
     return HTMLResponse(content=_rewrite_browser_html(load))
 
 
-@router.get("/data")
+@router.get("/data", summary="Return raw lineage JSON")
 def data(load: str = Query(...)) -> Any:
     """Raw lineage JSON, served verbatim from disk for the browser."""
     load_path = Path(load)
@@ -166,7 +167,7 @@ def data(load: str = Query(...)) -> Any:
     return json.loads(raw)
 
 
-@router.get("/walk")
+@router.get("/walk", summary="Walk lineage graph from a node")
 def walk(
     load: str = Query(...),
     node: str = Query(...),
@@ -189,7 +190,7 @@ def walk(
     return registry.deep_lineage.query_downstream(graph, node, "", depth)
 
 
-@router.get("/mermaid", response_class=PlainTextResponse)
+@router.get("/mermaid", response_class=PlainTextResponse, summary="Render lineage as Mermaid")
 def mermaid(
     load: str = Query(...),
     node: str = Query(...),

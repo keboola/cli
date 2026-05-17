@@ -36,7 +36,7 @@ class JobTerminate(BaseModel):
     dry_run: bool = False
 
 
-@router.get("")
+@router.get("", summary="List jobs across projects")
 def list_jobs(
     project: list[str] | None = Query(None),
     component_id: str | None = None,
@@ -45,6 +45,7 @@ def list_jobs(
     limit: int = 50,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """List jobs across one or more projects. Mirrors `kbagent job list`."""
     return registry.job.list_jobs(
         aliases=project,
         component_id=component_id,
@@ -54,14 +55,15 @@ def list_jobs(
     )
 
 
-@router.get("/{project}/{job_id}")
+@router.get("/{project}/{job_id}", summary="Get job detail")
 def detail(
     project: str, job_id: str, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Fetch detail for a single job. Mirrors `kbagent job detail`."""
     return registry.job.get_job_detail(alias=project, job_id=job_id)
 
 
-@router.post("/{project}/run")
+@router.post("/{project}/run", summary="Run a component configuration")
 def run(
     project: str,
     body: JobRun,
@@ -71,6 +73,7 @@ def run(
     log_tail_lines: int = DEFAULT_LOG_TAIL_LINES,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Run a component configuration and optionally wait for completion. Mirrors `kbagent job run`."""
     return registry.job.run_job(
         alias=project,
         component_id=body.component_id,
@@ -86,10 +89,11 @@ def run(
     )
 
 
-@router.post("/{project}/terminate")
+@router.post("/{project}/terminate", summary="Terminate running jobs")
 def terminate(
     project: str, body: JobTerminate, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Terminate jobs by id or filter. Mirrors `kbagent job terminate`."""
     if body.job_ids:
         return registry.job.terminate_jobs(
             alias=project, job_ids=body.job_ids, dry_run=body.dry_run
@@ -105,7 +109,7 @@ def terminate(
     return registry.job.terminate_jobs(alias=project, job_ids=job_ids, dry_run=body.dry_run)
 
 
-@router.get("/{project}/{job_id}/stream")
+@router.get("/{project}/{job_id}/stream", summary="Stream job status and logs (SSE)")
 async def stream_job(
     project: str,
     job_id: str,

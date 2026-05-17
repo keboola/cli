@@ -81,15 +81,19 @@ def _store(request: Request):
     return store
 
 
-@router.get("")
+@router.get("", summary="List scheduled tasks")
 def list_tasks(request: Request) -> dict[str, Any]:
+    """All persisted agent tasks (cron-scheduled + manual)."""
     store = _store(request)
     tasks = store.load_tasks()
     return {"tasks": [t.model_dump(mode="json") for t in tasks]}
 
 
-@router.post("")
+@router.post("", summary="Create a scheduled task")
 def create_task(body: AgentTaskCreate, request: Request) -> dict[str, Any]:
+    """Persist a new task. `manual=true` disables cron firing -- the task
+    only runs via `POST /agents/{id}/run` or downstream `trigger` chain.
+    """
     store = _store(request)
     _validate_trigger(store, body.trigger)
     task = AgentTask(
@@ -108,8 +112,9 @@ def create_task(body: AgentTaskCreate, request: Request) -> dict[str, Any]:
     return saved.model_dump(mode="json")
 
 
-@router.get("/{task_id}")
+@router.get("/{task_id}", summary="Fetch one task")
 def get_task(task_id: str, request: Request) -> dict[str, Any]:
+    """Single task by ID (404 if no such task)."""
     store = _store(request)
     task = store.get_task(task_id)
     if task is None:
@@ -117,8 +122,12 @@ def get_task(task_id: str, request: Request) -> dict[str, Any]:
     return task.model_dump(mode="json")
 
 
-@router.patch("/{task_id}")
+@router.patch("/{task_id}", summary="Update a task")
 def update_task(task_id: str, body: AgentTaskUpdate, request: Request) -> dict[str, Any]:
+    """Partial update. Omitted fields stay unchanged; `trigger: null`
+    explicitly clears the chain trigger (Pydantic `model_fields_set` is
+    used to distinguish absent vs. explicit-null).
+    """
     store = _store(request)
     task = store.get_task(task_id)
     if task is None:
@@ -148,8 +157,12 @@ def update_task(task_id: str, body: AgentTaskUpdate, request: Request) -> dict[s
     return task.model_dump(mode="json")
 
 
-@router.delete("/{task_id}")
+@router.delete("/{task_id}", summary="Delete a task")
 def delete_task(task_id: str, request: Request) -> dict[str, Any]:
+    """Remove a task. Existing run history on disk is left intact (the
+    run files live under `runs/{task_id}/` and are out of band for the
+    task record itself).
+    """
     store = _store(request)
     if not store.delete_task(task_id):
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
@@ -215,7 +228,7 @@ def _merge_runtime_input(task: AgentTask, runtime_input: dict[str, Any] | None) 
     return task.model_copy(update={"action": merged_action})
 
 
-@router.post("/{task_id}/run")
+@router.post("/{task_id}/run", summary="Run a task now (blocking)")
 async def run_now(
     task_id: str,
     request: Request,
@@ -242,7 +255,7 @@ async def run_now(
     return run.model_dump(mode="json")
 
 
-@router.post("/{task_id}/run/stream")
+@router.post("/{task_id}/run/stream", summary="Run a task now (SSE stream)")
 async def run_now_stream(
     task_id: str,
     request: Request,
@@ -288,14 +301,15 @@ async def run_now_stream(
     )
 
 
-@router.get("/{task_id}/runs")
+@router.get("/{task_id}/runs", summary="List recent runs")
 def list_runs(task_id: str, request: Request, limit: int = 50) -> dict[str, Any]:
+    """Last `limit` runs (default 50) for one task, newest first."""
     store = _store(request)
     runs = store.list_runs(task_id, limit=limit)
     return {"runs": [r.model_dump(mode="json") for r in runs]}
 
 
-@router.get("/{task_id}/runs/{run_id}")
+@router.get("/{task_id}/runs/{run_id}", summary="Fetch one run")
 def get_run(task_id: str, run_id: str, request: Request) -> dict[str, Any]:
     """Fetch a single persisted run record by its run_id.
 
@@ -311,7 +325,7 @@ def get_run(task_id: str, run_id: str, request: Request) -> dict[str, Any]:
     return run.model_dump(mode="json")
 
 
-@router.get("/{task_id}/runs/{run_id}/events")
+@router.get("/{task_id}/runs/{run_id}/events", summary="Replay run event timeline")
 def get_run_events(task_id: str, run_id: str, request: Request) -> dict[str, Any]:
     """Return the full event timeline for one finished run.
 
@@ -334,7 +348,7 @@ def get_run_events(task_id: str, run_id: str, request: Request) -> dict[str, Any
     return {"events": events, "count": len(events)}
 
 
-@router.post("/test")
+@router.post("/test", summary="Dry-run an action (no persistence)")
 async def test_action(
     body: AgentTaskCreate,
     registry: ServiceRegistry = Depends(get_registry),
@@ -383,7 +397,7 @@ def _sse(event: str, data: Any) -> bytes:
     return f"event: {event}\ndata: {payload}\n\n".encode()
 
 
-@router.post("/test/stream")
+@router.post("/test/stream", summary="Dry-run an action (SSE stream)")
 async def test_action_stream(
     body: AgentTaskCreate,
     registry: ServiceRegistry = Depends(get_registry),
@@ -453,7 +467,7 @@ async def test_action_stream(
     )
 
 
-@router.get("/cron/preview")
+@router.get("/cron/preview", summary="Preview cron firings")
 def cron_preview(cron: str, count: int = 5) -> dict[str, Any]:
     """Preview the next ``count`` firings of a cron expression. Validates syntax."""
     from datetime import datetime
@@ -490,7 +504,7 @@ class PromptHelperRequest(BaseModel):
     extra_args: list[str] = []
 
 
-@router.post("/prompt/improve/stream")
+@router.post("/prompt/improve/stream", summary="AI-rewrite a prompt (SSE stream)")
 async def improve_prompt_stream(
     body: PromptHelperRequest,
     registry: ServiceRegistry = Depends(get_registry),

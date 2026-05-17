@@ -64,19 +64,21 @@ class SqlHelperRequest(BaseModel):
     failed_error: str = ""
 
 
-@router.get("")
+@router.get("", summary="List workspaces across projects")
 def list_workspaces(
     project: list[str] | None = Query(None),
     orphaned: bool = False,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """List workspaces in one or more projects. Mirrors `kbagent workspace list`."""
     return registry.workspace.list_workspaces(aliases=project, orphaned_only=orphaned)
 
 
-@router.post("/{project}")
+@router.post("/{project}", summary="Create a workspace")
 def create(
     project: str, body: WorkspaceCreate, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Create a new workspace in a project. Mirrors `kbagent workspace create`."""
     return registry.workspace.create_workspace(
         alias=project,
         name=body.name,
@@ -86,34 +88,38 @@ def create(
     )
 
 
-@router.get("/{project}/{workspace_id}")
+@router.get("/{project}/{workspace_id}", summary="Get workspace detail")
 def detail(
     project: str, workspace_id: int, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Fetch detail for a single workspace. Mirrors `kbagent workspace detail`."""
     return registry.workspace.get_workspace(alias=project, workspace_id=workspace_id)
 
 
-@router.delete("/{project}/{workspace_id}")
+@router.delete("/{project}/{workspace_id}", summary="Delete a workspace")
 def delete(
     project: str, workspace_id: int, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Delete a workspace by id. Mirrors `kbagent workspace delete`."""
     return registry.workspace.delete_workspace(alias=project, workspace_id=workspace_id)
 
 
-@router.post("/{project}/{workspace_id}/password")
+@router.post("/{project}/{workspace_id}/password", summary="Reset workspace password")
 def password(
     project: str, workspace_id: int, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Reset and return the workspace password. Mirrors `kbagent workspace password`."""
     return registry.workspace.reset_password(alias=project, workspace_id=workspace_id)
 
 
-@router.post("/{project}/{workspace_id}/load")
+@router.post("/{project}/{workspace_id}/load", summary="Load tables into a workspace")
 def load(
     project: str,
     workspace_id: int,
     body: WorkspaceLoad,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Load Storage tables into a workspace. Mirrors `kbagent workspace load`."""
     return registry.workspace.load_tables(
         alias=project,
         workspace_id=workspace_id,
@@ -122,13 +128,14 @@ def load(
     )
 
 
-@router.post("/{project}/{workspace_id}/query")
+@router.post("/{project}/{workspace_id}/query", summary="Run SQL in a workspace")
 def query(
     project: str,
     workspace_id: int,
     body: WorkspaceQuery,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Execute a SQL statement against the workspace. Mirrors `kbagent workspace query`."""
     return registry.workspace.execute_query(
         alias=project,
         workspace_id=workspace_id,
@@ -142,7 +149,7 @@ def _sse(event: str, data: dict[str, Any]) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n".encode()
 
 
-@router.post("/sql/improve/stream")
+@router.post("/sql/improve/stream", summary="Stream AI SQL helper (SSE)")
 async def improve_sql_stream(
     body: SqlHelperRequest,
     registry: ServiceRegistry = Depends(get_registry),
@@ -225,12 +232,13 @@ async def improve_sql_stream(
     )
 
 
-@router.post("/{project}/from-transformation")
+@router.post("/{project}/from-transformation", summary="Create workspace from a transformation")
 def from_transformation(
     project: str,
     body: FromTransformation,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Spin up a workspace based on a transformation configuration. Mirrors `kbagent workspace from-transformation`."""
     return registry.workspace.create_from_transformation(
         alias=project,
         component_id=body.component_id,
@@ -239,10 +247,11 @@ def from_transformation(
     )
 
 
-@router.post("/gc")
+@router.post("/gc", summary="Garbage-collect orphaned workspaces")
 def gc(
     project: list[str] | None = Query(None),
     dry_run: bool = False,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Clean up orphaned workspaces across projects. Mirrors `kbagent workspace gc`."""
     return registry.workspace.gc_workspaces(aliases=project, dry_run=dry_run)
