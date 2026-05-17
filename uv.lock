@@ -496,7 +496,7 @@ wheels = [
 
 [[package]]
 name = "keboola-agent-cli"
-version = "0.41.9"
+version = "0.41.10"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

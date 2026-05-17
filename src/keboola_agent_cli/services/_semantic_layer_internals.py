@@ -26,6 +26,7 @@ Helpers grouped by feature:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from collections.abc import Callable
@@ -36,6 +37,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..metastore_client import SemanticType
@@ -536,6 +539,7 @@ def push_built_model(
     generated: dict[str, Any],
     model_name_or_uuid: str | None,
     resolve_model_fn: Callable[[Any, str], tuple[str, dict[str, Any]]],
+    keep_on_failure: bool = False,
 ) -> tuple[dict[str, int], str, dict[str, Any] | None]:
     """Push a heuristic-generated model + children to the metastore.
 
@@ -543,6 +547,14 @@ def push_built_model(
     is the freshly-created model record (``None`` when updating an
     existing model). ``counts`` maps each plural to the number of
     successfully POSTed children.
+
+    Rollback semantics (issue #295): on any POST failure during the
+    children loop, every successfully-POSTed child is DELETEd in
+    reverse order, then the model itself is DELETEd **only when this
+    call created it** (i.e. ``model_name_or_uuid`` was None). The
+    original exception is re-raised wrapped in a KeboolaApiError that
+    carries the rollback summary in ``details``. Pass
+    ``keep_on_failure=True`` to skip cleanup for forensic inspection.
     """
     if model_name_or_uuid is None:
         # Create the model.
@@ -554,20 +566,185 @@ def push_built_model(
             model_attrs["description"] = generated["description"]
         model_item = client.post_item("semantic-model", name=generated["name"], data=model_attrs)
         model_uuid = model_item["id"]
+        model_created_here = True
     else:
         model_uuid, _ = resolve_model_fn(client, model_name_or_uuid)
         model_item = None
+        model_created_here = False
 
+    posted_children: list[tuple[SemanticType, str, str]] = []
     counts: dict[str, int] = {plural: 0 for plural, _ in PUSH_ORDER}
-    for plural, type_slug in PUSH_ORDER:
-        for item in generated.get(plural, []) or []:
-            attrs = dict(item)
-            attrs["modelUUID"] = model_uuid
-            name = attrs.get("name") or attrs.get("term", "")
-            if not name:
-                continue
-            client.post_item(type_slug, name=name, data=attrs)
-            counts[plural] += 1
+    # Sentinel: the except clause references `plural` and `name` to tag the
+    # failing row in the wrapped error message; pre-init so they're defined
+    # even on the rare path where the loop never started a row (e.g. the
+    # first POST raised before either was set inside the loop body).
+    plural = ""
+    name = ""
+    try:
+        for plural, type_slug in PUSH_ORDER:
+            for item in generated.get(plural, []) or []:
+                # Resolve `name` BEFORE `dict(item)` so an exception during
+                # the dict-copy (or in the POST itself) tags the wrapped
+                # error with the current row, not the previous one.
+                name = (
+                    (item.get("name") if isinstance(item, dict) else "")
+                    or (item.get("term") if isinstance(item, dict) else "")
+                    or ""
+                )
+                if not name:
+                    continue
+                attrs = dict(item)
+                attrs["modelUUID"] = model_uuid
+                posted = client.post_item(type_slug, name=name, data=attrs)
+                posted_id = str(posted.get("id", "") or "") if isinstance(posted, dict) else ""
+                if not posted_id:
+                    # Defensive: the metastore always returns `id` in a
+                    # dict body, but a proxy / middleware that mangles
+                    # the response would otherwise leave this child
+                    # untrackable for rollback. Skip the counts increment
+                    # so the visible state matches what we can actually
+                    # clean up.
+                    logger.warning(
+                        "POST %s name=%s returned no id (response type=%s); "
+                        "skipping rollback tracking",
+                        type_slug,
+                        name,
+                        type(posted).__name__,
+                    )
+                    continue
+                posted_children.append((type_slug, posted_id, name))
+                counts[plural] += 1
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as exc:
+        # Catch broadly: client.post_item can raise httpx.RequestError
+        # subclasses (ReadError, ProtocolError, ...) that are NOT
+        # KeboolaApiError; without the rollback path on those, the partial
+        # state this PR exists to clean up would still leak. Re-raise of
+        # KeyboardInterrupt / SystemExit above keeps Ctrl-C honest.
+        api_exc = exc if isinstance(exc, KeboolaApiError) else None
+        error_code = api_exc.error_code if api_exc else ErrorCode.INTERNAL_ERROR
+        status_code = api_exc.status_code if api_exc else 500
+        exc_message = api_exc.message if api_exc else str(exc) or type(exc).__name__
+
+        if keep_on_failure:
+            logger.info(
+                "build_model push failed for %s/%s; preserving %d posted children + model %s "
+                "(--keep-on-failure set)",
+                plural,
+                name,
+                len(posted_children),
+                model_uuid,
+            )
+            raise KeboolaApiError(
+                message=(
+                    f"build_model push failed at {plural}/{name!r}: {exc_message}. "
+                    f"Partial state preserved (--keep-on-failure): {len(posted_children)} "
+                    f"children posted, model {model_uuid} kept."
+                ),
+                error_code=error_code,
+                status_code=status_code,
+                details={
+                    "rollback": {
+                        "attempted": False,
+                        "reason": "keep_on_failure",
+                        "posted_children": len(posted_children),
+                        "model_created_here": model_created_here,
+                        "model_uuid": model_uuid,
+                    }
+                },
+            ) from exc
+        deleted = 0
+        failed_deletes: list[dict[str, str]] = []
+        for type_slug, child_id, child_name in reversed(posted_children):
+            try:
+                client.delete_item(type_slug, child_id)
+                deleted += 1
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as del_exc:
+                # Same rationale as the outer broad catch: a non-API
+                # exception from delete_item must not abort the cleanup or
+                # mask the original POST failure. logger.warning (no
+                # traceback) keeps log volume bounded when the metastore
+                # is fully down -- 200+ ERROR-level stack traces would
+                # otherwise drown out the original POST failure. The
+                # consolidated summary line below carries the full count.
+                failed_deletes.append(
+                    {
+                        "type": type_slug,
+                        "id": child_id,
+                        "name": child_name,
+                        "error": (
+                            del_exc.message
+                            if isinstance(del_exc, KeboolaApiError)
+                            else str(del_exc) or type(del_exc).__name__
+                        ),
+                    }
+                )
+                logger.warning(
+                    "Rollback DELETE failed for %s id=%s name=%s: %s",
+                    type_slug,
+                    child_id,
+                    child_name,
+                    failed_deletes[-1]["error"],
+                )
+        model_deleted = False
+        model_delete_error: str | None = None
+        if model_created_here:
+            try:
+                client.delete_item("semantic-model", model_uuid)
+                model_deleted = True
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as del_exc:
+                model_delete_error = (
+                    del_exc.message
+                    if isinstance(del_exc, KeboolaApiError)
+                    else str(del_exc) or type(del_exc).__name__
+                )
+                # logger.exception here (with traceback) because there's
+                # only ever ONE model-delete; the volume concern that
+                # applies to the per-child loop does not.
+                logger.exception(
+                    "Rollback DELETE of created model %s failed during build_model cleanup",
+                    model_uuid,
+                )
+        if failed_deletes:
+            logger.error(
+                "build_model rollback summary: %d/%d child DELETEs failed during cleanup",
+                len(failed_deletes),
+                len(posted_children),
+            )
+        raise KeboolaApiError(
+            message=(
+                f"build_model push failed at {plural}/{name!r}: {exc_message}. "
+                f"Rollback deleted {deleted}/{len(posted_children)} child(ren)"
+                + (
+                    f" and the model ({model_uuid})."
+                    if model_deleted
+                    else (
+                        f"; model ({model_uuid}) delete failed: {model_delete_error}."
+                        if model_created_here
+                        else f"; existing model ({model_uuid}) preserved."
+                    )
+                )
+            ),
+            error_code=error_code,
+            status_code=status_code,
+            details={
+                "rollback": {
+                    "attempted": True,
+                    "posted_children": len(posted_children),
+                    "deleted": deleted,
+                    "failed_deletes": failed_deletes,
+                    "model_created_here": model_created_here,
+                    "model_deleted": model_deleted,
+                    "model_delete_error": model_delete_error,
+                    "model_uuid": model_uuid,
+                }
+            },
+        ) from exc
     return counts, model_uuid, model_item
 
 

@@ -1291,6 +1291,75 @@ class TestEditMetric:
         rollback = details.get("rollback") or {}
         assert rollback.get("status") == "succeeded"
 
+    def test_partial_state_false_when_cascade_succeeds(self, tmp_path: Path) -> None:
+        """Envelope carries partial_state=False + recovery_hint=None on full success (issue #294)."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        original = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
+        c_attrs = {"name": "rev_warning", "metrics": ["rev"]}
+        constraint = _child_item("semantic-constraint", "c1", c_attrs)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-metric":
+                return [original]
+            if item_type == "semantic-constraint":
+                return [constraint]
+            return []
+
+        mock.list_items.side_effect = _list
+        mock.post_item.side_effect = [
+            {"id": "m_new", "attributes": {"name": "revenue"}},
+            {"id": "c_new", "attributes": dict(c_attrs, name="rev_warning")},
+        ]
+        result = service.edit_metric(
+            "prod", None, current_name="rev", new_name="revenue", assume_yes=True
+        )
+        assert result["partial_state"] is False
+        assert result["recovery_hint"] is None
+
+    def test_partial_state_true_when_cascade_constraint_fails(self, tmp_path: Path) -> None:
+        """Envelope flags partial_state + recovery_hint when M of N cascades fail (issue #294)."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        original = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
+        # Two dependent constraints; only the second's POST will fail.
+        c1 = _child_item("semantic-constraint", "c1", {"name": "rev_ok", "metrics": ["rev"]})
+        c2 = _child_item("semantic-constraint", "c2", {"name": "rev_fail", "metrics": ["rev"]})
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-metric":
+                return [original]
+            if item_type == "semantic-constraint":
+                return [c1, c2]
+            return []
+
+        mock.list_items.side_effect = _list
+        # POST sequence:
+        #  1. metric rename POST -> succeeds
+        #  2. c1 cascade POST  -> succeeds
+        #  3. c2 cascade POST  -> fails
+        #  4. c2 rollback POST -> succeeds (per-item rollback)
+        mock.post_item.side_effect = [
+            {"id": "m_new", "attributes": {"name": "revenue"}},
+            {"id": "c1_new", "attributes": {"name": "rev_ok", "metrics": ["revenue"]}},
+            KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR),
+            {"id": "c2_restored", "attributes": {"name": "rev_fail", "metrics": ["rev"]}},
+        ]
+        result = service.edit_metric(
+            "prod", None, current_name="rev", new_name="revenue", assume_yes=True
+        )
+        assert result["partial_state"] is True
+        assert result["recovery_hint"] is not None
+        assert "validate" in result["recovery_hint"]
+        assert "edit constraint" in result["recovery_hint"]
+        # Per-entry record stays as before for diagnostics.
+        statuses = [entry["status"] for entry in result["cascaded_constraints"]]
+        assert statuses == ["updated", "failed"]
+
 
 class TestEditDataset:
     def test_not_found(self, tmp_path: Path) -> None:
@@ -1920,6 +1989,213 @@ class TestBuildModel:
             )
         ds = result["generated"]["datasets"][0]
         assert ds["fqn"] == '"KEBOOLA"."out.c-bk"."tab"'
+
+
+class TestBuildModelRollback:
+    """build_model push-loop rollback semantics (issue #295)."""
+
+    @staticmethod
+    def _patch_storage(
+        column_details: list[dict[str, Any]] | None = None,
+    ) -> Any:
+        return patch("keboola_agent_cli.services.semantic_layer_service.StorageService")
+
+    def test_rollback_deletes_posted_children_in_reverse_when_child_fails(
+        self, tmp_path: Path
+    ) -> None:
+        """On child POST failure, every successfully-POSTed child is DELETEd in reverse + model is deleted."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        # POST sequence:
+        #  1. model (created here, model_created_here=True)
+        #  2. dataset (succeeds, id=d1)
+        #  3. metric (succeeds, id=m1)
+        #  4. glossary (fails)
+        mock.post_item.side_effect = [
+            {"id": "new-model"},
+            {"id": "d1"},
+            {"id": "m1"},
+            KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR),
+        ]
+        with self._patch_storage() as MockStorageCls:
+            inst = MockStorageCls.return_value
+            inst.get_table_detail.return_value = {
+                "display_name": "fact_orders",
+                "column_details": [{"name": "AMOUNT", "type": "NUMBER"}],
+            }
+            with pytest.raises(KeboolaApiError) as excinfo:
+                service.build_model("prod", table_ids=["out.c.t"])
+        # Cleanup DELETEs: m1 first (reverse of POST order), then d1, then the model itself last.
+        delete_args = [call.args for call in mock.delete_item.call_args_list]
+        assert delete_args == [
+            ("semantic-metric", "m1"),
+            ("semantic-dataset", "d1"),
+            ("semantic-model", "new-model"),
+        ]
+        rollback = (excinfo.value.details or {}).get("rollback") or {}
+        assert rollback["attempted"] is True
+        assert rollback["model_created_here"] is True
+        assert rollback["model_deleted"] is True
+        assert rollback["deleted"] == 2  # two children deleted
+
+    def test_keep_on_failure_preserves_state(self, tmp_path: Path) -> None:
+        """With --keep-on-failure, no cleanup runs; rollback envelope flags reason."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        mock.post_item.side_effect = [
+            {"id": "new-model"},
+            {"id": "d1"},
+            {"id": "m1"},
+            KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR),
+        ]
+        with self._patch_storage() as MockStorageCls:
+            inst = MockStorageCls.return_value
+            inst.get_table_detail.return_value = {
+                "column_details": [{"name": "X", "type": "NUMBER"}],
+            }
+            with pytest.raises(KeboolaApiError) as excinfo:
+                service.build_model("prod", table_ids=["out.c.t"], keep_on_failure=True)
+        mock.delete_item.assert_not_called()
+        rollback = (excinfo.value.details or {}).get("rollback") or {}
+        assert rollback["attempted"] is False
+        assert rollback["reason"] == "keep_on_failure"
+        assert rollback["posted_children"] == 2
+        assert rollback["model_created_here"] is True
+
+    def test_rollback_does_not_delete_caller_supplied_model(self, tmp_path: Path) -> None:
+        """When caller passes --model EXISTING, the model itself is never DELETEd on rollback."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        existing_model = _model_item("existing-uuid", "existing_model")
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [existing_model]
+            return []
+
+        mock.list_items.side_effect = _list
+        # POST sequence (caller passed --model so no model POST):
+        #  1. dataset (succeeds, id=d1)
+        #  2. metric (fails)
+        mock.post_item.side_effect = [
+            {"id": "d1"},
+            KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR),
+        ]
+        with self._patch_storage() as MockStorageCls:
+            inst = MockStorageCls.return_value
+            inst.get_table_detail.return_value = {
+                "column_details": [{"name": "X", "type": "NUMBER"}],
+            }
+            with pytest.raises(KeboolaApiError) as excinfo:
+                service.build_model(
+                    "prod",
+                    table_ids=["out.c.t"],
+                    model_name_or_uuid="existing_model",
+                )
+        # Only the child was deleted, NOT the model.
+        delete_args = [call.args for call in mock.delete_item.call_args_list]
+        assert delete_args == [("semantic-dataset", "d1")]
+        rollback = (excinfo.value.details or {}).get("rollback") or {}
+        assert rollback["model_created_here"] is False
+        assert rollback["model_deleted"] is False
+
+    def test_rollback_triggers_on_non_api_exception(self, tmp_path: Path) -> None:
+        """Rollback must also fire when client.post_item raises a non-KeboolaApiError
+        (e.g. an httpx network exception); otherwise the partial state this PR exists
+        to clean up would still leak (review iter-2 NON-BLOCKING finding)."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        mock.post_item.side_effect = [
+            {"id": "new-model"},
+            {"id": "d1"},
+            RuntimeError("simulated network glitch"),  # NOT a KeboolaApiError
+        ]
+        with self._patch_storage() as MockStorageCls:
+            inst = MockStorageCls.return_value
+            inst.get_table_detail.return_value = {
+                "column_details": [{"name": "X", "type": "NUMBER"}],
+            }
+            with pytest.raises(KeboolaApiError) as excinfo:
+                service.build_model("prod", table_ids=["out.c.t"])
+        # Rollback still ran (deleted dataset + model).
+        delete_args = [call.args for call in mock.delete_item.call_args_list]
+        assert delete_args == [
+            ("semantic-dataset", "d1"),
+            ("semantic-model", "new-model"),
+        ]
+        rollback = (excinfo.value.details or {}).get("rollback") or {}
+        assert rollback["attempted"] is True
+        assert rollback["model_deleted"] is True
+        # The original exception is chained; the wrapped error code falls back to
+        # INTERNAL_ERROR since RuntimeError carries no api-layer code.
+        assert excinfo.value.error_code == ErrorCode.INTERNAL_ERROR
+
+    def test_continues_when_post_returns_no_id(self, tmp_path: Path) -> None:
+        """Degenerate POST response (missing id) is logged + skipped from rollback tracking
+        rather than silently incrementing counts (review iter-2 NON-BLOCKING finding)."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        # POST returns {} (no id) for the dataset; subsequent POSTs succeed.
+        mock.post_item.side_effect = [
+            {"id": "new-model"},
+            {},  # dataset POST with no id
+            {"id": "m1"},
+            {"id": "g1"},
+        ]
+        with self._patch_storage() as MockStorageCls:
+            inst = MockStorageCls.return_value
+            inst.get_table_detail.return_value = {
+                "column_details": [{"name": "X", "type": "NUMBER"}],
+            }
+            result = service.build_model("prod", table_ids=["out.c.t"])
+        # The id-less dataset must NOT be counted as created.
+        assert result["created"]["datasets"] == 0
+        assert result["created"]["metrics"] == 1
+        assert result["created"]["glossary"] == 1
+        # AND the id-less dataset must NOT be tracked for rollback -- on
+        # successful overall build there are zero DELETE calls regardless,
+        # but this makes the exclusion explicit (per padak's NIT-2 review).
+        mock.delete_item.assert_not_called()
+
+    def test_rollback_continues_when_individual_delete_fails(self, tmp_path: Path) -> None:
+        """A failed cleanup DELETE never masks the original error; remaining cleanup proceeds."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        mock.post_item.side_effect = [
+            {"id": "new-model"},
+            {"id": "d1"},
+            {"id": "m1"},
+            KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR),
+        ]
+        # First cleanup DELETE (the metric) raises; rest must still run.
+        mock.delete_item.side_effect = [
+            KeboolaApiError(
+                message="metric delete failed",
+                status_code=500,
+                error_code=ErrorCode.API_ERROR,
+            ),
+            None,  # dataset DELETE succeeds
+            None,  # model DELETE succeeds
+        ]
+        with self._patch_storage() as MockStorageCls:
+            inst = MockStorageCls.return_value
+            inst.get_table_detail.return_value = {
+                "column_details": [{"name": "X", "type": "NUMBER"}],
+            }
+            with pytest.raises(KeboolaApiError) as excinfo:
+                service.build_model("prod", table_ids=["out.c.t"])
+        rollback = (excinfo.value.details or {}).get("rollback") or {}
+        assert rollback["attempted"] is True
+        assert rollback["deleted"] == 1  # only the dataset DELETE succeeded
+        assert len(rollback["failed_deletes"]) == 1
+        assert rollback["failed_deletes"][0]["type"] == "semantic-metric"
+        assert rollback["model_deleted"] is True
 
 
 # ---------------------------------------------------------------------------

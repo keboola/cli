@@ -411,7 +411,7 @@ kbagent semantic-layer remove relationship --project P [--model M] --name N [--y
 kbagent semantic-layer remove glossary --project P [--model M] --term TERM [--yes]
 kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite]
 kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes]
-kbagent semantic-layer build --project P [--model M] --tables T,T,... [--name N] [--dry-run] [--output PATH]
+kbagent semantic-layer build --project P [--model M] --tables T,T,... [--name N] [--dry-run] [--keep-on-failure] [--output PATH]
 kbagent semantic-layer token --encrypt --project P --component-id C
 # Alias: `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
 

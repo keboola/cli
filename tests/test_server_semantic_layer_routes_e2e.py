@@ -460,6 +460,29 @@ def test_post_build_dry_run(http_session: dict[str, Any]) -> None:
     assert body["fallback_used"] == "heuristic"
 
 
+def test_post_build_keep_on_failure_propagates(http_session: dict[str, Any]) -> None:
+    """POST /semantic-layer/build with keep_on_failure=True propagates to the service.
+
+    Issue #295 added the rollback flag to the CLI; this verifies HTTP-API
+    parity (the BuildRequest pydantic model carries `keep_on_failure: bool`
+    and the route handler threads it through).
+    """
+    res = http_session["client"].post(
+        "/semantic-layer/build",
+        headers=_auth(),
+        json={
+            "project": _PROJECT_ALIAS,
+            "tables": ["out.c-syn.fact_a"],
+            "name": f"{http_session['tag']}_keep_on_failure_target",
+            "dry_run": True,
+            "keep_on_failure": True,
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["keep_on_failure"] is True
+
+
 def test_post_token_encrypt(http_session: dict[str, Any]) -> None:
     """POST /semantic-layer/token/encrypt — KBC::ProjectSecure envelope."""
     res = http_session["client"].post(

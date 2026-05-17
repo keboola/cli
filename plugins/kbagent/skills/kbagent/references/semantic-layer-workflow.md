@@ -224,6 +224,27 @@ success/failure in the response envelope's `rollback` field. If the
 rollback itself fails, the model is left in a partial state -- run
 `semantic-layer validate` immediately.
 
+**Partial cascade state (since v0.41.10)**: the cascade has per-item
+rollback only -- each constraint DELETE+POST rolls back individually.
+If the metric rename succeeds but M of N dependent constraints fail
+to repoint, the envelope sets `partial_state: true` at the top level
+and a `recovery_hint` string. Human-mode CLI prints a bright red
+`PARTIAL STATE` banner. Use the recovery recipe:
+
+```bash
+# 1. Diagnose: surface every dangling constraint reference
+kbagent --json semantic-layer validate --project prod --model core_model
+
+# 2. Re-cascade each failed constraint manually
+kbagent semantic-layer edit constraint --project prod --model core_model \
+    --name revenue_growth_minimum_warning --new-metrics revenue_growth_qoq
+```
+
+Atomic two-phase commit was rejected as disproportionate: the
+metastore has no PATCH endpoint, so every cascade 'stage' is itself a
+DELETE+POST that can fail; true atomicity would require side-staging
+every cascade item.
+
 ---
 
 ## Workflow 5 -- Remove a metric (with orphan-check)
@@ -362,6 +383,41 @@ For richer AI-assisted generation (full SQL analysis, relationship
 inference, paired range constraints), the `sl-build` skill in
 `04_AI_Kit/ai-kit/` is the right tool. The two are interoperable via
 the same metastore contract; bridge between them as needed.
+
+**Rollback on push failure (since v0.41.10)**: if a child POST fails
+mid-push, the service walks the list of successfully-POSTed children
+in REVERSE PUSH_ORDER and DELETEs each one, then DELETEs the model
+itself if we created it during this call. The wrapped error carries
+`details.rollback = {attempted, posted_children, deleted,
+failed_deletes, model_created_here, model_deleted, model_uuid}`.
+Pass `--keep-on-failure` (mirrors `data-app create --keep-on-failure`)
+to preserve the partial state for forensic inspection -- useful when
+you want to inspect what got POSTed before the failure:
+
+```bash
+# Preserve everything on failure for inspection
+kbagent --json semantic-layer build \
+    --project prod \
+    --tables out.c-revenue.fact_orders \
+    --keep-on-failure \
+    --name forensic_test_model
+# On failure: model + N children remain; error.details.rollback shows
+# {"attempted": false, "reason": "keep_on_failure", "posted_children": 3, ...}
+# Tear down by hand when done: `kbagent semantic-layer remove ...` per
+# child, then `kbagent semantic-layer model delete --yes`.
+
+# Default: rollback runs automatically, no orphans left behind
+kbagent --json semantic-layer build \
+    --project prod \
+    --tables out.c-revenue.fact_orders \
+    --name production_model
+# On failure: model + every successfully-POSTed child get DELETEd;
+# error.details.rollback shows {"attempted": true, "deleted": 3, ...}
+```
+
+When you pass `--model EXISTING_NAME` (update mode), the model itself
+is NEVER deleted on rollback -- only the children we POSTed during
+this specific call get torn down.
 
 ---
 

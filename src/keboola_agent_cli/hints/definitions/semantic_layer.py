@@ -673,6 +673,7 @@ HintRegistry.register(
                     model_name="{name}",
                     model_name_or_uuid="{model}",
                     dry_run="{dry_run}",
+                    keep_on_failure="{keep_on_failure}",
                     output_path="Path({output})",
                 ),
             ),
@@ -686,6 +687,10 @@ HintRegistry.register(
             "After the dataset POST, loop through semantic-metric, "
             "semantic-relationship, semantic-glossary, and semantic-constraint "
             "in that order.",
+            "On push failure the service deletes every successfully-POSTed "
+            "child in reverse PUSH_ORDER and deletes the model itself when "
+            "we created it. Pass `--keep-on-failure` to preserve the partial "
+            "state for forensic inspection (mirrors `data-app create`).",
         ],
     )
 )

@@ -327,6 +327,13 @@ def _print_edit_result(label: str):  # type: ignore[no-untyped-def]
         updated = d.get("updated") or {}
         attrs = updated.get("attributes") or {}
         name = attrs.get("name") or attrs.get("term", "?")
+        if d.get("partial_state"):
+            c.print(
+                f"[bold red]PARTIAL STATE[/bold red] -- {label} edit "
+                f"succeeded but one or more cascade entries failed. The "
+                f"model is internally inconsistent until you re-run the "
+                f"failed cascades."
+            )
         c.print(
             f"[bold green]Updated {label}[/bold green] [cyan]{name}[/cyan] "
             f"([dim]{updated.get('id', '')}[/dim])"
@@ -341,6 +348,8 @@ def _print_edit_result(label: str):  # type: ignore[no-untyped-def]
             )
         if d.get("rollback"):
             c.print(f"[bold red]Rollback applied:[/bold red] {d['rollback']}")
+        if d.get("recovery_hint"):
+            c.print(f"[bold yellow]Recovery:[/bold yellow] {d['recovery_hint']}")
 
     return _render
 

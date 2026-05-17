@@ -725,6 +725,86 @@ class TestEditMetric:
         )
         assert result.exit_code == 1
 
+    def test_partial_state_banner_in_human_output(self, store: ConfigStore) -> None:
+        """Human-mode CLI must print PARTIAL STATE banner when service returns partial_state=True (issue #294)."""
+        mock = MagicMock()
+        mock.edit_metric.return_value = {
+            "updated": {"id": "m_new", "attributes": {"name": "revenue"}},
+            "cascaded_constraints": [
+                {"constraint": "rev_warning", "status": "failed", "error": "boom"},
+            ],
+            "rollback": None,
+            "partial_state": True,
+            "recovery_hint": (
+                "1 cascade constraint(s) failed to repoint to 'revenue'. "
+                "Run `kbagent semantic-layer validate` to surface the dangling "
+                "references, then re-run each failed cascade via "
+                "`kbagent semantic-layer edit constraint --new-metrics ...`."
+            ),
+        }
+        result = _invoke(
+            [
+                # No --json: exercise the human-mode renderer.
+                "semantic-layer",
+                "edit",
+                "metric",
+                "--project",
+                "prod",
+                "--name",
+                "rev",
+                "--new-name",
+                "revenue",
+                "--yes",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        assert "PARTIAL STATE" in result.output
+        assert "Recovery:" in result.output
+
+    def test_partial_state_in_json_output(self, store: ConfigStore) -> None:
+        """--json mode must surface partial_state + recovery_hint at the envelope top level (issue #294, NB-2).
+
+        Catches a regression where the formatter layer strips or renames the
+        new keys -- the service-layer test wouldn't catch that; AI agents and
+        kbagent serve consumers always use --json, so this path is what they
+        depend on.
+        """
+        mock = MagicMock()
+        mock.edit_metric.return_value = {
+            "updated": {"id": "m_new", "attributes": {"name": "revenue"}},
+            "cascaded_constraints": [
+                {"constraint": "rev_warning", "status": "failed", "error": "boom"},
+            ],
+            "rollback": None,
+            "partial_state": True,
+            "recovery_hint": "Re-run `kbagent semantic-layer validate` and re-cascade manually.",
+        }
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "edit",
+                "metric",
+                "--project",
+                "prod",
+                "--name",
+                "rev",
+                "--new-name",
+                "revenue",
+                "--yes",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        assert body["status"] == "ok"
+        assert body["data"]["partial_state"] is True
+        assert body["data"]["recovery_hint"] is not None
+        assert "validate" in body["data"]["recovery_hint"]
+
 
 class TestEditDataset:
     def test_happy_path(self, store: ConfigStore) -> None:
@@ -1196,6 +1276,49 @@ class TestBuild:
         assert result.exit_code == 0, result.output
         body = json.loads(result.output)
         assert body["data"]["fallback_used"] == "heuristic"
+
+    def test_keep_on_failure_flag_propagates_through_cli(self, store: ConfigStore) -> None:
+        """The --keep-on-failure flag must propagate to build_model kwargs (issue #295).
+
+        Service-side rollback semantics are covered by
+        TestBuildModelRollback in test_semantic_layer_service.py.
+        """
+        mock = MagicMock()
+        mock.build_model.return_value = {
+            "project": "prod",
+            "dry_run": True,
+            "keep_on_failure": True,
+            "fallback_used": "heuristic",
+            "fetch_errors": [],
+            "generated": {
+                "name": "kbagent_build_model",
+                "datasets": [],
+                "metrics": [],
+                "relationships": [],
+                "constraints": [],
+                "glossary": [],
+            },
+            "validation": {"errors": [], "warnings": []},
+            "validated": True,
+        }
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "build",
+                "--project",
+                "prod",
+                "--tables",
+                "out.c.t",
+                "--dry-run",
+                "--keep-on-failure",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        _, kwargs = mock.build_model.call_args
+        assert kwargs["keep_on_failure"] is True
 
 
 # ---------------------------------------------------------------------------

@@ -205,10 +205,24 @@ def edit_metric_with_cascade(
                 }
             )
 
+    failed_cascades = [entry for entry in cascaded if entry["status"] == "failed"]
+    partial_state = bool(failed_cascades)
     return {
         "updated": new_item,
         "cascaded_constraints": cascaded,
         "rollback": rollback,
+        "partial_state": partial_state,
+        "recovery_hint": (
+            (
+                f"{len(failed_cascades)} cascade constraint(s) failed to repoint "
+                f"to '{effective_new_name}'. Run "
+                "`kbagent semantic-layer validate` to surface the dangling "
+                "references, then re-run each failed cascade via "
+                "`kbagent semantic-layer edit constraint --new-metrics ...`."
+            )
+            if partial_state
+            else None
+        ),
     }
 
 
@@ -306,8 +320,10 @@ def edit_simple(
             identity key is computed from the overrides.
         not_found_label: Human-readable label for the NOT_FOUND error.
 
-    Returns the same envelope shape as the legacy class methods:
-    ``{updated, cascaded_constraints: [], rollback}``.
+    Returns the same envelope shape as ``edit_metric_with_cascade``:
+    ``{updated, cascaded_constraints: [], rollback, partial_state: False,
+    recovery_hint: None}``. No-cascade variants never enter a partial
+    state, but carry the keys for envelope uniformity.
     """
     target = next(
         (i for i in items if (i.get("attributes") or {}).get(id_key) == current_key),
@@ -332,7 +348,13 @@ def edit_simple(
         new_name=effective_new,
         new_attrs=new_attrs,
     )
-    return {"updated": new_item, "cascaded_constraints": [], "rollback": rollback}
+    return {
+        "updated": new_item,
+        "cascaded_constraints": [],
+        "rollback": rollback,
+        "partial_state": False,
+        "recovery_hint": None,
+    }
 
 
 def scan_orphan_constraints(
