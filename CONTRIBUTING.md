@@ -527,6 +527,13 @@ steps 5-8 is that **CI will not catch you** if you skip them; they are the
 manual safety net for the silent-drift risks summarized in the
 [Plugin synchronization map](#plugin-synchronization-map) above.
 
+> **Want to ship a beta first?** You can. PEP 440 pre-release versions
+> (`0.43.0b1`, `0.43.0rc1`) are fully supported by `kbagent update --beta`
+> since v0.42.0. The startup auto-update hook never silently lands on a
+> beta -- only explicit opt-in installs them. See
+> [Releasing a beta (pre-release) version](#releasing-a-beta-pre-release-version)
+> below for the workflow.
+
 1. **Edit `pyproject.toml`** -- bump `version = "X.Y.Z"`. Single source of truth; everything else derives from it.
 2. **Add a changelog entry** to `src/keboola_agent_cli/changelog.py` -- one entry per release, no exceptions. CI fails (`make changelog-check`) if this is missing.
 3. **Run `make version-sync`** -- propagates the new version to `plugins/kbagent/.claude-plugin/plugin.json`. The pre-commit hook does this automatically on `git commit`, but running it explicitly lets you eyeball the diff.
