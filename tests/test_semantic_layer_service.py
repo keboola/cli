@@ -293,25 +293,119 @@ class TestCreateModel:
 
 
 class TestDeleteModel:
-    def test_lists_children_before_delete(self, tmp_path: Path) -> None:
+    def test_cascade_deletes_children_then_parent(self, tmp_path: Path) -> None:
+        """Children deleted in reverse PUSH_ORDER, then the parent."""
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
 
         def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
             if item_type == "semantic-model":
                 return [_model_item("u1", "doomed")]
+            if item_type == "semantic-dataset":
+                return [_child_item("semantic-dataset", "d1", {"name": "addresses"})]
             if item_type == "semantic-metric":
-                return [_child_item("semantic-metric", "m1", {"name": "x"})]
+                return [_child_item("semantic-metric", "m1", {"name": "revenue"})]
+            if item_type == "semantic-constraint":
+                return [_child_item("semantic-constraint", "c1", {"name": "rev_critical"})]
             return []
 
         mock.list_items.side_effect = _list
         result = service.delete_model("prod", model_name_or_uuid="doomed")
-        assert result["deleted"]["id"] == "u1"
-        assert result["deleted"]["name"] == "doomed"
-        # delete_item was called for the model
+
+        # Reverse PUSH_ORDER: constraints → glossary → relationships → metrics → datasets → model.
+        # Glossary and relationships are empty here, so the visible order is:
+        # constraint → metric → dataset → semantic-model.
+        actual_calls = [args for args, _ in mock.delete_item.call_args_list]
+        assert actual_calls == [
+            ("semantic-constraint", "c1"),
+            ("semantic-metric", "m1"),
+            ("semantic-dataset", "d1"),
+            ("semantic-model", "u1"),
+        ]
+
+        assert result["deleted"] == {"id": "u1", "name": "doomed"}
+        assert result["cascade"]["parent_deleted"] is True
+        assert result["cascade"]["failures"] == []
+        assert result["cascade"]["deleted"] == {
+            "datasets": 1,
+            "metrics": 1,
+            "relationships": 0,
+            "glossary": 0,
+            "constraints": 1,
+        }
+        # orphaned_children kept as alias for the deleted counts (back-compat).
+        assert result["orphaned_children"] == result["cascade"]["deleted"]
+
+    def test_cascade_partial_failure_preserves_parent(self, tmp_path: Path) -> None:
+        """Mid-cascade child failure leaves the parent intact; surface failures."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("u1", "doomed")]
+            if item_type == "semantic-dataset":
+                return [_child_item("semantic-dataset", "d1", {"name": "addresses"})]
+            if item_type == "semantic-metric":
+                return [
+                    _child_item("semantic-metric", "m1", {"name": "revenue"}),
+                    _child_item("semantic-metric", "m2", {"name": "orders"}),
+                ]
+            return []
+
+        mock.list_items.side_effect = _list
+
+        # Fail the first metric DELETE; everything else succeeds.
+        def _delete(item_type: str, item_id: str) -> None:
+            if item_type == "semantic-metric" and item_id == "m1":
+                raise KeboolaApiError(
+                    message="metric still referenced by something",
+                    error_code=ErrorCode.VALIDATION_ERROR,
+                    status_code=409,
+                )
+
+        mock.delete_item.side_effect = _delete
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.delete_model("prod", model_name_or_uuid="doomed")
+
+        # Parent delete must NOT have been attempted.
+        attempted_types = [args[0] for args, _ in mock.delete_item.call_args_list]
+        assert "semantic-model" not in attempted_types
+
+        # Cascade kept going past the failure (m2 and d1 still attempted).
+        assert ("semantic-metric", "m2") in [args for args, _ in mock.delete_item.call_args_list]
+        assert ("semantic-dataset", "d1") in [args for args, _ in mock.delete_item.call_args_list]
+
+        details = excinfo.value.details or {}
+        cascade = details.get("cascade") or {}
+        assert cascade["parent_deleted"] is False
+        assert cascade["model_uuid"] == "u1"
+        assert len(cascade["failures"]) == 1
+        assert cascade["failures"][0]["type"] == "semantic-metric"
+        assert cascade["failures"][0]["id"] == "m1"
+        assert cascade["failures"][0]["name"] == "revenue"
+        # The successful siblings are counted in deleted.
+        assert cascade["deleted"]["metrics"] == 1
+        assert cascade["deleted"]["datasets"] == 1
+
+    def test_empty_model_deletes_parent_only(self, tmp_path: Path) -> None:
+        """A childless model deletes the parent and reports zero cascades."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("u1", "doomed")]
+            return []
+
+        mock.list_items.side_effect = _list
+        result = service.delete_model("prod", model_name_or_uuid="doomed")
+
         mock.delete_item.assert_called_once_with("semantic-model", "u1")
-        # counts in orphaned_children
-        assert result["orphaned_children"]["metrics"] == 1
+        assert result["cascade"]["parent_deleted"] is True
+        assert all(v == 0 for v in result["cascade"]["deleted"].values())
+        assert result["cascade"]["failures"] == []
 
 
 # ---------------------------------------------------------------------------

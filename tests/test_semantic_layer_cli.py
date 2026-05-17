@@ -223,7 +223,25 @@ class TestModelDelete:
         mock.delete_model.return_value = {
             "project": "prod",
             "deleted": {"id": "u1", "name": "default"},
-            "orphaned_children": {},
+            "cascade": {
+                "attempted": True,
+                "deleted": {
+                    "datasets": 0,
+                    "metrics": 0,
+                    "relationships": 0,
+                    "glossary": 0,
+                    "constraints": 0,
+                },
+                "failures": [],
+                "parent_deleted": True,
+            },
+            "orphaned_children": {
+                "datasets": 0,
+                "metrics": 0,
+                "relationships": 0,
+                "glossary": 0,
+                "constraints": 0,
+            },
         }
         result = _invoke(
             [

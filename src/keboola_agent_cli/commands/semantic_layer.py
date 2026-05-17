@@ -162,7 +162,7 @@ def model_delete(
     model: str = typer.Option(..., "--model", help="Model name or UUID"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
 ) -> None:
-    """Delete a semantic-layer model. Fails if the model still has children."""
+    """Delete a semantic-layer model and cascade-delete its children."""
     if should_hint(ctx):
         emit_hint(ctx, "semantic-layer.model.delete", project=project, model=model)
         return
@@ -174,7 +174,9 @@ def model_delete(
         and not formatter.json_mode
         and not typer.confirm(
             f"Delete model '{model}' in project '{project}'? "
-            "If the model has datasets/metrics/etc. the API will refuse."
+            "This cascade-deletes ALL child entities (datasets, metrics, "
+            "relationships, constraints, glossary terms) belonging to the model. "
+            "This is irreversible."
         )
     ):
         formatter.console.print("Aborted.")
@@ -190,7 +192,8 @@ def model_delete(
         result,
         lambda c, d: c.print(
             f"[bold green]Deleted model[/bold green] [cyan]{d['deleted']['name']}[/cyan] "
-            f"([dim]{d['deleted']['id']}[/dim])"
+            f"([dim]{d['deleted']['id']}[/dim]) "
+            f"+ cascaded {sum(d.get('cascade', {}).get('deleted', {}).values())} child(ren)"
         ),
     )
 

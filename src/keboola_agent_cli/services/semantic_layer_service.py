@@ -33,8 +33,8 @@ from ._semantic_layer_crud import edit_simple as _edit_simple_helper
 from ._semantic_layer_crud import find_target_for_remove as _find_target_for_remove
 from ._semantic_layer_crud import scan_orphan_constraints as _scan_orphan_constraints
 from ._semantic_layer_crud import validate_constraint_attrs as _validate_constraint_attrs
+from ._semantic_layer_internals import PUSH_ORDER, collect_side_from_file
 from ._semantic_layer_internals import build_export_snapshot as _build_export_snapshot
-from ._semantic_layer_internals import collect_side_from_file
 from ._semantic_layer_internals import default_export_path as _default_export_path
 from ._semantic_layer_internals import diff_one_type as _diff_one_type_helper
 from ._semantic_layer_internals import fetch_table_schemas as _fetch_table_schemas
@@ -613,30 +613,112 @@ class SemanticLayerService(BaseService):
         alias: str,
         model_name_or_uuid: str,
     ) -> dict[str, Any]:
-        """Delete a semantic-layer model.
+        """Delete a semantic-layer model and cascade-delete its children.
 
-        Lists every referencing child entity first so the caller can warn
-        about orphaning. The metastore may refuse to delete a model that
-        still has children — we surface that error verbatim.
+        Children are deleted in reverse :data:`PUSH_ORDER` (constraints
+        first, datasets last) so each row's references are gone before the
+        row itself. On any child-DELETE failure we collect the error,
+        finish the cascade pass, **skip the parent**, and raise a
+        :class:`KeboolaApiError` carrying ``details.cascade`` — the same
+        envelope shape used by :func:`push_built_model` rollback. Re-running
+        the command after fixing the underlying error completes the
+        deletion.
         """
         project = self._resolve_one_project(alias)
         client = self._new_metastore_client(project)
         try:
             model_uuid, model_attrs = self._resolve_model(client, model_name_or_uuid)
             children = self._fetch_children_parallel(client, model_uuid)
+
+            deleted_counts: dict[str, int] = {plural: 0 for plural, _ in PUSH_ORDER}
+            failures: list[dict[str, str]] = []
+            # reversed(PUSH_ORDER) → constraints, glossary, relationships,
+            # metrics, datasets. Constraints reference metrics by name and
+            # metrics reference dataset tableIds, so this order kills the
+            # references before their targets.
+            for plural, type_slug in reversed(PUSH_ORDER):
+                for item in children.get(type_slug, []) or []:
+                    child_id = str(item.get("id", "") or "")
+                    if not child_id:
+                        continue
+                    attrs = item.get("attributes") or {}
+                    child_name = attrs.get("name") or attrs.get("term") or ""
+                    try:
+                        client.delete_item(type_slug, child_id)
+                        deleted_counts[plural] += 1
+                    except (KeyboardInterrupt, SystemExit):
+                        raise
+                    except Exception as exc:
+                        # Broad catch matches push_built_model rollback: a
+                        # non-API exception (httpx transport error, etc.)
+                        # must not abort the cascade or mask sibling
+                        # failures. Collect, log at warning level, continue.
+                        err = (
+                            exc.message
+                            if isinstance(exc, KeboolaApiError)
+                            else str(exc) or type(exc).__name__
+                        )
+                        failures.append(
+                            {
+                                "type": type_slug,
+                                "id": child_id,
+                                "name": child_name,
+                                "error": err,
+                            }
+                        )
+                        logger.warning(
+                            "Cascade DELETE failed for %s id=%s name=%s: %s",
+                            type_slug,
+                            child_id,
+                            child_name,
+                            err,
+                        )
+
+            if failures:
+                # Skip the parent: a "no parent + some children" partial
+                # state would still hit the exact 422 collision this fix
+                # is closing. Surface the failures so the user can re-run.
+                raise KeboolaApiError(
+                    message=(
+                        f"Cascade-delete for model "
+                        f"{model_attrs.get('name', '') or model_uuid!r} ({model_uuid}) "
+                        f"failed for {len(failures)} child(ren); parent preserved. "
+                        f"Re-run `kbagent semantic-layer model delete "
+                        f"--project {alias} --model {model_uuid}` "
+                        f"after resolving the underlying errors."
+                    ),
+                    error_code=ErrorCode.INTERNAL_ERROR,
+                    status_code=500,
+                    details={
+                        "cascade": {
+                            "attempted": True,
+                            "deleted": deleted_counts,
+                            "failures": failures,
+                            "parent_deleted": False,
+                            "model_uuid": model_uuid,
+                        }
+                    },
+                )
+
             client.delete_item("semantic-model", model_uuid)
         finally:
             client.close()
-        # Pluralise the bare keys (semantic-dataset -> "datasets", etc.).
-        # The naive ``key + "s"`` rule produces "glossarys" for the one
-        # already-plural type; fold it back to "glossary" so the wire shape
-        # matches the rest of the codebase (see ``_PLURAL_BY_TYPE`` above).
-        counts = {k.replace("semantic-", "") + "s": len(v) for k, v in children.items()}
-        counts.setdefault("glossary", counts.pop("glossarys", 0))
+
         return {
             "project": alias,
             "deleted": {"id": model_uuid, "name": model_attrs.get("name", "")},
-            "orphaned_children": counts,
+            "cascade": {
+                "attempted": True,
+                "deleted": deleted_counts,
+                "failures": [],
+                "parent_deleted": True,
+            },
+            # Back-compat: the key existed before this fix as a count of
+            # *leaked* children. After the fix it counts *cascaded*
+            # children. Same shape, opposite meaning — JSON consumers see
+            # zeros instead of leaks on the happy path, which is the
+            # behavior they always wanted.
+            "orphaned_children": deleted_counts,
         }
 
     # ------------------------------------------------------------------
