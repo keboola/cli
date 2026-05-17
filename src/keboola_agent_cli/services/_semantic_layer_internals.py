@@ -938,6 +938,62 @@ def write_snapshot_to_file(snapshot: dict[str, Any], output_path: Path) -> None:
         os.close(fd)
 
 
+# Map warehouse-native column types onto the closed set the metastore
+# accepts for `fields[*].type`. Anything not matched falls through to
+# "string" — safest default for legacy untyped Storage tables.
+_FIELD_TYPE_MAP: dict[str, str] = {
+    # strings
+    "varchar": "string",
+    "char": "string",
+    "string": "string",
+    "text": "string",
+    "nvarchar": "string",
+    "nchar": "string",
+    # integers
+    "int": "integer",
+    "integer": "integer",
+    "bigint": "integer",
+    "smallint": "integer",
+    "tinyint": "integer",
+    # decimals
+    "decimal": "decimal",
+    "numeric": "decimal",
+    "number": "decimal",
+    "float": "decimal",
+    "double": "decimal",
+    "real": "decimal",
+    "money": "decimal",
+    # booleans
+    "boolean": "boolean",
+    "bool": "boolean",
+    "bit": "boolean",
+    # date / datetime
+    "date": "date",
+    "datetime": "datetime",
+    "datetime2": "datetime",
+    "timestamp": "datetime",
+    "timestamptz": "datetime",
+    "timestamp_ntz": "datetime",
+    "timestamp_ltz": "datetime",
+    "timestamp_tz": "datetime",
+    # json
+    "json": "json",
+    "jsonb": "json",
+    "variant": "json",
+    "object": "json",
+    "array": "json",
+}
+
+
+def _normalize_field_type(basetype: str) -> str:
+    """Coerce a warehouse-native type into the metastore's closed vocabulary."""
+    if not basetype:
+        return "string"
+    # strip parens (e.g. VARCHAR(255), DECIMAL(38, 9))
+    head = basetype.split("(", 1)[0].strip().lower()
+    return _FIELD_TYPE_MAP.get(head, "string")
+
+
 def heuristic_generate_model(
     *,
     schemas: dict[str, dict[str, Any]],
@@ -970,10 +1026,16 @@ def heuristic_generate_model(
         for col in detail.get("column_details", []) or []:
             cname = col.get("name", "")
             basetype = col.get("type", "") or col.get("native_type", "")
+            # Metastore validates field types against a closed lowercase set:
+            #   {string, integer, decimal, boolean, date, datetime, json}
+            # Storage returns warehouse-native types (VARCHAR, INTEGER, ...)
+            # or empty strings for untyped legacy tables. Map both to the
+            # metastore vocabulary; fall back to "string" for unknown /
+            # empty types so the builder doesn't 422 on legacy buckets.
             fields.append(
                 {
                     "name": cname,
-                    "type": basetype,
+                    "type": _normalize_field_type(basetype),
                     "role": classify_role(cname, basetype),
                 }
             )

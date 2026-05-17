@@ -2,10 +2,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
   Download,
+  GitCompare,
+  KeyRound,
+  PackagePlus,
   Pencil,
   Plus,
   RefreshCw,
+  Send,
   Trash2,
+  Upload,
   XCircle,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -15,15 +20,23 @@ import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
+import {
+  BuildDialog,
+  DiffDialog,
+  ImportDialog,
+  PromoteDialog,
+  TokenEncryptDialog,
+} from "./SemanticLayerDialogs";
 
 /**
  * Semantic Layer (Keboola Metastore) page.
  *
  * Mirrors the `kbagent semantic-layer` CLI surface (v0.41.0+) for full
  * CRUD on models and the five entity kinds — metric, dataset,
- * relationship, constraint, glossary — plus the read-side workflow
- * operations (Validate, Export). Diff / Promote / Import / Build are
- * tracked separately and not in this iteration.
+ * relationship, constraint, glossary — plus every read-side workflow
+ * operation: Validate, Export, Diff, Promote, Import, Build, and the
+ * project-scoped Token-encrypt utility (Phase 3 dialogs live in
+ * SemanticLayerDialogs.tsx).
  *
  * Design notes:
  * - Schema-driven forms: each entity kind has a declarative field list
@@ -437,6 +450,14 @@ export function SemanticLayerPage() {
   const [activeModel, setActiveModel] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<EntityKind>("metric");
   const [showNewModel, setShowNewModel] = useState(false);
+  // Phase 3 workflow dialogs. State lives on the page so the buttons can
+  // sit in the page header (Build/Import/Token are project-scoped, not
+  // model-scoped) while Diff/Promote get triggered from ModelHeader.
+  const [showDiff, setShowDiff] = useState(false);
+  const [showPromote, setShowPromote] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [showBuild, setShowBuild] = useState(false);
+  const [showToken, setShowToken] = useState(false);
   const qc = useQueryClient();
 
   const modelsQ = useQuery<ModelsResponse>({
@@ -471,13 +492,39 @@ export function SemanticLayerPage() {
         title="Semantic Layer"
         description={`Keboola Metastore for ${project}. Models, metrics, datasets, relationships, constraints, glossary.`}
         actions={
-          <button
-            type="button"
-            className="nerd-btn flex items-center gap-1 hover:text-keboola"
-            onClick={() => setShowNewModel(true)}
-          >
-            <Plus className="w-3 h-3" /> New model
-          </button>
+          <div className="flex items-center gap-1 flex-wrap">
+            <button
+              type="button"
+              className="nerd-btn flex items-center gap-1 hover:text-keboola"
+              onClick={() => setShowNewModel(true)}
+            >
+              <Plus className="w-3 h-3" /> New model
+            </button>
+            <button
+              type="button"
+              className="nerd-btn flex items-center gap-1 hover:text-keboola"
+              onClick={() => setShowBuild(true)}
+              title="Heuristic greenfield builder — pick tables, get a starter model"
+            >
+              <PackagePlus className="w-3 h-3" /> Build
+            </button>
+            <button
+              type="button"
+              className="nerd-btn flex items-center gap-1 hover:text-keboola"
+              onClick={() => setShowImport(true)}
+              title="Replay a JSON snapshot into a model"
+            >
+              <Upload className="w-3 h-3" /> Import
+            </button>
+            <button
+              type="button"
+              className="nerd-btn flex items-center gap-1 hover:text-keboola"
+              onClick={() => setShowToken(true)}
+              title="Encrypt project storage token for transformation user_properties"
+            >
+              <KeyRound className="w-3 h-3" /> Encrypt token
+            </button>
+          </div>
         }
       />
 
@@ -497,6 +544,8 @@ export function SemanticLayerPage() {
           activeModel={resolvedModel}
           onChange={setActiveModel}
           project={project}
+          onOpenDiff={() => setShowDiff(true)}
+          onOpenPromote={() => setShowPromote(true)}
         />
       ) : null}
 
@@ -520,6 +569,48 @@ export function SemanticLayerPage() {
           }}
         />
       ) : null}
+
+      {showDiff ? (
+        <DiffDialog initialProject={project} onClose={() => setShowDiff(false)} />
+      ) : null}
+
+      {showPromote ? (
+        <PromoteDialog
+          initialFromProject={project}
+          onClose={() => setShowPromote(false)}
+        />
+      ) : null}
+
+      {showImport ? (
+        <ImportDialog
+          initialProject={project}
+          initialModel={resolvedModel ?? ""}
+          onClose={() => setShowImport(false)}
+          onImported={() => {
+            // Refresh the show query so the new entities surface immediately.
+            qc.invalidateQueries({ queryKey: ["sl-show"] });
+            qc.invalidateQueries({ queryKey: ["sl-models", project] });
+          }}
+        />
+      ) : null}
+
+      {showBuild ? (
+        <BuildDialog
+          initialProject={project}
+          initialModel={resolvedModel ?? ""}
+          onClose={() => setShowBuild(false)}
+          onBuilt={() => {
+            // Built model may be brand new — refresh the model list so it
+            // appears in the dropdown and gets auto-selected.
+            qc.invalidateQueries({ queryKey: ["sl-models", project] });
+            qc.invalidateQueries({ queryKey: ["sl-show"] });
+          }}
+        />
+      ) : null}
+
+      {showToken ? (
+        <TokenEncryptDialog initialProject={project} onClose={() => setShowToken(false)} />
+      ) : null}
     </div>
   );
 }
@@ -531,11 +622,15 @@ function ModelHeader({
   activeModel,
   onChange,
   project,
+  onOpenDiff,
+  onOpenPromote,
 }: {
   models: Model[];
   activeModel: string | null;
   onChange: (m: string) => void;
   project: string;
+  onOpenDiff: () => void;
+  onOpenPromote: () => void;
 }) {
   const qc = useQueryClient();
   const [showValidate, setShowValidate] = useState(false);
@@ -630,6 +725,22 @@ function ModelHeader({
         >
           <Download className="w-3 h-3" /> Export
         </button>
+        <button
+          type="button"
+          className="nerd-btn text-xs flex items-center gap-1 hover:text-keboola"
+          onClick={onOpenDiff}
+          title="Diff two snapshots (project↔project, project↔file, file↔file)"
+        >
+          <GitCompare className="w-3 h-3" /> Diff
+        </button>
+        <button
+          type="button"
+          className="nerd-btn text-xs flex items-center gap-1 hover:text-keboola"
+          onClick={onOpenPromote}
+          title="Promote this model to another project (with dry-run preview)"
+        >
+          <Send className="w-3 h-3" /> Promote
+        </button>
       </div>
 
       {showValidate && activeModel ? (
@@ -687,7 +798,9 @@ function NewModelDrawer({
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [sqlDialect, setSqlDialect] = useState("snowflake");
+  // Metastore is case-sensitive on the dialect name. Service default is
+  // "Snowflake" (capital S) -- lower-case "snowflake" trips a 422.
+  const [sqlDialect, setSqlDialect] = useState("Snowflake");
   const [error, setError] = useState<string | null>(null);
 
   const mu = useMutation<{ model?: { name?: string } }>({
@@ -737,8 +850,8 @@ function NewModelDrawer({
             value={sqlDialect}
             onChange={(e) => setSqlDialect(e.target.value)}
           >
-            <option value="snowflake">snowflake</option>
-            <option value="bigquery">bigquery</option>
+            <option value="Snowflake">Snowflake</option>
+            <option value="BigQuery">BigQuery</option>
           </select>
         </label>
         {error ? <ErrorBox message={error} /> : null}
@@ -996,6 +1109,7 @@ function EntityFormDrawer({
   onSaved: () => void;
 }) {
   const schema = ENTITY_SCHEMAS[kind];
+  const qc = useQueryClient();
   const [values, setValues] = useState<Record<string, unknown>>(() => {
     // Seed edit form with current values; add form starts empty.
     if (mode === "edit" && initial) {
@@ -1042,7 +1156,14 @@ function EntityFormDrawer({
         body,
       );
     },
-    onSuccess: onSaved,
+    onSuccess: () => {
+      // Force the parent's show-query to refetch BEFORE the drawer unmounts —
+      // the parent's refetch() callback alone occasionally races with React
+      // strict-mode double-effects, leaving the entity table stale. Invalidating
+      // here makes the refresh deterministic.
+      qc.invalidateQueries({ queryKey: ["sl-show", project, model] });
+      onSaved();
+    },
     onError: (err) => setError((err as Error).message),
   });
 
