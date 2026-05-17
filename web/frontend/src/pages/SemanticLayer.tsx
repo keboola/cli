@@ -1,24 +1,31 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   CheckCircle2,
   Download,
   GitCompare,
+  Info,
   KeyRound,
+  Network,
   PackagePlus,
   Pencil,
   Plus,
   RefreshCw,
+  Search,
   Send,
+  Table as TableIcon,
   Trash2,
   Upload,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import mermaid from "mermaid";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
+import { useTheme } from "../theme";
 import { useUIState } from "../state";
 import {
   BuildDialog,
@@ -27,6 +34,28 @@ import {
   PromoteDialog,
   TokenEncryptDialog,
 } from "./SemanticLayerDialogs";
+
+/**
+ * Metastore returns camelCase attribute keys (`tableId`, `primaryKey`,
+ * `constraintType`) while every Python-side surface (CLI args, Pydantic
+ * bodies, schema-driven form keys) uses snake_case. We do the bridge here so
+ * the rest of the page stays in one vocabulary and `tableColumns[*].cell(r)`
+ * functions keep working. The lossy aliases stay in place even when the
+ * original snake_case key already exists -- belt-and-braces.
+ */
+function normalizeEntityRow(row: Record<string, unknown>): EntityRow {
+  const out = { ...row } as Record<string, unknown>;
+  for (const [from, to] of [
+    ["tableId", "table_id"],
+    ["primaryKey", "primary_key"],
+    ["constraintType", "constraint_type"],
+  ] as const) {
+    if (out[from] !== undefined && out[to] === undefined) {
+      out[to] = out[from];
+    }
+  }
+  return out as EntityRow;
+}
 
 /**
  * Semantic Layer (Keboola Metastore) page.
@@ -904,9 +933,19 @@ function ModelDetail({
 
   const rows = useMemo<EntityRow[]>(() => {
     if (!showQ.data) return [];
-    return (showQ.data[kindToField[activeTab]] ?? []) as EntityRow[];
+    const raw = (showQ.data[kindToField[activeTab]] ?? []) as Record<string, unknown>[];
+    return raw.map(normalizeEntityRow);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showQ.data, activeTab]);
+
+  // Datasets are needed by the Relationships ER diagram (every edge endpoint
+  // must resolve to a dataset name). Always available regardless of activeTab.
+  const allDatasets = useMemo<EntityRow[]>(() => {
+    if (!showQ.data) return [];
+    return (showQ.data.datasets ?? []).map((r) =>
+      normalizeEntityRow(r as Record<string, unknown>),
+    );
+  }, [showQ.data]);
 
   return (
     <div className="space-y-4">
@@ -952,6 +991,7 @@ function ModelDetail({
           model={model}
           kind={activeTab}
           rows={rows}
+          allDatasets={allDatasets}
           onChange={() => showQ.refetch()}
         />
       ) : null}
@@ -966,18 +1006,50 @@ function EntityPanel({
   model,
   kind,
   rows,
+  allDatasets,
   onChange,
 }: {
   project: string;
   model: string;
   kind: EntityKind;
   rows: EntityRow[];
+  allDatasets: EntityRow[];
   onChange: () => void;
 }) {
   const schema = ENTITY_SCHEMAS[kind];
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<EntityRow | null>(null);
   const [inspecting, setInspecting] = useState<EntityRow | null>(null);
+  // Quick search across every visible string field. Empty = no filter.
+  const [search, setSearch] = useState("");
+  // Per-kind view toggle. Today only relationship supports a graph (ER)
+  // alternate; everything else stays "table". Stored on the panel so
+  // switching tabs resets it -- intentional, the graph is relationship-only.
+  const [viewMode, setViewMode] = useState<"table" | "graph">("table");
+  // Optional dataset chip filter for relationships (e.g. "only edges that
+  // touch conversations_complete_enriched"). Applies in both views.
+  const [relDatasetFilter, setRelDatasetFilter] = useState<string>("");
+
+  const filteredRows = useMemo<EntityRow[]>(() => {
+    let out = rows;
+    if (kind === "relationship" && relDatasetFilter) {
+      out = out.filter(
+        (r) => r.from === relDatasetFilter || r.to === relDatasetFilter,
+      );
+    }
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      out = out.filter((r) => {
+        for (const v of Object.values(r)) {
+          if (typeof v === "string" && v.toLowerCase().includes(q)) return true;
+          if (Array.isArray(v) && v.some((x) => String(x).toLowerCase().includes(q)))
+            return true;
+        }
+        return false;
+      });
+    }
+    return out;
+  }, [rows, search, kind, relDatasetFilter]);
 
   const deleteMu = useMutation({
     mutationFn: (row: EntityRow) => {
@@ -990,58 +1062,137 @@ function EntityPanel({
     onSuccess: onChange,
   });
 
+  const renderRowActions = (r: EntityRow) => (
+    <div className="flex justify-end gap-1">
+      <button
+        type="button"
+        className="nerd-btn text-xs"
+        onClick={(e) => {
+          e.stopPropagation();
+          setEditing(r);
+        }}
+        title="Edit"
+      >
+        <Pencil className="w-3 h-3" />
+      </button>
+      <button
+        type="button"
+        className="nerd-btn text-xs hover:text-red-400 hover:border-red-700"
+        onClick={(e) => {
+          e.stopPropagation();
+          const pk = r[schema.pkField] as string;
+          if (confirm(`Delete ${kind} '${pk}'?`)) deleteMu.mutate(r);
+        }}
+        title="Delete"
+      >
+        <Trash2 className="w-3 h-3" />
+      </button>
+    </div>
+  );
+
   return (
     <>
       <div className="nerd-card">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-keboola font-bold text-sm">{schema.pluralLabel}</h3>
-          <button
-            type="button"
-            className="nerd-btn text-xs flex items-center gap-1 hover:text-keboola"
-            onClick={() => setAdding(true)}
-          >
-            <Plus className="w-3 h-3" /> Add {kind}
-          </button>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h3 className="text-keboola font-bold text-sm">
+            {schema.pluralLabel}{" "}
+            <span className="text-zinc-500 font-normal text-[10px]">
+              {search || (kind === "relationship" && relDatasetFilter)
+                ? `${filteredRows.length} / ${rows.length}`
+                : rows.length}
+            </span>
+          </h3>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="relative">
+              <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-zinc-500" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search…"
+                className="nerd-input text-xs pl-6 w-44"
+              />
+            </label>
+            {kind === "relationship" ? (
+              <>
+                <select
+                  className="nerd-input text-xs py-1"
+                  value={relDatasetFilter}
+                  onChange={(e) => setRelDatasetFilter(e.target.value)}
+                  title="Filter relationships touching a specific dataset"
+                >
+                  <option value="">(all datasets)</option>
+                  {allDatasets
+                    .map((d) => (d.table_id as string) || "")
+                    .filter(Boolean)
+                    .sort((a, b) => a.localeCompare(b))
+                    .map((tid) => (
+                      <option key={tid} value={tid}>
+                        {tid}
+                      </option>
+                    ))}
+                </select>
+                <div className="flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    className={`nerd-btn text-xs px-1.5 ${
+                      viewMode === "table" ? "border-keboola text-keboola" : ""
+                    }`}
+                    onClick={() => setViewMode("table")}
+                    title="Table view"
+                  >
+                    <TableIcon className="w-3 h-3" />
+                  </button>
+                  <button
+                    type="button"
+                    className={`nerd-btn text-xs px-1.5 ${
+                      viewMode === "graph" ? "border-keboola text-keboola" : ""
+                    }`}
+                    onClick={() => setViewMode("graph")}
+                    title="ER diagram view"
+                  >
+                    <Network className="w-3 h-3" />
+                  </button>
+                </div>
+              </>
+            ) : null}
+            <button
+              type="button"
+              className="nerd-btn text-xs flex items-center gap-1 hover:text-keboola"
+              onClick={() => setAdding(true)}
+            >
+              <Plus className="w-3 h-3" /> Add {kind}
+            </button>
+          </div>
         </div>
+
         {rows.length === 0 ? (
           <Empty title={`No ${schema.pluralLabel.toLowerCase()} yet`} />
+        ) : kind === "relationship" && viewMode === "graph" ? (
+          <RelationshipsERDiagram
+            datasets={allDatasets}
+            relationships={filteredRows}
+            onPickEdge={(r) => setEditing(r)}
+          />
+        ) : kind === "constraint" ? (
+          <ConstraintGroupedTable
+            rows={filteredRows}
+            onRowClick={(r) => setInspecting(r)}
+            renderRowActions={renderRowActions}
+          />
         ) : (
           <DataTable
-            rows={rows}
-            rowKey={(r) => (r[schema.pkField] as string) ?? JSON.stringify(r).slice(0, 32)}
+            rows={filteredRows}
+            rowKey={(r) =>
+              (r[schema.pkField] as string) ?? JSON.stringify(r).slice(0, 32)
+            }
             onRowClick={(r) => setInspecting(r)}
             columns={[
               ...schema.tableColumns,
               {
                 header: "",
                 align: "right",
-                cell: (r) => (
-                  <div className="flex justify-end gap-1">
-                    <button
-                      type="button"
-                      className="nerd-btn text-xs"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditing(r);
-                      }}
-                      title="Edit"
-                    >
-                      <Pencil className="w-3 h-3" />
-                    </button>
-                    <button
-                      type="button"
-                      className="nerd-btn text-xs hover:text-red-400 hover:border-red-700"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const pk = r[schema.pkField] as string;
-                        if (confirm(`Delete ${kind} '${pk}'?`)) deleteMu.mutate(r);
-                      }}
-                      title="Delete"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                ),
+                cell: renderRowActions,
               },
             ]}
           />
@@ -1082,7 +1233,11 @@ function EntityPanel({
           onClose={() => setInspecting(null)}
           title={`${kind} · ${inspecting[schema.pkField] ?? "(no name)"}`}
         >
-          <JsonView data={inspecting} />
+          {kind === "dataset" ? (
+            <DatasetDetail row={inspecting} />
+          ) : (
+            <JsonView data={inspecting} />
+          )}
         </Drawer>
       ) : null}
     </>
@@ -1321,5 +1476,432 @@ function FieldInput({
       />
       {helpEl}
     </label>
+  );
+}
+
+// ── DatasetDetail ─────────────────────────────────────────────────────
+//
+// Rendered inside the inspect-drawer when kind="dataset". Surfaces the
+// curated metadata (FQN, primary key, grain, AI keywords) at the top and
+// shows the fields[] table with role + type + description so users don't
+// have to read the raw JSON. The full JsonView stays available behind a
+// "Raw" disclosure for power users / debugging.
+
+interface DatasetField {
+  name?: string;
+  type?: string;
+  role?: string;
+  description?: string;
+  [k: string]: unknown;
+}
+
+function RoleBadge({ role }: { role?: string }) {
+  if (!role) return <span className="text-zinc-500 text-[10px]">—</span>;
+  const cls =
+    role === "key"
+      ? "bg-keboola/10 text-keboola border-keboola/30"
+      : role === "measure"
+        ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
+        : "bg-zinc-200/30 text-zinc-600 dark:text-zinc-400 border-zinc-300";
+  return (
+    <span className={`px-1.5 py-0.5 rounded text-[10px] border ${cls}`}>{role}</span>
+  );
+}
+
+function DatasetDetail({ row }: { row: EntityRow }) {
+  const fields = (row.fields as DatasetField[] | undefined) ?? [];
+  const aiKeywords =
+    (row.ai as { keywords?: string[] } | undefined)?.keywords ?? [];
+
+  const tableId = (row.table_id as string) || (row.tableId as string) || "";
+  const fqn = (row.fqn as string) || "";
+  const grain = (row.grain as string) || "";
+  const pk = (row.primary_key as string[]) || (row.primaryKey as string[]) || [];
+
+  return (
+    <div className="space-y-4 text-xs">
+      <div className="grid md:grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <div className="text-[10px] uppercase tracking-widest text-zinc-500">
+            Storage table
+          </div>
+          <div className="font-mono">{tableId || "(unset)"}</div>
+        </div>
+        <div className="space-y-1">
+          <div className="text-[10px] uppercase tracking-widest text-zinc-500">
+            FQN
+          </div>
+          <div className="font-mono break-all">{fqn || "(derived from table_id)"}</div>
+        </div>
+        <div className="space-y-1">
+          <div className="text-[10px] uppercase tracking-widest text-zinc-500">
+            Grain
+          </div>
+          <div>{grain || <span className="text-zinc-500 italic">(not set)</span>}</div>
+        </div>
+        <div className="space-y-1">
+          <div className="text-[10px] uppercase tracking-widest text-zinc-500">
+            Primary key
+          </div>
+          <div className="font-mono">
+            {pk.length > 0 ? pk.join(", ") : <span className="text-zinc-500 italic">(none)</span>}
+          </div>
+        </div>
+      </div>
+
+      {row.description ? (
+        <div className="space-y-1">
+          <div className="text-[10px] uppercase tracking-widest text-zinc-500">
+            Description
+          </div>
+          <div className="text-zinc-700 dark:text-zinc-300">{row.description as string}</div>
+        </div>
+      ) : null}
+
+      {aiKeywords.length > 0 ? (
+        <div className="space-y-1">
+          <div className="text-[10px] uppercase tracking-widest text-zinc-500">
+            AI keywords
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {aiKeywords.map((kw) => (
+              <span
+                key={kw}
+                className="px-1.5 py-0.5 rounded bg-keboola/10 text-keboola text-[10px]"
+              >
+                {kw}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div>
+        <div className="text-[10px] uppercase tracking-widest text-zinc-500 mb-1">
+          Fields ({fields.length})
+        </div>
+        {fields.length === 0 ? (
+          <div className="text-zinc-500 italic">
+            No fields. Re-run add with --deep-fields to populate from Snowflake.
+          </div>
+        ) : (
+          <div className="border border-zinc-200 dark:border-zinc-900 rounded overflow-hidden">
+            <table className="w-full text-[11px]">
+              <thead className="bg-zinc-100 dark:bg-zinc-900 text-zinc-500">
+                <tr>
+                  <th className="text-left px-2 py-1 font-normal">Name</th>
+                  <th className="text-left px-2 py-1 font-normal">Type</th>
+                  <th className="text-left px-2 py-1 font-normal">Role</th>
+                  <th className="text-left px-2 py-1 font-normal">Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fields.map((f, i) => (
+                  <tr
+                    key={`${f.name}-${i}`}
+                    className="border-t border-zinc-200 dark:border-zinc-900"
+                  >
+                    <td className="px-2 py-1 font-mono">{f.name || "—"}</td>
+                    <td className="px-2 py-1 font-mono text-zinc-500">{f.type || "—"}</td>
+                    <td className="px-2 py-1">
+                      <RoleBadge role={f.role} />
+                    </td>
+                    <td className="px-2 py-1 text-zinc-600 dark:text-zinc-400">
+                      {f.description || ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <details className="text-[11px]">
+        <summary className="cursor-pointer text-zinc-500">Raw response</summary>
+        <div className="mt-2">
+          <JsonView data={row} maxHeight="40vh" />
+        </div>
+      </details>
+    </div>
+  );
+}
+
+// ── ConstraintGroupedTable ────────────────────────────────────────────
+//
+// Constraints come in seven `constraint_type` buckets in CLI; rendered
+// flat they're hard to scan. Group by type with collapsible sections,
+// keep the existing severity pill, and add a leading icon so error vs
+// warning vs info pops at a glance.
+
+const CONSTRAINT_TYPE_ORDER: string[] = [
+  "inequality",
+  "equality",
+  "range",
+  "composition",
+  "exclusion",
+  "temporal",
+  "conditional",
+];
+
+function SeverityIcon({ severity }: { severity?: string }) {
+  if (severity === "critical" || severity === "error") {
+    return <XCircle className="w-3 h-3 text-red-500" />;
+  }
+  if (severity === "warning") {
+    return <AlertTriangle className="w-3 h-3 text-amber-500" />;
+  }
+  return <Info className="w-3 h-3 text-zinc-500" />;
+}
+
+function ConstraintGroupedTable({
+  rows,
+  onRowClick,
+  renderRowActions,
+}: {
+  rows: EntityRow[];
+  onRowClick: (r: EntityRow) => void;
+  renderRowActions: (r: EntityRow) => React.ReactNode;
+}) {
+  // Bucket rows by constraint_type; preserve a stable order so the page
+  // doesn't reshuffle when the user edits a constraint.
+  const groups = useMemo(() => {
+    const acc: Record<string, EntityRow[]> = {};
+    for (const r of rows) {
+      const t = (r.constraint_type as string) || "(untyped)";
+      (acc[t] ??= []).push(r);
+    }
+    return acc;
+  }, [rows]);
+
+  const orderedTypes = useMemo(() => {
+    const present = Object.keys(groups);
+    return present.sort((a, b) => {
+      const ia = CONSTRAINT_TYPE_ORDER.indexOf(a);
+      const ib = CONSTRAINT_TYPE_ORDER.indexOf(b);
+      if (ia === -1 && ib === -1) return a.localeCompare(b);
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+  }, [groups]);
+
+  if (rows.length === 0) {
+    return <Empty title="No constraints match the current filter" />;
+  }
+
+  return (
+    <div className="space-y-3">
+      {orderedTypes.map((type) => {
+        const group = groups[type];
+        return (
+          <details key={type} open className="border border-zinc-200 dark:border-zinc-900 rounded">
+            <summary className="cursor-pointer select-none px-3 py-2 text-xs font-bold bg-zinc-50 dark:bg-zinc-950 flex items-center gap-2">
+              <span className="nerd-pill text-[10px]">{type}</span>
+              <span className="text-zinc-500 font-normal">({group.length})</span>
+            </summary>
+            <table className="w-full text-xs">
+              <tbody>
+                {group.map((r, i) => (
+                  <tr
+                    key={`${r.name}-${i}`}
+                    className="border-t border-zinc-200 dark:border-zinc-900 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-950"
+                    onClick={() => onRowClick(r)}
+                  >
+                    <td className="px-3 py-1.5 align-top">
+                      <SeverityIcon severity={r.severity as string} />
+                    </td>
+                    <td className="px-2 py-1.5 align-top font-bold w-1/4">
+                      {r.name as string}
+                    </td>
+                    <td className="px-2 py-1.5 align-top">
+                      <code className="text-zinc-600 dark:text-zinc-400 break-all">
+                        {r.rule as string}
+                      </code>
+                    </td>
+                    <td className="px-2 py-1.5 align-top text-right">
+                      {renderRowActions(r)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── RelationshipsERDiagram ────────────────────────────────────────────
+//
+// Mermaid `erDiagram` rendering of the model's relationships. Datasets
+// become entities, relationships become labelled edges with cardinality
+// hint "}o--o{" (many-to-many-ish; we don't know the real cardinality
+// without probing the source). Each edge label is the join condition
+// + relationship name. Click an edge label = the existing table row;
+// for now we render a parallel "click to edit" overlay below the SVG
+// so users can hop straight into the edit drawer.
+
+function escMermaid(s: string): string {
+  // Mermaid is picky about quotes inside labels. Replace the bare quote with
+  // its HTML entity so the parser doesn't bail out on the typical join
+  // expression `from."thread_id" = to."thread_id"`.
+  return s
+    .replace(/"/g, "#quot;")
+    .replace(/\n/g, " ")
+    .replace(/`/g, "'");
+}
+
+function slugId(s: string): string {
+  // Mermaid identifiers can't contain dots/hyphens/quotes — replace with _.
+  return s.replace(/[^A-Za-z0-9_]/g, "_").replace(/^_+/, "");
+}
+
+// Cap to keep the SVG render under Mermaid's internal size guard. The user
+// can use the dataset chip filter to drill into a specific subgraph if the
+// model has more relationships than this. 80 is a soft ceiling — enough
+// for ~10 datasets but small enough not to time out the browser.
+const ERD_MAX_EDGES = 80;
+
+function RelationshipsERDiagram({
+  datasets,
+  relationships,
+  onPickEdge,
+}: {
+  datasets: EntityRow[];
+  relationships: EntityRow[];
+  onPickEdge: (r: EntityRow) => void;
+}) {
+  const { theme } = useTheme();
+  const ref = useRef<HTMLDivElement | null>(null);
+  const renderSeq = useRef(0);
+  const [error, setError] = useState<string | null>(null);
+  const [mermaidCode, setMermaidCode] = useState<string>("");
+
+  const limited = relationships.slice(0, ERD_MAX_EDGES);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    let cancelled = false;
+
+    // Datasets the relationships actually reference; we also include the
+    // ones we know about so an unconnected dataset still shows up.
+    const tidToName = new Map<string, string>();
+    for (const d of datasets) {
+      const tid = (d.table_id as string) || "";
+      const name = (d.name as string) || tid;
+      if (tid) tidToName.set(tid, name);
+    }
+    // Some relationships reference table_ids that aren't in datasets[];
+    // fall back to using the table_id itself as the entity label so the
+    // diagram still draws (it'd otherwise look like a broken FK).
+    for (const r of limited) {
+      for (const side of [r.from as string, r.to as string]) {
+        if (side && !tidToName.has(side)) tidToName.set(side, side);
+      }
+    }
+
+    const lines: string[] = ["erDiagram"];
+    // Empty entity blocks — just declare them. The relationship lines
+    // below register the entity automatically, but declaring up front
+    // gives the layout engine something to work with.
+    for (const [tid, label] of tidToName) {
+      lines.push(`  ${slugId(tid)}["${escMermaid(label)}"] {`);
+      lines.push(`    string id`);
+      lines.push(`  }`);
+    }
+    for (const r of limited) {
+      const f = r.from as string;
+      const t = r.to as string;
+      if (!f || !t) continue;
+      const label = (r.name as string) || (r.on as string) || "";
+      const type = (r.type as string) || "left";
+      lines.push(
+        `  ${slugId(f)} }o--o{ ${slugId(t)} : "${escMermaid(`${label} (${type})`)}"`,
+      );
+    }
+    const code = lines.join("\n");
+    setMermaidCode(code);
+
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: theme === "dark" ? "dark" : "default",
+      securityLevel: "loose",
+      themeVariables: {
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+      },
+    });
+
+    renderSeq.current += 1;
+    const runId = `sl_erd_${Date.now()}_${renderSeq.current}`;
+
+    mermaid
+      .render(runId, code)
+      .then(({ svg }) => {
+        if (cancelled || !ref.current) return;
+        ref.current.innerHTML = svg;
+        setError(null);
+      })
+      .catch((err: Error) => {
+        if (cancelled || !ref.current) return;
+        ref.current.innerHTML = "";
+        setError(err.message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [datasets, limited, theme]);
+
+  return (
+    <div className="space-y-3">
+      {relationships.length > ERD_MAX_EDGES ? (
+        <div className="text-[11px] text-amber-500 flex items-center gap-1">
+          <AlertTriangle className="w-3.5 h-3.5" /> Showing the first {ERD_MAX_EDGES}{" "}
+          of {relationships.length} relationships. Use the dataset filter above to
+          drill into a subgraph.
+        </div>
+      ) : null}
+
+      {error ? (
+        <div className="space-y-2">
+          <ErrorBox message={`ER diagram failed to render: ${error}`} />
+          <details className="text-[10px]">
+            <summary className="cursor-pointer text-zinc-500">Mermaid source</summary>
+            <pre className="mt-1 p-2 bg-zinc-50 dark:bg-zinc-950 rounded overflow-auto max-h-72">
+              {mermaidCode}
+            </pre>
+          </details>
+        </div>
+      ) : null}
+
+      <div ref={ref} className="w-full overflow-auto border border-zinc-200 dark:border-zinc-900 rounded p-2" />
+
+      {/* Click-through helper: list every edge so users can hop into the
+          edit drawer for any relationship even when SVG hit-testing is
+          fiddly. Kept compact (one line per edge). */}
+      <details className="text-[11px]">
+        <summary className="cursor-pointer text-zinc-500">
+          Edge list ({limited.length}) — click to edit
+        </summary>
+        <ul className="mt-1 space-y-0.5 max-h-72 overflow-auto">
+          {limited.map((r) => (
+            <li key={r.name as string}>
+              <button
+                type="button"
+                onClick={() => onPickEdge(r)}
+                className="text-left hover:text-keboola"
+              >
+                <span className="font-mono">{r.from as string}</span>
+                <span className="mx-1 text-zinc-500">→</span>
+                <span className="font-mono">{r.to as string}</span>
+                <span className="ml-2 text-zinc-500">{r.on as string}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </details>
+    </div>
   );
 }
