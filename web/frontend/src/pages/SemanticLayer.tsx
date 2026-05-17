@@ -1740,13 +1740,18 @@ function ConstraintGroupedTable({
 
 // ── RelationshipsERDiagram ────────────────────────────────────────────
 //
-// Mermaid `erDiagram` rendering of the model's relationships. Datasets
-// become entities, relationships become labelled edges with cardinality
-// hint "}o--o{" (many-to-many-ish; we don't know the real cardinality
-// without probing the source). Each edge label is the join condition
-// + relationship name. Click an edge label = the existing table row;
-// for now we render a parallel "click to edit" overlay below the SVG
-// so users can hop straight into the edit drawer.
+// Mermaid `flowchart TB` rendering of the model's relationships.
+// Datasets become boxes, relationships become directed edges from
+// `from` table_id to `to` table_id with the relationship name on the
+// arrow. We use `flowchart` (not `erDiagram`) because flowchart has a
+// configurable rank direction — top-to-bottom places the hub above and
+// dimensions in a row beneath, which uses vertical space sensibly for
+// the typical hub-and-spoke Keboola model. `erDiagram` had no rankdir
+// and always laid out wide-and-short, wasting most of the canvas.
+//
+// Click the row in the "click to edit" list below the diagram to open
+// the existing edit drawer — we don't bind onClick to flowchart edges
+// because Mermaid's edge hit-targets are narrow and hard to land.
 
 function escMermaid(s: string): string {
   // Mermaid is picky about quotes inside labels. Replace the bare quote with
@@ -1799,15 +1804,13 @@ function RelationshipsERDiagram({
 
   const limited = relationships.slice(0, ERD_MAX_EDGES);
 
-  // Compute the zoom that fills the active canvas as much as possible
-  // without distorting the diagram. The erDiagram layout is wide-and-short
-  // so `Math.min(fitX, fitY)` (= "the whole graph fits without scrolling")
-  // produces tiny zoom levels with a sea of whitespace below. We pick the
-  // larger of the two -- the diagram fills one axis and the other axis
-  // scrolls if needed. Floor at 1.0 so we never shrink below 100% (the
-  // user asked for "150%-looking" by default, and the screenshot they
-  // shared had the SVG rendering at its natural mermaid size which is the
-  // smallest readable form). Cap at 3x so we don't lose context.
+  // Compute the zoom that fits the diagram into the visible canvas
+  // without scrolling. `flowchart TB` is typically tall-and-narrow
+  // (one rank per join level, dimensions in a row beneath the hub), so
+  // `Math.min(fitX, fitY)` chooses the dominant constraint — the
+  // diagram fills the bottle-necking axis and stays inside the canvas
+  // on the other. Floor 0.4 so very dense graphs (80 edges) can shrink
+  // enough to fit; cap 2.5 so a 3-node mini-graph doesn't blow up.
   const applyAutoFit = () => {
     const target = fullscreen ? fullscreenRef.current : ref.current;
     const svgEl = target?.querySelector("svg");
@@ -1819,10 +1822,8 @@ function RelationshipsERDiagram({
     if (!svgW || !svgH) return;
     const fitX = (container.clientWidth - 32) / svgW;
     const fitY = (container.clientHeight - 32) / svgH;
-    // For wide-and-short graphs fitY >> fitX -- pick whichever fills one
-    // axis tightly; the other axis becomes the scrollable direction.
-    const fit = Math.max(fitX, fitY);
-    setZoom(Math.max(1.0, Math.min(3, fit)));
+    const fit = Math.min(fitX, fitY);
+    setZoom(Math.max(0.4, Math.min(2.5, fit)));
   };
 
   useEffect(() => {
@@ -1846,23 +1847,28 @@ function RelationshipsERDiagram({
       }
     }
 
-    const lines: string[] = ["erDiagram"];
-    // Empty entity blocks — just declare them. The relationship lines
-    // below register the entity automatically, but declaring up front
-    // gives the layout engine something to work with.
+    const lines: string[] = ["flowchart TB"];
+    // Declare each node up-front so isolated datasets (no relationships)
+    // still show up; the rank-aware layout also benefits from seeing the
+    // full node set before the edges constrain it.
     for (const [tid, label] of tidToName) {
-      lines.push(`  ${slugId(tid)}["${escMermaid(label)}"] {`);
-      lines.push(`    string id`);
-      lines.push(`  }`);
+      lines.push(`  ${slugId(tid)}["${escMermaid(label)}"]`);
     }
     for (const r of limited) {
       const f = r.from as string;
       const t = r.to as string;
       if (!f || !t) continue;
-      const label = (r.name as string) || (r.on as string) || "";
       const type = (r.type as string) || "left";
+      // `-->|"…"|` is flowchart's labelled directed edge. Inner joins
+      // use a thicker `==>` so they pop out of a left-join-heavy graph.
+      const arrow = type === "inner" ? "==>" : "-->";
+      // Only the join type goes on the arrow. The full relationship
+      // name (often `<from>_to_<to>`) duplicates what's already at
+      // both ends, bloating horizontal space and forcing auto-fit to a
+      // tight zoom that clips the canvas. The dataset-level edge list
+      // below the diagram keeps the names browsable.
       lines.push(
-        `  ${slugId(f)} }o--o{ ${slugId(t)} : "${escMermaid(`${label} (${type})`)}"`,
+        `  ${slugId(f)} ${arrow}|"${escMermaid(type)}"| ${slugId(t)}`,
       );
     }
     const code = lines.join("\n");
