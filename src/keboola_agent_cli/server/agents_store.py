@@ -256,3 +256,70 @@ class AgentStore:
             if run.run_id == run_id:
                 return run
         return None
+
+
+# ── Boundary helpers (shared between REST router + CLI service) ─────
+# Kept here (next to the types they operate on) so REST endpoints and the
+# CLI service stay in lock-step. Both import these directly. Raise
+# ValueError; callers translate to their preferred error envelope.
+
+
+def validate_trigger(
+    store: AgentStore, trigger: Trigger | None, *, owner_task_id: str | None = None
+) -> None:
+    """Reject obviously broken trigger configs at the API/CLI boundary.
+
+    - downstream task_id must exist
+    - no self-loop (task triggering itself)
+
+    Deeper cycle detection (A->B->A) is left to runtime safety; the value of
+    a deep check here is low compared to the implementation cost.
+
+    Raises:
+        ValueError: with a human-readable message when the trigger is invalid.
+    """
+    if trigger is None:
+        return
+    if owner_task_id is not None and trigger.task_id == owner_task_id:
+        raise ValueError("Trigger target cannot be the task itself (would self-loop).")
+    if store.get_task(trigger.task_id) is None:
+        raise ValueError(f"Trigger target task '{trigger.task_id}' not found.")
+
+
+def merge_runtime_input(task: AgentTask, runtime_input: dict[str, Any] | None) -> AgentTask:
+    """Return a shallow-copied task with runtime_input merged into its action.
+
+    The original task is NOT mutated; we copy because the scheduler-side
+    ``run_task_once`` persists ``task.last_run_at`` / ``next_run_at`` on the
+    real stored task, not on the merged ghost.
+
+    Per-action-type semantics:
+    - ``ai_agent``: ``runtime_input.prompt`` (string) is appended to the
+      persisted prompt as a labeled section so the AI sees both the
+      operator's static instructions and the runtime ask.
+    - ``cli_command``: ``runtime_input.argv`` (list of strings) is appended
+      to the persisted argv list.
+    - ``mcp_tool``: ``runtime_input`` (dict) is shallow-merged into the
+      persisted MCP tool input, with runtime keys winning on conflict.
+    """
+    if not runtime_input:
+        return task
+    merged_params = dict(task.action.params)
+    if task.action.type == "ai_agent":
+        extra = runtime_input.get("prompt")
+        if isinstance(extra, str) and extra.strip():
+            base_prompt = str(merged_params.get("prompt", ""))
+            merged_params["prompt"] = (
+                f"{base_prompt}\n\n[Operator's runtime input for this run]\n{extra.strip()}"
+            )
+    elif task.action.type == "cli_command":
+        extra_argv = runtime_input.get("argv")
+        if isinstance(extra_argv, list) and extra_argv:
+            base_argv = list(merged_params.get("argv") or [])
+            merged_params["argv"] = [*base_argv, *(str(a) for a in extra_argv)]
+    elif task.action.type == "mcp_tool":
+        base_input = dict(merged_params.get("input") or {})
+        base_input.update(runtime_input)
+        merged_params["input"] = base_input
+    merged_action = AgentAction(type=task.action.type, params=merged_params)
+    return task.model_copy(update={"action": merged_action})

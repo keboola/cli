@@ -1994,3 +1994,38 @@ requires `canManageTokens` privilege, which only **master tokens** carry.
   styling and escapes the interpolated `app_id` / `project_alias`
   values via `rich.markup.escape` per the `commands/config.py`
   precedent.
+
+## `kbagent agent` CRUD works offline; cron firing needs `kbagent serve` running (since v0.42.0)
+
+The `kbagent agent <verb>` command tree reads/writes `<config_dir>/agents.json`
+directly via `AgentService`, so `agent list / show / create / update / delete /
+run / runs / cron-preview / test / prompt-improve` all work without
+`kbagent serve` running. But the cron loop that fires scheduled tasks lives
+**inside** the FastAPI lifespan -- tasks created via CLI sit dormant until a
+serve instance picks up the file on its next minute-tick.
+
+- **Symptom**: `kbagent agent create --cron "*/5 * * * *" --type ...` returns
+  the persisted task with `next_run_at` populated, but the task never
+  actually runs. `agent runs <id>` stays empty hour after hour.
+- **Cause**: no `kbagent serve` process is running, so the cron loop never
+  ticks. The task is correctly persisted; the scheduler just isn't alive.
+- **Fix**: start `kbagent serve` (with or without `--ui`) on the machine that
+  owns the config directory. The scheduler picks up the new task on the
+  next tick and fires it on the cron's schedule.
+- **Diagnostic**: `kbagent agent run <id>` works offline (it dispatches via
+  the in-process runner without consulting cron). If that runs the action
+  successfully but cron-driven runs never happen, the scheduler is offline.
+
+This is the SAME on-disk format the REST router writes via `POST /agents`,
+so CLI-created tasks are interchangeable with UI-created and REST-created
+tasks -- the only difference is who fires them.
+
+## `agent` action helpers are shared between REST + CLI (since v0.42.0)
+
+The `validate_trigger` (cycle/self-loop check) and `merge_runtime_input`
+(per-action-type runtime input merge) helpers live in
+`keboola_agent_cli.server.agents_store` so the REST router and the CLI
+`AgentService` share the exact same boundary behaviour. If you add a
+new action type, update **both** the runner dispatcher (`agent_runner.py`)
+**and** `merge_runtime_input` to keep CRUD parity. Tests in
+`tests/test_agent_service.py` + `tests/test_agent_cli.py` catch drift.

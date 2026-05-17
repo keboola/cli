@@ -499,6 +499,7 @@ name = "keboola-agent-cli"
 version = "0.43.9"
 source = { editable = "." }
 dependencies = [
+    { name = "croniter" },
     { name = "httpx" },
     { name = "jsonschema" },
     { name = "kai-client" },
@@ -514,7 +515,6 @@ dependencies = [
 
 [package.optional-dependencies]
 server = [
-    { name = "croniter" },
     { name = "fastapi" },
     { name = "python-multipart" },
     { name = "sse-starlette" },
@@ -534,7 +534,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "croniter", marker = "extra == 'server'", specifier = ">=2.0" },
+    { name = "croniter", specifier = ">=2.0" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jsonschema", specifier = ">=4.20" },
