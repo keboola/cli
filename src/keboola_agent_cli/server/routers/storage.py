@@ -67,32 +67,35 @@ class SwapTables(BaseModel):
     branch_id: int
 
 
-@router.get("/buckets")
+@router.get("/buckets", summary="List storage buckets")
 def list_buckets(
     project: str | None = None,
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """List storage buckets in one or more projects. Mirrors `kbagent storage buckets`."""
     aliases = [project] if project else None
     return registry.storage.list_buckets(aliases=aliases, branch_id=branch_id)
 
 
-@router.get("/buckets/{project}/{bucket_id:path}")
+@router.get("/buckets/{project}/{bucket_id:path}", summary="Get bucket detail")
 def bucket_detail(
     project: str,
     bucket_id: str,
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Fetch detail for a single bucket. Mirrors `kbagent storage bucket-detail`."""
     return registry.storage.get_bucket_detail(
         alias=project, bucket_id=bucket_id, branch_id=branch_id
     )
 
 
-@router.post("/buckets/{project}")
+@router.post("/buckets/{project}", summary="Create a bucket")
 def create_bucket(
     project: str, body: CreateBucket, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Create a new storage bucket. Mirrors `kbagent storage create-bucket`."""
     return registry.storage.create_bucket(
         alias=project,
         stage=body.stage,
@@ -103,7 +106,7 @@ def create_bucket(
     )
 
 
-@router.delete("/buckets/{project}")
+@router.delete("/buckets/{project}", summary="Delete buckets")
 def delete_buckets(
     project: str,
     bucket_id: list[str] = Query(...),
@@ -112,6 +115,7 @@ def delete_buckets(
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Delete one or more storage buckets. Mirrors `kbagent storage delete-bucket`."""
     return registry.storage.delete_buckets(
         alias=project,
         bucket_ids=bucket_id,
@@ -121,13 +125,14 @@ def delete_buckets(
     )
 
 
-@router.post("/buckets/{project}/{bucket_id:path}/describe")
+@router.post("/buckets/{project}/{bucket_id:path}/describe", summary="Set bucket description")
 def describe_bucket(
     project: str,
     bucket_id: str,
     body: DescribeBucket,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Set or update a bucket's description. Mirrors `kbagent storage describe-bucket`."""
     return registry.storage.describe_bucket(
         alias=project,
         bucket_id=bucket_id,
@@ -136,27 +141,29 @@ def describe_bucket(
     )
 
 
-@router.get("/tables")
+@router.get("/tables", summary="List storage tables")
 def list_tables(
     project: list[str] | None = Query(None),
     bucket_id: str | None = None,
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """List tables across one or more projects. Mirrors `kbagent storage tables`."""
     return registry.storage.list_tables(aliases=project, bucket_id=bucket_id, branch_id=branch_id)
 
 
-@router.get("/table-detail/{project}/{table_id:path}")
+@router.get("/table-detail/{project}/{table_id:path}", summary="Get table detail")
 def table_detail(
     project: str,
     table_id: str,
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Fetch detail for a single table. Mirrors `kbagent storage table-detail`."""
     return registry.storage.get_table_detail(alias=project, table_id=table_id, branch_id=branch_id)
 
 
-@router.get("/table-preview/{project}/{table_id:path}")
+@router.get("/table-preview/{project}/{table_id:path}", summary="Preview table rows")
 def preview_table_v2(
     project: str,
     table_id: str,
@@ -190,7 +197,7 @@ def preview_table_v2(
     return {"header": rows[0], "rows": rows[1:], "row_count": len(rows) - 1}
 
 
-@router.get("/table-download/{project}/{table_id:path}")
+@router.get("/table-download/{project}/{table_id:path}", summary="Download table as CSV")
 def download_table_v2(
     project: str,
     table_id: str,
@@ -216,10 +223,11 @@ def download_table_v2(
     )
 
 
-@router.post("/tables/{project}")
+@router.post("/tables/{project}", summary="Create a table")
 def create_table(
     project: str, body: CreateTable, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Create a typed storage table. Mirrors `kbagent storage create-table`."""
     return registry.storage.create_table(
         alias=project,
         bucket_id=body.bucket_id,
@@ -232,7 +240,7 @@ def create_table(
     )
 
 
-@router.post("/tables/{project}/upload")
+@router.post("/tables/{project}/upload", summary="Upload data into a table")
 async def upload_table(
     project: str,
     table_id: str = Form(...),
@@ -241,6 +249,7 @@ async def upload_table(
     file: UploadFile = File(...),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Upload a CSV file into an existing table. Mirrors `kbagent storage upload-table`."""
     with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or "x").suffix) as tmp:
         tmp.write(await file.read())
         tmp_path = Path(tmp.name)
@@ -256,7 +265,7 @@ async def upload_table(
         tmp_path.unlink(missing_ok=True)
 
 
-@router.delete("/tables/{project}")
+@router.delete("/tables/{project}", summary="Delete tables")
 def delete_tables(
     project: str,
     table_id: list[str] = Query(...),
@@ -265,6 +274,7 @@ def delete_tables(
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Delete one or more storage tables. Mirrors `kbagent storage delete-table`."""
     return registry.storage.delete_tables(
         alias=project,
         table_ids=table_id,
@@ -274,7 +284,7 @@ def delete_tables(
     )
 
 
-@router.post("/tables/{project}/truncate")
+@router.post("/tables/{project}/truncate", summary="Truncate tables")
 def truncate_tables(
     project: str,
     table_id: list[str] = Query(...),
@@ -282,6 +292,7 @@ def truncate_tables(
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Truncate (empty) one or more storage tables. Mirrors `kbagent storage truncate-table`."""
     return registry.storage.truncate_tables(
         alias=project,
         table_ids=table_id,
@@ -290,7 +301,7 @@ def truncate_tables(
     )
 
 
-@router.delete("/columns/{project}/{table_id:path}")
+@router.delete("/columns/{project}/{table_id:path}", summary="Delete table columns")
 def delete_columns(
     project: str,
     table_id: str,
@@ -300,6 +311,7 @@ def delete_columns(
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Delete columns from a table. Mirrors `kbagent storage delete-column`."""
     return registry.storage.delete_columns(
         alias=project,
         table_id=table_id,
@@ -310,7 +322,7 @@ def delete_columns(
     )
 
 
-@router.post("/tables/{project}/{table_id:path}/swap")
+@router.post("/tables/{project}/{table_id:path}/swap", summary="Swap two tables")
 def swap_tables(
     project: str,
     table_id: str,
@@ -318,6 +330,7 @@ def swap_tables(
     dry_run: bool = False,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Atomically swap two storage tables. Mirrors `kbagent storage swap-tables`."""
     return registry.storage.swap_tables(
         alias=project,
         table_id=table_id,
@@ -327,13 +340,14 @@ def swap_tables(
     )
 
 
-@router.post("/tables/{project}/{table_id:path}/describe")
+@router.post("/tables/{project}/{table_id:path}/describe", summary="Set table description")
 def describe_table(
     project: str,
     table_id: str,
     body: DescribeTable,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Set or update a table's description. Mirrors `kbagent storage describe-table`."""
     return registry.storage.describe_table(
         alias=project,
         table_id=table_id,
@@ -342,13 +356,14 @@ def describe_table(
     )
 
 
-@router.post("/columns/{project}/{table_id:path}/describe")
+@router.post("/columns/{project}/{table_id:path}/describe", summary="Set column descriptions")
 def describe_columns(
     project: str,
     table_id: str,
     body: DescribeColumns,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Set descriptions for table columns. Mirrors `kbagent storage describe-column`."""
     return registry.storage.describe_columns(
         alias=project,
         table_id=table_id,
@@ -360,7 +375,7 @@ def describe_columns(
 # ---- Files ----
 
 
-@router.get("/files")
+@router.get("/files", summary="List storage files")
 def list_files(
     project: str,
     tag: list[str] | None = Query(None),
@@ -370,6 +385,7 @@ def list_files(
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """List files in a project's Storage Files API. Mirrors `kbagent storage files`."""
     return registry.storage.list_files(
         alias=project,
         tags=tag,
@@ -380,7 +396,7 @@ def list_files(
     )
 
 
-@router.post("/files/upload")
+@router.post("/files/upload", summary="Upload a file to Storage")
 async def upload_file(
     project: str = Form(...),
     name: str | None = Form(None),
@@ -390,6 +406,7 @@ async def upload_file(
     file: UploadFile = File(...),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Upload a file into Storage Files. Mirrors `kbagent storage file-upload`."""
     with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or "x").suffix) as tmp:
         tmp.write(await file.read())
         tmp_path = Path(tmp.name)
@@ -406,21 +423,23 @@ async def upload_file(
         tmp_path.unlink(missing_ok=True)
 
 
-@router.get("/files/{project}/{file_id}")
+@router.get("/files/{project}/{file_id}", summary="Get file detail")
 def file_detail(
     project: str,
     file_id: int,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Fetch detail for a single Storage file. Mirrors `kbagent storage file-detail`."""
     return registry.storage.get_file_info(alias=project, file_id=file_id)
 
 
-@router.get("/files/{project}/{file_id}/download")
+@router.get("/files/{project}/{file_id}/download", summary="Download a file")
 def file_download(
     project: str,
     file_id: int,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> FileResponse:
+    """Download a Storage file. Mirrors `kbagent storage file-download`."""
     out_dir = Path(tempfile.mkdtemp(prefix="kbagent-file-"))
     result = registry.storage.download_file(alias=project, file_id=file_id, output_dir=out_dir)
     file_path = result.get("local_path") if isinstance(result, dict) else None
@@ -431,23 +450,25 @@ def file_download(
     )
 
 
-@router.delete("/files/{project}")
+@router.delete("/files/{project}", summary="Delete files")
 def delete_files(
     project: str,
     file_id: list[int] = Query(...),
     dry_run: bool = False,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Delete one or more Storage files. Mirrors `kbagent storage file-delete`."""
     return registry.storage.delete_files(alias=project, file_ids=file_id, dry_run=dry_run)
 
 
-@router.post("/files/{project}/{file_id}/tag")
+@router.post("/files/{project}/{file_id}/tag", summary="Add or remove file tags")
 def tag_file(
     project: str,
     file_id: int,
     body: TagFile,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Add or remove tags on a Storage file. Mirrors `kbagent storage file-tag`."""
     return registry.storage.tag_file(
         alias=project,
         file_id=file_id,
@@ -456,12 +477,13 @@ def tag_file(
     )
 
 
-@router.post("/files/{project}/load-to-table")
+@router.post("/files/{project}/load-to-table", summary="Load a file into a table")
 def load_file_to_table(
     project: str,
     body: LoadFileToTable,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Load a Storage file's contents into a table. Mirrors `kbagent storage load-file`."""
     return registry.storage.load_file_to_table(
         alias=project,
         file_id=body.file_id,

@@ -57,29 +57,32 @@ class RepoValidate(BaseModel):
     strict: bool = False
 
 
-@router.get("")
+@router.get("", summary="List data apps across projects")
 def list_apps(
     project: list[str] | None = Query(None),
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """List data apps in one or more projects. Mirrors `kbagent data-app list`."""
     return registry.data_app.list_data_apps(aliases=project, branch_id=branch_id)
 
 
-@router.get("/{project}/{app_id}")
+@router.get("/{project}/{app_id}", summary="Get data app detail")
 def detail(
     project: str,
     app_id: str,
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Fetch detail for a single data app. Mirrors `kbagent data-app detail`."""
     return registry.data_app.get_data_app(alias=project, app_id=app_id, branch_id=branch_id)
 
 
-@router.post("/{project}")
+@router.post("/{project}", summary="Create a data app")
 def create(
     project: str, body: DataAppCreate, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Create a new data app, optionally deploy and wait. Mirrors `kbagent data-app create`."""
     return registry.data_app.create_data_app(
         alias=project,
         name=body.name,
@@ -104,7 +107,7 @@ def create(
     )
 
 
-@router.post("/{project}/{app_id}/deploy")
+@router.post("/{project}/{app_id}/deploy", summary="Deploy a data app version")
 def deploy(
     project: str,
     app_id: str,
@@ -114,6 +117,7 @@ def deploy(
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Deploy the configured version of a data app. Mirrors `kbagent data-app deploy`."""
     return registry.data_app.deploy_data_app(
         alias=project,
         app_id=app_id,
@@ -124,7 +128,7 @@ def deploy(
     )
 
 
-@router.post("/{project}/{app_id}/start")
+@router.post("/{project}/{app_id}/start", summary="Start a data app")
 def start(
     project: str,
     app_id: str,
@@ -132,12 +136,13 @@ def start(
     timeout_seconds: float = 600.0,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Start a deployed data app. Mirrors `kbagent data-app start`."""
     return registry.data_app.start_data_app(
         alias=project, app_id=app_id, wait=wait, timeout_seconds=timeout_seconds
     )
 
 
-@router.post("/{project}/{app_id}/stop")
+@router.post("/{project}/{app_id}/stop", summary="Stop a data app")
 def stop(
     project: str,
     app_id: str,
@@ -145,26 +150,29 @@ def stop(
     timeout_seconds: float = 600.0,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Stop a running data app. Mirrors `kbagent data-app stop`."""
     return registry.data_app.stop_data_app(
         alias=project, app_id=app_id, wait=wait, timeout_seconds=timeout_seconds
     )
 
 
-@router.delete("/{project}/{app_id}")
+@router.delete("/{project}/{app_id}", summary="Delete a data app")
 def delete(
     project: str, app_id: str, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Delete a data app and its configuration. Mirrors `kbagent data-app delete`."""
     return registry.data_app.delete_data_app(alias=project, app_id=app_id)
 
 
-@router.get("/{project}/{app_id}/password")
+@router.get("/{project}/{app_id}/password", summary="Get data app access password")
 def password(
     project: str, app_id: str, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Fetch the password for a password-protected data app. Mirrors `kbagent data-app password`."""
     return registry.data_app.get_data_app_password(alias=project, app_id=app_id)
 
 
-@router.get("/{project}/{app_id}/secrets")
+@router.get("/{project}/{app_id}/secrets", summary="List data app secrets")
 def secrets_list(
     project: str,
     app_id: str,
@@ -172,6 +180,7 @@ def secrets_list(
     show_fingerprint: bool = False,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """List secret keys configured on a data app. Mirrors `kbagent data-app secrets-list`."""
     return registry.data_app.list_data_app_secrets(
         alias=project,
         app_id=app_id,
@@ -180,7 +189,7 @@ def secrets_list(
     )
 
 
-@router.get("/{project}/{app_id}/secrets/{key:path}")
+@router.get("/{project}/{app_id}/secrets/{key:path}", summary="Get a single data app secret")
 def secrets_get(
     project: str,
     app_id: str,
@@ -188,18 +197,20 @@ def secrets_get(
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Read a single secret value on a data app. Mirrors `kbagent data-app secrets-get`."""
     return registry.data_app.get_data_app_secret(
         alias=project, app_id=app_id, key=key, branch_id=branch_id
     )
 
 
-@router.put("/{project}/{app_id}/secrets")
+@router.put("/{project}/{app_id}/secrets", summary="Set data app secrets")
 def secrets_set(
     project: str,
     app_id: str,
     body: SecretsSet,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Set or update encrypted secrets on a data app. Mirrors `kbagent data-app secrets-set`."""
     return registry.data_app.set_data_app_secrets(
         alias=project,
         app_id=app_id,
@@ -210,13 +221,14 @@ def secrets_set(
     )
 
 
-@router.post("/{project}/{app_id}/secrets/remove")
+@router.post("/{project}/{app_id}/secrets/remove", summary="Remove data app secrets")
 def secrets_remove(
     project: str,
     app_id: str,
     body: SecretsRemove,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Remove one or more secrets from a data app. Mirrors `kbagent data-app secrets-remove`."""
     return registry.data_app.remove_data_app_secrets(
         alias=project,
         app_id=app_id,
@@ -226,10 +238,11 @@ def secrets_remove(
     )
 
 
-@router.post("/validate-repo")
+@router.post("/validate-repo", summary="Validate a data app git repo")
 def validate_repo(
     body: RepoValidate, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Validate that a git repo is a deployable data app. Mirrors `kbagent data-app validate-repo`."""
     return registry.repo_validate.validate(
         git_repo=body.git_repo,
         git_branch=body.git_branch,

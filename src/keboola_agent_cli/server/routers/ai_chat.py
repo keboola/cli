@@ -58,7 +58,7 @@ def _sse(event: str, data: dict[str, Any]) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n".encode()
 
 
-@router.post("/chat/stream")
+@router.post("/chat/stream", summary="Stream a local AI chat response")
 async def chat_stream(
     body: AiChatRequest,
     registry: ServiceRegistry = Depends(get_registry),

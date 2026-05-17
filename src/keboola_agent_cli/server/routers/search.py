@@ -11,7 +11,7 @@ from ..dependencies import ServiceRegistry, get_registry
 router = APIRouter(prefix="/search", tags=["search"])
 
 
-@router.get("")
+@router.get("", summary="Search across projects")
 def search(
     query: str,
     project: list[str] | None = Query(None),
@@ -20,6 +20,7 @@ def search(
     limit: int = 50,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Search tables, buckets, configs and flows across one or more projects. Mirrors `kbagent search`."""
     return registry.search.search(
         query=query,
         aliases=project,

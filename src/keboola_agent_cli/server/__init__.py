@@ -21,6 +21,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -28,7 +29,7 @@ from .. import __version__
 from ..config_store import ConfigStore, resolve_config_dir
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from .agents_store import AgentStore
-from .auth import AuthSettings, install_auth
+from .auth import PUBLIC_PATHS, AuthSettings, install_auth
 from .dependencies import ServiceRegistry, install_registry
 from .routers import (
     agents,
@@ -56,6 +57,329 @@ from .routers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# OpenAPI tag metadata. Order matches the CLI groupings printed by
+# ``kbagent --help`` so the Swagger UI sidebar reads top-down the same
+# way users explore commands on the terminal:
+#
+#   Project Management -> Configurations -> Data -> Execution ->
+#   Development -> AI & Tools -> System
+#
+# FastAPI uses this list both for ordering and for the per-section
+# descriptions. The names below MUST match the ``tags=[...]`` value on
+# each ``APIRouter`` in ``server/routers/`` -- a typo silently demotes
+# a section to the end of the sidebar with no description.
+OPENAPI_TAGS: list[dict[str, str]] = [
+    # ---- Project Management ----
+    {
+        "name": "projects",
+        "description": (
+            "**Project Management.** "
+            "Register, list, edit, and remove Keboola project aliases. "
+            "Mirrors `kbagent project add|list|remove|edit|status|use|current|info`."
+        ),
+    },
+    {
+        "name": "members",
+        "description": (
+            "**Project Management.** "
+            "Invite users, list members and pending invitations, "
+            "change roles, and remove members. "
+            "Mirrors `kbagent project invite|member-*|invitation-*`."
+        ),
+    },
+    {
+        "name": "org",
+        "description": (
+            "**Project Management.** "
+            "Bulk-onboard an entire organization (Manage API). Requires "
+            "the `X-Manage-Token` header on every request -- the manage "
+            "token is never persisted in config. "
+            "Mirrors `kbagent org setup|refresh`."
+        ),
+    },
+    # ---- Configurations ----
+    {
+        "name": "configs",
+        "description": (
+            "**Configurations.** "
+            "Browse, search, update, and manage component configurations "
+            "and rows (variables, metadata, folder, default bucket, "
+            "OAuth URL). "
+            "Mirrors `kbagent config *`."
+        ),
+    },
+    {
+        "name": "components",
+        "description": (
+            "**Configurations.** "
+            "Discover components (extractors, writers, applications, "
+            "transformations) and fetch their JSON schemas. "
+            "Mirrors `kbagent component list|detail`."
+        ),
+    },
+    {
+        "name": "encrypt",
+        "description": (
+            "**Configurations.** "
+            "Encrypt secret values for a specific project + component "
+            "using the Keboola encryption API. "
+            "Mirrors `kbagent encrypt values`."
+        ),
+    },
+    # ---- Data ----
+    {
+        "name": "storage",
+        "description": (
+            "**Data.** "
+            "Buckets, tables, columns, files. Create, upload, download, "
+            "describe, swap, delete. "
+            "Mirrors `kbagent storage *`."
+        ),
+    },
+    {
+        "name": "search",
+        "description": (
+            "**Data.** "
+            "Cross-resource search over tables, buckets, configs, "
+            "flows, data-apps, and transformations. "
+            "Mirrors `kbagent search`."
+        ),
+    },
+    {
+        "name": "sharing",
+        "description": (
+            "**Data.** "
+            "Share buckets across projects and inspect the sharing "
+            "graph (edges). "
+            "Mirrors `kbagent sharing *`."
+        ),
+    },
+    # ---- Execution ----
+    {
+        "name": "jobs",
+        "description": (
+            "**Execution.** "
+            "Run components, inspect job history, terminate running "
+            "jobs. "
+            "Mirrors `kbagent job list|detail|run|terminate`."
+        ),
+    },
+    {
+        "name": "flows",
+        "description": (
+            "**Execution.** "
+            "Orchestrator and Flow CRUD, scheduling, run history. "
+            "Mirrors `kbagent flow *`."
+        ),
+    },
+    {
+        "name": "schedules",
+        "description": (
+            "**Execution.** "
+            "Cron-style schedules attached to flows / configurations. "
+            "Mirrors `kbagent schedule list|detail|find`."
+        ),
+    },
+    {
+        "name": "data-apps",
+        "description": (
+            "**Execution.** "
+            "Streamlit / R / Python data apps -- create, deploy, "
+            "start/stop, manage secrets. "
+            "Mirrors `kbagent data-app *`."
+        ),
+    },
+    {
+        "name": "workspaces",
+        "description": (
+            "**Execution.** "
+            "Snowflake / BigQuery workspaces -- CRUD, load tables, "
+            "run SQL via Query Service, GC orphans. "
+            "Mirrors `kbagent workspace *`."
+        ),
+    },
+    # ---- Development ----
+    {
+        "name": "branches",
+        "description": (
+            "**Development.** "
+            "Dev branch lifecycle (create / use / reset / delete / "
+            "merge) and branch metadata. "
+            "Mirrors `kbagent branch *`."
+        ),
+    },
+    {
+        "name": "lineage",
+        "description": (
+            "**Development.** "
+            "Build and query cross-project data lineage (table-level "
+            "and column-level). "
+            "Mirrors `kbagent lineage build|show|info`."
+        ),
+    },
+    {
+        "name": "semantic-layer",
+        "description": (
+            "**Development.** "
+            "Model, validate, import/export, diff, promote, and build "
+            "semantic layer artifacts (datasets, metrics, "
+            "relationships, constraints, glossary). "
+            "Mirrors `kbagent semantic-layer *`."
+        ),
+    },
+    # ---- AI & Tools ----
+    {
+        "name": "mcp",
+        "description": (
+            "**AI & Tools.** "
+            "List and call MCP tools across one or all projects. "
+            "Mirrors `kbagent tool list|call`."
+        ),
+    },
+    {
+        "name": "kai",
+        "description": (
+            "**AI & Tools.** "
+            "Keboola AI (Kai) -- ping, preflight, single-shot ask, "
+            "chat with history. "
+            "Mirrors `kbagent kai *`."
+        ),
+    },
+    {
+        "name": "ai-chat",
+        "description": (
+            "**AI & Tools.** "
+            "Server-side streaming AI chat (SSE) used by the kbagent "
+            "web UI. No CLI equivalent."
+        ),
+    },
+    {
+        "name": "agents",
+        "description": (
+            "**AI & Tools.** "
+            "Scheduled / on-demand AI agent tasks. Server-only feature "
+            "(no CLI equivalent) -- the scheduler loop runs inside "
+            "`kbagent serve` and persists tasks + runs to the config "
+            "directory."
+        ),
+    },
+    # ---- System ----
+    {
+        "name": "health",
+        "description": (
+            "**System.** "
+            "Liveness ping, auth-info bootstrap, version, changelog, "
+            "and doctor checks. `/health/ping` is the only public "
+            "endpoint -- everything else requires Bearer auth."
+        ),
+    },
+]
+
+
+APP_DESCRIPTION = """\
+HTTP API surface for **kbagent**. Wraps every CLI command as a REST
+endpoint so the kbagent web UI and any HTTP client (curl, the
+`kbagent http` proxy, scheduled agents, Node BFFs, ...) can drive
+Keboola the same way the terminal does.
+
+## Authentication
+
+Every endpoint except `GET /health/ping`, `GET /docs`, `GET /redoc`,
+and `GET /openapi.json` requires a bearer token. The token is
+generated when `kbagent serve` starts and printed to stdout -- click
+**Authorize** at the top right of this page and paste it once.
+
+Endpoints under **org** additionally require an `X-Manage-Token`
+header (the Keboola Manage API token). It is never persisted; pass
+it per request.
+
+## Layout
+
+Sections below are grouped roughly the same way `kbagent --help` groups
+its command tree:
+
+- **Project Management** -- projects, members, org
+- **Configurations** -- configs, components, encrypt
+- **Data** -- storage, search, sharing
+- **Execution** -- jobs, flows, schedules, data-apps, workspaces
+- **Development** -- branches, lineage, semantic-layer
+- **AI & Tools** -- mcp, kai, ai-chat, agents
+- **System** -- health
+
+Most endpoints accept a `project` alias either in the body or as a
+query parameter; multi-project endpoints accept `project` repeatedly.
+"""
+
+
+def _build_custom_openapi(app: FastAPI):
+    """Return a closure that generates the OpenAPI schema with auth schemes.
+
+    FastAPI's default ``get_openapi(...)`` does not know about the
+    ``BearerAuthMiddleware`` (it's an ASGI middleware, not a per-route
+    dependency), so the generated schema has no ``securitySchemes`` and
+    Swagger UI shows no **Authorize** button. We patch the schema after
+    generation:
+
+    1. Declare a ``BearerAuth`` HTTP scheme (the global default for every
+       endpoint that is not in ``PUBLIC_PATHS``).
+    2. Declare a ``ManageToken`` API-key scheme (header ``X-Manage-Token``)
+       used by the ``org`` router and any future endpoint that requires the
+       Manage API token. Endpoints opt in by listing it in their
+       ``openapi_extra={"security": [{"BearerAuth": [], "ManageToken": []}]}``.
+    3. Apply ``BearerAuth`` globally and clear ``security`` for public paths
+       so Swagger UI shows them as unsecured (matching the actual middleware
+       behavior).
+
+    The result is cached on ``app.openapi_schema`` per FastAPI convention.
+    """
+
+    def custom_openapi() -> dict:
+        if app.openapi_schema:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+            tags=app.openapi_tags,
+        )
+        components = schema.setdefault("components", {})
+        components["securitySchemes"] = {
+            "BearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "description": (
+                    "Bearer token printed to stdout when `kbagent serve` starts. "
+                    "Paste it once and Swagger UI will attach it to every request."
+                ),
+            },
+            "ManageToken": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "X-Manage-Token",
+                "description": (
+                    "Keboola Manage API token. Required only by `/org/*` "
+                    "endpoints. Never persisted; passed per request."
+                ),
+            },
+        }
+        schema["security"] = [{"BearerAuth": []}]
+        # Public paths in PUBLIC_PATHS are exempt from the bearer-auth
+        # middleware. Reflect that in the schema so Swagger UI does not
+        # mislabel them as locked.
+        for path in PUBLIC_PATHS:
+            path_item = schema.get("paths", {}).get(path)
+            if not path_item:
+                continue
+            for op in path_item.values():
+                if isinstance(op, dict):
+                    op["security"] = []
+        app.openapi_schema = schema
+        return schema
+
+    return custom_openapi
 
 
 def _format_error(
@@ -143,15 +467,27 @@ def create_app(
     app = FastAPI(
         lifespan=_lifespan,  # type: ignore[arg-type]
         title="kbagent serve",
-        description=(
-            "HTTP API surface for kbagent. Wraps all kbagent CLI commands as "
-            "REST endpoints. Designed for the kbagent web UI (web/backend + "
-            "web/frontend) but consumable by any HTTP client."
-        ),
+        description=APP_DESCRIPTION,
         version=__version__,
         docs_url="/docs",
         redoc_url="/redoc",
+        openapi_tags=OPENAPI_TAGS,
+        swagger_ui_parameters={
+            # Keep the bearer token across page refreshes so the user only
+            # has to paste it once per browser session. The token is held in
+            # the Swagger UI in-memory store (and localStorage when persist
+            # is true) -- safe for a localhost-only dev tool, and a major
+            # ergonomics win for exploring the API.
+            "persistAuthorization": True,
+            # Default tag ordering follows ``openapi_tags`` above; this
+            # toggle just keeps Swagger from re-sorting operations within
+            # each tag alphabetically (we want them in router declaration
+            # order, which usually mirrors a logical workflow).
+            "operationsSorter": None,
+            "docExpansion": "none",
+        },
     )
+    app.openapi = _build_custom_openapi(app)  # type: ignore[method-assign]
 
     app.add_middleware(
         CORSMiddleware,
@@ -303,8 +639,10 @@ def _install_ui(app: FastAPI, *, ui_dist: str, token: str) -> None:
 
     # Allow unauthenticated access to the bootstrap HTML so the browser can
     # load it and pick up the session cookie. Static assets (JS/CSS/icons)
-    # under /assets/* are also public -- they carry no secrets.
-    from .auth import PUBLIC_PATHS as _AUTH_PUBLIC_PATHS  # noqa: F401  (touch to confirm import)
+    # under /assets/* are also public -- they carry no secrets. The shared
+    # PUBLIC_PATHS set is already imported at module scope; the SPA's
+    # extended public surface is bolted on via ``_allow_static_through_auth``
+    # below.
 
     @app.get("/", include_in_schema=False)
     @app.get("/index.html", include_in_schema=False)

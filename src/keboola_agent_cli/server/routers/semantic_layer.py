@@ -198,7 +198,7 @@ class TokenEncryptRequest(BaseModel):
 # ── Routes (14 declarations, in the order from the plan) ────────────
 
 
-@router.get("/models")
+@router.get("/models", summary="List semantic-layer models")
 def list_models(
     project: str,
     registry: ServiceRegistry = Depends(get_registry),
@@ -207,7 +207,7 @@ def list_models(
     return registry.semantic_layer.list_models(project)
 
 
-@router.post("/models")
+@router.post("/models", summary="Create a semantic-layer model")
 def create_model(
     body: ModelCreate, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
@@ -220,7 +220,7 @@ def create_model(
     )
 
 
-@router.delete("/models/{model}")
+@router.delete("/models/{model}", summary="Delete a semantic-layer model")
 def delete_model(
     model: str,
     project: str,
@@ -230,7 +230,7 @@ def delete_model(
     return registry.semantic_layer.delete_model(alias=project, model_name_or_uuid=model)
 
 
-@router.get("/show")
+@router.get("/show", summary="Show model entities")
 def show(
     project: str,
     model: str | None = None,
@@ -243,7 +243,7 @@ def show(
     )
 
 
-@router.get("/validate")
+@router.get("/validate", summary="Validate a semantic-layer model")
 def validate(
     project: str,
     model: str | None = None,
@@ -256,7 +256,7 @@ def validate(
     )
 
 
-@router.get("/export")
+@router.get("/export", summary="Export model snapshot")
 def export(
     project: str,
     model: str | None = None,
@@ -284,7 +284,7 @@ def export(
     return result
 
 
-@router.post("/diff")
+@router.post("/diff", summary="Diff two semantic-layer snapshots")
 def diff(body: DiffRequest, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
     """Diff two snapshots — project↔project, project↔file, file↔file.
 
@@ -333,7 +333,7 @@ def diff(body: DiffRequest, registry: ServiceRegistry = Depends(get_registry)) -
                 p.unlink()
 
 
-@router.post("/items/{kind}")
+@router.post("/items/{kind}", summary="Add an entity to a model")
 def add_item(
     kind: ItemKind,
     body: dict[str, Any],
@@ -410,7 +410,7 @@ def add_item(
     )
 
 
-@router.put("/items/{kind}/{name}")
+@router.put("/items/{kind}/{name}", summary="Edit a model entity")
 def edit_item(
     kind: ItemKind,
     name: str,
@@ -489,7 +489,7 @@ def edit_item(
     )
 
 
-@router.delete("/items/{kind}/{name}")
+@router.delete("/items/{kind}/{name}", summary="Remove a model entity")
 def remove_item(
     kind: ItemKind,
     name: str,
@@ -508,7 +508,7 @@ def remove_item(
     )
 
 
-@router.post("/import")
+@router.post("/import", summary="Import a snapshot into a project")
 def import_snapshot(
     body: ImportRequest, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
@@ -523,7 +523,7 @@ def import_snapshot(
     )
 
 
-@router.post("/promote")
+@router.post("/promote", summary="Promote a model between projects")
 def promote(
     body: PromoteRequest, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
@@ -538,7 +538,7 @@ def promote(
     )
 
 
-@router.post("/build")
+@router.post("/build", summary="Build a model from tables")
 def build(body: BuildRequest, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
     """Heuristic greenfield builder — synthesize a model from a list of tables."""
     return registry.semantic_layer.build_model(
@@ -551,7 +551,7 @@ def build(body: BuildRequest, registry: ServiceRegistry = Depends(get_registry))
     )
 
 
-@router.post("/token/encrypt")
+@router.post("/token/encrypt", summary="Encrypt storage token for transformation")
 def token_encrypt(
     body: TokenEncryptRequest, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:

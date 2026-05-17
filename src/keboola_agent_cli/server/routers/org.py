@@ -11,6 +11,12 @@ from ..dependencies import ServiceRegistry, get_manage_token, get_registry
 
 router = APIRouter(prefix="/org", tags=["org"])
 
+# Every endpoint in this router requires BOTH the standard bearer token AND
+# the per-request Manage API token. Declaring it here means Swagger UI's
+# "Authorize" dialog will list both schemes so users can paste each one
+# once instead of guessing why a request 401s.
+_NEEDS_MANAGE_TOKEN: dict[str, Any] = {"security": [{"BearerAuth": [], "ManageToken": []}]}
+
 
 class OrgSetup(BaseModel):
     stack_url: str
@@ -30,12 +36,19 @@ class OrgRefresh(BaseModel):
     token_expires_in: int | None = None
 
 
-@router.post("/setup")
+@router.post("/setup", summary="Onboard org / project list", openapi_extra=_NEEDS_MANAGE_TOKEN)
 def setup(
     body: OrgSetup,
     manage_token: str | None = Depends(get_manage_token),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Bulk-register every project in an organization (or a fixed project ID list).
+
+    Issues a fresh storage token per project via the Manage API and persists
+    each project under a slug-style alias. Idempotent: existing aliases that
+    already point at the same project ID are skipped. Mirrors
+    `kbagent org setup`.
+    """
     if not manage_token:
         raise HTTPException(
             status_code=401,
@@ -52,12 +65,19 @@ def setup(
     )
 
 
-@router.post("/refresh")
+@router.post("/refresh", summary="Re-issue storage tokens", openapi_extra=_NEEDS_MANAGE_TOKEN)
 def refresh(
     body: OrgRefresh,
     manage_token: str | None = Depends(get_manage_token),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Refresh the storage token for one alias, several aliases, or every project.
+
+    Useful after rotating a Manage API token or when a per-project token is
+    near expiry. Pass `refresh_all=true` to refresh every persisted alias,
+    or a list of aliases to scope the refresh. Mirrors
+    `kbagent project refresh --project` and `kbagent project refresh --all`.
+    """
     if not manage_token:
         raise HTTPException(
             status_code=401,

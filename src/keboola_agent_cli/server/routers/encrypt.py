@@ -18,10 +18,16 @@ class EncryptRequest(BaseModel):
     values: dict[str, str]
 
 
-@router.post("/values")
+@router.post("/values", summary="Encrypt secret values")
 def encrypt_values(
     body: EncryptRequest, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
+    """Encrypt one or more values for a specific project + component pair.
+
+    Returns the same keys with `KBC::ProjectSecure::...` ciphertexts. Use
+    this before writing secret values into a configuration so they are
+    never persisted in plaintext. Mirrors `kbagent encrypt values`.
+    """
     return registry.encrypt.encrypt(
         alias=body.project,
         component_id=body.component_id,
