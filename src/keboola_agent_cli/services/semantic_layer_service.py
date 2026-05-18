@@ -25,6 +25,7 @@ from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..metastore_client import MetastoreClient, SemanticType
 from ..models import ProjectConfig
+from ._semantic_layer_cascade import cascade_delete_model as _cascade_delete_model_impl
 from ._semantic_layer_crud import REMOVE_KINDS as _REMOVE_KINDS_HELPER
 from ._semantic_layer_crud import code_metric as _code_metric_helper
 from ._semantic_layer_crud import delete_then_post as _delete_then_post_helper
@@ -33,8 +34,8 @@ from ._semantic_layer_crud import edit_simple as _edit_simple_helper
 from ._semantic_layer_crud import find_target_for_remove as _find_target_for_remove
 from ._semantic_layer_crud import scan_orphan_constraints as _scan_orphan_constraints
 from ._semantic_layer_crud import validate_constraint_attrs as _validate_constraint_attrs
-from ._semantic_layer_internals import PUSH_ORDER, collect_side_from_file
 from ._semantic_layer_internals import build_export_snapshot as _build_export_snapshot
+from ._semantic_layer_internals import collect_side_from_file
 from ._semantic_layer_internals import default_export_path as _default_export_path
 from ._semantic_layer_internals import diff_one_type as _diff_one_type_helper
 from ._semantic_layer_internals import fetch_table_schemas as _fetch_table_schemas
@@ -615,117 +616,26 @@ class SemanticLayerService(BaseService):
     ) -> dict[str, Any]:
         """Delete a semantic-layer model and cascade-delete its children.
 
-        Children are deleted in reverse :data:`PUSH_ORDER` (constraints
-        first, datasets last) so each row's references are gone before the
-        row itself. On any child-DELETE failure we collect the error,
-        finish the cascade pass, **skip the parent**, and raise a
-        :class:`KeboolaApiError` carrying ``details.cascade`` — the same
-        envelope shape used by :func:`push_built_model` rollback. Re-running
-        the command after fixing the underlying error completes the
-        deletion.
+        Thin orchestrator: resolve project + model, fetch children, and
+        forward to :func:`_cascade_delete_model_impl`. Cascade semantics
+        (reverse :data:`PUSH_ORDER`, per-child try/except, parent
+        preserved on any failure with ``details.cascade`` envelope) live
+        in the helper to keep this file under the 1500 LOC ceiling.
         """
         project = self._resolve_one_project(alias)
         client = self._new_metastore_client(project)
         try:
             model_uuid, model_attrs = self._resolve_model(client, model_name_or_uuid)
             children = self._fetch_children_parallel(client, model_uuid)
-
-            deleted_counts: dict[str, int] = {plural: 0 for plural, _ in PUSH_ORDER}
-            failures: list[dict[str, str]] = []
-            # reversed(PUSH_ORDER) → constraints, glossary, relationships,
-            # metrics, datasets. Constraints reference metrics by name and
-            # metrics reference dataset tableIds, so this order kills the
-            # references before their targets.
-            for plural, type_slug in reversed(PUSH_ORDER):
-                for item in children.get(type_slug, []) or []:
-                    child_id = str(item.get("id", "") or "")
-                    if not child_id:
-                        continue
-                    attrs = item.get("attributes") or {}
-                    child_name = attrs.get("name") or attrs.get("term") or ""
-                    try:
-                        client.delete_item(type_slug, child_id)
-                        deleted_counts[plural] += 1
-                    except (KeyboardInterrupt, SystemExit):
-                        raise
-                    except Exception as exc:
-                        # Broad catch mirrors the rollback semantics in
-                        # `_semantic_layer_internals.push_built_model` (the
-                        # prior-art rationale lives there): a non-API
-                        # exception (httpx transport error, etc.) must not
-                        # abort the cascade or mask sibling failures.
-                        # Collect, log at warning level, continue.
-                        err = (
-                            exc.message
-                            if isinstance(exc, KeboolaApiError)
-                            else str(exc) or type(exc).__name__
-                        )
-                        failures.append(
-                            {
-                                "type": type_slug,
-                                "id": child_id,
-                                "name": child_name,
-                                "error": err,
-                            }
-                        )
-                        logger.warning(
-                            "Cascade DELETE failed for %s id=%s name=%s: %s",
-                            type_slug,
-                            child_id,
-                            child_name,
-                            err,
-                        )
-
-            if failures:
-                # Skip the parent: a "no parent + some children" partial
-                # state would still hit the exact 422 collision this fix
-                # is closing. Surface the failures so the user can re-run.
-                raise KeboolaApiError(
-                    message=(
-                        f"Cascade-delete for model "
-                        f"{model_attrs.get('name', '') or model_uuid!r} ({model_uuid}) "
-                        f"failed for {len(failures)} child(ren); parent preserved. "
-                        f"Re-run `kbagent semantic-layer model delete "
-                        f"--project {alias} --model {model_uuid}` "
-                        f"after resolving the underlying errors."
-                    ),
-                    error_code=ErrorCode.INTERNAL_ERROR,
-                    status_code=500,
-                    details={
-                        "cascade": {
-                            "attempted": True,
-                            "deleted": deleted_counts,
-                            "failures": failures,
-                            "parent_deleted": False,
-                            "model_uuid": model_uuid,
-                        }
-                    },
-                )
-
-            client.delete_item("semantic-model", model_uuid)
+            return _cascade_delete_model_impl(
+                client,
+                alias=alias,
+                model_uuid=model_uuid,
+                model_attrs=model_attrs,
+                children=children,
+            )
         finally:
             client.close()
-
-        return {
-            "project": alias,
-            "deleted": {"id": model_uuid, "name": model_attrs.get("name", "")},
-            "cascade": {
-                "attempted": True,
-                "deleted": deleted_counts,
-                "failures": [],
-                "parent_deleted": True,
-            },
-            # Back-compat: the key existed before this fix as a count of
-            # *leaked* children. After the fix it counts *cascaded*
-            # children. Same shape, opposite meaning — JSON consumers see
-            # zeros instead of leaks on the happy path, which is the
-            # behavior they always wanted.
-            # DEPRECATED: scheduled for removal in v0.42.0; new callers
-            # should read `cascade.deleted` (plus `cascade.attempted` /
-            # `cascade.parent_deleted` / `cascade.failures` for the
-            # partial-failure path). See changelog 0.41.11 + gotchas.md.
-            "orphaned_children": deleted_counts,
-        }
 
     # ------------------------------------------------------------------
     # Phase 4 — add subcommands
