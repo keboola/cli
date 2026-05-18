@@ -527,6 +527,13 @@ steps 5-8 is that **CI will not catch you** if you skip them; they are the
 manual safety net for the silent-drift risks summarized in the
 [Plugin synchronization map](#plugin-synchronization-map) above.
 
+> **Want to ship a beta first?** You can. PEP 440 pre-release versions
+> (`0.43.0b1`, `0.43.0rc1`) are fully supported by `kbagent update --beta`
+> since v0.42.0. The startup auto-update hook never silently lands on a
+> beta -- only explicit opt-in installs them. See
+> [Releasing a beta (pre-release) version](#releasing-a-beta-pre-release-version)
+> below for the workflow.
+
 1. **Edit `pyproject.toml`** -- bump `version = "X.Y.Z"`. Single source of truth; everything else derives from it.
 2. **Add a changelog entry** to `src/keboola_agent_cli/changelog.py` -- one entry per release, no exceptions. CI fails (`make changelog-check`) if this is missing.
 3. **Run `make version-sync`** -- propagates the new version to `plugins/kbagent/.claude-plugin/plugin.json`. The pre-commit hook does this automatically on `git commit`, but running it explicitly lets you eyeball the diff.
@@ -546,6 +553,57 @@ manual safety net for the silent-drift risks summarized in the
 If any of steps 5-8 reveal "I should have done this in the PR that introduced
 the command, not at release time", **also patch the per-command checklist**
 above so the next contributor catches the gap earlier.
+
+### Releasing a beta (pre-release) version
+
+Beta and release-candidate versions follow PEP 440: `X.Y.Zb1`, `X.Y.Zb2`,
+`X.Y.Zrc1`, ... -- not the SemVer `-beta.1` form (hatchling and uv require
+PEP 440 syntax in `pyproject.toml`'s `version` field). Two gates keep stable
+users safe from accidentally landing on a beta:
+
+1. **Version string itself.** PEP 440 marks any pre-release suffix as such;
+   `pip install keboola-agent-cli` and `uv tool install ...` default to
+   **skipping** pre-releases unless the resolver is told otherwise (`--pre`
+   for pip, `--prerelease=allow` for uv).
+2. **GitHub Release `prerelease: true` flag.** The auto-update startup
+   hook calls `GET /releases/latest`, which GitHub explicitly defines as
+   "the most recent non-prerelease, non-draft release". Marking the release
+   `--prerelease` makes it invisible to the auto-update path.
+
+**Workflow:**
+
+1. Bump `pyproject.toml` to the PEP 440 pre-release version
+   (e.g. `0.43.0b1`).
+2. Add a changelog entry under that key in `src/keboola_agent_cli/changelog.py`.
+3. `make version-sync` propagates the version to `plugin.json` /
+   `marketplace.json`.
+4. Tag and push: `git tag v0.43.0b1 && git push origin v0.43.0b1`.
+5. Create the GitHub release **with the `--prerelease` flag**:
+   ```bash
+   gh release create v0.43.0b1 --prerelease \
+       --title "v0.43.0 — Beta 1" \
+       --notes-file release-notes-0.43.0b1.md
+   ```
+6. Test by installing yourself: `kbagent update --beta` (or set
+   `KBAGENT_INCLUDE_PRERELEASE=1` in env). Users who do **not** opt in
+   keep getting the latest stable; the new beta is invisible to them.
+7. Once the beta cooks long enough, bump to the stable equivalent
+   (`0.43.0`), retag, and create the release **without** `--prerelease`
+   so auto-update picks it up.
+
+**Users opt in two ways:**
+
+- One-shot: `kbagent update --beta` (resolver is told `--prerelease=allow`
+  / `--pre`, GitHub query switches to `/releases` and picks the highest
+  PEP 440 version including pre-releases).
+- Per-session env var: `export KBAGENT_INCLUDE_PRERELEASE=1` -- every
+  subsequent `kbagent update` / `kbagent version` in that shell treats
+  betas as installable.
+
+**Never persists.** There is no `release_channel: beta` config setting --
+each invocation has to opt in. This is deliberate: betas should always be
+an active choice, never a forgotten "I once typed --beta six months ago"
+foot-gun.
 
 ## Running CI Locally
 

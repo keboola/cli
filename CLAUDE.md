@@ -171,6 +171,46 @@ All three inherit from `BaseHttpClient` (`http_base.py`) which provides shared r
 
 **When bumping the version**: edit `pyproject.toml`, add a changelog entry to `src/keboola_agent_cli/changelog.py`, then run `make version-sync`. Do not edit `__init__.py` or `plugin.json` manually. CI enforces changelog completeness via `make changelog-check`.
 
+### Beta / pre-release versions (since 0.43.3)
+
+Beta and release-candidate versions follow **PEP 440**: `0.44.0b1`, `0.44.0rc1`, ... -- **not** the SemVer `-beta.1` form (hatchling + uv require PEP 440 syntax in `pyproject.toml`). Three independent gates keep stable users safe from accidentally landing on a beta:
+
+1. **PEP 440 pre-release suffix.** pip / uv default to **skipping** pre-releases unless told otherwise (`--pre` for pip, `--prerelease=allow` for uv).
+2. **GitHub Release `prerelease: true` flag.** The auto-update startup hook calls `/releases/latest`, which GitHub defines as "the most recent non-prerelease, non-draft release". Marking the release `--prerelease` makes it invisible to the auto-update path.
+3. **Tag-pinned install URL.** When `--beta` opts into a pre-release, the install command appends `@v<version>` to the git+ source URL so uv pulls the **exact commit** the tag points to. Without this, uv would resolve the default branch (`main`) and -- if the beta lives on a feature branch -- silently install the stale main HEAD even though the version fetcher advertised the beta tag.
+
+**Author workflow (release a beta from a feature branch):**
+
+```bash
+# 1. Bump pyproject.toml to PEP 440 pre-release form on the feature branch
+#    version = "0.44.0b1"
+make version-sync                          # propagates to plugin.json / marketplace.json
+
+# 2. Add a changelog entry under that key in src/keboola_agent_cli/changelog.py
+# 3. Commit + push to PR (NOT to main -- main stays on the stable channel)
+git push origin feat/my-feature
+
+# 4. Tag the PR head SHA + push tag
+git tag v0.44.0b1 && git push origin v0.44.0b1
+
+# 5. KEY STEP: create the GitHub Release WITH --prerelease pointing at the tag
+gh release create v0.44.0b1 --prerelease \
+    --title "v0.44.0 — Beta 1" \
+    --notes-file release-notes-0.44.0b1.md
+```
+
+When the beta cooks long enough, merge the PR (stable squash) and ship `0.44.0` from main with a normal release **without** `--prerelease` -- auto-update picks it up on next startup.
+
+**User opt-in (consume betas):**
+
+- One-shot: `kbagent update --beta` -- resolver opts into pre-releases for this invocation only.
+- Per-shell: `export KBAGENT_INCLUDE_PRERELEASE=1` -- every `kbagent update` / `kbagent version` in that shell treats betas as installable.
+- **No persistent setting.** Each beta install is an active choice; never a forgotten "I once typed --beta six months ago" foot-gun.
+
+The startup auto-update hook is **never** affected by `--beta` / env opt-in -- it always uses `/releases/latest` (stable channel). Beta installs only come from explicit `kbagent update --beta`.
+
+Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) version".
+
 ## Coding Conventions
 
 > **0. (BINDING) Follow [CONTRIBUTING.md](CONTRIBUTING.md) in full.** Every code change -- human or AI agent -- must satisfy the rules in `CONTRIBUTING.md`. Specifically, the "Code Quality Patterns" section is non-negotiable: dataclasses (not bare tuples) for multi-value returns; categorical arguments before variable ones; `ErrorCode` enum (never raw strings); file-size budgets; context managers over lambdas; named functions over assigned anonymous functions; `ty` clean for new code. The `.claude/settings.json` post-edit hooks run `ruff check --fix`, `ruff format`, and `ty check` after every edit -- when an AI agent edits a file in this repo, those checks fire automatically and any failure must be addressed before continuing. If a rule conflicts with an existing pattern in legacy code, **fix it in the PR you are touching** or open a follow-up issue; do not propagate the pattern.
@@ -447,8 +487,11 @@ kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--projec
 kbagent context
 kbagent init [--from-global]
 kbagent doctor [--fix]
-kbagent version
-kbagent update
+kbagent version [--beta]
+kbagent update [--beta]
+# `--beta` (or env `KBAGENT_INCLUDE_PRERELEASE=1`) opts into pre-release versions
+# (PEP 440 betas/rc, e.g. 0.43.0b1). Default (no flag) is stable-only -- auto-update
+# startup hook never silently lands on a beta.
 kbagent changelog [--limit N]
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]
 ```

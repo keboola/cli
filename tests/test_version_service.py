@@ -11,6 +11,7 @@ from keboola_agent_cli.services.version_service import (
     MCP_PACKAGE_NAME,
     VersionService,
     _detect_mcp_install_method,
+    _fetch_kbagent_latest_version,
     _fetch_mcp_latest_version,
     _get_local_mcp_version,
     _is_up_to_date,
@@ -18,6 +19,7 @@ from keboola_agent_cli.services.version_service import (
     _perform_mcp_update,
     _uv_tool_list_get_mcp_version,
     _uv_tool_list_has_mcp,
+    build_kbagent_upgrade_command,
 )
 
 
@@ -801,3 +803,209 @@ class TestSelfUpdateTwoStage:
         assert "vNone" not in result["mcp"]["message"]
         # Overall flag flips to True too.
         assert result["updated"] is True
+
+
+class TestFetchKbagentLatestVersion:
+    """Beta / pre-release opt-in for kbagent version lookup (since v0.42.0)."""
+
+    @patch("keboola_agent_cli.services.version_service.httpx.get")
+    def test_default_uses_releases_latest_endpoint(self, mock_get: MagicMock) -> None:
+        """Without --beta: hit /releases/latest (GitHub filters prerelease)."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"tag_name": "v0.42.0"}
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        result = _fetch_kbagent_latest_version()
+
+        assert result == "0.42.0"
+        # Only one call, to /releases/latest -- the prerelease path uses
+        # /releases (plural) instead.
+        assert mock_get.call_count == 1
+        url = mock_get.call_args.args[0]
+        assert url.endswith("/releases/latest")
+
+    @patch("keboola_agent_cli.services.version_service.httpx.get")
+    def test_prerelease_returns_highest_pep440_version(self, mock_get: MagicMock) -> None:
+        """With include_prerelease=True: pick highest by PEP 440 ordering."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        # GitHub /releases returns newest-first, but the function must sort
+        # by SemVer/PEP 440, not by API order -- otherwise a hot-fix to an
+        # older release line (e.g. v0.41.11 after v0.42.0) would win.
+        mock_response.json.return_value = [
+            {"tag_name": "v0.41.11", "draft": False, "prerelease": False},
+            {"tag_name": "v0.42.0", "draft": False, "prerelease": False},
+            {"tag_name": "v0.43.0b1", "draft": False, "prerelease": True},
+            {"tag_name": "v0.43.0b2", "draft": False, "prerelease": True},
+        ]
+        mock_get.return_value = mock_response
+
+        result = _fetch_kbagent_latest_version(include_prerelease=True)
+
+        assert result == "0.43.0b2"
+        # Plural /releases endpoint -- only one call.
+        url = mock_get.call_args.args[0]
+        assert url.endswith("/releases")
+
+    @patch("keboola_agent_cli.services.version_service.httpx.get")
+    def test_prerelease_skips_drafts(self, mock_get: MagicMock) -> None:
+        """Draft releases must be ignored even when newest by tag."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = [
+            {"tag_name": "v0.42.0", "draft": False, "prerelease": False},
+            {"tag_name": "v0.43.0b1", "draft": True, "prerelease": True},
+        ]
+        mock_get.return_value = mock_response
+
+        result = _fetch_kbagent_latest_version(include_prerelease=True)
+
+        # Draft 0.43.0b1 skipped -> 0.42.0 wins.
+        assert result == "0.42.0"
+
+    @patch("keboola_agent_cli.services.version_service.httpx.get")
+    def test_prerelease_falls_back_to_stable_when_no_betas(self, mock_get: MagicMock) -> None:
+        """When no pre-releases exist, the highest stable still wins."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = [
+            {"tag_name": "v0.41.10", "draft": False, "prerelease": False},
+            {"tag_name": "v0.42.0", "draft": False, "prerelease": False},
+        ]
+        mock_get.return_value = mock_response
+
+        assert _fetch_kbagent_latest_version(include_prerelease=True) == "0.42.0"
+
+    @patch("keboola_agent_cli.services.version_service.httpx.get")
+    def test_prerelease_ignores_invalid_tags(self, mock_get: MagicMock) -> None:
+        """Hand-rolled tags that don't parse as PEP 440 are silently dropped."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = [
+            {"tag_name": "vnext", "draft": False, "prerelease": True},  # invalid
+            {"tag_name": "v0.42.0", "draft": False, "prerelease": False},
+            {"tag_name": "wip", "draft": False, "prerelease": True},  # invalid
+        ]
+        mock_get.return_value = mock_response
+
+        assert _fetch_kbagent_latest_version(include_prerelease=True) == "0.42.0"
+
+    @patch("keboola_agent_cli.services.version_service.httpx.get")
+    def test_prerelease_http_failure_returns_none(self, mock_get: MagicMock) -> None:
+        """Any httpx error returns None without crashing the caller."""
+        import httpx
+
+        mock_get.side_effect = httpx.HTTPError("upstream is down")
+        assert _fetch_kbagent_latest_version(include_prerelease=True) is None
+
+
+class TestBuildKbagentUpgradeCommand:
+    """Resolver pre-release opt-in propagation (since v0.42.0)."""
+
+    @patch("keboola_agent_cli.services.version_service.has_server_extras")
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    def test_uv_without_extras_no_prerelease(
+        self, mock_which: MagicMock, mock_has_server: MagicMock
+    ) -> None:
+        mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
+        mock_has_server.return_value = False
+
+        cmd = build_kbagent_upgrade_command()
+
+        assert cmd is not None
+        assert "--prerelease=allow" not in cmd
+        assert "--upgrade" in cmd
+
+    @patch("keboola_agent_cli.services.version_service.has_server_extras")
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    def test_uv_without_extras_with_prerelease(
+        self, mock_which: MagicMock, mock_has_server: MagicMock
+    ) -> None:
+        mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
+        mock_has_server.return_value = False
+
+        cmd = build_kbagent_upgrade_command(prerelease=True)
+
+        assert cmd is not None
+        assert "--prerelease=allow" in cmd
+        # Flag must sit before the install spec (positional last arg).
+        assert cmd.index("--prerelease=allow") == len(cmd) - 2
+
+    @patch("keboola_agent_cli.services.version_service.has_server_extras")
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    def test_uv_with_extras_with_prerelease(
+        self, mock_which: MagicMock, mock_has_server: MagicMock
+    ) -> None:
+        mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
+        mock_has_server.return_value = True
+
+        cmd = build_kbagent_upgrade_command(prerelease=True)
+
+        assert cmd is not None
+        assert "--prerelease=allow" in cmd
+        # Extras flag preserved
+        assert "--with" in cmd
+        assert "keboola-agent-cli[server]" in cmd
+
+    @patch("keboola_agent_cli.services.version_service.has_server_extras")
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    def test_pip_fallback_with_prerelease(
+        self, mock_which: MagicMock, mock_has_server: MagicMock
+    ) -> None:
+        mock_which.side_effect = lambda x: "/usr/bin/pip" if x == "pip" else None
+        mock_has_server.return_value = False
+
+        cmd = build_kbagent_upgrade_command(prerelease=True)
+
+        assert cmd is not None
+        # pip uses --pre, not --prerelease=allow
+        assert "--pre" in cmd
+        # Must sit after the `install` verb, before `--upgrade`
+        assert cmd.index("--pre") == cmd.index("install") + 1
+
+    @patch("keboola_agent_cli.services.version_service.has_server_extras")
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    def test_uv_prerelease_with_target_version_appends_tag(
+        self, mock_which: MagicMock, mock_has_server: MagicMock
+    ) -> None:
+        """Variant B fix: prerelease+target_version tag-pins install URL.
+
+        Without this, uv resolves the default branch (`main`) which
+        carries the latest stable pyproject.toml -- even though the
+        version fetcher advertised a beta tag on a feature branch. Pinning
+        ``@v<version>`` forces uv to install the exact commit the tag
+        points to.
+        """
+        mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
+        mock_has_server.return_value = False
+
+        cmd = build_kbagent_upgrade_command(prerelease=True, target_version="0.44.0b1")
+
+        assert cmd is not None
+        # Install source = last positional arg, must end with @v<version>.
+        assert cmd[-1].endswith("@v0.44.0b1")
+        # --prerelease=allow still required so the resolver accepts the
+        # PEP 440 pre-release spec at the tag's pyproject.toml.
+        assert "--prerelease=allow" in cmd
+
+    @patch("keboola_agent_cli.services.version_service.has_server_extras")
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    def test_uv_stable_with_target_version_ignores_tag(
+        self, mock_which: MagicMock, mock_has_server: MagicMock
+    ) -> None:
+        """target_version is ignored unless prerelease=True.
+
+        Stable upgrades always track main (which IS the stable channel),
+        so tag-pinning would just add a needless HTTP round-trip without
+        changing the resolved version.
+        """
+        mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
+        mock_has_server.return_value = False
+
+        cmd = build_kbagent_upgrade_command(prerelease=False, target_version="0.43.3")
+
+        assert cmd is not None
+        # No tag suffix when prerelease=False, even if target_version supplied.
+        assert not cmd[-1].endswith("@v0.43.3")
+        assert "@v" not in cmd[-1]
