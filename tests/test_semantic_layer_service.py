@@ -1925,6 +1925,49 @@ class TestPromoteModel:
 # ---------------------------------------------------------------------------
 
 
+class TestNormalizeFieldType:
+    """Pin the warehouse-native → metastore-vocabulary mapping.
+
+    The metastore's `fields[*].type` accepts only a closed lowercase set
+    (`string`, `integer`, `decimal`, `boolean`, `date`, `datetime`, `json`).
+    Storage hands us warehouse-native uppercase types — Snowflake `NUMBER`,
+    `VARCHAR(255)`, BigQuery `STRING`, etc. Forgetting to normalize causes
+    HTTP 422 on every legacy untyped table. These cases pin the mapping so
+    extending `_FIELD_TYPE_MAP` can't accidentally drop one.
+    """
+
+    @pytest.mark.parametrize(
+        "basetype,expected",
+        [
+            # The case the bug report was filed against — empty string from
+            # an untyped Storage column.
+            ("", "string"),
+            (None, "string"),
+            # Snowflake / BigQuery uppercase types with parameter brackets.
+            ("VARCHAR(255)", "string"),
+            ("NUMBER(38,2)", "decimal"),
+            ("DECIMAL(18, 9)", "decimal"),
+            # Plain types in different cases.
+            ("STRING", "string"),
+            ("integer", "integer"),
+            ("BIGINT", "integer"),
+            ("Boolean", "boolean"),
+            ("DATE", "date"),
+            ("TIMESTAMP_NTZ", "datetime"),
+            ("VARIANT", "json"),
+            # Unknown types fall through to `"string"` — safest default.
+            ("CUSTOM_UDT", "string"),
+            ("geography", "string"),
+        ],
+    )
+    def test_normalize_field_type(self, basetype: str, expected: str) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            _normalize_field_type,
+        )
+
+        assert _normalize_field_type(basetype) == expected
+
+
 class TestBuildModel:
     def test_heuristic_fallback(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -1950,6 +1993,12 @@ class TestBuildModel:
         assert len(result["generated"]["metrics"]) == 1
         assert len(result["generated"]["glossary"]) == 1
         assert result["validated"] is True
+        # Pin the warehouse → metastore type normalization: Storage hands us
+        # `"NUMBER"`, the metastore only accepts lowercase `"decimal"`. The
+        # heuristic builder must perform the mapping before the model is
+        # posted, otherwise we regress to the HTTP 422 this PR fixes.
+        ds_fields = result["generated"]["datasets"][0]["fields"]
+        assert ds_fields[0]["type"] == "decimal"
 
     def test_dry_run_skips_post(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

@@ -208,6 +208,14 @@ events and emits a final `done` SSE frame mirroring the same record.
   `04_AI_Kit/ai-kit/`. Bridge to that skill when the heuristic is
   not enough; the two are interoperable via the same metastore
   contract.
+- **Field-type normalization (since v0.41.10)**: warehouse-native
+  column types from Storage (`VARCHAR(255)`, `NUMBER(38,2)`,
+  `STRING`, `TIMESTAMP_NTZ`, ...) are mapped to the metastore's
+  closed lowercase set (`string`, `integer`, `decimal`, `boolean`,
+  `date`, `datetime`, `json`) before the model is POSTed. Untyped
+  Storage columns (empty `basetype`) default to `string`. Before
+  this fix `build` 422'd on every legacy untyped table because the
+  metastore rejected the raw warehouse types verbatim.
 - **Rollback + `--keep-on-failure` (updated v0.41.10 -- closes #295)**:
   the push loop now tracks every successfully-POSTed child in order
   and, on any subsequent POST failure, walks that list in REVERSE

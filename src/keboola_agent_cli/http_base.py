@@ -223,12 +223,6 @@ class BaseHttpClient:
 
         try:
             body = response.json()
-            # Real Keboola APIs answer with one of these keys in priority order.
-            # Metastore in particular ships HTTP 422 / 500 bodies with a
-            # plain `description` (FastAPI default) or `errors`/`detail` lists;
-            # without these fallbacks the user sees a bare "422" with no
-            # actionable text. Falling back to the full JSON serialisation
-            # keeps every unexpected shape debuggable.
             # Real Keboola APIs answer with one of these keys in priority
             # order. Two caveats:
             #   1. Keboola Metastore puts the HTTP status code into `error`
