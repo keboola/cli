@@ -121,6 +121,27 @@ limit, transient 5xx), the detail call still succeeds and
 `storage_workspace_id` is set to `null` -- the annotation is UX, not a
 contract.
 
+## Metastore duplicate-name POST returns 409 OR 500 -- both map to `ALREADY_EXISTS` (since v0.43.5)
+
+`MetastoreClient.post_item` normalises **both** the post-go-monorepo-PR#513
+HTTP 409 (`"Object with this name already exists in this project"`) and the
+legacy HTTP 500 (`"Failed to create meta object"`) into
+`ErrorCode.ALREADY_EXISTS` -- the user-facing message and command-layer
+exit-code mapping stay the same across stacks during the rollout window.
+
+**Why an AI agent might trip on this:** raw `httpx.post(...)` calls against
+`metastore.*.keboola.com/v1/api/repository/...` (instead of going through
+`kbagent semantic-layer add ...` / `MetastoreClient`) get the bare HTTP
+status. Code that branched on `status_code == 500` to detect duplicates
+silently breaks on a 409-enabled stack; code that only handles 409 silently
+breaks on a legacy 500 stack. Use `kbagent semantic-layer ...` and let the
+client do the mapping.
+
+**Retry behaviour:** 500 is in `RETRYABLE_STATUS_CODES` so the legacy path
+costs `MAX_RETRIES` round-trips before the normaliser fires; 409 is not, so
+post-fix duplicates resolve in a single round-trip. No code change needed
+in callers either way.
+
 ## `semantic-layer model delete` cascade-deletes children (since v0.43.4)
 
 `kbagent semantic-layer model delete --project P --model M` used to DELETE

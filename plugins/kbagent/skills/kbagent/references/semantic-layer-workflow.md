@@ -489,7 +489,7 @@ Quick reminders:
 - **Duplicate-name POST -> 409 Conflict** (post go-monorepo PR #513) with
   `"Object with this name already exists in this project"`, or **500** with
   `"Failed to create meta object"` on legacy stacks. kbagent normalizes both
-  into `ErrorCode.ALREADY_EXISTS` (since v0.43.4). 409 is non-retryable so
+  into `ErrorCode.ALREADY_EXISTS` (since v0.43.5). 409 is non-retryable so
   the fix-deployed path avoids the `MAX_RETRIES` round-trips the 500 path
   still pays.
 - **DELETE -> 204** empty body.
