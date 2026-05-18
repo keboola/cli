@@ -108,8 +108,8 @@ a critical failure.
    user's local claude / codex / gemini CLI; backs the dashboard
    Local AI tile that replaces Kai for non-master-token projects)
    needs 0.41.9+,
-   data-app discoverability fix on `workspace list/detail` +
-   sandbox config annotation needs 0.42.0+ (#304; gotchas.md),
+   data-app workspace + CLI sandbox annotation = 0.42.0+ (#304),
+   HTTP opt-in `?include_sandbox_annotation=true` = 0.43.1+ (#312),
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.

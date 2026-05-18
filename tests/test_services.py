@@ -2098,6 +2098,10 @@ class TestConfigServiceSandboxAnnotation:
         # No fan-out to list_workspaces when the flag is off; this is the
         # zero-regression guarantee for callers that don't opt in.
         mock_client.list_workspaces.assert_not_called()
+        # Client must be closed exactly once even on the fast path so the
+        # connection pool doesn't leak. Each annotation test pins this so
+        # an accidental early-return that skips the finally would be caught.
+        mock_client.close.assert_called_once()
 
     def test_annotation_resolves_storage_workspace_id(self, tmp_config_dir: Path) -> None:
         """With the flag on, the service resolves the real Storage workspace ID."""
@@ -2137,6 +2141,7 @@ class TestConfigServiceSandboxAnnotation:
         # branch_id is forwarded to list_workspaces so the lookup hits the
         # same scope as the detail call.
         mock_client.list_workspaces.assert_called_once_with(branch_id=None)
+        mock_client.close.assert_called_once()
 
     def test_annotation_orphan_returns_none_for_workspace_id(self, tmp_config_dir: Path) -> None:
         """No workspace currently backs the config -> storage_workspace_id is None,
@@ -2168,6 +2173,7 @@ class TestConfigServiceSandboxAnnotation:
         ann = result["sandbox_annotation"]
         assert ann["sandbox_service_id"] is None
         assert ann["storage_workspace_id"] is None
+        mock_client.close.assert_called_once()
 
     def test_annotation_skipped_for_non_sandbox_component(self, tmp_config_dir: Path) -> None:
         """Annotation is keboola.sandboxes-specific; other components must NOT
@@ -2196,6 +2202,7 @@ class TestConfigServiceSandboxAnnotation:
 
         assert "sandbox_annotation" not in result
         mock_client.list_workspaces.assert_not_called()
+        mock_client.close.assert_called_once()
 
     def test_annotation_swallows_workspace_listing_error(self, tmp_config_dir: Path) -> None:
         """If list_workspaces fails (rate limit, transient 5xx, ...), the detail
@@ -2233,6 +2240,11 @@ class TestConfigServiceSandboxAnnotation:
         ann = result["sandbox_annotation"]
         assert ann["sandbox_service_id"] == "1296392806"
         assert ann["storage_workspace_id"] is None
+        # The finally block must still run even when list_workspaces raised
+        # mid-try, otherwise an httpx client leaks per call. This pins the
+        # exception-safe close path that the bare try/except KeboolaApiError
+        # would otherwise let regress silently.
+        mock_client.close.assert_called_once()
 
 
 class TestConfigServiceListConfigsIncludeRows:
