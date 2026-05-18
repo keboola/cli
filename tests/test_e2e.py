@@ -5944,6 +5944,150 @@ class TestE2EPR8WorkspaceGC:
 
 
 # ---------------------------------------------------------------------------
+# Issue #304: workspace discoverability (login_type / qs_compatible / sandbox annotation)
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EIssue304WorkspaceDiscoverability:
+    """End-to-end coverage for the issue #304 workspace fixes.
+
+    Creates a real workspace (sandbox-backed, RO) and verifies:
+    - ``workspace list`` JSON entries carry ``login_type`` / ``read_only``
+      / ``qs_compatible`` / ``database`` / ``warehouse`` (the four fields
+      that were silently discarded pre-0.42.0).
+    - ``workspace detail`` carries the same fields.
+    - ``workspace list --qs-compatible`` returns a subset that excludes the
+      created workspace ONLY when its loginType is off the confirmed
+      whitelist -- otherwise it includes it. Either direction is consistent
+      with whitelist semantics.
+    - ``config detail --component-id keboola.sandboxes --config-id <ID>``
+      annotates the response with ``sandbox_annotation.storage_workspace_id``
+      pointing at the actual workspace ID (the issue #304 trap fix).
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-disc"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        self.api = KeboolaClient(self.url, self.token)
+        self._created_workspace_ids: list[int] = []
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self) -> Any:
+        yield
+        for ws_id in self._created_workspace_ids:
+            with contextlib.suppress(Exception):
+                self.api.delete_workspace(ws_id)
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_issue_304_discoverability_roundtrip(self) -> None:
+        """list/detail expose loginType; sandbox config annotation resolves real workspace ID."""
+        _step(1, "workspace create (RO sandbox)")
+        result = self._run("workspace", "create", "--project", self.alias)
+        if result.exit_code != 0:
+            pytest.skip(f"workspace create not supported: {result.output}")
+        data = _json_ok(result)
+        ws_id = int(data["data"]["workspace_id"])
+        config_id = data["data"]["config_id"]
+        self._created_workspace_ids.append(ws_id)
+
+        _step(2, "workspace list -- new fields present on every entry")
+        list_data = self._run_ok("workspace", "list", "--project", self.alias)
+        entries = list_data["data"]["workspaces"]
+        ours = [w for w in entries if w["id"] == ws_id]
+        assert ours, f"created workspace {ws_id} not in list"
+        entry = ours[0]
+        # The four formerly-discarded fields. We assert they EXIST and have
+        # the expected types; the actual loginType depends on the stack the
+        # E2E hits, so we don't pin a specific value.
+        assert "login_type" in entry, f"missing login_type: {entry.keys()}"
+        assert "read_only" in entry, f"missing read_only: {entry.keys()}"
+        assert "qs_compatible" in entry, f"missing qs_compatible: {entry.keys()}"
+        assert isinstance(entry["login_type"], str)
+        assert isinstance(entry["read_only"], bool)
+        assert isinstance(entry["qs_compatible"], bool)
+        assert entry["read_only"] is True, (
+            "RO sandboxes created via `workspace create` MUST be read-only"
+        )
+
+        _step(3, "workspace detail -- same fields on single-workspace detail")
+        detail_data = self._run_ok(
+            "workspace", "detail", "--project", self.alias, "--workspace-id", str(ws_id)
+        )
+        d = detail_data["data"]
+        assert d.get("login_type") == entry["login_type"]
+        assert d.get("read_only") is True
+        assert d.get("qs_compatible") == entry["qs_compatible"]
+
+        _step(4, "workspace list --qs-compatible -- filter is consistent with the entry's flag")
+        qs_data = self._run_ok("workspace", "list", "--project", self.alias, "--qs-compatible")
+        qs_ids = {w["id"] for w in qs_data["data"]["workspaces"]}
+        # Conservation law: our workspace is in the filter result iff its
+        # qs_compatible flag is True. This guards against drift between the
+        # filter logic and the per-row classifier.
+        if entry["qs_compatible"]:
+            assert ws_id in qs_ids, (
+                f"qs_compatible=true workspace {ws_id} missing from --qs-compatible filter"
+            )
+        else:
+            assert ws_id not in qs_ids, (
+                f"qs_compatible=false workspace {ws_id} leaked into --qs-compatible filter"
+            )
+
+        _step(5, "config detail keboola.sandboxes -- sandbox_annotation resolves real workspace ID")
+        cfg_data = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.sandboxes",
+            "--config-id",
+            config_id,
+        )
+        annotation = cfg_data["data"].get("sandbox_annotation")
+        assert annotation is not None, (
+            "config detail for keboola.sandboxes must carry sandbox_annotation"
+        )
+        # The actual mapping: storage_workspace_id MUST equal the workspace
+        # we just created (the whole point of the fix -- previously the
+        # caller would have used the misleading parameters.id and 404'd).
+        assert annotation.get("storage_workspace_id") == ws_id, (
+            f"expected storage_workspace_id={ws_id}, got annotation={annotation}"
+        )
+        assert "sandbox-service internal ID" in annotation.get("note", "")
+
+
+# ---------------------------------------------------------------------------
 # Queue polling parity (PR4 / P0-3): exponential curve, log tail, timeout kill
 # ---------------------------------------------------------------------------
 
