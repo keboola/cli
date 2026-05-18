@@ -109,6 +109,18 @@ no workspace found".
 annotation to avoid N+1 (one `list_workspaces` per config). Use
 `workspace list --project NAME` as a one-shot lookup instead.
 
+**HTTP / REST parity** (updated v0.43.1 -- closes #312): the annotation
+now lives in `ConfigService.get_config_detail()` behind an opt-in
+`include_sandbox_annotation: bool = False` parameter, not only in the
+CLI command. `GET /configs/{project}/{component_id}/{config_id}` on
+`kbagent serve` accepts `?include_sandbox_annotation=true` to switch it
+on. Default off so existing programmatic / web UI consumers see the
+unchanged shape -- a regression-free upgrade. The CLI command always
+opts in to preserve v0.42.0 behavior. If `list_workspaces` fails (rate
+limit, transient 5xx), the detail call still succeeds and
+`storage_workspace_id` is set to `null` -- the annotation is UX, not a
+contract.
+
 ## Web UI `Kai Chat` is gone — replaced by `Local AI` (since v0.41.9)
 
 The web UI dashboard tile / left-nav entry previously labelled **Kai

@@ -111,6 +111,18 @@ def config_detail(
     config_id: str,
     branch_id: int | None = None,
     with_state: bool = False,
+    include_sandbox_annotation: bool = Query(
+        False,
+        description=(
+            "Opt-in enrichment for component_id=keboola.sandboxes. When true, "
+            "the response carries a `sandbox_annotation` block with "
+            "`sandbox_service_id` (the misleading `configuration.parameters.id`) "
+            "and `storage_workspace_id` (the actual Storage workspace ID, "
+            "resolved via an extra GET /v2/storage/workspaces). Off by default "
+            "to keep the endpoint response shape stable for existing callers. "
+            "Closes #312 (HTTP parity for the #304 trap)."
+        ),
+    ),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Fetch a single configuration. Mirrors `kbagent config detail`."""
@@ -120,6 +132,7 @@ def config_detail(
         config_id=config_id,
         branch_id=branch_id,
         with_state=with_state,
+        include_sandbox_annotation=include_sandbox_annotation,
     )
 
 

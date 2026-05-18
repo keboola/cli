@@ -23,6 +23,7 @@ from ..sync.code_extraction import normalize_blocks_codes_script
 from ..sync.manifest import Manifest, load_manifest, save_manifest
 from ..sync.naming import sanitize_name
 from .base import BaseService, ClientFactory, sanitize_unexpected_error
+from .workspace_service import find_storage_workspace_for_sandbox_config
 
 AiClientFactory = Callable[[str, str], AiServiceClient]
 
@@ -299,6 +300,7 @@ class ConfigService(BaseService):
         branch_id: int | None = None,
         with_state: bool = False,
         aliases: list[str] | None = None,
+        include_sandbox_annotation: bool = False,
     ) -> dict[str, Any]:
         """Get detailed information about one or many configurations.
 
@@ -340,6 +342,18 @@ class ConfigService(BaseService):
                 ``config_id`` must be None and ``branch_id`` must be None.
                 Returns ``{"configs": [...], "errors": [...]}`` with every
                 row tagged by ``project_alias``.
+            include_sandbox_annotation: Opt-in enrichment for
+                ``component_id == "keboola.sandboxes"`` in single-config
+                mode. When True, the response gains a
+                ``sandbox_annotation`` block with ``sandbox_service_id``
+                (the misleading ``configuration.parameters.id``) and
+                ``storage_workspace_id`` (the actual Storage workspace ID,
+                resolved via an extra ``GET /v2/storage/workspaces``).
+                Default False to keep this method a clean API wrapper for
+                programmatic callers (closes #312 -- HTTP/REST parity gap
+                left by #304). Bulk mode is N+1-sensitive (one extra HTTP
+                round-trip per config), so the flag is silently ignored
+                there.
 
         Returns:
             Dict. Shape depends on mode:
@@ -403,11 +417,45 @@ class ConfigService(BaseService):
                 detail.setdefault("state", {})
                 if not isinstance(detail["state"], dict):
                     detail["state"] = {}
+            # Sandbox annotation enrichment (issue #312 / #304 HTTP parity).
+            # Opt-in (default off) so existing programmatic consumers keep
+            # the unchanged shape. The extra ``list_workspaces`` HTTP call
+            # is intentional: there is no per-config sandbox→workspace
+            # endpoint, and reusing the same client keeps retry/backoff +
+            # branch routing consistent with the detail call above.
+            sandbox_annotation: dict[str, Any] | None = None
+            if include_sandbox_annotation and component_id == "keboola.sandboxes":
+                sandbox_service_id = (
+                    (detail.get("configuration") or {}).get("parameters", {}).get("id")
+                )
+                try:
+                    workspaces = client.list_workspaces(branch_id=effective_branch_id)
+                    storage_workspace_id = find_storage_workspace_for_sandbox_config(
+                        workspaces, config_id
+                    )
+                except KeboolaApiError:
+                    # Best-effort: do not fail the detail fetch just because
+                    # the workspace listing endpoint hiccuped -- the
+                    # annotation is a UX nicety, not a contract. The caller
+                    # still gets the raw detail.
+                    storage_workspace_id = None
+                sandbox_annotation = {
+                    "sandbox_service_id": sandbox_service_id,
+                    "storage_workspace_id": storage_workspace_id,
+                    "note": (
+                        "`parameters.id` in a keboola.sandboxes config is the "
+                        "sandbox-service internal ID, NOT the Storage workspace ID. "
+                        "Use `storage_workspace_id` with `kbagent workspace detail "
+                        "--workspace-id ...`."
+                    ),
+                }
         finally:
             client.close()
 
         detail["project_alias"] = alias
         detail["branch_id"] = effective_branch_id
+        if sandbox_annotation is not None:
+            detail["sandbox_annotation"] = sandbox_annotation
         return detail
 
     def _get_config_detail_bulk(

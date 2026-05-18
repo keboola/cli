@@ -28,6 +28,49 @@ def _classify_qs_compatibility(login_type: str) -> bool:
     return login_type in QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES
 
 
+def find_storage_workspace_for_sandbox_config(
+    workspaces: list[dict[str, Any]],
+    config_id: str,
+) -> int | None:
+    """Pure-function lookup: find the Storage workspace that backs a sandbox config.
+
+    A ``keboola.sandboxes`` configuration's ``parameters.id`` is the
+    sandbox-service internal ID, not a Storage workspace ID -- passing it to
+    ``GET /v2/storage/workspaces/{ID}`` returns 404 (issue #304). The real
+    relation goes the other direction: each Storage workspace exposes
+    ``configurationId`` pointing back at its sandbox config.
+
+    Extracted from ``WorkspaceService.resolve_sandbox_workspace_id`` so
+    ``ConfigService.get_config_detail`` can call it with a workspace list it
+    already has (avoiding a circular ``ConfigService -> WorkspaceService``
+    dependency and the extra HTTP round-trip that would otherwise pile up
+    in HTTP and web-UI consumers -- see issue #312).
+
+    Args:
+        workspaces: Raw output of ``KeboolaClient.list_workspaces()`` -- each
+            entry is the Storage API workspace dict (not the normalised CLI
+            shape).
+        config_id: ``keboola.sandboxes`` configuration ID.
+
+    Returns:
+        Storage workspace ID (int), or None if no workspace currently backs
+        this config (orphan sandbox, or workspace deleted but config kept
+        around).
+    """
+    for ws in workspaces:
+        if ws.get("component") == "keboola.sandboxes" and str(ws.get("configurationId", "")) == str(
+            config_id
+        ):
+            ws_id = ws.get("id")
+            if isinstance(ws_id, int):
+                return ws_id
+            try:
+                return int(ws_id) if ws_id is not None else None
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def _is_orphaned_workspace(ws: dict[str, Any], config_names: dict[str, str]) -> bool:
     """Return True if a workspace has no backing keboola.sandboxes config.
 
@@ -321,18 +364,7 @@ class WorkspaceService(BaseService):
         finally:
             client.close()
 
-        for ws in workspaces:
-            if ws.get("component") == "keboola.sandboxes" and str(
-                ws.get("configurationId", "")
-            ) == str(config_id):
-                ws_id = ws.get("id")
-                if isinstance(ws_id, int):
-                    return ws_id
-                try:
-                    return int(ws_id) if ws_id is not None else None
-                except (TypeError, ValueError):
-                    return None
-        return None
+        return find_storage_workspace_for_sandbox_config(workspaces, config_id)
 
     def list_workspaces(
         self,
