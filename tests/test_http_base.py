@@ -327,6 +327,105 @@ class TestBaseHttpClientErrorSanitization:
         assert "500" in exc_info.value.message
         client.close()
 
+    def test_int_error_field_falls_back_to_description(self, httpx_mock) -> None:
+        """Metastore returns `{"error": 422, "description": "..."}` — the int
+        in `error` must not shadow the real message in `description`."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            json={"error": 422, "description": "field type not allowed"},
+            status_code=422,
+        )
+
+        client = BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client._do_request("GET", "/test-path")
+
+        # The real message must be surfaced; the int `422` must not.
+        assert "field type not allowed" in exc_info.value.message
+        # And we must not be left with a bare "API error 422: 422"
+        # (the regression this test pins).
+        assert "API error 422: 422" not in exc_info.value.message
+        client.close()
+
+    def test_description_field_used_when_no_message(self, httpx_mock) -> None:
+        """FastAPI returns `{"description": "..."}` by default — surface it."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            json={"description": "validation failed"},
+            status_code=400,
+        )
+
+        client = BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client._do_request("GET", "/test-path")
+
+        assert "validation failed" in exc_info.value.message
+        client.close()
+
+    def test_errors_list_shape_serialised(self, httpx_mock) -> None:
+        """Metastore 422 ships `{"errors": [{...}]}` (list of dicts) — must
+        be json-serialised so the message contains the diagnostic content,
+        not the Python list repr."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            json={
+                "errors": [
+                    {"loc": ["body", "name"], "msg": "field required"},
+                ],
+            },
+            status_code=422,
+        )
+
+        client = BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client._do_request("GET", "/test-path")
+
+        # Both the field path and the human message must be present.
+        assert "field required" in exc_info.value.message
+        assert "name" in exc_info.value.message
+        client.close()
+
+    def test_detail_list_shape_serialised(self, httpx_mock) -> None:
+        """FastAPI 422 uses `{"detail": [{...}]}` (the canonical pydantic
+        validation shape). Same serialisation rule as `errors`."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            json={
+                "detail": [
+                    {"loc": ["query", "limit"], "msg": "value is not a valid integer"},
+                ],
+            },
+            status_code=422,
+        )
+
+        client = BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client._do_request("GET", "/test-path")
+
+        assert "value is not a valid integer" in exc_info.value.message
+        assert "limit" in exc_info.value.message
+        client.close()
+
     def test_401_maps_to_invalid_token(self, httpx_mock) -> None:
         """401 status code maps to INVALID_TOKEN error code."""
         httpx_mock.add_response(

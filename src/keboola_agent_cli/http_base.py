@@ -5,6 +5,7 @@ from BaseHttpClient to avoid duplicating the retry loop, error mapping,
 and message sanitization code.
 """
 
+import json
 import logging
 import os
 import time
@@ -222,7 +223,30 @@ class BaseHttpClient:
 
         try:
             body = response.json()
-            api_message = body.get("error", body.get("message", response.text))
+            # Real Keboola APIs answer with one of these keys in priority
+            # order. Two caveats:
+            #   1. Keboola Metastore puts the HTTP status code into `error`
+            #      as an int (e.g. {"error": 422}) -- using `or` would
+            #      shadow the actual error message in `errors`/`exception`.
+            #      So we only accept `error` if it's a non-empty string.
+            #   2. `errors`/`detail` are lists of dicts (FastAPI / metastore
+            #      422 shape); we json.dumps them so the f-string render
+            #      below doesn't print `[{...}]` repr.
+            err_field = body.get("error")
+            api_message = (
+                err_field
+                if isinstance(err_field, str) and err_field
+                else (
+                    body.get("exception")
+                    or body.get("message")
+                    or body.get("description")
+                    or body.get("detail")
+                    or body.get("errors")
+                    or json.dumps(body)
+                )
+            )
+            if not isinstance(api_message, str):
+                api_message = json.dumps(api_message)
         except Exception:
             api_message = response.text
 
