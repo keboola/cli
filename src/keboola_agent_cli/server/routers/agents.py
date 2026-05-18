@@ -464,6 +464,68 @@ class PromptHelperRequest(BaseModel):
     extra_args: list[str] = []
 
 
+@router.post("/prompt/improve", summary="AI-rewrite a prompt (blocking)")
+async def improve_prompt(
+    body: PromptHelperRequest,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Blocking variant of ``/prompt/improve/stream`` -- consumes the SSE
+    generator server-side and returns the final ``done`` payload.
+
+    Drives the same ``stream_ai_agent_events`` machinery the streaming
+    variant uses, so the resulting ``data.prompt`` is byte-for-byte
+    identical to what the SSE consumer would see in its last event.
+    Useful for scripted callers (``kbagent http`` from inside a scheduled
+    task, batch wrappers) where opening an SSE connection just to read
+    the final frame is needless ceremony.
+
+    Returns the enriched ``done.data`` payload directly: ``{status,
+    exit_code, elapsed_seconds, response, prompt, raw_response, ...}``.
+    The CLI's ``kbagent agent prompt-improve --no-stream`` consumes this
+    endpoint's shape verbatim.
+    """
+    from ..agent_runner import (
+        build_prompt_helper_meta_prompt,
+        clean_prompt_helper_response,
+    )
+
+    goal = body.goal.strip()
+    if not goal:
+        raise HTTPException(status_code=400, detail="goal must not be empty")
+    meta_prompt = build_prompt_helper_meta_prompt(
+        goal=goal,
+        draft=body.draft,
+        project=body.project,
+    )
+    params: dict[str, Any] = {
+        "cli": body.cli,
+        "prompt": meta_prompt,
+        "extra_args": body.extra_args,
+        "timeout": AI_PROMPT_HELPER_TIMEOUT,
+    }
+    final_done: dict[str, Any] | None = None
+    try:
+        async for evt in stream_ai_agent_events(registry, params):
+            if evt["event"] == "done":
+                raw = str(evt["data"].get("response") or "")
+                final_done = {
+                    **evt["data"],
+                    "prompt": clean_prompt_helper_response(raw),
+                    "raw_response": raw,
+                }
+    except ValueError as exc:
+        # Same translation the streaming variant uses (bad CLI, empty
+        # prompt, malformed extra_args). 400 surfaces it cleanly to the
+        # caller without leaking a stack trace.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if final_done is None:
+        raise HTTPException(
+            status_code=502,
+            detail="ai_agent stream ended without a done event",
+        )
+    return final_done
+
+
 @router.post("/prompt/improve/stream", summary="AI-rewrite a prompt (SSE stream)")
 async def improve_prompt_stream(
     body: PromptHelperRequest,
