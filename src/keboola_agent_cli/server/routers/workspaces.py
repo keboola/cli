@@ -68,10 +68,35 @@ class SqlHelperRequest(BaseModel):
 def list_workspaces(
     project: list[str] | None = Query(None),
     orphaned: bool = False,
+    branch: int | None = Query(
+        None,
+        description=(
+            "Dev branch ID. Requires exactly one project. Without branch, the "
+            "production endpoint is used regardless of any pinned active branch "
+            "(read-command convention, mirrors `storage buckets`)."
+        ),
+    ),
+    qs_compatible: bool = Query(
+        False,
+        description=(
+            "Filter to RO + whitelisted-loginType workspaces (the canonical "
+            "data-app shape). See QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES."
+        ),
+    ),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List workspaces in one or more projects. Mirrors `kbagent workspace list`."""
-    return registry.workspace.list_workspaces(aliases=project, orphaned_only=orphaned)
+    if branch is not None and (project is None or len(project) != 1):
+        raise HTTPException(
+            status_code=400,
+            detail="branch requires exactly one project (branch ID is per-project)",
+        )
+    return registry.workspace.list_workspaces(
+        aliases=project,
+        orphaned_only=orphaned,
+        branch_id=branch,
+        qs_compatible_only=qs_compatible,
+    )
 
 
 @router.post("/{project}", summary="Create a workspace")
@@ -90,10 +115,21 @@ def create(
 
 @router.get("/{project}/{workspace_id}", summary="Get workspace detail")
 def detail(
-    project: str, workspace_id: int, registry: ServiceRegistry = Depends(get_registry)
+    project: str,
+    workspace_id: int,
+    branch: int | None = Query(
+        None,
+        description=(
+            "Dev branch ID. Without branch, the production endpoint is used "
+            "regardless of any pinned active branch (read-command convention)."
+        ),
+    ),
+    registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Fetch detail for a single workspace. Mirrors `kbagent workspace detail`."""
-    return registry.workspace.get_workspace(alias=project, workspace_id=workspace_id)
+    return registry.workspace.get_workspace(
+        alias=project, workspace_id=workspace_id, branch_id=branch
+    )
 
 
 @router.delete("/{project}/{workspace_id}", summary="Delete a workspace")

@@ -1328,3 +1328,247 @@ class TestResolveBranchId:
         project = store.get_project("prod")
         with pytest.raises(ConfigError, match="No default branch found"):
             svc._resolve_branch_id("prod", project)
+
+
+class TestIssue304WorkspaceListEnrichment:
+    """Tests for the fields added to `list_workspaces` to close issue #304."""
+
+    def test_list_exposes_login_type_and_qs_compatible(self, tmp_config_dir: Path) -> None:
+        """Each workspace entry carries login_type, read_only, qs_compatible."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 1, "isDefault": True}]
+        mock_client.list_workspaces.return_value = [
+            {
+                "id": 1,
+                "name": "compat",
+                "connection": {
+                    "backend": "snowflake",
+                    "host": "h",
+                    "schema": "S1",
+                    "user": "U1",
+                    "loginType": "snowflake-service-keypair",
+                },
+                "readOnlyStorageAccess": True,
+                "created": "2026-05-18T00:00:00Z",
+                "component": "keboola.sandboxes",
+                "configurationId": "cfg-1",
+            },
+            {
+                "id": 2,
+                "name": "legacy-rw",
+                "connection": {
+                    "backend": "snowflake",
+                    "host": "h",
+                    "schema": "S2",
+                    "user": "U2",
+                    "loginType": "default",
+                },
+                "readOnlyStorageAccess": False,
+                "created": "2026-05-18T00:00:00Z",
+                "component": "keboola.snowflake-transformation",
+                "configurationId": "cfg-2",
+            },
+        ]
+        mock_client.list_component_configs.return_value = []
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.list_workspaces(aliases=["prod"])
+
+        workspaces = result["workspaces"]
+        assert len(workspaces) == 2
+        compat = next(w for w in workspaces if w["id"] == 1)
+        legacy = next(w for w in workspaces if w["id"] == 2)
+
+        assert compat["login_type"] == "snowflake-service-keypair"
+        assert compat["read_only"] is True
+        assert compat["qs_compatible"] is True
+
+        assert legacy["login_type"] == "default"
+        assert legacy["read_only"] is False
+        # ``default`` is intentionally OFF the whitelist (legacy 2016 ws,
+        # confirmed broken with Query Service via "JWT token is invalid")
+        assert legacy["qs_compatible"] is False
+
+    def test_qs_compatible_filter_requires_both_compat_and_ro(self, tmp_config_dir: Path) -> None:
+        """`qs_compatible_only=True` drops workspaces that are compat-but-RW or RO-but-unknown."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 1, "isDefault": True}]
+        mock_client.list_workspaces.return_value = [
+            # Hit: compat + RO
+            {
+                "id": 1,
+                "name": "data-app-ready",
+                "connection": {
+                    "backend": "snowflake",
+                    "loginType": "snowflake-service-keypair",
+                },
+                "readOnlyStorageAccess": True,
+            },
+            # Miss: compat but RW
+            {
+                "id": 2,
+                "name": "compat-but-rw",
+                "connection": {
+                    "backend": "snowflake",
+                    "loginType": "snowflake-person-sso",
+                },
+                "readOnlyStorageAccess": False,
+            },
+            # Miss: RO but legacy loginType
+            {
+                "id": 3,
+                "name": "ro-but-legacy",
+                "connection": {
+                    "backend": "snowflake",
+                    "loginType": "default",
+                },
+                "readOnlyStorageAccess": True,
+            },
+        ]
+        mock_client.list_component_configs.return_value = []
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.list_workspaces(aliases=["prod"], qs_compatible_only=True)
+
+        ids = [w["id"] for w in result["workspaces"]]
+        assert ids == [1]
+
+    def test_explicit_branch_id_propagated_to_client(self, tmp_config_dir: Path) -> None:
+        """When the command layer passes branch_id, the client call uses it verbatim."""
+        mock_client = MagicMock()
+        mock_client.list_workspaces.return_value = []
+        mock_client.list_component_configs.return_value = []
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        svc.list_workspaces(aliases=["prod"], branch_id=42)
+
+        mock_client.list_workspaces.assert_called_once_with(branch_id=42)
+        # `_resolve_branch_id` MUST NOT be invoked when caller supplied a branch
+        mock_client.list_dev_branches.assert_not_called()
+
+    def test_explicit_branch_with_multi_project_raises(self, tmp_config_dir: Path) -> None:
+        """A branch ID is per-project; multi-project + branch_id is a usage bug."""
+        store = setup_two_projects(tmp_config_dir)
+        svc = WorkspaceService(config_store=store)
+
+        with pytest.raises(ConfigError, match="branch_id requires exactly one alias"):
+            svc.list_workspaces(branch_id=99)
+
+
+class TestIssue304ResolveSandboxWorkspaceId:
+    """Tests for ``resolve_sandbox_workspace_id`` (issue #304 bod #3)."""
+
+    def test_resolves_matching_workspace(self, tmp_config_dir: Path) -> None:
+        """A keboola.sandboxes config ID maps back to the workspace pointing at it."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 1, "isDefault": True}]
+        mock_client.list_workspaces.return_value = [
+            {
+                "id": 7777,
+                "component": "keboola.snowflake-transformation",
+                "configurationId": "cfg-other",
+            },
+            {
+                "id": 9999,
+                "component": "keboola.sandboxes",
+                "configurationId": "cfg-target",
+            },
+        ]
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        assert svc.resolve_sandbox_workspace_id("prod", "cfg-target") == 9999
+
+    def test_returns_none_for_orphan_config(self, tmp_config_dir: Path) -> None:
+        """No workspace currently backs the config -> None (not raise)."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 1, "isDefault": True}]
+        mock_client.list_workspaces.return_value = [
+            {
+                "id": 7777,
+                "component": "keboola.sandboxes",
+                "configurationId": "cfg-other",
+            },
+        ]
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        assert svc.resolve_sandbox_workspace_id("prod", "cfg-orphan") is None
+
+    def test_uses_explicit_branch(self, tmp_config_dir: Path) -> None:
+        """Caller-supplied branch_id is passed to list_workspaces."""
+        mock_client = MagicMock()
+        mock_client.list_workspaces.return_value = []
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        svc.resolve_sandbox_workspace_id("prod", "cfg-1", branch_id=555)
+
+        mock_client.list_workspaces.assert_called_once_with(branch_id=555)
+        mock_client.list_dev_branches.assert_not_called()
+
+
+class TestIssue304GetWorkspaceEnrichment:
+    """Tests for the fields added to `get_workspace` to close issue #304."""
+
+    def test_detail_exposes_login_type_and_qs_compatible(self, tmp_config_dir: Path) -> None:
+        """`get_workspace` returns login_type / read_only / qs_compatible."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 1, "isDefault": True}]
+        mock_client.get_workspace.return_value = {
+            "id": 42,
+            "component": "keboola.sandboxes",
+            "configurationId": "cfg-42",
+            "connection": {
+                "backend": "snowflake",
+                "host": "h",
+                "schema": "S",
+                "user": "U",
+                "warehouse": "W",
+                "database": "D",
+                "loginType": "snowflake-person-sso",
+            },
+            "readOnlyStorageAccess": True,
+            "created": "2026-05-18T00:00:00Z",
+        }
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.get_workspace(alias="prod", workspace_id=42)
+
+        assert result["login_type"] == "snowflake-person-sso"
+        assert result["read_only"] is True
+        assert result["qs_compatible"] is True
+        assert result["component_id"] == "keboola.sandboxes"
+        assert result["config_id"] == "cfg-42"

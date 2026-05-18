@@ -124,7 +124,12 @@ class TestWorkspaceListOrphaned:
         data = json.loads(result.output)
         assert len(data["data"]["workspaces"]) == 1
         # Verify service was called with orphaned_only=True
-        mock_ws.list_workspaces.assert_called_once_with(aliases=["prod"], orphaned_only=True)
+        mock_ws.list_workspaces.assert_called_once_with(
+            aliases=["prod"],
+            orphaned_only=True,
+            branch_id=None,
+            qs_compatible_only=False,
+        )
 
     def test_list_without_orphaned_flag(self, tmp_path: Path) -> None:
         store = _setup_store(tmp_path)
@@ -141,7 +146,12 @@ class TestWorkspaceListOrphaned:
         )
         assert result.exit_code == 0, result.output
         # orphaned_only=False (default) when flag absent
-        mock_ws.list_workspaces.assert_called_once_with(aliases=["prod"], orphaned_only=False)
+        mock_ws.list_workspaces.assert_called_once_with(
+            aliases=["prod"],
+            orphaned_only=False,
+            branch_id=None,
+            qs_compatible_only=False,
+        )
 
 
 # ── workspace gc CLI tests ─────────────────────────────────────────────

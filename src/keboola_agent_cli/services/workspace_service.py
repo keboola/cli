@@ -8,11 +8,24 @@ single-project operations.
 import logging
 from typing import Any
 
+from ..constants import QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
+
+
+def _classify_qs_compatibility(login_type: str) -> bool:
+    """Map a Storage API workspace ``connection.loginType`` to Query-Service compat.
+
+    Conservative whitelist semantics: returns True only for ``loginType``s
+    confirmed to work with POST /v2/storage/branch/{ID}/workspaces/{WS}/query.
+    See ``constants.QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES`` for the rationale
+    behind why ``snowflake-legacy-service`` (issue #304) stays off the list
+    even though it works on some stacks.
+    """
+    return login_type in QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES
 
 
 def _is_orphaned_workspace(ws: dict[str, Any], config_names: dict[str, str]) -> bool:
@@ -269,10 +282,64 @@ class WorkspaceService(BaseService):
             ),
         }
 
+    def resolve_sandbox_workspace_id(
+        self,
+        alias: str,
+        config_id: str,
+        branch_id: int | None = None,
+    ) -> int | None:
+        """Map a ``keboola.sandboxes`` config ID to its Storage workspace ID.
+
+        The sandbox config's ``parameters.id`` field looks like a Storage
+        workspace ID but is actually a sandbox-service-internal handle --
+        passing it to ``GET /v2/storage/workspaces/{ID}`` returns 404 (issue
+        #304). The real mapping lives the other way around: each Storage
+        workspace exposes ``configurationId`` pointing back at its sandbox
+        config. This helper walks the workspace list to find the matching
+        one.
+
+        Args:
+            alias: Project alias.
+            config_id: ``keboola.sandboxes`` configuration ID.
+            branch_id: Branch to query. When None, uses the project's
+                resolved branch (production fallback).
+
+        Returns:
+            Storage workspace ID, or None if no workspace is currently
+            backed by this config (orphan sandbox, or workspace deleted but
+            config kept around).
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch = (
+            branch_id if branch_id is not None else self._resolve_branch_id(alias, project)
+        )
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            workspaces = client.list_workspaces(branch_id=effective_branch)
+        finally:
+            client.close()
+
+        for ws in workspaces:
+            if ws.get("component") == "keboola.sandboxes" and str(
+                ws.get("configurationId", "")
+            ) == str(config_id):
+                ws_id = ws.get("id")
+                if isinstance(ws_id, int):
+                    return ws_id
+                try:
+                    return int(ws_id) if ws_id is not None else None
+                except (TypeError, ValueError):
+                    return None
+        return None
+
     def list_workspaces(
         self,
         aliases: list[str] | None = None,
         orphaned_only: bool = False,
+        branch_id: int | None = None,
+        qs_compatible_only: bool = False,
     ) -> dict[str, Any]:
         """List workspaces across one or multiple projects.
 
@@ -280,10 +347,29 @@ class WorkspaceService(BaseService):
             aliases: Project aliases to query. None means all projects.
             orphaned_only: If True, return only orphaned workspaces — those
                 whose keboola.sandboxes config no longer exists.
+            branch_id: When set, list workspaces from this specific dev branch
+                (`/v2/storage/branch/{ID}/workspaces`). When None, the
+                production endpoint is used; callers wanting to honour the
+                alias's pinned branch should resolve it via
+                ``resolve_branch()`` in the command layer before calling.
+                Only valid with a single alias (mirrors storage commands).
+            qs_compatible_only: If True, return only workspaces whose
+                ``login_type`` is in ``QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES``
+                AND that are read-only -- the canonical shape for a Streamlit
+                / Quix data-app reading via the Query Service.
 
         Returns:
-            Dict with "workspaces" and "errors" lists.
+            Dict with "workspaces" and "errors" lists. Each workspace entry
+            carries ``login_type``, ``read_only``, ``qs_compatible``,
+            ``database`` and ``warehouse`` so callers can pick a
+            data-app-compatible workspace without spawning a probe query
+            (closes #304).
         """
+        if branch_id is not None and (aliases is None or len(aliases) != 1):
+            raise ConfigError(
+                "branch_id requires exactly one alias (a branch ID is scoped to a single project)."
+            )
+
         projects = self.resolve_projects(aliases)
 
         def worker(
@@ -291,31 +377,43 @@ class WorkspaceService(BaseService):
         ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, str]]:
             client = self._client_factory(project.stack_url, project.token)
             try:
-                branch_id = self._resolve_branch_id(alias, project)
-                raw_workspaces = client.list_workspaces(branch_id=branch_id)
+                effective_branch = (
+                    branch_id if branch_id is not None else self._resolve_branch_id(alias, project)
+                )
+                raw_workspaces = client.list_workspaces(branch_id=effective_branch)
 
                 # Fetch sandbox configs to resolve user-given names
-                config_names = self._fetch_sandbox_config_names(client, branch_id)
+                config_names = self._fetch_sandbox_config_names(client, effective_branch)
 
                 workspaces: list[dict[str, Any]] = []
                 for ws in raw_workspaces:
                     connection = ws.get("connection", {})
                     config_id = ws.get("configurationId") or ""
                     component_id = ws.get("component") or ""
+                    login_type = connection.get("loginType", "") or ""
+                    read_only = bool(ws.get("readOnlyStorageAccess", False))
                     entry = {
                         "project_alias": alias,
                         "id": ws.get("id"),
                         "name": config_names.get(str(config_id), ws.get("name", "")),
                         "backend": connection.get("backend", ""),
                         "host": connection.get("host", ""),
+                        "database": connection.get("database", ""),
+                        "warehouse": connection.get("warehouse", ""),
                         "schema": connection.get("schema", ""),
                         "user": connection.get("user", ""),
                         "created": ws.get("created", ""),
                         "component_id": component_id,
                         "config_id": config_id,
+                        "login_type": login_type,
+                        "read_only": read_only,
+                        "qs_compatible": _classify_qs_compatibility(login_type),
                     }
                     if orphaned_only:
                         if _is_orphaned_workspace(entry, config_names):
+                            workspaces.append(entry)
+                    elif qs_compatible_only:
+                        if entry["qs_compatible"] and entry["read_only"]:
                             workspaces.append(entry)
                     else:
                         workspaces.append(entry)
@@ -424,27 +522,44 @@ class WorkspaceService(BaseService):
             ),
         }
 
-    def get_workspace(self, alias: str, workspace_id: int) -> dict[str, Any]:
+    def get_workspace(
+        self,
+        alias: str,
+        workspace_id: int,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
         """Get workspace details (password NOT included).
 
         Args:
             alias: Project alias.
             workspace_id: Workspace ID.
+            branch_id: When set, query the branch-scoped endpoint
+                ``/v2/storage/branch/{ID}/workspaces/{WS}``. When None, falls
+                back to the project's active branch (or the production
+                endpoint if no active branch is pinned). Explicit None vs.
+                resolved value lets the command layer surface a "production
+                branch used" notice without changing the service signature.
 
         Returns:
-            Dict with workspace details.
+            Dict with workspace details including ``login_type``,
+            ``read_only`` and ``qs_compatible`` so callers can pick a
+            Query-Service-compatible workspace without firing a probe query
+            (closes #304).
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        branch_id = self._resolve_branch_id(alias, project)
+        effective_branch = (
+            branch_id if branch_id is not None else self._resolve_branch_id(alias, project)
+        )
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            ws_data = client.get_workspace(workspace_id, branch_id=branch_id)
+            ws_data = client.get_workspace(workspace_id, branch_id=effective_branch)
         finally:
             client.close()
 
         connection = ws_data.get("connection", {})
+        login_type = connection.get("loginType", "") or ""
         return {
             "project_alias": alias,
             "workspace_id": ws_data.get("id"),
@@ -455,6 +570,11 @@ class WorkspaceService(BaseService):
             "schema": connection.get("schema", ""),
             "user": connection.get("user", ""),
             "created": ws_data.get("created", ""),
+            "login_type": login_type,
+            "read_only": bool(ws_data.get("readOnlyStorageAccess", False)),
+            "qs_compatible": _classify_qs_compatibility(login_type),
+            "component_id": ws_data.get("component", "") or "",
+            "config_id": ws_data.get("configurationId", "") or "",
         }
 
     def delete_workspace(self, alias: str, workspace_id: int) -> dict[str, Any]:
