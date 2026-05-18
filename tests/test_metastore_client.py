@@ -155,11 +155,21 @@ class TestPostItem:
         assert body["data"]["modelUUID"] == "u"
 
 
+@pytest.fixture
+def metastore_client():
+    """Open a `MetastoreClient` and close it after the test."""
+    client = MetastoreClient(stack_url=STACK_URL_US, token=TOKEN)
+    try:
+        yield client
+    finally:
+        client.close()
+
+
 class TestDuplicateNameNormalization:
     """Server returns 409 (post-fix) or 500 (legacy) for duplicate names;
     client normalizes both into ALREADY_EXISTS."""
 
-    def test_duplicate_name_409_becomes_already_exists(self, httpx_mock) -> None:
+    def test_duplicate_name_409_becomes_already_exists(self, httpx_mock, metastore_client) -> None:
         """Post go-monorepo PR #513 the metastore returns a proper 409 Conflict.
 
         409 is not in ``RETRYABLE_STATUS_CODES`` so only a single response is
@@ -170,19 +180,15 @@ class TestDuplicateNameNormalization:
             status_code=409,
             json={"error": "Object with this name already exists in this project"},
         )
-        client = MetastoreClient(stack_url=STACK_URL_US, token=TOKEN)
-        try:
-            with pytest.raises(KeboolaApiError) as excinfo:
-                client.post_item("semantic-metric", name="foo", data={"name": "foo"})
-        finally:
-            client.close()
+        with pytest.raises(KeboolaApiError) as excinfo:
+            metastore_client.post_item("semantic-metric", name="foo", data={"name": "foo"})
         assert excinfo.value.error_code == ErrorCode.ALREADY_EXISTS
         assert excinfo.value.status_code == 409
         assert "already exists" in excinfo.value.message
         assert "foo" in excinfo.value.message
         assert excinfo.value.retryable is False
 
-    def test_duplicate_name_500_becomes_already_exists(self, httpx_mock) -> None:
+    def test_duplicate_name_500_becomes_already_exists(self, httpx_mock, metastore_client) -> None:
         """Legacy / pre-fix metastore still returns 500 -- retain the workaround."""
         for _ in range(MAX_RETRIES):
             httpx_mock.add_response(
@@ -190,17 +196,13 @@ class TestDuplicateNameNormalization:
                 status_code=500,
                 json={"error": "Failed to create meta object: duplicate name 'foo'"},
             )
-        client = MetastoreClient(stack_url=STACK_URL_US, token=TOKEN)
-        try:
-            with pytest.raises(KeboolaApiError) as excinfo:
-                client.post_item("semantic-metric", name="foo", data={"name": "foo"})
-        finally:
-            client.close()
+        with pytest.raises(KeboolaApiError) as excinfo:
+            metastore_client.post_item("semantic-metric", name="foo", data={"name": "foo"})
         assert excinfo.value.error_code == ErrorCode.ALREADY_EXISTS
         assert "already exists" in excinfo.value.message
         assert "foo" in excinfo.value.message
 
-    def test_unrelated_500_passes_through(self, httpx_mock) -> None:
+    def test_unrelated_500_passes_through(self, httpx_mock, metastore_client) -> None:
         """A 500 without the magic phrase keeps its API_ERROR code."""
         for _ in range(MAX_RETRIES):
             httpx_mock.add_response(
@@ -208,12 +210,8 @@ class TestDuplicateNameNormalization:
                 status_code=500,
                 json={"error": "some unrelated internal error"},
             )
-        client = MetastoreClient(stack_url=STACK_URL_US, token=TOKEN)
-        try:
-            with pytest.raises(KeboolaApiError) as excinfo:
-                client.post_item("semantic-metric", name="foo", data={"name": "foo"})
-        finally:
-            client.close()
+        with pytest.raises(KeboolaApiError) as excinfo:
+            metastore_client.post_item("semantic-metric", name="foo", data={"name": "foo"})
         assert excinfo.value.error_code != ErrorCode.ALREADY_EXISTS
 
 
