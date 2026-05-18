@@ -638,12 +638,27 @@ class VersionService:
             ),
         }
 
+        # Reflect the actual install command the user should run, including
+        # --prerelease=allow and @v<version> tag-pin when --beta is active.
+        # Without this, programmatic JSON consumers reading upgrade_command
+        # would copy a stable-channel install command even though
+        # latest_version advertised a beta tag -- silently landing on the
+        # wrong version.
+        kbagent_target_version = kbagent_latest if include_prerelease else None
+        kbagent_upgrade_cmd = build_kbagent_upgrade_command(
+            prerelease=include_prerelease, target_version=kbagent_target_version
+        )
+        kbagent_upgrade_str = (
+            " ".join(kbagent_upgrade_cmd)
+            if kbagent_upgrade_cmd is not None
+            else f"uv tool install --upgrade {KBAGENT_INSTALL_SOURCE}"
+        )
         return {
             "kbagent": {
                 "version": __version__,
                 "latest_version": kbagent_latest,
                 "up_to_date": kbagent_up_to_date,
-                "upgrade_command": f"uv tool install --upgrade {KBAGENT_INSTALL_SOURCE}",
+                "upgrade_command": kbagent_upgrade_str,
             },
             "dependencies": [
                 mcp_entry,

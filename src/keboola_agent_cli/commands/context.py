@@ -1035,6 +1035,10 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
      KBAGENT_AUTO_UPDATE      Set to "false" to disable automatic update on startup
      KBAGENT_UPDATED_FROM     Set to an older version to trigger "What's new" display on next run
      KBAGENT_MCP_TRANSPORT    MCP transport mode: "http" (default, persistent) or "stdio" (subprocess)
+     KBAGENT_INCLUDE_PRERELEASE  Set to "1" (or "true"/"yes"/"on") to opt into pre-release versions for
+                              `kbagent update` / `kbagent version` in this shell (equivalent to --beta flag,
+                              since 0.43.3). NEVER affects the startup auto-update hook -- that path is
+                              stable-channel-only by design so betas stay an explicit per-invocation choice.
 
 8. Config resolution order:
      --config-dir flag > KBAGENT_CONFIG_DIR env > .kbagent/ in CWD/parents > ~/.config/keboola-agent-cli/
