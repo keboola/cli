@@ -156,9 +156,34 @@ class TestPostItem:
 
 
 class TestDuplicateNameNormalization:
-    """Server returns 500 for duplicate names; client normalizes to ALREADY_EXISTS."""
+    """Server returns 409 (post-fix) or 500 (legacy) for duplicate names;
+    client normalizes both into ALREADY_EXISTS."""
+
+    def test_duplicate_name_409_becomes_already_exists(self, httpx_mock) -> None:
+        """Post go-monorepo PR #513 the metastore returns a proper 409 Conflict.
+
+        409 is not in ``RETRYABLE_STATUS_CODES`` so only a single response is
+        registered -- the client must not retry before normalising.
+        """
+        httpx_mock.add_response(
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-metric",
+            status_code=409,
+            json={"error": "Object with this name already exists in this project"},
+        )
+        client = MetastoreClient(stack_url=STACK_URL_US, token=TOKEN)
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.post_item("semantic-metric", name="foo", data={"name": "foo"})
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.ALREADY_EXISTS
+        assert excinfo.value.status_code == 409
+        assert "already exists" in excinfo.value.message
+        assert "foo" in excinfo.value.message
+        assert excinfo.value.retryable is False
 
     def test_duplicate_name_500_becomes_already_exists(self, httpx_mock) -> None:
+        """Legacy / pre-fix metastore still returns 500 -- retain the workaround."""
         for _ in range(MAX_RETRIES):
             httpx_mock.add_response(
                 url=f"{METASTORE_URL_US}/api/v1/repository/semantic-metric",
