@@ -171,31 +171,35 @@ All three inherit from `BaseHttpClient` (`http_base.py`) which provides shared r
 
 **When bumping the version**: edit `pyproject.toml`, add a changelog entry to `src/keboola_agent_cli/changelog.py`, then run `make version-sync`. Do not edit `__init__.py` or `plugin.json` manually. CI enforces changelog completeness via `make changelog-check`.
 
-### Beta / pre-release versions (since 0.42.0)
+### Beta / pre-release versions (since 0.43.3)
 
-Beta and release-candidate versions follow **PEP 440**: `0.43.0b1`, `0.43.0rc1`, ... -- **not** the SemVer `-beta.1` form (hatchling + uv require PEP 440 syntax in `pyproject.toml`). Two independent gates keep stable users safe from accidentally landing on a beta:
+Beta and release-candidate versions follow **PEP 440**: `0.44.0b1`, `0.44.0rc1`, ... -- **not** the SemVer `-beta.1` form (hatchling + uv require PEP 440 syntax in `pyproject.toml`). Three independent gates keep stable users safe from accidentally landing on a beta:
 
 1. **PEP 440 pre-release suffix.** pip / uv default to **skipping** pre-releases unless told otherwise (`--pre` for pip, `--prerelease=allow` for uv).
 2. **GitHub Release `prerelease: true` flag.** The auto-update startup hook calls `/releases/latest`, which GitHub defines as "the most recent non-prerelease, non-draft release". Marking the release `--prerelease` makes it invisible to the auto-update path.
+3. **Tag-pinned install URL.** When `--beta` opts into a pre-release, the install command appends `@v<version>` to the git+ source URL so uv pulls the **exact commit** the tag points to. Without this, uv would resolve the default branch (`main`) and -- if the beta lives on a feature branch -- silently install the stale main HEAD even though the version fetcher advertised the beta tag.
 
-**Author workflow (release a beta):**
+**Author workflow (release a beta from a feature branch):**
 
 ```bash
-# 1. Bump pyproject.toml to PEP 440 pre-release form
-#    version = "0.43.0b1"
+# 1. Bump pyproject.toml to PEP 440 pre-release form on the feature branch
+#    version = "0.44.0b1"
 make version-sync                          # propagates to plugin.json / marketplace.json
 
 # 2. Add a changelog entry under that key in src/keboola_agent_cli/changelog.py
-# 3. Tag + push
-git tag v0.43.0b1 && git push origin v0.43.0b1
+# 3. Commit + push to PR (NOT to main -- main stays on the stable channel)
+git push origin feat/my-feature
 
-# 4. KEY STEP: create the GitHub Release WITH --prerelease
-gh release create v0.43.0b1 --prerelease \
-    --title "v0.43.0 — Beta 1" \
-    --notes-file release-notes-0.43.0b1.md
+# 4. Tag the PR head SHA + push tag
+git tag v0.44.0b1 && git push origin v0.44.0b1
+
+# 5. KEY STEP: create the GitHub Release WITH --prerelease pointing at the tag
+gh release create v0.44.0b1 --prerelease \
+    --title "v0.44.0 — Beta 1" \
+    --notes-file release-notes-0.44.0b1.md
 ```
 
-When the beta cooks long enough, ship the stable equivalent (`0.43.0`) by retagging and creating the release **without** `--prerelease` -- auto-update picks it up on next startup.
+When the beta cooks long enough, merge the PR (stable squash) and ship `0.44.0` from main with a normal release **without** `--prerelease` -- auto-update picks it up on next startup.
 
 **User opt-in (consume betas):**
 

@@ -59,7 +59,9 @@ def has_server_extras() -> bool:
     return importlib.util.find_spec("fastapi") is not None
 
 
-def build_kbagent_upgrade_command(*, prerelease: bool = False) -> list[str] | None:
+def build_kbagent_upgrade_command(
+    *, prerelease: bool = False, target_version: str | None = None
+) -> list[str] | None:
     """Build the argv command to upgrade kbagent in-place.
 
     Used by both ``kbagent update`` (explicit) and the startup
@@ -72,16 +74,31 @@ def build_kbagent_upgrade_command(*, prerelease: bool = False) -> list[str] | No
             uv gets ``--prerelease=allow`` (resolver-level opt-in for the
             entire tool environment), pip gets ``--pre`` (the legacy
             equivalent). Without this flag, both resolvers reject
-            pre-release version strings like ``0.43.0b1`` even if they
+            pre-release version strings like ``0.44.0b1`` even if they
             are the newest available -- the default-deny behaviour we
             want for cron-driven auto-update so stable users never
             silently land on a beta release.
+        target_version: When set together with ``prerelease=True``, append
+            ``@v<target_version>`` to the git+ source URL so uv installs
+            the exact commit pointed to by the tag. Critical when betas
+            live on a feature branch instead of main -- without this, uv
+            resolves the default branch and silently installs the stale
+            main HEAD even though the version fetcher advertised the
+            beta tag. Ignored for stable upgrades (the auto-update path
+            always tracks main, which IS the latest stable).
 
     Returns:
         Command list ready for :func:`subprocess.run`, or ``None`` if
         neither ``uv`` nor ``pip`` is on ``PATH`` (in which case the
         caller surfaces a manual-install hint).
     """
+    # Tag-pin the install source ONLY for beta opt-in (Variant B fix).
+    # Stable upgrades let uv resolve main HEAD as before -- main IS
+    # the stable channel, so an extra HTTP round-trip to fetch the
+    # tag name would be pure overhead.
+    install_source = KBAGENT_INSTALL_SOURCE
+    if prerelease and target_version:
+        install_source = f"{KBAGENT_INSTALL_SOURCE}@v{target_version}"
     has_server = has_server_extras()
     uv_path = shutil.which("uv")
     if uv_path:
@@ -99,10 +116,10 @@ def build_kbagent_upgrade_command(*, prerelease: bool = False) -> list[str] | No
                 "--force",
                 "--with",
                 "keboola-agent-cli[server]",
-                KBAGENT_INSTALL_SOURCE,
+                install_source,
             ]
         else:
-            cmd = [uv_path, "tool", "install", "--upgrade", KBAGENT_INSTALL_SOURCE]
+            cmd = [uv_path, "tool", "install", "--upgrade", install_source]
         if prerelease:
             # Insert before the source spec so uv parses it as a global
             # resolver flag (not a positional arg).
@@ -114,11 +131,7 @@ def build_kbagent_upgrade_command(*, prerelease: bool = False) -> list[str] | No
     # pip extras syntax: the [server] suffix attaches to the project
     # name in the PEP 508 spec; for git+ URLs we wrap with the project
     # name on the left of the URL.
-    install_spec = (
-        f"keboola-agent-cli[server] @ {KBAGENT_INSTALL_SOURCE}"
-        if has_server
-        else KBAGENT_INSTALL_SOURCE
-    )
+    install_spec = f"keboola-agent-cli[server] @ {install_source}" if has_server else install_source
     cmd = [pip_path, "install", "--upgrade", install_spec]
     if prerelease:
         cmd.insert(2, "--pre")
@@ -740,10 +753,17 @@ class VersionService:
                 "message": f"kbagent v{old_version} is already up to date.",
             }
 
-        cmd = build_kbagent_upgrade_command(prerelease=include_prerelease)
+        # Tag-pin the install URL ONLY for beta opt-in (Variant B fix).
+        # Stable upgrades intentionally pass target_version=None so uv
+        # resolves main HEAD as before -- main IS the stable channel.
+        target_version = kbagent_latest if include_prerelease else None
+        cmd = build_kbagent_upgrade_command(
+            prerelease=include_prerelease, target_version=target_version
+        )
         if cmd is None:
             with_flag = "--with 'keboola-agent-cli[server]' " if has_server_extras() else ""
             pre_flag = "--prerelease=allow " if include_prerelease else ""
+            tag_suffix = f"@v{target_version}" if target_version else ""
             return {
                 "updated": False,
                 "current_version": old_version,
@@ -751,7 +771,7 @@ class VersionService:
                 "message": (
                     "Neither 'uv' nor 'pip' found on PATH. "
                     f"Install manually: uv tool install --upgrade {pre_flag}{with_flag}"
-                    f"{KBAGENT_INSTALL_SOURCE}"
+                    f"{KBAGENT_INSTALL_SOURCE}{tag_suffix}"
                 ),
             }
 

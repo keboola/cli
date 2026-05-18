@@ -963,3 +963,49 @@ class TestBuildKbagentUpgradeCommand:
         assert "--pre" in cmd
         # Must sit after the `install` verb, before `--upgrade`
         assert cmd.index("--pre") == cmd.index("install") + 1
+
+    @patch("keboola_agent_cli.services.version_service.has_server_extras")
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    def test_uv_prerelease_with_target_version_appends_tag(
+        self, mock_which: MagicMock, mock_has_server: MagicMock
+    ) -> None:
+        """Variant B fix: prerelease+target_version tag-pins install URL.
+
+        Without this, uv resolves the default branch (`main`) which
+        carries the latest stable pyproject.toml -- even though the
+        version fetcher advertised a beta tag on a feature branch. Pinning
+        ``@v<version>`` forces uv to install the exact commit the tag
+        points to.
+        """
+        mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
+        mock_has_server.return_value = False
+
+        cmd = build_kbagent_upgrade_command(prerelease=True, target_version="0.44.0b1")
+
+        assert cmd is not None
+        # Install source = last positional arg, must end with @v<version>.
+        assert cmd[-1].endswith("@v0.44.0b1")
+        # --prerelease=allow still required so the resolver accepts the
+        # PEP 440 pre-release spec at the tag's pyproject.toml.
+        assert "--prerelease=allow" in cmd
+
+    @patch("keboola_agent_cli.services.version_service.has_server_extras")
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    def test_uv_stable_with_target_version_ignores_tag(
+        self, mock_which: MagicMock, mock_has_server: MagicMock
+    ) -> None:
+        """target_version is ignored unless prerelease=True.
+
+        Stable upgrades always track main (which IS the stable channel),
+        so tag-pinning would just add a needless HTTP round-trip without
+        changing the resolved version.
+        """
+        mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
+        mock_has_server.return_value = False
+
+        cmd = build_kbagent_upgrade_command(prerelease=False, target_version="0.43.3")
+
+        assert cmd is not None
+        # No tag suffix when prerelease=False, even if target_version supplied.
+        assert not cmd[-1].endswith("@v0.43.3")
+        assert "@v" not in cmd[-1]
