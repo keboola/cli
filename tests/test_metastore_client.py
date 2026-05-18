@@ -199,8 +199,10 @@ class TestDuplicateNameNormalization:
         with pytest.raises(KeboolaApiError) as excinfo:
             metastore_client.post_item("semantic-metric", name="foo", data={"name": "foo"})
         assert excinfo.value.error_code == ErrorCode.ALREADY_EXISTS
+        assert excinfo.value.status_code == 500
         assert "already exists" in excinfo.value.message
         assert "foo" in excinfo.value.message
+        assert excinfo.value.retryable is False
 
     def test_unrelated_500_passes_through(self, httpx_mock, metastore_client) -> None:
         """A 500 without the magic phrase keeps its API_ERROR code."""
