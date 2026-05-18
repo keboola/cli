@@ -2045,6 +2045,196 @@ class TestConfigServiceGetConfigDetail:
         assert result["errors"][0]["message"] == "boom"
 
 
+class TestConfigServiceSandboxAnnotation:
+    """Tests for ConfigService.get_config_detail(include_sandbox_annotation=...).
+
+    Verifies the issue #312 service-layer enrichment that closes the HTTP/REST
+    parity gap left by #304 (CLI-only). The flag defaults False so existing
+    programmatic / HTTP callers see the unchanged shape; opting in resolves
+    the sandbox config's misleading parameters.id to the real Storage
+    workspace ID via an additional list_workspaces call.
+    """
+
+    def _make_store(self, tmp_config_dir: Path) -> ConfigStore:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            ),
+        )
+        return store
+
+    def test_annotation_off_by_default(self, tmp_config_dir: Path) -> None:
+        """Default include_sandbox_annotation=False keeps the response shape stable.
+
+        This is the contract for existing programmatic callers (web UI, scheduled
+        agents, third-party scripts) -- they must NOT see a new key appear in the
+        response just because they upgraded kbagent.
+        """
+        store = self._make_store(tmp_config_dir)
+        detail = {
+            "id": "sb-cfg-1",
+            "name": "RO sandbox",
+            "componentId": "keboola.sandboxes",
+            "configuration": {"parameters": {"id": "1296392806"}},
+            "rows": [],
+        }
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = detail
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.sandboxes",
+            config_id="sb-cfg-1",
+        )
+
+        assert "sandbox_annotation" not in result
+        # No fan-out to list_workspaces when the flag is off; this is the
+        # zero-regression guarantee for callers that don't opt in.
+        mock_client.list_workspaces.assert_not_called()
+
+    def test_annotation_resolves_storage_workspace_id(self, tmp_config_dir: Path) -> None:
+        """With the flag on, the service resolves the real Storage workspace ID."""
+        store = self._make_store(tmp_config_dir)
+        detail = {
+            "id": "sb-cfg-1",
+            "name": "RO sandbox",
+            "componentId": "keboola.sandboxes",
+            "configuration": {"parameters": {"id": "1296392806"}},
+            "rows": [],
+        }
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = detail
+        mock_client.list_workspaces.return_value = [
+            {
+                "id": 2950518214,
+                "component": "keboola.sandboxes",
+                "configurationId": "sb-cfg-1",
+            },
+        ]
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.sandboxes",
+            config_id="sb-cfg-1",
+            include_sandbox_annotation=True,
+        )
+
+        ann = result["sandbox_annotation"]
+        assert ann["sandbox_service_id"] == "1296392806"
+        assert ann["storage_workspace_id"] == 2950518214
+        assert "sandbox-service internal ID" in ann["note"]
+        # branch_id is forwarded to list_workspaces so the lookup hits the
+        # same scope as the detail call.
+        mock_client.list_workspaces.assert_called_once_with(branch_id=None)
+
+    def test_annotation_orphan_returns_none_for_workspace_id(self, tmp_config_dir: Path) -> None:
+        """No workspace currently backs the config -> storage_workspace_id is None,
+        annotation block still present so callers can distinguish 'no annotation
+        ran' from 'annotation ran but no workspace found'."""
+        store = self._make_store(tmp_config_dir)
+        detail = {
+            "id": "sb-orphan",
+            "name": "Orphan sandbox",
+            "componentId": "keboola.sandboxes",
+            "configuration": {},  # no parameters.id at all
+            "rows": [],
+        }
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = detail
+        mock_client.list_workspaces.return_value = []
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.sandboxes",
+            config_id="sb-orphan",
+            include_sandbox_annotation=True,
+        )
+
+        ann = result["sandbox_annotation"]
+        assert ann["sandbox_service_id"] is None
+        assert ann["storage_workspace_id"] is None
+
+    def test_annotation_skipped_for_non_sandbox_component(self, tmp_config_dir: Path) -> None:
+        """Annotation is keboola.sandboxes-specific; other components must NOT
+        trigger the extra list_workspaces fan-out even when the flag is on."""
+        store = self._make_store(tmp_config_dir)
+        detail = {
+            "id": "cfg-101",
+            "name": "Snowflake extractor",
+            "componentId": "keboola.ex-db-snowflake",
+            "configuration": {"parameters": {"db": "prod"}},
+            "rows": [],
+        }
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = detail
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="cfg-101",
+            include_sandbox_annotation=True,
+        )
+
+        assert "sandbox_annotation" not in result
+        mock_client.list_workspaces.assert_not_called()
+
+    def test_annotation_swallows_workspace_listing_error(self, tmp_config_dir: Path) -> None:
+        """If list_workspaces fails (rate limit, transient 5xx, ...), the detail
+        call MUST still succeed -- the annotation is UX, not contract. The
+        annotation block appears with storage_workspace_id=None so callers
+        can tell the difference between 'orphan' and 'lookup failed'."""
+        from keboola_agent_cli.errors import KeboolaApiError
+
+        store = self._make_store(tmp_config_dir)
+        detail = {
+            "id": "sb-cfg-1",
+            "componentId": "keboola.sandboxes",
+            "configuration": {"parameters": {"id": "1296392806"}},
+        }
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = detail
+        mock_client.list_workspaces.side_effect = KeboolaApiError(
+            message="rate limited",
+            status_code=429,
+            error_code="RATE_LIMITED",
+            retryable=True,
+        )
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_config_detail(
+            alias="prod",
+            component_id="keboola.sandboxes",
+            config_id="sb-cfg-1",
+            include_sandbox_annotation=True,
+        )
+
+        ann = result["sandbox_annotation"]
+        assert ann["sandbox_service_id"] == "1296392806"
+        assert ann["storage_workspace_id"] is None
+
+
 class TestConfigServiceListConfigsIncludeRows:
     """Tests for ConfigService.list_configs(include_rows=...)."""
 

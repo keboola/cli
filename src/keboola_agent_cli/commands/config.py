@@ -291,16 +291,25 @@ def config_detail(
 
     try:
         if config_id is not None:
-            # Single-config mode: shape unchanged for backward compat
+            # Single-config mode: shape unchanged for backward compat,
+            # plus the opt-in sandbox annotation (since v0.42.1, issue #312):
+            # the service layer now owns the keboola.sandboxes
+            # configurationId->workspace.id resolution so HTTP and REST
+            # callers get the same enrichment, not only the CLI.
             result = service.get_config_detail(
                 alias=project[0],
                 component_id=component_id,
                 config_id=config_id,
                 branch_id=effective_branch,
                 with_state=with_state,
+                include_sandbox_annotation=True,
             )
         else:
-            # Bulk mode: one call per project, filtered by component_id
+            # Bulk mode: one call per project, filtered by component_id.
+            # Annotation flag stays off here -- bulk mode would N+1 the
+            # workspace listing endpoint (one extra round-trip per config),
+            # and the field that triggers the annotation in single-config
+            # mode (parameters.id) is rarely consumed in bulk anyway.
             result = service.get_config_detail(
                 alias=project[0],
                 component_id=component_id,
@@ -321,39 +330,6 @@ def config_detail(
             retryable=exc.retryable,
         )
         raise typer.Exit(code=exit_code) from None
-
-    # Issue #304 bod #3: ``keboola.sandboxes`` configs carry ``parameters.id``
-    # that looks like a Storage workspace ID but is actually a sandbox-service
-    # internal handle (passing it to ``workspace detail --workspace-id`` 404s).
-    # Resolve the real Storage workspace ID once via WorkspaceService so JSON
-    # callers get the mapping and human-mode readers see an explicit annotation.
-    # Single-config mode only -- bulk mode is N+1-sensitive (one extra request
-    # per config) and would be a regression for the existing fast-fan-out use.
-    if config_id is not None and component_id == "keboola.sandboxes":
-        ws_service = get_service(ctx, "workspace_service")
-        configuration = result.get("configuration", {}) or {}
-        sandbox_service_id = (configuration.get("parameters") or {}).get("id")
-        try:
-            storage_workspace_id = ws_service.resolve_sandbox_workspace_id(
-                alias=project[0],
-                config_id=config_id,
-                branch_id=effective_branch,
-            )
-        except (KeboolaApiError, ConfigError):
-            # Best-effort enrichment: do not fail the whole detail call just
-            # because the workspace listing endpoint hiccuped. The annotation
-            # is a UX nicety, not a contract.
-            storage_workspace_id = None
-        result["sandbox_annotation"] = {
-            "sandbox_service_id": sandbox_service_id,
-            "storage_workspace_id": storage_workspace_id,
-            "note": (
-                "`parameters.id` in a keboola.sandboxes config is the "
-                "sandbox-service internal ID, NOT the Storage workspace ID. "
-                "Use `storage_workspace_id` with `kbagent workspace detail "
-                "--workspace-id ...`."
-            ),
-        }
 
     if config_id is not None:
         # Single-config mode: emit unchanged shape

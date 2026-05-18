@@ -1812,9 +1812,12 @@ class TestConfigDetail:
 
         Regression test for issue #304 bod #3 -- a sandbox config's
         ``parameters.id`` looks like a Storage workspace ID but is in fact
-        the sandbox-service-internal handle. The command layer must enrich
-        the detail with a ``sandbox_annotation`` block containing the
-        resolved Storage workspace ID looked up via WorkspaceService.
+        the sandbox-service-internal handle. Since v0.42.1 (issue #312)
+        the enrichment lives in ``ConfigService.get_config_detail``, so
+        this test mocks the Storage client's ``list_workspaces`` call to
+        return a workspace whose ``configurationId`` matches the sandbox
+        config; the service walks the list to resolve the real workspace
+        id.
         """
         config_dir = tmp_path / "config"
         config_dir.mkdir()
@@ -1828,20 +1831,23 @@ class TestConfigDetail:
         }
         mock_client = MagicMock()
         mock_client.get_config_detail.return_value = detail_response
+        mock_client.list_workspaces.return_value = [
+            {
+                "id": 2950518214,
+                "component": "keboola.sandboxes",
+                "configurationId": "sb-cfg-1",
+            },
+        ]
 
         store = _setup_config_test(
             config_dir,
             {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
         )
 
-        mock_ws = MagicMock()
-        mock_ws.resolve_sandbox_workspace_id.return_value = 2950518214
-
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
-            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
         ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
@@ -1849,7 +1855,6 @@ class TestConfigDetail:
                 config_store=store,
                 client_factory=lambda url, token: mock_client,
             )
-            MockWsService.return_value = mock_ws
 
             result = runner.invoke(
                 app,
@@ -1873,9 +1878,7 @@ class TestConfigDetail:
         assert annotation["sandbox_service_id"] == "1296392806"
         assert annotation["storage_workspace_id"] == 2950518214
         assert "sandbox-service internal ID" in annotation["note"]
-        mock_ws.resolve_sandbox_workspace_id.assert_called_once_with(
-            alias="prod", config_id="sb-cfg-1", branch_id=None
-        )
+        mock_client.list_workspaces.assert_called_once()
 
     def test_config_detail_sandbox_annotation_orphan(self, tmp_path: Path) -> None:
         """When no workspace is currently backed by the sandbox config, the annotation
@@ -1894,20 +1897,25 @@ class TestConfigDetail:
         }
         mock_client = MagicMock()
         mock_client.get_config_detail.return_value = detail_response
+        # No workspace points at sb-cfg-orphan -> service returns None for
+        # storage_workspace_id without raising.
+        mock_client.list_workspaces.return_value = [
+            {
+                "id": 9999,
+                "component": "keboola.sandboxes",
+                "configurationId": "some-other-config",
+            },
+        ]
 
         store = _setup_config_test(
             config_dir,
             {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
         )
 
-        mock_ws = MagicMock()
-        mock_ws.resolve_sandbox_workspace_id.return_value = None
-
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
-            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
         ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
@@ -1915,7 +1923,6 @@ class TestConfigDetail:
                 config_store=store,
                 client_factory=lambda url, token: mock_client,
             )
-            MockWsService.return_value = mock_ws
 
             result = runner.invoke(
                 app,
@@ -1960,13 +1967,10 @@ class TestConfigDetail:
             {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
         )
 
-        mock_ws = MagicMock()
-
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
             patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
-            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
         ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
@@ -1974,7 +1978,6 @@ class TestConfigDetail:
                 config_store=store,
                 client_factory=lambda url, token: mock_client,
             )
-            MockWsService.return_value = mock_ws
 
             result = runner.invoke(
                 app,
@@ -1994,7 +1997,9 @@ class TestConfigDetail:
         assert result.exit_code == 0
         data = json.loads(result.output)["data"]
         assert "sandbox_annotation" not in data
-        mock_ws.resolve_sandbox_workspace_id.assert_not_called()
+        # Service must NOT fan out to list_workspaces for non-sandbox components,
+        # even with include_sandbox_annotation=True (which the CLI sets).
+        mock_client.list_workspaces.assert_not_called()
 
     def test_config_detail_human_output(self, tmp_path: Path) -> None:
         """config detail in human mode shows a Rich panel with details."""

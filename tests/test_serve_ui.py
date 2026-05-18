@@ -190,3 +190,98 @@ class TestUiOptional:
         resp = client.get("/", headers={"authorization": "Bearer t"})
         assert resp.status_code == 404
         assert any("missing index.html" in rec.message for rec in caplog.records)
+
+
+class TestConfigDetailSandboxAnnotation:
+    """Issue #312: ``include_sandbox_annotation=true`` query param on
+    ``GET /configs/{project}/{component_id}/{config_id}`` triggers the
+    same enrichment as the CLI ``config detail`` command.
+
+    Validates the HTTP-side closure of the #304 trap: web UI / scheduled
+    agent / third-party HTTP callers can now see ``sandbox_annotation``
+    without spelunking through ``parameters.id``.
+
+    Default-off contract is also pinned: without the flag, the response
+    shape is unchanged so existing programmatic consumers stay isolated
+    from the new field.
+    """
+
+    def _patch_config_service(self, app, *, with_workspace: bool) -> dict:
+        """Replace the real ConfigService.get_config_detail with a stub.
+
+        Avoids hitting any real Keboola HTTP -- the test focuses on
+        FastAPI's parameter binding and the router -> service plumbing.
+        """
+        captured: dict = {}
+
+        def fake_get_config_detail(**kwargs):
+            captured["kwargs"] = kwargs
+            response = {
+                "id": kwargs["config_id"],
+                "componentId": kwargs["component_id"],
+                "configuration": {"parameters": {"id": "1296392806"}},
+                "rows": [],
+                "project_alias": kwargs["alias"],
+                "branch_id": kwargs.get("branch_id"),
+            }
+            # Emulate what the real service does when include_sandbox_annotation
+            # is true and the component is keboola.sandboxes.
+            if (
+                kwargs.get("include_sandbox_annotation")
+                and kwargs["component_id"] == "keboola.sandboxes"
+            ):
+                response["sandbox_annotation"] = {
+                    "sandbox_service_id": "1296392806",
+                    "storage_workspace_id": 2950518214 if with_workspace else None,
+                    "note": "`parameters.id` ... sandbox-service internal ID ...",
+                }
+            return response
+
+        app.state.registry.config.get_config_detail = fake_get_config_detail  # type: ignore[method-assign]
+        return captured
+
+    def test_flag_off_keeps_response_shape_stable(self, tmp_path: Path) -> None:
+        """Default GET (no query param) MUST NOT include sandbox_annotation."""
+        client = _make_client(tmp_path, token="t")
+        captured = self._patch_config_service(client.app, with_workspace=True)
+
+        resp = client.get(
+            "/configs/prod/keboola.sandboxes/sb-cfg-1",
+            headers={"authorization": "Bearer t"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert "sandbox_annotation" not in body
+        # Router forwarded include_sandbox_annotation=False (FastAPI default).
+        assert captured["kwargs"]["include_sandbox_annotation"] is False
+
+    def test_flag_on_returns_annotation(self, tmp_path: Path) -> None:
+        """`?include_sandbox_annotation=true` propagates through the router."""
+        client = _make_client(tmp_path, token="t")
+        captured = self._patch_config_service(client.app, with_workspace=True)
+
+        resp = client.get(
+            "/configs/prod/keboola.sandboxes/sb-cfg-1",
+            params={"include_sandbox_annotation": "true"},
+            headers={"authorization": "Bearer t"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        ann = body.get("sandbox_annotation")
+        assert ann is not None, "expected sandbox_annotation in HTTP response"
+        assert ann["sandbox_service_id"] == "1296392806"
+        assert ann["storage_workspace_id"] == 2950518214
+        assert captured["kwargs"]["include_sandbox_annotation"] is True
+
+    def test_flag_on_for_non_sandbox_component_is_no_op(self, tmp_path: Path) -> None:
+        """The flag is keboola.sandboxes-specific; other components stay clean."""
+        client = _make_client(tmp_path, token="t")
+        self._patch_config_service(client.app, with_workspace=True)
+
+        resp = client.get(
+            "/configs/prod/keboola.ex-db-snowflake/cfg-101",
+            params={"include_sandbox_annotation": "true"},
+            headers={"authorization": "Bearer t"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert "sandbox_annotation" not in resp.json()
