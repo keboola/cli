@@ -138,9 +138,10 @@ def cascade_delete_model(
         # children. Same shape, opposite meaning — JSON consumers see
         # zeros instead of leaks on the happy path, which is the
         # behavior they always wanted.
-        # DEPRECATED: scheduled for removal in v0.42.0; new callers
-        # should read `cascade.deleted` (plus `cascade.attempted` /
+        # DEPRECATED (since 0.43.4): scheduled for removal in a future
+        # minor release (not before 0.44.0). New callers should read
+        # `cascade.deleted` (plus `cascade.attempted` /
         # `cascade.parent_deleted` / `cascade.failures` for the
-        # partial-failure path). See changelog 0.41.11 + gotchas.md.
+        # partial-failure path). See changelog 0.43.4 + gotchas.md.
         "orphaned_children": deleted_counts,
     }

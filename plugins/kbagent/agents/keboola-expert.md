@@ -495,9 +495,10 @@ success, not a failure.
     follow up with `add metric`, `add relationship`, `add constraint`.
     The full AI wizard lives in the `sl-build` skill under
     `04_AI_Kit/ai-kit/`.
-  - **`model delete` cascades children** (v0.41.11+, #306): never
+  - **`model delete` cascades children** (v0.43.4+, #306): never
     recommend manual child teardown; JSON carries `cascade.deleted` +
-    `cascade.parent_deleted`. Legacy `orphaned_children` removed v0.42.0.
+    `cascade.parent_deleted`. Legacy `orphaned_children` deprecated
+    since v0.43.4 (removal in a future minor release).
 
 ---
 

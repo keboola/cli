@@ -121,7 +121,7 @@ limit, transient 5xx), the detail call still succeeds and
 `storage_workspace_id` is set to `null` -- the annotation is UX, not a
 contract.
 
-## `semantic-layer model delete` cascade-deletes children (since v0.41.11)
+## `semantic-layer model delete` cascade-deletes children (since v0.43.4)
 
 `kbagent semantic-layer model delete --project P --model M` used to DELETE
 only the parent `semantic-model` row, leaving every dataset / metric /
@@ -156,12 +156,12 @@ will be deleted.
   'cascaded count'. Happy-path JSON consumers always saw zeros on this key
   before — the only way to populate it was the bug.
 
-**Deprecation:** `orphaned_children` is deprecated as of v0.41.11 and
-scheduled for **removal in v0.42.0**. Read `cascade.deleted` instead — it
-carries the same per-type counts plus the explicit `attempted` /
-`parent_deleted` / `failures` fields that disambiguate happy-path from
-partial-failure responses. JSON callers should migrate before the 0.42.0
-bump; the field name is the only thing that changes.
+**Deprecation:** `orphaned_children` is deprecated as of v0.43.4 and
+scheduled for **removal in a future minor release** (not before v0.44.0).
+Read `cascade.deleted` instead — it carries the same per-type counts plus
+the explicit `attempted` / `parent_deleted` / `failures` fields that
+disambiguate happy-path from partial-failure responses. JSON callers
+should migrate now; the field name is the only thing that changes.
 
 **Implication for AI agents / scripts:** Scripts that called `model delete`
 and then assumed they had to teardown children manually can drop that
