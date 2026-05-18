@@ -252,7 +252,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Validate a semantic-layer model | `kbagent semantic-layer validate --project PROJECT` |
 | List all semantic-layer models in a project | `kbagent semantic-layer model list --project PROJECT` |
 | Create a new semantic-layer model | `kbagent semantic-layer model create --project PROJECT --name NAME` |
-| Delete a semantic-layer model. | `kbagent semantic-layer model delete --project PROJECT --model MODEL` |
+| Delete a semantic-layer model and cascade-delete its children | `kbagent semantic-layer model delete --project PROJECT --model MODEL` |
 | Add a metric to a semantic-layer model | `kbagent semantic-layer add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
 | Add a dataset (FQN derived from tableId) | `kbagent semantic-layer add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent semantic-layer add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
@@ -278,7 +278,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Validate a semantic-layer model | `kbagent sl validate --project PROJECT` |
 | List all semantic-layer models in a project | `kbagent sl model list --project PROJECT` |
 | Create a new semantic-layer model | `kbagent sl model create --project PROJECT --name NAME` |
-| Delete a semantic-layer model. | `kbagent sl model delete --project PROJECT --model MODEL` |
+| Delete a semantic-layer model and cascade-delete its children | `kbagent sl model delete --project PROJECT --model MODEL` |
 | Add a metric to a semantic-layer model | `kbagent sl add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
 | Add a dataset (FQN derived from tableId) | `kbagent sl add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent sl add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |

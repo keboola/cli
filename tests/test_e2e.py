@@ -8839,3 +8839,285 @@ class TestE2ESemanticLayerLifecycle:
                     )
             except _ApiError as exc:
                 print(f"  WARN: residue scan failed: {exc}")
+
+    def test_semantic_layer_delete_cascade(self) -> None:
+        """Regression test for #306 — cascade-delete frees up per-project dataset names.
+
+        Before #306 was fixed, ``kbagent semantic-layer model delete`` only
+        DELETEd the parent ``semantic-model`` row; the child entities
+        (datasets, metrics, relationships, constraints, glossary terms) stayed
+        on the wire pointing at the now-dead ``modelUUID``. Because dataset
+        names are unique **per project** (not per model), the next ``build``
+        or ``import`` of a same-named dataset hit HTTP 422
+        ``"semantic-dataset with name 'X' already exists in the target model"``
+        with no UI/CLI escape.
+
+        This test exercises the four-step regression loop padak called out in
+        the PR #309 review (BLOCKING [B-1]):
+
+        1. Create model A with a mix of children that exercise the full
+           reverse-PUSH_ORDER cascade (dataset + metric + constraint).
+        2. ``kbagent semantic-layer model delete --yes`` via the CLI — assert
+           the response envelope carries ``cascade.parent_deleted == True``
+           and non-zero per-type counts under ``cascade.deleted``.
+        3. Create model B with the **same dataset and metric names** as
+           model A — must succeed. Before #306 was fixed this would have
+           failed with 422 on the dataset POST because model A's orphan
+           still held the name globally in the project.
+        4. ``finally`` teardown: drop model B's children + model B itself.
+           Model A's children are gone by the time the cascade returns,
+           so there's nothing to clean up on the model A side except in
+           failure paths.
+
+        Run focused: ``E2E_API_TOKEN=... E2E_URL=... uv run pytest -v
+        tests/test_e2e.py::TestE2ESemanticLayerLifecycle::test_semantic_layer_delete_cascade``.
+        """
+        from keboola_agent_cli.errors import KeboolaApiError as _ApiError
+        from keboola_agent_cli.metastore_client import (
+            SEMANTIC_TYPES,
+            MetastoreClient,
+        )
+
+        tag = f"kbagent_e2e_cascade_{int(time.time())}"
+        model_a = f"{tag}_a"
+        model_b = f"{tag}_b"
+
+        # Names reused across model A and model B — this is the regression:
+        # they must be free again after cascade-delete of model A.
+        shared_ds_a = f"{tag}_shared_ds_a"
+        shared_ds_b = f"{tag}_shared_ds_b"
+        shared_metric = f"{tag}_shared_metric"
+        shared_constraint = f"{tag}_shared_c_healthy"
+
+        # IDs to clean up if the cascade fails mid-flight.
+        model_a_id: str | None = None
+        model_b_id: str | None = None
+        model_b_items: list[tuple[str, str]] = []
+
+        def _direct_delete(item_type: str, item_id: str) -> None:
+            with MetastoreClient(stack_url=self.url, token=self.token) as mc:
+                mc.delete_item(item_type, item_id)  # type: ignore[arg-type]
+
+        try:
+            # --- 1. Create model A with children spanning the cascade order ---
+            _step(1, "create model A + cascade-able children")
+            data = self._run_ok(
+                "semantic-layer",
+                "model",
+                "create",
+                "--project",
+                self.alias,
+                "--name",
+                model_a,
+            )
+            model_a_id = data["data"]["model"]["id"]
+            assert model_a_id
+
+            self._run_ok(
+                "semantic-layer",
+                "add",
+                "dataset",
+                "--project",
+                self.alias,
+                "--model",
+                model_a,
+                "--name",
+                shared_ds_a,
+                "--table-id",
+                "out.c-syn.fact_cascade_a",
+            )
+            self._run_ok(
+                "semantic-layer",
+                "add",
+                "dataset",
+                "--project",
+                self.alias,
+                "--model",
+                model_a,
+                "--name",
+                shared_ds_b,
+                "--table-id",
+                "out.c-syn.fact_cascade_b",
+            )
+            self._run_ok(
+                "semantic-layer",
+                "add",
+                "metric",
+                "--project",
+                self.alias,
+                "--model",
+                model_a,
+                "--name",
+                shared_metric,
+                "--sql",
+                "COUNT(*)",
+                "--dataset",
+                "out.c-syn.fact_cascade_a",
+                "--yes",
+            )
+            # Constraint references the metric by name — exercises the
+            # full reverse-PUSH_ORDER cascade (constraint → metric → dataset).
+            self._run_ok(
+                "semantic-layer",
+                "add",
+                "constraint",
+                "--project",
+                self.alias,
+                "--model",
+                model_a,
+                "--name",
+                shared_constraint,
+                "--constraint-type",
+                "inequality",
+                "--rule",
+                "value >= 0",
+                "--metrics",
+                shared_metric,
+                "--severity",
+                "info",
+            )
+
+            # --- 2. Cascade-delete model A via the CLI ---
+            _step(2, "model delete A (cascade-delete via CLI)")
+            delete_resp = self._run_ok(
+                "semantic-layer",
+                "model",
+                "delete",
+                "--project",
+                self.alias,
+                "--model",
+                model_a,
+                "--yes",
+            )
+            envelope = delete_resp["data"]
+            assert envelope["deleted"]["id"] == model_a_id, (
+                f"deleted.id should match the model UUID: {envelope}"
+            )
+            cascade = envelope["cascade"]
+            assert cascade["attempted"] is True, f"cascade attempted: {cascade}"
+            assert cascade["parent_deleted"] is True, f"parent should be deleted: {cascade}"
+            assert cascade["failures"] == [], (
+                f"unexpected cascade failures (should be 0): {cascade['failures']}"
+            )
+            counts = cascade["deleted"]
+            assert counts["datasets"] >= 2, f"datasets cascaded: {counts}"
+            assert counts["metrics"] >= 1, f"metrics cascaded: {counts}"
+            assert counts["constraints"] >= 1, f"constraints cascaded: {counts}"
+            # Back-compat alias: orphaned_children == cascade.deleted (deprecated v0.42.0).
+            assert envelope["orphaned_children"] == counts, (
+                "orphaned_children back-compat alias should equal cascade.deleted"
+            )
+
+            # The cascade succeeded — model A's children are gone.
+            # Drop the cleanup token so the finally block doesn't try to delete it again.
+            model_a_id = None
+
+            # --- 3. Create model B with the SAME names (regression test) ---
+            # Before #306 was fixed, the next add-dataset would 422 here because
+            # the orphans from model A still held shared_ds_a / shared_ds_b
+            # globally in the project.
+            _step(3, "create model B with shared dataset/metric names (regression)")
+            data = self._run_ok(
+                "semantic-layer",
+                "model",
+                "create",
+                "--project",
+                self.alias,
+                "--name",
+                model_b,
+            )
+            model_b_id = data["data"]["model"]["id"]
+
+            ds_a_resp = self._run_ok(
+                "semantic-layer",
+                "add",
+                "dataset",
+                "--project",
+                self.alias,
+                "--model",
+                model_b,
+                "--name",
+                shared_ds_a,  # same name as model A's first dataset
+                "--table-id",
+                "out.c-syn.fact_cascade_a",
+            )
+            model_b_items.append(("semantic-dataset", ds_a_resp["data"]["id"]))
+
+            ds_b_resp = self._run_ok(
+                "semantic-layer",
+                "add",
+                "dataset",
+                "--project",
+                self.alias,
+                "--model",
+                model_b,
+                "--name",
+                shared_ds_b,
+                "--table-id",
+                "out.c-syn.fact_cascade_b",
+            )
+            model_b_items.append(("semantic-dataset", ds_b_resp["data"]["id"]))
+
+            m_resp = self._run_ok(
+                "semantic-layer",
+                "add",
+                "metric",
+                "--project",
+                self.alias,
+                "--model",
+                model_b,
+                "--name",
+                shared_metric,  # same name as model A's metric
+                "--sql",
+                "COUNT(*)",
+                "--dataset",
+                "out.c-syn.fact_cascade_a",
+                "--yes",
+            )
+            model_b_items.append(("semantic-metric", m_resp["data"]["id"]))
+
+            # If we got here without 422, the regression #306 is fixed.
+
+        finally:
+            # ----------------------------------------------------------------
+            # Teardown — best-effort, runs even on test failure.
+            # ----------------------------------------------------------------
+            print("\n--- CASCADE TEST CLEANUP ---")
+            for item_type, item_id in reversed(model_b_items):
+                try:
+                    _direct_delete(item_type, item_id)
+                    print(f"  Deleted {item_type} {item_id}")
+                except Exception as exc:
+                    print(f"  WARN: failed to delete {item_type} {item_id}: {exc}")
+
+            if model_b_id:
+                try:
+                    _direct_delete("semantic-model", model_b_id)
+                    print(f"  Deleted semantic-model {model_b_id}")
+                except Exception as exc:
+                    print(f"  WARN: failed to delete model_b {model_b_id}: {exc}")
+
+            # Only present if the cascade failed mid-test.
+            if model_a_id:
+                try:
+                    _direct_delete("semantic-model", model_a_id)
+                    print(f"  Deleted semantic-model {model_a_id} (cascade did not complete)")
+                except Exception as exc:
+                    print(f"  WARN: failed to delete model_a {model_a_id}: {exc}")
+
+            # Residue check across all six metastore types — fail if anything
+            # tagged with this run is left, so silent cleanup bugs surface.
+            try:
+                with MetastoreClient(stack_url=self.url, token=self.token) as mc:
+                    residue: list[str] = []
+                    for stype in SEMANTIC_TYPES:
+                        for item in mc.list_items(stype):  # type: ignore[arg-type]
+                            attrs = item.get("attributes") or {}
+                            name = attrs.get("name") or attrs.get("term", "")
+                            if isinstance(name, str) and name.startswith(tag):
+                                residue.append(f"{stype}:{name}:{item.get('id', '')}")
+                    assert not residue, (
+                        f"Cleanup left residue (manual teardown required): {residue}"
+                    )
+            except _ApiError as exc:
+                print(f"  WARN: residue scan failed: {exc}")

@@ -25,6 +25,7 @@ from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..metastore_client import MetastoreClient, SemanticType
 from ..models import ProjectConfig
+from ._semantic_layer_cascade import cascade_delete_model as _cascade_delete_model_impl
 from ._semantic_layer_crud import REMOVE_KINDS as _REMOVE_KINDS_HELPER
 from ._semantic_layer_crud import code_metric as _code_metric_helper
 from ._semantic_layer_crud import delete_then_post as _delete_then_post_helper
@@ -613,31 +614,28 @@ class SemanticLayerService(BaseService):
         alias: str,
         model_name_or_uuid: str,
     ) -> dict[str, Any]:
-        """Delete a semantic-layer model.
+        """Delete a semantic-layer model and cascade-delete its children.
 
-        Lists every referencing child entity first so the caller can warn
-        about orphaning. The metastore may refuse to delete a model that
-        still has children — we surface that error verbatim.
+        Thin orchestrator: resolve project + model, fetch children, and
+        forward to :func:`_cascade_delete_model_impl`. Cascade semantics
+        (reverse :data:`PUSH_ORDER`, per-child try/except, parent
+        preserved on any failure with ``details.cascade`` envelope) live
+        in the helper to keep this file under the 1500 LOC ceiling.
         """
         project = self._resolve_one_project(alias)
         client = self._new_metastore_client(project)
         try:
             model_uuid, model_attrs = self._resolve_model(client, model_name_or_uuid)
             children = self._fetch_children_parallel(client, model_uuid)
-            client.delete_item("semantic-model", model_uuid)
+            return _cascade_delete_model_impl(
+                client,
+                alias=alias,
+                model_uuid=model_uuid,
+                model_attrs=model_attrs,
+                children=children,
+            )
         finally:
             client.close()
-        # Pluralise the bare keys (semantic-dataset -> "datasets", etc.).
-        # The naive ``key + "s"`` rule produces "glossarys" for the one
-        # already-plural type; fold it back to "glossary" so the wire shape
-        # matches the rest of the codebase (see ``_PLURAL_BY_TYPE`` above).
-        counts = {k.replace("semantic-", "") + "s": len(v) for k, v in children.items()}
-        counts.setdefault("glossary", counts.pop("glossarys", 0))
-        return {
-            "project": alias,
-            "deleted": {"id": model_uuid, "name": model_attrs.get("name", "")},
-            "orphaned_children": counts,
-        }
 
     # ------------------------------------------------------------------
     # Phase 4 — add subcommands

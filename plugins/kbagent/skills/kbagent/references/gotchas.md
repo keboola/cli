@@ -121,6 +121,54 @@ limit, transient 5xx), the detail call still succeeds and
 `storage_workspace_id` is set to `null` -- the annotation is UX, not a
 contract.
 
+## `semantic-layer model delete` cascade-deletes children (since v0.43.4)
+
+`kbagent semantic-layer model delete --project P --model M` used to DELETE
+only the parent `semantic-model` row, leaving every dataset / metric /
+relationship / constraint / glossary term on the wire pointing at the
+now-dead `modelUUID` (issue #306). The orphans were invisible until the next
+`build` or `import` hit HTTP 422 `semantic-dataset with name 'X' already
+exists in the target model` on a same-named dataset — names are unique
+**per project**, not per model.
+
+Since this release the command walks `reversed(PUSH_ORDER)` (constraints →
+glossary → relationships → metrics → datasets) and deletes each child via
+`client.delete_item` before the parent. `--yes` still skips the
+confirmation prompt; the prompt text now warns explicitly that all children
+will be deleted.
+
+**Partial failure semantics (matches `push_built_model` rollback envelope):**
+
+- Every child DELETE is wrapped individually; sibling failures do **not**
+  abort the cascade.
+- If ANY child fails, the parent is **preserved** and a `KeboolaApiError`
+  is raised with `details.cascade = {attempted, deleted, failures: [{type,
+  id, name, error}], parent_deleted: False, model_uuid}`.
+- Re-run `kbagent semantic-layer model delete --project P --model <uuid>`
+  after fixing the underlying error to finish the cascade.
+
+**Response envelope changes:**
+
+- New top-level `cascade` block on success: `{attempted, deleted: {datasets,
+  metrics, relationships, glossary, constraints}, failures: [], parent_deleted}`.
+- Legacy `orphaned_children` top-level key kept for back-compat with the
+  shape unchanged, but its **meaning** flips from 'leaked count' to
+  'cascaded count'. Happy-path JSON consumers always saw zeros on this key
+  before — the only way to populate it was the bug.
+
+**Deprecation:** `orphaned_children` is deprecated as of v0.43.4 and
+scheduled for **removal in a future minor release** (not before v0.44.0).
+Read `cascade.deleted` instead — it carries the same per-type counts plus
+the explicit `attempted` / `parent_deleted` / `failures` fields that
+disambiguate happy-path from partial-failure responses. JSON callers
+should migrate now; the field name is the only thing that changes.
+
+**Implication for AI agents / scripts:** Scripts that called `model delete`
+and then assumed they had to teardown children manually can drop that
+follow-up. Scripts that scraped `orphaned_children` to detect the bug now
+see the same zeros they always wanted — but should switch to
+`cascade.deleted` ahead of v0.42.0.
+
 ## Web UI `Kai Chat` is gone — replaced by `Local AI` (since v0.41.9)
 
 The web UI dashboard tile / left-nav entry previously labelled **Kai
