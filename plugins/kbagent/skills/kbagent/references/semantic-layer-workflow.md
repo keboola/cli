@@ -486,8 +486,12 @@ Quick reminders:
 - **POST envelope**: `{name, data, branch: "main", schemaVersion:
   "1.0.0", scope: "project"}` -> 201 with `{data: {type, id,
   attributes, meta}}`. kbagent handles this.
-- **Duplicate-name POST -> 500** with `"Failed to create meta object"`.
-  kbagent normalizes to `ErrorCode.ALREADY_EXISTS`.
+- **Duplicate-name POST -> 409 Conflict** (post go-monorepo PR #513) with
+  `"Object with this name already exists in this project"`, or **500** with
+  `"Failed to create meta object"` on legacy stacks. kbagent normalizes both
+  into `ErrorCode.ALREADY_EXISTS` (since v0.43.5). 409 is non-retryable so
+  the fix-deployed path avoids the `MAX_RETRIES` round-trips the 500 path
+  still pays.
 - **DELETE -> 204** empty body.
 - **No PATCH endpoint** -- every "edit" is DELETE+POST. kbagent's
   `edit metric / dataset / relationship / constraint / glossary`
