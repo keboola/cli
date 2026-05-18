@@ -129,8 +129,8 @@ All seven commands authenticate via `KBC_MANAGE_API_TOKEN` (Manage API), not the
 
 ## Workspaces (SQL Debugging)
 - `workspace create --project ALIAS [--name NAME] [--ui] [--read-only]` -- create workspace (headless ~1s, `--ui` ~15s)
-- `workspace list [--project NAME ...] [--orphaned]` -- list workspaces. `--project` repeatable for multi-project; `--orphaned` filters to workspaces whose backing `keboola.sandboxes` config is missing
-- `workspace detail --project ALIAS --workspace-id ID` -- show connection details
+- `workspace list [--project NAME ...] [--orphaned] [--branch ID] [--qs-compatible]` -- list workspaces. `--project` repeatable; `--orphaned` filters to workspaces whose backing `keboola.sandboxes` config is missing. **Since v0.42.0 (#304)**: each entry carries `login_type`, `read_only`, `qs_compatible`, `database`, `warehouse`. New `Login Type` / `RO` / `QS` columns in human mode. `--qs-compatible` pre-filters to RO + whitelisted-loginType workspaces (the canonical data-app shape). `--branch` requires exactly one `--project`; without `--branch`, the command behaves like `storage buckets` and uses production with an `Info: Using production branch for read (active dev branch X ignored; pass --branch X to override)` banner when an alias is pinned to a dev branch
+- `workspace detail --project ALIAS --workspace-id ID [--branch ID]` -- show connection details. **Since v0.42.0 (#304)**: response carries `login_type`, `read_only`, `qs_compatible`; human mode adds `Login type:` / `Read-only:` / `Query Service compatible:` rows. `--branch` opt-in mirrors `workspace list`
 - `workspace delete --project ALIAS --workspace-id ID` -- delete workspace
 - `workspace password --project ALIAS --workspace-id ID` -- reset and return new password
 - `workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [...] [--preserve]` -- load storage tables

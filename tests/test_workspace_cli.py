@@ -1103,3 +1103,239 @@ class TestWorkspaceFromTransformation:
         output = json.loads(result.output)
         assert output["status"] == "error"
         assert output["error"]["code"] == "NOT_FOUND"
+
+
+class TestWorkspaceListIssue304:
+    """Regression tests for issue #304 (workspace discoverability gap).
+
+    Covers:
+    - ``--branch`` flag parity with ``storage buckets`` / ``config list``
+    - ``--qs-compatible`` filter that pre-selects data-app-ready workspaces
+    - ``--branch`` validation (rejects multi-project usage)
+    - ``Info: Using production branch for read ...`` banner when an alias is
+      pinned to a dev branch (read commands ignore the implicit branch)
+    """
+
+    def test_workspace_list_branch_flag_propagates_to_service(self, tmp_path: Path) -> None:
+        """`workspace list --branch 1234` passes branch_id=1234 to the service."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.list_workspaces.return_value = {"workspaces": [], "errors": []}
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockWsService.return_value = mock_ws
+
+            result = runner.invoke(
+                app,
+                ["--json", "workspace", "list", "--project", "prod", "--branch", "1234"],
+            )
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+        mock_ws.list_workspaces.assert_called_once()
+        kwargs = mock_ws.list_workspaces.call_args.kwargs
+        assert kwargs["branch_id"] == 1234
+
+    def test_workspace_list_branch_rejects_multi_project(self, tmp_path: Path) -> None:
+        """`workspace list --project a --project b --branch 1` fails with exit 2."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(
+            config_dir,
+            {"a": {"token": TEST_TOKEN}, "b": {"token": TEST_TOKEN}},
+        )
+
+        mock_ws = _make_workspace_mock()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockWsService.return_value = mock_ws
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "workspace",
+                    "list",
+                    "--project",
+                    "a",
+                    "--project",
+                    "b",
+                    "--branch",
+                    "1",
+                ],
+            )
+
+        assert result.exit_code == 2
+        # Service must not have been called -- validation happens upfront
+        mock_ws.list_workspaces.assert_not_called()
+
+    def test_workspace_list_qs_compatible_filter_propagates(self, tmp_path: Path) -> None:
+        """`workspace list --qs-compatible` sets qs_compatible_only=True."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.list_workspaces.return_value = {"workspaces": [], "errors": []}
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockWsService.return_value = mock_ws
+
+            result = runner.invoke(
+                app,
+                ["--json", "workspace", "list", "--project", "prod", "--qs-compatible"],
+            )
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+        kwargs = mock_ws.list_workspaces.call_args.kwargs
+        assert kwargs["qs_compatible_only"] is True
+
+    def test_workspace_list_ignores_active_branch_with_banner(self, tmp_path: Path) -> None:
+        """`workspace list` with an alias pinned to a dev branch behaves like `storage buckets`.
+
+        The implicit ``active_branch_id`` is ignored (read endpoint uses
+        production), and an ``Info: ...`` banner explains the override.
+        Before issue #304 the command silently scoped to the pinned branch
+        without notifying the caller, returning a different workspace set
+        than ``workspace list`` against the same alias one shell ago.
+        """
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = ConfigStore(config_dir=config_dir)
+        store.add_project(
+            "pinned",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=TEST_TOKEN,
+                project_name="Pinned",
+                project_id=42,
+                active_branch_id=99999,
+            ),
+        )
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.list_workspaces.return_value = {"workspaces": [], "errors": []}
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockWsService.return_value = mock_ws
+
+            result = runner.invoke(
+                app,
+                ["workspace", "list", "--project", "pinned"],
+            )
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+        # Banner goes to stderr in real use; CliRunner mixes streams.
+        assert "production branch for read" in result.output
+        assert "99999" in result.output
+        # branch_id must NOT be propagated -- read commands target production
+        kwargs = mock_ws.list_workspaces.call_args.kwargs
+        assert kwargs["branch_id"] is None
+
+
+class TestWorkspaceDetailIssue304:
+    """Regression tests for `workspace detail` shape changes (issue #304)."""
+
+    def test_workspace_detail_exposes_login_type_and_qs_fields(self, tmp_path: Path) -> None:
+        """JSON output of `workspace detail` carries login_type / read_only / qs_compatible."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.get_workspace.return_value = {
+            "project_alias": "prod",
+            "workspace_id": 42,
+            "backend": "snowflake",
+            "host": "account.snowflakecomputing.com",
+            "warehouse": "KEBOOLA_PROD",
+            "database": "KEBOOLA_258",
+            "schema": "WORKSPACE_42",
+            "user": "KEBOOLA_WORKSPACE_42",
+            "created": "2026-05-18T00:00:00Z",
+            "login_type": "snowflake-service-keypair",
+            "read_only": True,
+            "qs_compatible": True,
+            "component_id": "keboola.sandboxes",
+            "config_id": "cfg-xyz",
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockWsService.return_value = mock_ws
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "workspace",
+                    "detail",
+                    "--project",
+                    "prod",
+                    "--workspace-id",
+                    "42",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        data = output["data"]
+        assert data["login_type"] == "snowflake-service-keypair"
+        assert data["read_only"] is True
+        assert data["qs_compatible"] is True

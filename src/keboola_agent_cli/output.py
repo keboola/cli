@@ -224,6 +224,29 @@ def format_config_detail(console: Console, data: dict[str, Any]) -> None:
         config_str = json.dumps(configuration, indent=2)
         lines.append(f"\n[bold]Configuration:[/bold]\n{config_str}")
 
+    # keboola.sandboxes annotation (issue #304 bod #3): make explicit that
+    # ``parameters.id`` is NOT the Storage workspace ID, and show the real
+    # mapping resolved by the command layer.
+    annotation = data.get("sandbox_annotation")
+    if annotation:
+        sb_id = annotation.get("sandbox_service_id")
+        ws_id = annotation.get("storage_workspace_id")
+        lines.append("\n[bold yellow]Sandbox / Workspace mapping:[/bold yellow]")
+        lines.append(
+            f"  [dim]parameters.id (sandbox-service):[/dim] {sb_id if sb_id is not None else '[dim](absent)[/dim]'}"
+        )
+        if ws_id is not None:
+            lines.append(
+                f"  [bold]Storage workspace ID:[/bold] [green]{ws_id}[/green]  "
+                f"[dim](use with `kbagent workspace detail --workspace-id {ws_id}`)[/dim]"
+            )
+        else:
+            lines.append(
+                "  [bold]Storage workspace ID:[/bold] [dim]none[/dim] "
+                "[yellow](no workspace currently backed by this config -- orphan sandbox)[/yellow]"
+            )
+        lines.append(f"  [dim]{annotation.get('note', '')}[/dim]")
+
     # Show rows if present
     rows = data.get("rows", [])
     if rows:
@@ -886,6 +909,13 @@ def format_workspaces_table(console: Console, data: dict[str, Any]) -> None:
     table.add_column("Name", style="bold cyan")
     table.add_column("Backend")
     table.add_column("Schema")
+    # Login type + RO + QS surface the three Query-Service compatibility signals
+    # that were previously invisible to data-app developers (issue #304).
+    # Width-clamped because ``snowflake-service-keypair`` is the longest known
+    # value; clamp leaves room for the wider table on standard terminals.
+    table.add_column("Login Type", max_width=24)
+    table.add_column("RO", justify="center")
+    table.add_column("QS", justify="center")
     table.add_column("Created", style="dim")
 
     prev_alias = None
@@ -894,16 +924,38 @@ def format_workspaces_table(console: Console, data: dict[str, Any]) -> None:
         display_alias = alias if alias != prev_alias else ""
         prev_alias = alias
 
+        login_type = ws.get("login_type", "") or "[dim]?[/dim]"
+        ro_cell = "[green]yes[/green]" if ws.get("read_only") else "no"
+        if ws.get("qs_compatible") is True:
+            qs_cell = "[green]yes[/green]"
+        elif ws.get("login_type"):
+            # We have a loginType but it is not on the confirmed whitelist.
+            # Yellow rather than red: the policy varies per stack (see
+            # snowflake-legacy-service in constants.py) and we do not want to
+            # actively discourage a workspace that might in fact work.
+            qs_cell = "[yellow]?[/yellow]"
+        else:
+            qs_cell = "[dim]?[/dim]"
+
         table.add_row(
             display_alias,
             str(ws.get("workspace_id", ws.get("id", ""))),
             ws.get("name", ""),
             ws.get("backend", ""),
             ws.get("schema", ""),
+            login_type,
+            ro_cell,
+            qs_cell,
             ws.get("created", ""),
         )
 
     console.print(table)
+    console.print(
+        "[dim]RO = read-only storage access. QS = Query Service compatible "
+        "(yes = confirmed whitelist, ? = loginType not on confirmed list, "
+        "may still work). See `kbagent workspace list --qs-compatible` to "
+        "filter to data-app-ready workspaces.[/dim]"
+    )
     console.print()
 
 

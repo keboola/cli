@@ -156,6 +156,12 @@ Use `kbagent <command> --help` for full flag details and examples.
     --with-state attaches the runtime state dict. Single: dedicated get_config_state
     call. Bulk: include=state ridesalong (no N+1, still one call per project).
     --branch requires exactly one --project (branch IDs are per-project).
+    Sandbox annotation (since v0.42.0, single-config mode only):
+    --component-id keboola.sandboxes adds a sandbox_annotation block with
+    sandbox_service_id (the misleading parameters.id) and storage_workspace_id
+    (the actual Storage workspace ID -- resolved via workspace list lookup).
+    Use storage_workspace_id with `kbagent workspace detail --workspace-id ID`,
+    NOT parameters.id (which 404s).
 
   kbagent config update --project NAME --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--dry-run] [--branch ID]
     Update config metadata and/or configuration content. --set targets a
@@ -594,11 +600,15 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
     Create workspace. Backend auto-detected from project (or override with --backend). Default: headless (~1s). --ui: visible in KBC UI (~15s).
 
-  kbagent workspace list [--project NAME] [--orphaned]
-    List workspaces. --orphaned shows only orphaned workspaces (sandboxes config missing).
+  kbagent workspace list [--project NAME] [--orphaned] [--branch ID] [--qs-compatible]
+    List workspaces. Read command: ignores active dev branch (production endpoint) with an Info banner;
+    pass --branch to opt in. Each entry carries login_type, read_only, qs_compatible so callers can pick a
+    Query-Service-compatible workspace without firing a probe query. --qs-compatible filters to RO +
+    confirmed-whitelist loginType (canonical data-app shape). --orphaned shows orphaned workspaces.
 
-  kbagent workspace detail --project ALIAS --workspace-id ID
-    Workspace connection details (no password).
+  kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
+    Workspace connection details (no password). Includes login_type, read_only, qs_compatible.
+    Read command: ignores active dev branch with an Info banner; pass --branch to opt in.
 
   kbagent workspace delete --project ALIAS --workspace-id ID
     Delete workspace. They also expire automatically.

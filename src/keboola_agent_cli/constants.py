@@ -253,6 +253,36 @@ DEFAULT_JOB_RUN_TIMEOUT: float = 300.0  # 5 min default for --wait polling
 # States where POST /jobs/{id}/kill returns HTTP 200; any other state yields 400.
 KILLABLE_JOB_STATUSES: frozenset[str] = frozenset({"created", "waiting", "processing"})
 
+# --- Workspace Query Service compatibility (since v0.42.0, closes #304) ---
+# Storage API workspace endpoint exposes `connection.loginType`. The Query
+# Service (POST /v2/storage/branch/{ID}/workspaces/{WS}/query) accepts only a
+# subset of these and rejects the rest with HTTP 400 and
+# `code: storage.executeQuery.notSupportedLoginType`. Before #304 the only
+# way to learn whether a workspace was Query-Service-compatible was to fire a
+# query and read the failure -- the issue cost ~30 min of trial-and-error
+# per data-app onboarding.
+#
+# Conservative WHITELIST semantics (false negatives over false positives):
+#   present  -> qs_compatible=True (confirmed working in production)
+#   absent   -> qs_compatible=False; hint to try anyway because the policy
+#               varies per stack (snowflake-legacy-service worked on
+#               connection.keboola.com but failed on the GCP us-east4 stack
+#               in the original issue report)
+#
+# Verified 2026-05-18 against project 901 on connection.keboola.com:
+#   snowflake-service-keypair: PASS
+#   snowflake-person-sso:      PASS
+#   snowflake-legacy-service:  PASS here, FAIL on GCP us-east4 (issue #304)
+#   default (legacy 2016 ws):  FAIL ('JWT token is invalid')
+#
+# Extend ONLY after empirical confirmation across at least one non-AWS stack.
+QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES: frozenset[str] = frozenset(
+    {
+        "snowflake-service-keypair",
+        "snowflake-person-sso",
+    }
+)
+
 # --- Permission Exit Code ---
 EXIT_PERMISSION_DENIED: int = 6
 # --- Job-timeout Exit Code ---

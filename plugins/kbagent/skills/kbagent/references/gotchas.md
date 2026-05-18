@@ -11,6 +11,104 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## `workspace list` / `workspace detail` now expose loginType + RO + qs_compatible (since v0.42.0, closes #304)
+
+Before v0.42.0 the Storage workspace endpoint already returned
+`connection.loginType` and `readOnlyStorageAccess`, but kbagent discarded
+both fields when normalising the response. The only way for a data-app
+developer to learn whether a workspace was Query-Service-compatible was to
+fire a query and read the failure (`code:
+storage.executeQuery.notSupportedLoginType`). v0.42.0 surfaces both fields
+plus a derived `qs_compatible: bool`.
+
+**Output shape (JSON):**
+
+```jsonc
+{
+  "workspaces": [{
+    "id": 2950518214,
+    "name": "RO",
+    "backend": "snowflake",
+    "host": "...",
+    "database": "sapi_901",
+    "warehouse": "KEBOOLA_PROD",
+    "schema": "WORKSPACE_...",
+    "user": "...",
+    "login_type": "snowflake-service-keypair",
+    "read_only": true,
+    "qs_compatible": true,
+    "component_id": "keboola.sandboxes",
+    "config_id": "01kj..."
+  }],
+  "errors": []
+}
+```
+
+**Compatibility whitelist (`constants.QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES`):**
+
+- `snowflake-service-keypair` -- confirmed PASS
+- `snowflake-person-sso` -- confirmed PASS
+- `snowflake-legacy-service` -- explicitly OFF the list (works on
+  `connection.keboola.com` but FAILED on GCP us-east4 stack in the
+  original #304 incident -- keep it off until cross-stack confirmation)
+- `default` (legacy 2016 workspaces) -- confirmed FAIL
+  (`JWT token is invalid`)
+
+`qs_compatible: false` does NOT mean "broken"; it means "not on the
+confirmed-good whitelist". For an unknown loginType, `workspace list`
+renders it as `?` (yellow) in the QS column so callers know the policy
+is uncertain rather than confirmed-bad.
+
+**Filter (data-app pre-selection):**
+
+```bash
+kbagent --json workspace list --project prod --qs-compatible
+# returns only workspaces with login_type ∈ whitelist AND read_only=true
+```
+
+**Branch behaviour (read-command parity with `storage buckets`):**
+
+`workspace list` / `workspace detail` now follow the same pattern as
+`storage buckets` / `storage tables` / `config list`: when an alias is
+pinned to a dev branch via `branch use`, the production endpoint is used
+with an `Info: Using production branch for read (active dev branch X
+ignored; pass --branch X to override)` banner. Before v0.42.0 these
+commands silently scoped to the pinned branch, returning a different
+workspace set than the same alias one shell ago. Pass `--branch ID` to
+opt back into the dev-branch endpoint. `--branch` requires exactly one
+`--project`.
+
+## `config detail --component-id keboola.sandboxes` now annotates the misleading `parameters.id` (since v0.42.0, closes #304)
+
+The sandbox config's `parameters.id` field (e.g. `1296392806`) looks like
+a Storage workspace ID but is actually a sandbox-service-internal handle.
+Passing it to `workspace detail --workspace-id 1296392806` returns 404.
+The real mapping is the other way around: each Storage workspace exposes
+`configurationId` pointing at its sandbox config.
+
+`config detail --component-id keboola.sandboxes --config-id <ID>` now
+appends a `sandbox_annotation` block:
+
+```jsonc
+{
+  // ... original config detail fields unchanged ...
+  "sandbox_annotation": {
+    "sandbox_service_id": "1296392806",
+    "storage_workspace_id": 2950518214,
+    "note": "`parameters.id` in a keboola.sandboxes config is the sandbox-service internal ID, NOT the Storage workspace ID. Use `storage_workspace_id` with `kbagent workspace detail --workspace-id ...`."
+  }
+}
+```
+
+When no workspace is currently backed by the sandbox config (orphan
+sandbox), `storage_workspace_id` is `null` -- the annotation block still
+appears so callers can distinguish "annotation did not run" from "ran but
+no workspace found".
+
+**Single-config mode only.** Bulk mode (`--config-id` omitted) skips the
+annotation to avoid N+1 (one `list_workspaces` per config). Use
+`workspace list --project NAME` as a one-shot lookup instead.
+
 ## Web UI `Kai Chat` is gone — replaced by `Local AI` (since v0.41.9)
 
 The web UI dashboard tile / left-nav entry previously labelled **Kai

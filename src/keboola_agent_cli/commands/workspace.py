@@ -9,6 +9,7 @@ from pathlib import Path
 import typer
 from rich.markup import escape
 
+from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_query_results, format_workspaces_table
 from ._helpers import (
@@ -18,6 +19,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    resolve_branch,
     should_hint,
 )
 
@@ -121,16 +123,59 @@ def workspace_list(
         "--orphaned",
         help="Show only orphaned workspaces (keboola.sandboxes config missing)",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID. Read-only command -- ignores the alias's active branch "
+        "by default (mirrors `storage buckets`); pass --branch to opt in. "
+        "Requires exactly one --project.",
+    ),
+    qs_compatible: bool = typer.Option(
+        False,
+        "--qs-compatible",
+        help="Show only workspaces whose loginType is known to work with the Query "
+        "Service AND that are read-only -- the canonical shape for a data-app.",
+    ),
 ) -> None:
-    """List workspaces from connected projects."""
+    """List workspaces from connected projects.
+
+    Branch handling: this is a read command and follows the same pattern as
+    `storage buckets` / `config list` -- when an alias is pinned to a dev
+    branch via `branch use`, the production endpoint is used (with a visible
+    `Info: ...` banner) instead of silently scoping the listing to the
+    pinned branch. Pass `--branch ID` to query a specific dev branch.
+
+    Each workspace entry exposes `login_type`, `read_only` and
+    `qs_compatible` so data-app developers can pick a Query-Service-compatible
+    workspace without firing a probe query (closes #304).
+    """
     if should_hint(ctx):
-        emit_hint(ctx, "workspace.list", project=project)
+        emit_hint(ctx, "workspace.list", project=project, branch=branch)
         return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+
+    if branch is not None and (not project or len(project) != 1):
+        formatter.error(
+            message="--branch requires exactly one --project (branch ID is per-project)",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+
+    effective_branch: int | None = branch
+    if branch is None and project and len(project) == 1:
+        _, effective_branch = resolve_branch(
+            config_store, formatter, project[0], None, ignore_active_branch=True
+        )
 
     try:
-        result = service.list_workspaces(aliases=project, orphaned_only=orphaned)
+        result = service.list_workspaces(
+            aliases=project,
+            orphaned_only=orphaned,
+            branch_id=effective_branch,
+            qs_compatible_only=qs_compatible,
+        )
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
         formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
@@ -159,16 +204,36 @@ def workspace_detail(
         "--workspace-id",
         help="Workspace ID",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID. Read-only command -- ignores the alias's active branch "
+        "by default (mirrors `storage bucket-detail`); pass --branch to opt in.",
+    ),
 ) -> None:
-    """Show workspace details (password NOT included)."""
+    """Show workspace details (password NOT included).
+
+    Includes `login_type`, `read_only` and `qs_compatible` so callers can
+    verify a workspace is Query-Service-compatible before issuing a query
+    (closes #304).
+    """
     if should_hint(ctx):
-        emit_hint(ctx, "workspace.detail", project=project, workspace_id=workspace_id)
+        emit_hint(
+            ctx, "workspace.detail", project=project, workspace_id=workspace_id, branch=branch
+        )
         return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+
+    _, effective_branch = resolve_branch(
+        config_store, formatter, project, branch, ignore_active_branch=True
+    )
 
     try:
-        result = service.get_workspace(alias=project, workspace_id=workspace_id)
+        result = service.get_workspace(
+            alias=project, workspace_id=workspace_id, branch_id=effective_branch
+        )
         formatter.output(
             result,
             lambda c, d: (
@@ -180,6 +245,14 @@ def workspace_detail(
                 c.print(f"[bold]Database:[/bold] {d.get('database', '')}"),
                 c.print(f"[bold]Schema:[/bold] {d['schema']}"),
                 c.print(f"[bold]User:[/bold] {d['user']}"),
+                c.print(
+                    f"[bold]Login type:[/bold] {d.get('login_type', '') or '[dim](unknown)[/dim]'}"
+                ),
+                c.print(f"[bold]Read-only:[/bold] {'yes' if d.get('read_only') else 'no'}"),
+                c.print(
+                    f"[bold]Query Service compatible:[/bold] "
+                    f"{'[green]yes[/green]' if d.get('qs_compatible') else '[yellow]no (loginType not on the confirmed whitelist; query may still work, try `kbagent workspace query`)[/yellow]'}"
+                ),
                 c.print(f"[bold]Created:[/bold] {d.get('created', '')}"),
             ),
         )

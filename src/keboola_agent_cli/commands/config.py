@@ -322,6 +322,39 @@ def config_detail(
         )
         raise typer.Exit(code=exit_code) from None
 
+    # Issue #304 bod #3: ``keboola.sandboxes`` configs carry ``parameters.id``
+    # that looks like a Storage workspace ID but is actually a sandbox-service
+    # internal handle (passing it to ``workspace detail --workspace-id`` 404s).
+    # Resolve the real Storage workspace ID once via WorkspaceService so JSON
+    # callers get the mapping and human-mode readers see an explicit annotation.
+    # Single-config mode only -- bulk mode is N+1-sensitive (one extra request
+    # per config) and would be a regression for the existing fast-fan-out use.
+    if config_id is not None and component_id == "keboola.sandboxes":
+        ws_service = get_service(ctx, "workspace_service")
+        configuration = result.get("configuration", {}) or {}
+        sandbox_service_id = (configuration.get("parameters") or {}).get("id")
+        try:
+            storage_workspace_id = ws_service.resolve_sandbox_workspace_id(
+                alias=project[0],
+                config_id=config_id,
+                branch_id=effective_branch,
+            )
+        except (KeboolaApiError, ConfigError):
+            # Best-effort enrichment: do not fail the whole detail call just
+            # because the workspace listing endpoint hiccuped. The annotation
+            # is a UX nicety, not a contract.
+            storage_workspace_id = None
+        result["sandbox_annotation"] = {
+            "sandbox_service_id": sandbox_service_id,
+            "storage_workspace_id": storage_workspace_id,
+            "note": (
+                "`parameters.id` in a keboola.sandboxes config is the "
+                "sandbox-service internal ID, NOT the Storage workspace ID. "
+                "Use `storage_workspace_id` with `kbagent workspace detail "
+                "--workspace-id ...`."
+            ),
+        }
+
     if config_id is not None:
         # Single-config mode: emit unchanged shape
         formatter.output(result, format_config_detail)

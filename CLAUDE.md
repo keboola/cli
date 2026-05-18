@@ -357,8 +357,8 @@ kbagent branch metadata-set --project NAME --key KEY [--text STR | --file PATH |
 kbagent branch metadata-delete --project NAME --metadata-id ID [--branch ID|default]
 
 kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
-kbagent workspace list [--project NAME ...] [--orphaned]
-kbagent workspace detail --project ALIAS --workspace-id ID
+kbagent workspace list [--project NAME ...] [--orphaned] [--branch ID] [--qs-compatible]
+kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
 kbagent workspace delete --project ALIAS --workspace-id ID
 kbagent workspace password --project ALIAS --workspace-id ID
 kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [--tables ...] [--preserve]
