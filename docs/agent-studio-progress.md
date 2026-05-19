@@ -105,11 +105,14 @@ web/frontend/src/
 These are the things v2 PRD § 21 Phase 1 lists that the scaffold
 **didn't** ship. Order is "what unblocks the most downstream work".
 
-1. **Playbook detail drawer** in the UI. Currently the library cards
-   are read-only; clicking them does nothing. The detail Drawer (per
-   design system § 5.9) shows the SOP, the connections, the budget,
-   the trigger config — wired to `GET /v1/agent-studio/playbooks/{id}`
-   which already exists. Frontend-only slice, no backend changes.
+1. **Playbook detail drawer** in the UI — ✅ done
+   (`feat(agent-studio): Playbook detail Drawer + two-step delete`,
+   commit `5a85b47`). PlaybookCard is clickable, opens a right-side
+   Drawer fed by `GET /v1/agent-studio/playbooks/{id}`, shows
+   description + connections + skills + plugins + triggers (formatted
+   JSON) + timestamps. Delete button uses a two-step confirm modal
+   so destructive clicks are deliberate. New Playbook auto-opens its
+   drawer to land the user on what they just produced.
 
 2. **Run loop**: tie Playbook execution into the existing
    `server/agent_runner.py` scheduler. `AgentRun` gains the new
