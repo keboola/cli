@@ -80,18 +80,70 @@ web/frontend/src/
   pages/Playbooks.tsx   # library page
 ```
 
-### Task tracker
+### Task tracker — Phase 1 scaffold (shipped)
 
-| # | Task | Status |
-|---|---|---|
-| 10 | Persistent progress doc + audit existing branch | in_progress |
-| 11 | Backend: Playbook Pydantic model | pending |
-| 12 | Backend: YAML storage with 0600 perms | pending |
-| 13 | Backend: FastAPI router | pending |
-| 14 | Tests: model + storage + router | pending |
-| 15 | Frontend: sidebar entry + state.tsx PageId | pending |
-| 16 | Frontend: Playbooks library page | pending |
-| 17 | Sample data + make check + commit | pending |
+| # | Task | Status | Lands in commit |
+|---|---|---|---|
+| 10 | Persistent progress doc + audit existing branch | ✅ done | `docs(agent-studio): v2 PRD + NERD UI ...` |
+| 11 | Backend: Playbook Pydantic model | ✅ done | `feat(agent-studio): Phase 1 scaffold` |
+| 12 | Backend: YAML storage with 0600 perms | ✅ done | `feat(agent-studio): Phase 1 scaffold` |
+| 13 | Backend: FastAPI router | ✅ done | `feat(agent-studio): Phase 1 scaffold` |
+| 14 | Tests: model + storage + router | ✅ done | `feat(agent-studio): Phase 1 scaffold` |
+| 15 | Frontend: sidebar entry + state.tsx PageId | ✅ done | `feat(agent-studio): Phase 1 scaffold` |
+| 16 | Frontend: Playbooks library page | ✅ done | `feat(agent-studio): Phase 1 scaffold` |
+| 17 | Sample data + make check + commit | ✅ done — sample data skipped (TwoPathEmpty is the on-ramp) | `feat(agent-studio): Phase 1 scaffold` |
+
+**Verification snapshot:**
+- 27 new tests under `tests/test_playbook_*.py`, all green.
+- `ruff check`, `ruff format --check`, `ty check` clean on changed files.
+- `npx tsc --noEmit` clean on frontend.
+- `git log --oneline feat/personal-ai-agents ^main` shows the two
+  Phase 1 commits at the tip.
+
+## Next slices (Phase 1 continuation, in priority order)
+
+These are the things v2 PRD § 21 Phase 1 lists that the scaffold
+**didn't** ship. Order is "what unblocks the most downstream work".
+
+1. **Playbook detail drawer** in the UI. Currently the library cards
+   are read-only; clicking them does nothing. The detail Drawer (per
+   design system § 5.9) shows the SOP, the connections, the budget,
+   the trigger config — wired to `GET /v1/agent-studio/playbooks/{id}`
+   which already exists. Frontend-only slice, no backend changes.
+
+2. **Run loop**: tie Playbook execution into the existing
+   `server/agent_runner.py` scheduler. `AgentRun` gains the new
+   statuses (`blocked` / `waiting_for_approval` / `reviewing`) per
+   § 23 migration. `PlaybookRun` is a thin specialisation of
+   `AgentRun` so we get the SSE stream + cost tracking for free.
+
+3. **Tool Broker primitives**: registry + risk-class enum + scoped
+   per-run JWTs. No UI yet — the foundation that the Approval queue
+   and the budget enforcer need.
+
+4. **Budget enforcer**: hook into `server/pricing.py`, evaluate after
+   every tool call, transition the run to `waiting_for_approval` or
+   `failed` per the policy's `on_breach`.
+
+5. **Approval queue + body_hash + 5s undo**: § 14 of the PRD. The UI
+   side is the centered modal mocked in
+   `docs/mockups/05-approval-modal.png`.
+
+6. **Untrusted-content wrapping**: wrap every untrusted tool output in
+   `<untrusted source="...">...</untrusted>` before passing back to
+   the LLM. System-prompt invariant.
+
+7. **Skill loader** for built-in skills under `plugins/kbagent/skills/`.
+
+8. **Connection auto-discovery**: synthesise Connection YAMLs from the
+   user's existing Keboola component configs.
+
+9. **`data-cleanup` native plugin**: the Phase 1 use case (a) target.
+
+Once 1–9 land, Phase 1 acceptance criteria from § 21 are met:
+"User creates Playbook from `data-cleanup` template, runs it, hits
+HITL pause at ER rules, approves, budget respected, final report +
+lineage map in workspace."
 
 ## Branch state when this slice started
 
