@@ -1,4 +1,5 @@
 import { Shell } from "./layout/Shell";
+import { findApp, isAppPageId, slugFromAppPageId } from "./apps/_registry";
 import { AgentsPage } from "./pages/Agents";
 import { BranchesPage } from "./pages/Branches";
 import { DashboardPage } from "./pages/Dashboard";
@@ -16,6 +17,7 @@ import { McpPage } from "./pages/Mcp";
 import { SemanticLayerPage } from "./pages/SemanticLayer";
 import { MembersPage } from "./pages/Members";
 import { OrgPage } from "./pages/Org";
+import { PlaybooksPage } from "./pages/Playbooks";
 import { ProjectsPage } from "./pages/Projects";
 import { SchedulesPage } from "./pages/Schedules";
 import { SearchPage } from "./pages/Search";
@@ -27,6 +29,14 @@ import { ThemeProvider } from "./theme";
 
 function Router() {
   const { page } = useUIState();
+  if (isAppPageId(page)) {
+    const app = findApp(slugFromAppPageId(page));
+    if (app) {
+      const AppComponent = app.component;
+      return <AppComponent />;
+    }
+    return <DashboardPage />;
+  }
   switch (page) {
     case "dashboard":
       return <DashboardPage />;
@@ -62,6 +72,8 @@ function Router() {
       return <LocalAiPage />;
     case "agents":
       return <AgentsPage />;
+    case "playbooks":
+      return <PlaybooksPage />;
     case "search":
       return <SearchPage />;
     case "encrypt":
