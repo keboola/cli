@@ -1,23 +1,37 @@
 /**
- * Playbook Library — Phase 1 read-mostly surface.
+ * Playbook Library — Phase 1 surface.
  *
- * The page shows every Playbook stored under
- * `<config_dir>/playbooks/*.yaml` as a card. Phase 1 has no run
- * logic so cards link only to a placeholder detail drawer (TODO in
- * the next slice). Empty state uses the same TwoPathEmpty pattern as
- * Agent Tasks to keep the new-user flow consistent.
+ * Library cards render summaries; clicking opens a right-side Drawer
+ * with the full Playbook (description, connections, skills, plugins,
+ * triggers, timestamps). The Drawer is read-only for now — editing
+ * the SOP / Budget / Approval policy lands in a later slice.
  *
- * Source of truth for the layout is the design system mockup
- * `docs/mockups/01-playbooks-library.png` plus § 20.1 of
- * `docs/agents-v2.md`.
+ * Sources of truth:
+ * - layout: `docs/mockups/01-playbooks-library.png`
+ * - data shape: `docs/agents-v2.md` § 7 (PlaybookSummary + Playbook)
+ * - components: `docs/agent-studio-design-system.md` § 5 (.nerd-card,
+ *   .nerd-btn, .nerd-pill-*, Drawer)
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Plus, Sparkles } from "lucide-react";
+import { BookOpen, Plus, Sparkles, Trash2 } from "lucide-react";
 import { clsx } from "clsx";
 import { useState } from "react";
 import { api } from "../api/client";
+import { Drawer } from "../components/Drawer";
 import { ErrorBox, Loading, PageTitle, TwoPathEmpty } from "../components/Empty";
+
+type PlaybookStatus =
+  | "draft"
+  | "scheduled"
+  | "queued"
+  | "running"
+  | "blocked"
+  | "waiting_for_approval"
+  | "reviewing"
+  | "done"
+  | "failed"
+  | "cancelled";
 
 interface PlaybookSummary {
   id: string;
@@ -25,19 +39,16 @@ interface PlaybookSummary {
   description: string | null;
   revision: number;
   enabled: boolean;
-  status:
-    | "draft"
-    | "scheduled"
-    | "queued"
-    | "running"
-    | "blocked"
-    | "waiting_for_approval"
-    | "reviewing"
-    | "done"
-    | "failed"
-    | "cancelled";
+  status: PlaybookStatus;
   created_at: string;
   updated_at: string;
+}
+
+interface Playbook extends PlaybookSummary {
+  connections: string[];
+  skills: string[];
+  plugins: string[];
+  triggers: Array<Record<string, unknown>>;
 }
 
 interface PlaybooksResponse {
@@ -47,7 +58,7 @@ interface PlaybooksResponse {
 // `.nerd-pill-*` family stays the source of truth for outlined status
 // colors. Map each status to one of the three buckets per design
 // system § 2.3.
-const STATUS_PILL_CLASS: Record<PlaybookSummary["status"], string> = {
+const STATUS_PILL_CLASS: Record<PlaybookStatus, string> = {
   draft: "nerd-pill",
   scheduled: "nerd-pill-green",
   queued: "nerd-pill-green",
@@ -60,7 +71,7 @@ const STATUS_PILL_CLASS: Record<PlaybookSummary["status"], string> = {
   cancelled: "nerd-pill-red",
 };
 
-const STATUS_LABEL: Record<PlaybookSummary["status"], string> = {
+const STATUS_LABEL: Record<PlaybookStatus, string> = {
   draft: "Draft",
   scheduled: "Scheduled",
   queued: "Queued",
@@ -76,6 +87,13 @@ const STATUS_LABEL: Record<PlaybookSummary["status"], string> = {
 export function PlaybooksPage() {
   const qc = useQueryClient();
   const [creating, setCreating] = useState(false);
+  // Selected playbook ID drives the detail Drawer. Keeping ID-only
+  // (vs. the full summary) means the Drawer re-fetches the full body
+  // every time it opens, picking up edits that happened in between.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Two-step delete: clicking Delete in the Drawer surfaces the
+  // confirmation modal; only then does the mutation run.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const q = useQuery<PlaybooksResponse>({
     queryKey: ["playbooks"],
@@ -88,13 +106,27 @@ export function PlaybooksPage() {
 
   const createMu = useMutation({
     mutationFn: (name: string) =>
-      api.post<PlaybookSummary>("/v1/agent-studio/playbooks", {
+      api.post<Playbook>("/v1/agent-studio/playbooks", {
         name,
         description: null,
       }),
-    onSuccess: () => {
+    onSuccess: (created) => {
       qc.invalidateQueries({ queryKey: ["playbooks"] });
       setCreating(false);
+      // Open the new Playbook's drawer so the user immediately sees
+      // what their click produced — much better than dropping them
+      // back onto the library and making them hunt for the row.
+      setSelectedId(created.id);
+    },
+  });
+
+  const deleteMu = useMutation({
+    mutationFn: (id: string) =>
+      api.delete<void>(`/v1/agent-studio/playbooks/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["playbooks"] });
+      setConfirmDeleteId(null);
+      setSelectedId(null);
     },
   });
 
@@ -165,7 +197,11 @@ export function PlaybooksPage() {
       {playbooks.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {playbooks.map((p) => (
-            <PlaybookCard key={p.id} playbook={p} />
+            <PlaybookCard
+              key={p.id}
+              playbook={p}
+              onOpen={() => setSelectedId(p.id)}
+            />
           ))}
         </div>
       ) : null}
@@ -178,14 +214,40 @@ export function PlaybooksPage() {
           error={createMu.error ? (createMu.error as Error).message : null}
         />
       ) : null}
+
+      <PlaybookDetailDrawer
+        playbookId={selectedId}
+        onClose={() => setSelectedId(null)}
+        onDelete={(id) => setConfirmDeleteId(id)}
+      />
+
+      {confirmDeleteId ? (
+        <DeleteConfirmModal
+          playbookId={confirmDeleteId}
+          onCancel={() => setConfirmDeleteId(null)}
+          onConfirm={() => deleteMu.mutate(confirmDeleteId)}
+          isSubmitting={deleteMu.isPending}
+          error={deleteMu.error ? (deleteMu.error as Error).message : null}
+        />
+      ) : null}
     </div>
   );
 }
 
-function PlaybookCard({ playbook }: { playbook: PlaybookSummary }) {
+function PlaybookCard({
+  playbook,
+  onOpen,
+}: {
+  playbook: PlaybookSummary;
+  onOpen: () => void;
+}) {
   const pillClass = STATUS_PILL_CLASS[playbook.status];
   return (
-    <div className="nerd-card hover:border-keboola/30 transition-colors">
+    <button
+      type="button"
+      onClick={onOpen}
+      className="nerd-card hover:border-keboola/30 transition-colors text-left w-full"
+    >
       <div className="flex items-center justify-between mb-2">
         <span className="nerd-pill font-mono">
           {playbook.id.slice(0, 8)} · v{playbook.revision}
@@ -202,8 +264,160 @@ function PlaybookCard({ playbook }: { playbook: PlaybookSummary }) {
       <div className="text-[10px] uppercase tracking-widest text-zinc-500 mt-3">
         rev {playbook.revision} · {playbook.enabled ? "enabled" : "disabled"}
       </div>
+    </button>
+  );
+}
+
+function PlaybookDetailDrawer({
+  playbookId,
+  onClose,
+  onDelete,
+}: {
+  playbookId: string | null;
+  onClose: () => void;
+  onDelete: (id: string) => void;
+}) {
+  // The Drawer mounts only when ``playbookId`` is set, so we are safe
+  // to fan out the query unconditionally inside the body branch.
+  const isOpen = playbookId !== null;
+  const detailQ = useQuery<Playbook>({
+    queryKey: ["playbook", playbookId],
+    queryFn: () => api.get(`/v1/agent-studio/playbooks/${playbookId}`),
+    enabled: isOpen,
+  });
+
+  const pb = detailQ.data;
+  const title = pb?.name ?? (detailQ.isLoading ? "loading…" : "Playbook");
+  const subtitle = pb
+    ? `${pb.id} · rev ${pb.revision}`
+    : playbookId
+      ? playbookId
+      : undefined;
+
+  return (
+    <Drawer
+      open={isOpen}
+      title={title}
+      subtitle={subtitle}
+      width="640px"
+      onClose={onClose}
+      actions={
+        pb ? (
+          <button
+            type="button"
+            className="nerd-btn flex items-center gap-1 hover:border-red-300 hover:text-red-500"
+            onClick={() => onDelete(pb.id)}
+          >
+            <Trash2 className="w-3 h-3" /> Delete
+          </button>
+        ) : null
+      }
+    >
+      {detailQ.isLoading ? <Loading /> : null}
+      {detailQ.error ? (
+        <ErrorBox message={(detailQ.error as Error).message} />
+      ) : null}
+      {pb ? <PlaybookBody playbook={pb} /> : null}
+    </Drawer>
+  );
+}
+
+function PlaybookBody({ playbook }: { playbook: Playbook }) {
+  const pillClass = STATUS_PILL_CLASS[playbook.status];
+  return (
+    <div className="space-y-5">
+      <section>
+        <div className="flex items-center gap-2 mb-2">
+          <span className={clsx(pillClass, "font-mono")}>
+            <span className="w-1.5 h-1.5 rounded-full bg-current opacity-80" />
+            {STATUS_LABEL[playbook.status]}
+          </span>
+          <span className="nerd-pill font-mono">
+            {playbook.enabled ? "enabled" : "disabled"}
+          </span>
+        </div>
+        <p className="text-sm text-zinc-700 dark:text-zinc-300">
+          {playbook.description ?? (
+            <span className="text-zinc-500 italic">No description yet.</span>
+          )}
+        </p>
+      </section>
+
+      <DetailGroup label="Connections" items={playbook.connections} />
+      <DetailGroup label="Skills" items={playbook.skills} />
+      <DetailGroup label="Plugins" items={playbook.plugins} />
+
+      <section>
+        <h4 className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">
+          Triggers
+        </h4>
+        {playbook.triggers.length === 0 ? (
+          <p className="text-xs text-zinc-500 italic">
+            No triggers — runs are manual-only.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {playbook.triggers.map((t, i) => (
+              <li
+                key={i}
+                className="nerd-code font-mono whitespace-pre-wrap break-words"
+              >
+                {JSON.stringify(t, null, 2)}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="text-[10px] uppercase tracking-widest text-zinc-500 grid grid-cols-2 gap-2">
+        <div>
+          <div>Created</div>
+          <div className="font-mono normal-case text-xs text-zinc-700 dark:text-zinc-300 tracking-normal">
+            {formatTs(playbook.created_at)}
+          </div>
+        </div>
+        <div>
+          <div>Updated</div>
+          <div className="font-mono normal-case text-xs text-zinc-700 dark:text-zinc-300 tracking-normal">
+            {formatTs(playbook.updated_at)}
+          </div>
+        </div>
+      </section>
     </div>
   );
+}
+
+function DetailGroup({ label, items }: { label: string; items: string[] }) {
+  return (
+    <section>
+      <h4 className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">
+        {label}
+      </h4>
+      {items.length === 0 ? (
+        <p className="text-xs text-zinc-500 italic">None — set in a later slice.</p>
+      ) : (
+        <ul className="flex flex-wrap gap-1.5">
+          {items.map((s) => (
+            <li key={s} className="nerd-pill font-mono">
+              {s}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function formatTs(iso: string): string {
+  // Render server timestamps as the user's local clock so the Drawer
+  // matches what they'd see in any system tray; UTC is preserved in
+  // the YAML on disk so audit consumers can still parse deterministic
+  // ISO-8601.
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
 }
 
 function NewPlaybookModal({
@@ -258,6 +472,57 @@ function NewPlaybookModal({
             onClick={() => onConfirm(name.trim())}
           >
             {isSubmitting ? "Creating..." : "Create"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteConfirmModal({
+  playbookId,
+  onCancel,
+  onConfirm,
+  isSubmitting,
+  error,
+}: {
+  playbookId: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+  isSubmitting: boolean;
+  error: string | null;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="nerd-card w-[460px] border-red-300/60 dark:border-red-700/40">
+        <h2 className="font-bold text-base mb-2 text-red-700 dark:text-red-400">
+          Delete this Playbook?
+        </h2>
+        <p className="text-xs text-zinc-500 mb-3">
+          The on-disk YAML at{" "}
+          <code className="font-mono text-zinc-700 dark:text-zinc-300">
+            playbooks/{playbookId}.yaml
+          </code>{" "}
+          will be removed. Run history is unaffected. This action cannot
+          be undone.
+        </p>
+        {error ? <div className="text-xs text-red-500 mb-2">{error}</div> : null}
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            className="nerd-btn"
+            onClick={onCancel}
+            disabled={isSubmitting}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="nerd-btn hover:border-red-300 hover:text-red-500"
+            disabled={isSubmitting}
+            onClick={onConfirm}
+          >
+            {isSubmitting ? "Deleting..." : "Delete"}
           </button>
         </div>
       </div>
