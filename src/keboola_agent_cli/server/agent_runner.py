@@ -731,7 +731,13 @@ _AI_CLI_RECIPES: dict[str, Any] = {
     # Anthropic Claude Code: -p PROMPT runs in headless / non-interactive mode.
     "claude": lambda prompt, extra: ["claude", "-p", prompt, *extra],
     # OpenAI Codex CLI: `codex exec PROMPT` runs once and exits.
-    "codex": lambda prompt, extra: ["codex", "exec", *extra, prompt],
+    # `--skip-git-repo-check` is mandatory for headless invocation: codex 0.131+
+    # refuses to run in any directory it has not been interactively "trusted"
+    # via the first-run dialog, which a subprocess never sees. Without the flag
+    # the CLI exits 1 with "Not inside a trusted directory" before reading the
+    # prompt -- that is the failure path that surfaced as "AI chat failed" in
+    # the Local AI dashboard tile.
+    "codex": lambda prompt, extra: ["codex", "exec", "--skip-git-repo-check", *extra, prompt],
     # Google Gemini CLI: `gemini -p PROMPT` for non-interactive single prompt.
     "gemini": lambda prompt, extra: ["gemini", "-p", prompt, *extra],
 }
@@ -816,7 +822,11 @@ _AI_CLI_STREAM_RECIPES: dict[str, Any] = {
         ],
         True,  # jsonl
     ),
-    "codex": lambda prompt, extra: (["codex", "exec", *extra, prompt], False),
+    # See _AI_CLI_RECIPES above for the `--skip-git-repo-check` rationale.
+    "codex": lambda prompt, extra: (
+        ["codex", "exec", "--skip-git-repo-check", *extra, prompt],
+        False,
+    ),
     "gemini": lambda prompt, extra: (["gemini", "-p", prompt, *extra], False),
 }
 
@@ -995,6 +1005,18 @@ async def stream_ai_agent_events(
     }
     if timed_out:
         final["error"] = f"AI CLI '{cli_name}' timed out after {timeout}s"
+    elif status == "error":
+        # Non-timeout failure (CLI exited with non-zero rc). Surface a
+        # human-readable error so the UI does not fall back to a generic
+        # "AI chat failed" placeholder -- the stderr tail almost always
+        # explains the failure (e.g. codex "Not inside a trusted directory",
+        # claude auth errors, network blips). Cap tail length so a chatty
+        # CLI cannot blow up the SSE frame.
+        tail_lines = [s for s in stderr_chunks if s.strip()][-8:]
+        tail = "\n".join(tail_lines)[-800:].strip()
+        final["error"] = f"AI CLI '{cli_name}' exited with code {proc.returncode}." + (
+            f"\nstderr (tail):\n{tail}" if tail else ""
+        )
     yield {"event": "done", "data": final}
 
 
