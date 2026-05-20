@@ -11,11 +11,13 @@ from typing import Any
 
 from ..constants import (
     DEFAULT_JOB_LIMIT,
+    DEFAULT_JOB_MODE,
     DEFAULT_LOG_TAIL_LINES,
     DEFAULT_POLL_STRATEGY,
     JOB_TERMINATE_GRACE_SECONDS,
     JOB_TERMINATE_POLL_INTERVAL,
     KILLABLE_JOB_STATUSES,
+    VALID_JOB_MODES,
     VALID_POLL_STRATEGIES,
 )
 from ..errors import ErrorCode, KeboolaApiError
@@ -321,6 +323,7 @@ class JobService(BaseService):
         no_variables: bool = False,
         poll_strategy: str = DEFAULT_POLL_STRATEGY,
         log_tail_lines: int = DEFAULT_LOG_TAIL_LINES,
+        mode: str = DEFAULT_JOB_MODE,
     ) -> dict[str, Any]:
         """Create and optionally wait for a Queue API job.
 
@@ -363,6 +366,12 @@ class JobService(BaseService):
             poll_strategy: Wait cadence. One of VALID_POLL_STRATEGIES.
             log_tail_lines: Number of trailing events to surface on
                 non-success terminal states. ``0`` disables the fetch.
+            mode: Queue API job mode. One of ``VALID_JOB_MODES`` -- ``"run"``
+                (default) writes to mapped output tables; ``"debug"`` runs the
+                component but redirects the output to a Storage File tagged
+                ``debug-<jobId>`` instead of into destination buckets, so the
+                job can be safely re-run for diagnostics without touching
+                production data.
 
         Returns:
             Job dict with ``project_alias``. If wait=True, returns the
@@ -375,6 +384,12 @@ class JobService(BaseService):
                     f"Invalid poll_strategy {poll_strategy!r}. "
                     f"Expected one of: {sorted(VALID_POLL_STRATEGIES)}."
                 ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+        if mode not in VALID_JOB_MODES:
+            raise KeboolaApiError(
+                message=(f"Invalid mode {mode!r}. Expected one of: {sorted(VALID_JOB_MODES)}."),
                 status_code=0,
                 error_code=ErrorCode.INVALID_ARGUMENT,
             )
@@ -405,6 +420,7 @@ class JobService(BaseService):
                 config_row_ids=config_row_ids,
                 branch_id=branch_id,
                 variable_values_id=resolved_values_id,
+                mode=mode,
             )
             job_id = str(job.get("id", ""))
 

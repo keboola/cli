@@ -2931,6 +2931,7 @@ class TestJobServiceRunJob:
             config_row_ids=None,
             branch_id=None,
             variable_values_id=None,
+            mode="run",
         )
         mock_client.close.assert_called_once()
 
@@ -2975,6 +2976,7 @@ class TestJobServiceRunJob:
             config_row_ids=None,
             branch_id=789,
             variable_values_id=None,
+            mode="run",
         )
 
     def test_run_job_with_branch_and_wait(self, tmp_config_dir: Path) -> None:
@@ -3021,10 +3023,93 @@ class TestJobServiceRunJob:
             config_row_ids=None,
             branch_id=123,
             variable_values_id=None,
+            mode="run",
         )
         mock_client.wait_for_queue_job.assert_called_once_with(
             "557", max_wait=60.0, poll_strategy="exponential"
         )
+
+
+class TestJobServiceRunJobMode:
+    """run_job propagates the Queue API ``mode`` field (#319 follow-up).
+
+    The Queue API accepts ``"run"`` (default, writes to output tables) and
+    ``"debug"`` (redirects output to a debug Storage File). Coverage here
+    asserts the default, the opt-in debug path, and service-side rejection
+    of unknown values so a typo cannot reach the wire.
+    """
+
+    def _store(self, tmp_config_dir: Path) -> ConfigStore:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-abc-defghijklmnopqrst",
+                project_name="Prod",
+                project_id=1234,
+            ),
+        )
+        return store
+
+    def _service(self, store: ConfigStore, mock_client: MagicMock) -> JobService:
+        return JobService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+    def test_run_job_defaults_to_mode_run(self, tmp_config_dir: Path) -> None:
+        """When --mode is omitted the service sends mode='run'."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 800, "status": "waiting"}
+        mock_client.get_config_detail.return_value = {}
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        service.run_job(
+            alias="prod",
+            component_id="keboola.ex-http",
+            config_id="42",
+            no_variables=True,
+        )
+
+        _args, kwargs = mock_client.create_job.call_args
+        assert kwargs["mode"] == "run"
+
+    def test_run_job_forwards_mode_debug(self, tmp_config_dir: Path) -> None:
+        """mode='debug' reaches create_job unchanged so the Queue API body
+        carries it through to the worker."""
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": 801, "status": "waiting"}
+        mock_client.get_config_detail.return_value = {}
+
+        service = self._service(self._store(tmp_config_dir), mock_client)
+        service.run_job(
+            alias="prod",
+            component_id="keboola.ex-http",
+            config_id="42",
+            mode="debug",
+            no_variables=True,
+        )
+
+        _args, kwargs = mock_client.create_job.call_args
+        assert kwargs["mode"] == "debug"
+
+    def test_run_job_rejects_unknown_mode(self, tmp_config_dir: Path) -> None:
+        """Unknown mode fails at the service boundary, never hits the wire."""
+        mock_client = MagicMock()
+        service = self._service(self._store(tmp_config_dir), mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.run_job(
+                alias="prod",
+                component_id="keboola.ex-http",
+                config_id="42",
+                mode="dry-run",
+                no_variables=True,
+            )
+
+        assert exc_info.value.error_code == "INVALID_ARGUMENT"
+        mock_client.create_job.assert_not_called()
 
 
 class TestJobServiceQueuePollingParity:
@@ -3590,6 +3675,7 @@ class TestJobServiceVariableValuesResolution:
             config_row_ids=None,
             branch_id=None,
             variable_values_id="row-first",
+            mode="run",
         )
 
     def test_run_job_explicit_override_wins(self, tmp_config_dir: Path) -> None:

@@ -263,7 +263,7 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent job detail --project NAME --job-id ID
     Full job detail including result message and timing.
 
-  kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N]
+  kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N]
     Run a Queue API job. --row-id selects specific config rows (repeatable; omit to run entire config).
     --wait polls until job finishes. --timeout sets max wait in seconds (default 300). Branch-aware.
     When the config has linked variables (configuration.variables_id), kbagent auto-resolves
@@ -274,6 +274,10 @@ Use `kbagent <command> --help` for full flag details and examples.
     --poll-strategy fixed keeps a constant 1s interval. On FAILED/WARNING/TERMINATED, the last
     --log-tail-lines events (default 200, 0 disables -- recommended for automation pipelines) are
     surfaced as `logTail` in --json output.
+    --mode run (default) writes to mapped output tables. --mode debug runs the component but
+    redirects the output to a Storage File tagged `debug-<jobId>` instead of into destination
+    buckets -- safe for dry-runs and for reproducing a failing run on a production configuration
+    without touching production data. Invalid values exit 2 via Click choice gate (since v0.43.6).
     --json response shapes by exit code:
       - exit 0 (success): {{status:"ok", data:{{..., logTail?:[...]}}}}
       - exit 1 (QUEUE_JOB_FAILED, remote job status=error):

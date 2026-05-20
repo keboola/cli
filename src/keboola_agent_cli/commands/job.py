@@ -11,12 +11,14 @@ from rich.markup import escape
 from ..config_store import ConfigStore
 from ..constants import (
     DEFAULT_JOB_LIMIT,
+    DEFAULT_JOB_MODE,
     DEFAULT_JOB_RUN_TIMEOUT,
     DEFAULT_LOG_TAIL_LINES,
     DEFAULT_POLL_STRATEGY,
     KILLABLE_JOB_STATUSES,
     MAX_JOB_LIMIT,
     MAX_LOG_TAIL_LINES,
+    VALID_JOB_MODES,
     VALID_POLL_STRATEGIES,
     VALID_STATUSES,
 )
@@ -197,6 +199,19 @@ def job_run(
         "--branch",
         help="Dev branch ID (overrides active branch)",
     ),
+    mode: str = typer.Option(
+        DEFAULT_JOB_MODE,
+        "--mode",
+        click_type=click.Choice(sorted(VALID_JOB_MODES)),
+        help=(
+            "Queue API job mode. 'run' (default) executes the component "
+            "normally and writes to mapped output tables. 'debug' executes "
+            "the component but redirects its output to a Storage File tagged "
+            "'debug-<jobId>' instead of the destination buckets -- safe for "
+            "dry-runs and for reproducing a failing run on production "
+            "configuration without touching production data."
+        ),
+    ),
     variable_values_id: str | None = typer.Option(
         None,
         "--variable-values-id",
@@ -271,6 +286,7 @@ def job_run(
             wait=wait,
             timeout=timeout,
             branch=branch,
+            mode=mode,
             variable_values_id=variable_values_id,
             no_variables=no_variables,
             poll_strategy=poll_strategy,
@@ -323,6 +339,8 @@ def job_run(
             msg += f" (rows: {', '.join(row_id)})"
         if effective_branch is not None:
             msg += f" on branch [cyan]{effective_branch}[/cyan]"
+        if mode != DEFAULT_JOB_MODE:
+            msg += f" [bold yellow]mode={mode}[/bold yellow]"
         if wait:
             msg += f" [dim](waiting up to {timeout:.0f}s)[/dim]"
         msg += "..."
@@ -343,6 +361,7 @@ def job_run(
             no_variables=no_variables,
             poll_strategy=poll_strategy,
             log_tail_lines=log_tail_lines,
+            mode=mode,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)

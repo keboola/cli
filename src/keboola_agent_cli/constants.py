@@ -94,6 +94,13 @@ JOB_POLL_CURVE: tuple[tuple[float, int], ...] = (
 )
 VALID_POLL_STRATEGIES: frozenset[str] = frozenset({"exponential", "fixed"})
 DEFAULT_POLL_STRATEGY: str = "exponential"
+# Queue API "mode" body field for job creation. "run" is the normal execution
+# path (writes to mapped output tables); "debug" runs the component the same
+# way but redirects the output to a Storage File tagged "debug-" + the job id
+# instead of into destination buckets. Useful for dry-runs and reproducing
+# failures without touching production tables.
+VALID_JOB_MODES: frozenset[str] = frozenset({"run", "debug"})
+DEFAULT_JOB_MODE: str = "run"
 # Default log-tail length surfaced on FAILED/WARNING/TERMINATED jobs.
 DEFAULT_LOG_TAIL_LINES: int = 200
 # Upper bound to prevent accidentally pulling tens of thousands of events
