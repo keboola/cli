@@ -20,6 +20,7 @@ import { useState } from "react";
 import { api } from "../api/client";
 import { Drawer } from "../components/Drawer";
 import { ErrorBox, Loading, PageTitle, TwoPathEmpty } from "../components/Empty";
+import { useUIState } from "../state";
 
 type PlaybookStatus =
   | "draft"
@@ -101,6 +102,7 @@ const STATUS_LABEL: Record<PlaybookStatus, string> = {
 
 export function PlaybooksPage() {
   const qc = useQueryClient();
+  const { setPage } = useUIState();
   const [creating, setCreating] = useState(false);
   // Selected playbook ID drives the detail Drawer. Keeping ID-only
   // (vs. the full summary) means the Drawer re-fetches the full body
@@ -181,10 +183,9 @@ export function PlaybooksPage() {
                 <button
                   type="button"
                   className="nerd-btn hover:text-keboola"
-                  disabled
-                  title="Blueprints catalogue ships in Phase 2"
+                  onClick={() => setPage("blueprints")}
                 >
-                  Browse Blueprints (Phase 2)
+                  Browse Blueprints
                 </button>
               ),
             },

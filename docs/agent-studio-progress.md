@@ -131,6 +131,19 @@ These are the things v2 PRD § 21 Phase 1 lists that the scaffold
      § 23 migration. `PlaybookRun` becomes a thin specialisation of
      `AgentRun` so we get the SSE stream + cost tracking for free.
 
+2.5 **Blueprints catalogue** — ✅ done
+   (`feat(agent-studio): Blueprints catalogue …`). Read-only catalogue
+   of forkable Playbook templates (the 9 cards from
+   `docs/mockups/02-blueprints-catalog.png`), served from a static
+   in-code seed (`agent_studio/blueprints_catalog.py`). Endpoints:
+   GET `/v1/agent-studio/blueprints[?category=X]`, GET `/{id}`,
+   POST `/{id}/fork` (mints a draft Playbook prefilled with the
+   blueprint's connections/skills/plugins). New Blueprints page with
+   category filter + search + card grid; "Use this blueprint" forks
+   and navigates to the Playbooks library. The Playbooks empty-state
+   "Browse Blueprints" button is now wired (was disabled). Catalogue
+   becomes YAML-data-file-backed (marketplace) in a later slice.
+
 3. **Tool Broker primitives**: registry + risk-class enum + scoped
    per-run JWTs. No UI yet — the foundation that the Approval queue
    and the budget enforcer need.

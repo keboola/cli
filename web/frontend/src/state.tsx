@@ -24,6 +24,7 @@ export type BuiltinPageId =
   | "localai"
   | "agents"
   | "playbooks"
+  | "blueprints"
   | "search"
   | "encrypt"
   | "org"

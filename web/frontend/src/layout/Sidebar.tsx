@@ -12,6 +12,7 @@ import {
   Heart,
   Layers,
   LayoutDashboard,
+  LayoutGrid,
   Lock,
   MessageSquare,
   Network,
@@ -89,6 +90,11 @@ const BUILTIN_SECTIONS: Array<{
       // and will eventually subsume Agent Tasks once the migration
       // path in § 23 lands.
       { id: "playbooks", label: "Playbooks", icon: BookOpen },
+      // Read-only catalogue of forkable Playbook templates --
+      // `docs/mockups/02-blueprints-catalog.png`, § 20.1 of
+      // `docs/agents-v2.md`. Sits right after Playbooks since "fork a
+      // Blueprint" is the fastest path to a working Playbook.
+      { id: "blueprints", label: "Blueprints", icon: LayoutGrid },
     ],
   },
   {

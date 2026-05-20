@@ -17,6 +17,7 @@ import { McpPage } from "./pages/Mcp";
 import { SemanticLayerPage } from "./pages/SemanticLayer";
 import { MembersPage } from "./pages/Members";
 import { OrgPage } from "./pages/Org";
+import { BlueprintsPage } from "./pages/Blueprints";
 import { PlaybooksPage } from "./pages/Playbooks";
 import { ProjectsPage } from "./pages/Projects";
 import { SchedulesPage } from "./pages/Schedules";
@@ -74,6 +75,8 @@ function Router() {
       return <AgentsPage />;
     case "playbooks":
       return <PlaybooksPage />;
+    case "blueprints":
+      return <BlueprintsPage />;
     case "search":
       return <SearchPage />;
     case "encrypt":
