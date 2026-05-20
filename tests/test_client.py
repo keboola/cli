@@ -2697,6 +2697,40 @@ class TestCreateJob:
         body = json.loads(httpx_mock.get_request().content)
         assert "variableValuesId" not in body
 
+    def test_create_job_mode_default_is_run(self, httpx_mock) -> None:
+        """Default body carries ``"mode": "run"`` -- the Queue API contract."""
+        httpx_mock.add_response(
+            url="https://queue.keboola.com/jobs",
+            method="POST",
+            json={"id": 602, "status": "waiting"},
+            status_code=201,
+        )
+
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client.create_job(component_id="keboola.ex-http", config_id="42")
+
+        body = json.loads(httpx_mock.get_request().content)
+        assert body["mode"] == "run"
+
+    def test_create_job_mode_debug_in_body(self, httpx_mock) -> None:
+        """``mode="debug"`` reaches the Queue API body verbatim."""
+        httpx_mock.add_response(
+            url="https://queue.keboola.com/jobs",
+            method="POST",
+            json={"id": 603, "status": "waiting"},
+            status_code=201,
+        )
+
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client.create_job(
+                component_id="keboola.ex-http",
+                config_id="42",
+                mode="debug",
+            )
+
+        body = json.loads(httpx_mock.get_request().content)
+        assert body["mode"] == "debug"
+
 
 class TestKillJob:
     """Tests for kill_job() - Queue API POST /jobs/{id}/kill."""

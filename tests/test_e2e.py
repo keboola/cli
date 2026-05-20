@@ -4592,6 +4592,124 @@ class TestE2EJobRunVariableValues:
         assert resolved == pinned_row_id
 
 
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EJobRunMode:
+    """Prove `kbagent job run --mode debug` reaches the Queue API wire (#321 / v0.43.6).
+
+    Submits a real job with ``--mode debug`` against a live Keboola project and
+    asserts that the Queue API echoes back ``mode="debug"`` on the create
+    response. This is the single canonical sign that the flag has not been
+    silently dropped anywhere on the CLI -> service -> client -> wire path --
+    the same regression the kbagent-pr-reviewer subagent caught in
+    ``server/routers/jobs.py`` during the original review of #321.
+
+    Intentionally does NOT use ``--wait``. The Queue accepts the job with the
+    mode field set even before the worker starts processing, so the create
+    response is the load-bearing assertion. The worker outcome (debug file
+    appearing in Storage Files tagged ``debug-<jobId>``) is a Queue worker
+    behaviour, not a kbagent behaviour, and is already covered by the manual
+    smoke-test step in the PR description; baking a worker-side wait into the
+    E2E suite would add minutes per run for no extra kbagent-side proof.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-jobmode"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+        self._created: list[tuple[str, str]] = []
+
+        yield
+
+        for component_id, config_id in reversed(self._created):
+            try:
+                self.client.delete_config(component_id=component_id, config_id=config_id)
+            except Exception as exc:
+                print(
+                    f"  {_DIM}(teardown) delete_config {component_id}/{config_id} failed: {exc}{_RESET}"
+                )
+        self.client.close()
+
+    def test_job_run_mode_debug_reaches_queue_api(self) -> None:
+        """`kbagent job run --mode debug` returns a job dict carrying `mode='debug'`.
+
+        The Queue API echoes the body's ``mode`` field on its create
+        response, so this is a wire-level proof that the flag was not
+        dropped by the CLI, service, or client.
+        """
+        import contextlib
+
+        _step(1, "create a minimal ex-http config to target")
+        parent = self.client.create_config(
+            component_id="keboola.ex-http",
+            name=f"{RUN_ID}-http-debug-mode",
+            description="E2E #321: --mode debug wire passthrough",
+            configuration={"parameters": {"baseUrl": "https://example.com"}},
+        )
+        parent_id = str(parent["id"])
+        self._created.append(("keboola.ex-http", parent_id))
+
+        _step(2, "kbagent job run --mode debug --no-variables (no --wait)")
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "job",
+                "run",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                parent_id,
+                "--mode",
+                "debug",
+                "--no-variables",
+            ],
+        )
+
+        data = _json(result)
+        payload = data.get("data", data)
+        # Queue API echoes the mode field on the create response -- this is
+        # the load-bearing proof that the wire body carried "mode": "debug".
+        print(f"  {_DIM}returned mode={payload.get('mode')!r} id={payload.get('id')}{_RESET}")
+        assert payload.get("mode") == "debug", (
+            f"expected mode='debug' in Queue create response, got {payload.get('mode')!r}. "
+            f"Full payload keys: {sorted(payload.keys())}"
+        )
+
+        # Best-effort: kill the job so we do not waste compute waiting for
+        # the worker to upload the debug file. The wire assertion above is
+        # the actual test contract.
+        job_id = payload.get("id")
+        if job_id:
+            with contextlib.suppress(Exception):
+                self.client.kill_job(str(job_id))
+
+
 # ---------------------------------------------------------------------------
 # Project pin + firewall flag E2E (PR5)
 # ---------------------------------------------------------------------------

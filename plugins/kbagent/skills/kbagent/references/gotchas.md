@@ -121,6 +121,42 @@ limit, transient 5xx), the detail call still succeeds and
 `storage_workspace_id` is set to `null` -- the annotation is UX, not a
 contract.
 
+## `kbagent job run --mode debug` redirects output to a Storage File, not the destination buckets (since v0.43.6)
+
+`kbagent job run` accepts `--mode run|debug` (default `run`). The flag is
+threaded straight into the Queue API job-creation body as `"mode": "..."`;
+`run` is the unchanged historical wire shape. `--mode debug` flips the Queue
+worker into debug execution: the component starts with the same configuration
+and inputs as a normal run, but its output stream is **not** written to the
+configured destination buckets. Instead the worker uploads the output bytes
+to a Storage File tagged `debug-<jobId>` (you can pull it down with
+`kbagent storage file-download --tag debug-<jobId>`). Useful for:
+
+- **Dry-runs against production configs** -- reproduce a failing job exactly
+  as it happened in prod without touching downstream tables, and inspect the
+  worker's actual output bytes after the fact.
+- **Seeding component test fixtures** -- harvest the debug output file as
+  ground-truth input for a new VCR recording or a component test case (the
+  intended use case that drove this flag).
+- **Validating a config change before merging** -- run the new config in
+  debug mode, diff the output file against the previous debug file, only
+  promote once the diff is acceptable.
+
+The CLI gates the flag with `click.Choice` so a typo like `--mode dry-run`
+exits 2 with a Click usage error before any wire call -- it cannot reach the
+Queue API and surface as an opaque 422. Service-layer also validates against
+`VALID_JOB_MODES` so direct programmatic callers get a
+`KeboolaApiError(INVALID_ARGUMENT)` rather than a silent passthrough.
+
+The human-mode `Running ...` banner appends a bold-yellow `mode=debug` chip
+when the flag is non-default, so operators see at a glance that a run is
+diagnostic, not production. `--json` output shape is unchanged (the mode is
+visible on the returned job dict via the Queue API's own response shape).
+
+Before this release the `mode` parameter existed on `KeboolaClient.create_job`
+but neither `JobService.run_job` nor `commands/job.py` exposed it, so every
+job created via `kbagent` hard-coded `mode: "run"` on the wire.
+
 ## Metastore duplicate-name POST returns 409 OR 500 -- both map to `ALREADY_EXISTS` (since v0.43.5)
 
 `MetastoreClient.post_item` normalises **both** the post-go-monorepo-PR#513

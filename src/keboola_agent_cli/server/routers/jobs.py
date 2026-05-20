@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from ...constants import DEFAULT_LOG_TAIL_LINES, DEFAULT_POLL_STRATEGY
+from ...constants import DEFAULT_JOB_MODE, DEFAULT_LOG_TAIL_LINES, DEFAULT_POLL_STRATEGY
 from ..dependencies import ServiceRegistry, get_registry
 from ..sse import json_event
 
@@ -24,6 +24,7 @@ class JobRun(BaseModel):
     branch_id: int | None = None
     variable_values_id: str | None = None
     no_variables: bool = False
+    mode: str = DEFAULT_JOB_MODE
 
 
 class JobTerminate(BaseModel):
@@ -86,6 +87,7 @@ def run(
         no_variables=body.no_variables,
         poll_strategy=poll_strategy,
         log_tail_lines=log_tail_lines,
+        mode=body.mode,
     )
 
 

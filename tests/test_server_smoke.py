@@ -233,3 +233,69 @@ def test_semantic_layer_routes_require_auth(client: TestClient) -> None:
     ):
         res = client.get(path)
         assert res.status_code == 401, f"{path} should require auth"
+
+
+# ── POST /jobs/{project}/run -- mode field passthrough (issue #321) ──
+#
+# Locks the CLI <-> REST 1:1 parity contract for the v0.43.6 `--mode`
+# flag: a caller hitting `kbagent serve` with `{"mode": "debug", ...}`
+# must see `mode="debug"` reach `JobService.run_job` -- silently dropping
+# the field would let kbagent serve / scheduled-agent / web-UI callers
+# accidentally land on production execution.
+
+
+def test_jobs_run_default_mode_is_run(tmp_path: Path) -> None:
+    """Omitting `mode` in the request body lands as mode='run' on the service."""
+    from unittest.mock import MagicMock
+
+    from keboola_agent_cli.server.dependencies import ServiceRegistry, get_registry
+
+    app = create_app(config_dir=str(tmp_path), auth_token="test-token")
+    job_service = MagicMock()
+    job_service.run_job.return_value = {"id": 900, "status": "waiting"}
+    registry = ServiceRegistry.__new__(ServiceRegistry)
+    registry.job = job_service  # type: ignore[attr-defined]
+    app.dependency_overrides[get_registry] = lambda: registry
+
+    with TestClient(app) as test_client:
+        res = test_client.post(
+            "/jobs/prod/run",
+            headers={"Authorization": "Bearer test-token"},
+            json={"component_id": "keboola.ex-http", "config_id": "42"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert job_service.run_job.call_args.kwargs["mode"] == "run"
+
+
+def test_jobs_run_mode_debug_reaches_service(tmp_path: Path) -> None:
+    """`{"mode": "debug"}` in the request body reaches JobService.run_job verbatim.
+
+    Regression guard against the original bug: `JobRun` Pydantic model used
+    to lack the `mode` field, so the endpoint silently hard-coded `mode="run"`
+    even when a caller passed `"mode": "debug"`.
+    """
+    from unittest.mock import MagicMock
+
+    from keboola_agent_cli.server.dependencies import ServiceRegistry, get_registry
+
+    app = create_app(config_dir=str(tmp_path), auth_token="test-token")
+    job_service = MagicMock()
+    job_service.run_job.return_value = {"id": 901, "status": "waiting"}
+    registry = ServiceRegistry.__new__(ServiceRegistry)
+    registry.job = job_service  # type: ignore[attr-defined]
+    app.dependency_overrides[get_registry] = lambda: registry
+
+    with TestClient(app) as test_client:
+        res = test_client.post(
+            "/jobs/prod/run",
+            headers={"Authorization": "Bearer test-token"},
+            json={
+                "component_id": "keboola.ex-http",
+                "config_id": "42",
+                "mode": "debug",
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    assert job_service.run_job.call_args.kwargs["mode"] == "debug"

@@ -3549,6 +3549,136 @@ class TestJobRun:
         payload = json.loads(result.output).get("data", {})
         assert "resolvedVariableValuesId" not in payload
 
+    def test_job_run_mode_defaults_to_run(self, tmp_path: Path) -> None:
+        """Omitting --mode lands as mode='run' on the service call."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            job_service = MagicMock()
+            job_service.run_job.return_value = {"id": 702, "status": "waiting"}
+            MockJobService.return_value = job_service
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "job",
+                    "run",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-http",
+                    "--config-id",
+                    "42",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert job_service.run_job.call_args.kwargs["mode"] == "run"
+
+    def test_job_run_mode_debug_forwarded(self, tmp_path: Path) -> None:
+        """--mode debug reaches the service layer unchanged.
+
+        Locks in that the Queue API ``mode`` body field is opt-in via this
+        flag and not silently dropped by the CLI wrapper.
+        """
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            job_service = MagicMock()
+            job_service.run_job.return_value = {"id": 703, "status": "waiting"}
+            MockJobService.return_value = job_service
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "job",
+                    "run",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-http",
+                    "--config-id",
+                    "42",
+                    "--mode",
+                    "debug",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert job_service.run_job.call_args.kwargs["mode"] == "debug"
+
+    def test_job_run_mode_rejects_unknown_value(self, tmp_path: Path) -> None:
+        """Click's choice gate rejects unsupported --mode values (exit 2).
+
+        Without the Choice gate a bad value would flow through to the wire
+        and surface as an opaque 422 from the Queue API.
+        """
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            job_service = MagicMock()
+            MockJobService.return_value = job_service
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "job",
+                    "run",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-http",
+                    "--config-id",
+                    "42",
+                    "--mode",
+                    "dry-run",
+                ],
+            )
+
+        assert result.exit_code == 2
+        job_service.run_job.assert_not_called()
+
     def test_job_run_mutually_exclusive_flags_rejected(self, tmp_path: Path) -> None:
         """--variable-values-id + --no-variables is an invalid combination (exit 2)."""
         config_dir = tmp_path / "config"
