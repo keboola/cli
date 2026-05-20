@@ -12,11 +12,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "latest"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -69,17 +69,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "latest"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
+          # v6 can auto-enable package-manager caching when a package.json
+          # declares `packageManager`; the SPA is built from web/frontend/, so
+          # keep the v4 behaviour (no implicit cache) explicit and predictable.
+          package-manager-cache: false
 
       # Bug 1: with npm present, the hook must resolve `npm.cmd` via
       # shutil.which and run it (shell=False) instead of crashing with
