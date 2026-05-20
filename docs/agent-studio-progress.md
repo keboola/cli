@@ -114,11 +114,22 @@ These are the things v2 PRD § 21 Phase 1 lists that the scaffold
    so destructive clicks are deliberate. New Playbook auto-opens its
    drawer to land the user on what they just produced.
 
-2. **Run loop**: tie Playbook execution into the existing
-   `server/agent_runner.py` scheduler. `AgentRun` gains the new
-   statuses (`blocked` / `waiting_for_approval` / `reviewing`) per
-   § 23 migration. `PlaybookRun` is a thin specialisation of
-   `AgentRun` so we get the SSE stream + cost tracking for free.
+2. **Run loop** — partial:
+   - 2.a ✅ done (`feat(agent-studio): PlaybookRun stub …`). New
+     `PlaybookRun` Pydantic model + YAML storage under
+     `<config_dir>/runs/` + 3 endpoints
+     (POST `/v1/agent-studio/playbooks/{id}/run` stub,
+     GET `/v1/agent-studio/runs[?playbook_id=X]`,
+     GET `/v1/agent-studio/runs/{run_id}`). Drawer gained a Run
+     button and a Recent Runs section (truncated to 5, "+ N earlier"
+     marker for the future Past Jobs tab). Backend stub marks runs
+     `done` immediately with a clear "stub" summary — proves the
+     data flow end-to-end without real execution.
+   - 2.b **(next)**: tie Playbook execution into the existing
+     `server/agent_runner.py` scheduler. `AgentRun` gains the new
+     statuses (`blocked` / `waiting_for_approval` / `reviewing`) per
+     § 23 migration. `PlaybookRun` becomes a thin specialisation of
+     `AgentRun` so we get the SSE stream + cost tracking for free.
 
 3. **Tool Broker primitives**: registry + risk-class enum + scoped
    per-run JWTs. No UI yet — the foundation that the Approval queue

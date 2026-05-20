@@ -14,7 +14,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Plus, Sparkles, Trash2 } from "lucide-react";
+import { BookOpen, Play, Plus, Sparkles, Trash2 } from "lucide-react";
 import { clsx } from "clsx";
 import { useState } from "react";
 import { api } from "../api/client";
@@ -51,8 +51,23 @@ interface Playbook extends PlaybookSummary {
   triggers: Array<Record<string, unknown>>;
 }
 
+interface PlaybookRun {
+  id: string;
+  playbook_id: string;
+  playbook_revision: number;
+  status: PlaybookStatus;
+  started_at: string;
+  ended_at: string | null;
+  summary: string | null;
+  objective_override: string | null;
+}
+
 interface PlaybooksResponse {
   playbooks: PlaybookSummary[];
+}
+
+interface RunsResponse {
+  runs: PlaybookRun[];
 }
 
 // `.nerd-pill-*` family stays the source of truth for outlined status
@@ -277,6 +292,7 @@ function PlaybookDetailDrawer({
   onClose: () => void;
   onDelete: (id: string) => void;
 }) {
+  const qc = useQueryClient();
   // The Drawer mounts only when ``playbookId`` is set, so we are safe
   // to fan out the query unconditionally inside the body branch.
   const isOpen = playbookId !== null;
@@ -284,6 +300,32 @@ function PlaybookDetailDrawer({
     queryKey: ["playbook", playbookId],
     queryFn: () => api.get(`/v1/agent-studio/playbooks/${playbookId}`),
     enabled: isOpen,
+  });
+
+  const runsQ = useQuery<RunsResponse>({
+    queryKey: ["playbook-runs", playbookId],
+    queryFn: () =>
+      api.get(`/v1/agent-studio/runs`, {
+        query: { playbook_id: playbookId ?? undefined },
+      }),
+    enabled: isOpen,
+    // Match the library's polling cadence so a run kicked off elsewhere
+    // shows up here without a manual refresh.
+    refetchInterval: 10_000,
+  });
+
+  const runMu = useMutation({
+    mutationFn: () =>
+      api.post<PlaybookRun>(
+        `/v1/agent-studio/playbooks/${playbookId}/run`,
+        {},
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["playbook-runs", playbookId] });
+      // The library card status pill follows the latest run state, so
+      // pop the library query too -- cheap and keeps everything in sync.
+      qc.invalidateQueries({ queryKey: ["playbooks"] });
+    },
   });
 
   const pb = detailQ.data;
@@ -303,13 +345,24 @@ function PlaybookDetailDrawer({
       onClose={onClose}
       actions={
         pb ? (
-          <button
-            type="button"
-            className="nerd-btn flex items-center gap-1 hover:border-red-300 hover:text-red-500"
-            onClick={() => onDelete(pb.id)}
-          >
-            <Trash2 className="w-3 h-3" /> Delete
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="nerd-btn flex items-center gap-1 hover:text-keboola hover:border-keboola/40"
+              onClick={() => runMu.mutate()}
+              disabled={runMu.isPending}
+            >
+              <Play className="w-3 h-3" />
+              {runMu.isPending ? "Running..." : "Run"}
+            </button>
+            <button
+              type="button"
+              className="nerd-btn flex items-center gap-1 hover:border-red-300 hover:text-red-500"
+              onClick={() => onDelete(pb.id)}
+            >
+              <Trash2 className="w-3 h-3" /> Delete
+            </button>
+          </div>
         ) : null
       }
     >
@@ -317,12 +370,29 @@ function PlaybookDetailDrawer({
       {detailQ.error ? (
         <ErrorBox message={(detailQ.error as Error).message} />
       ) : null}
-      {pb ? <PlaybookBody playbook={pb} /> : null}
+      {runMu.error ? (
+        <ErrorBox message={(runMu.error as Error).message} />
+      ) : null}
+      {pb ? (
+        <PlaybookBody
+          playbook={pb}
+          runs={runsQ.data?.runs ?? []}
+          runsLoading={runsQ.isLoading}
+        />
+      ) : null}
     </Drawer>
   );
 }
 
-function PlaybookBody({ playbook }: { playbook: Playbook }) {
+function PlaybookBody({
+  playbook,
+  runs,
+  runsLoading,
+}: {
+  playbook: Playbook;
+  runs: PlaybookRun[];
+  runsLoading: boolean;
+}) {
   const pillClass = STATUS_PILL_CLASS[playbook.status];
   return (
     <div className="space-y-5">
@@ -369,6 +439,8 @@ function PlaybookBody({ playbook }: { playbook: Playbook }) {
         )}
       </section>
 
+      <RunsSection runs={runs} loading={runsLoading} />
+
       <section className="text-[10px] uppercase tracking-widest text-zinc-500 grid grid-cols-2 gap-2">
         <div>
           <div>Created</div>
@@ -385,6 +457,91 @@ function PlaybookBody({ playbook }: { playbook: Playbook }) {
       </section>
     </div>
   );
+}
+
+function RunsSection({
+  runs,
+  loading,
+}: {
+  runs: PlaybookRun[];
+  loading: boolean;
+}) {
+  // Truncate to last 5 — full run history is a Past Jobs tab in a
+  // later slice. The "+N more" pill keeps the user informed without
+  // making the drawer scroll.
+  const displayed = runs.slice(0, 5);
+  const hidden = runs.length - displayed.length;
+  return (
+    <section>
+      <h4 className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">
+        Recent Runs
+        {runs.length > 0 ? (
+          <span className="ml-2 normal-case tracking-normal text-zinc-400">
+            ({runs.length})
+          </span>
+        ) : null}
+      </h4>
+      {loading ? <Loading /> : null}
+      {!loading && runs.length === 0 ? (
+        <p className="text-xs text-zinc-500 italic">
+          No runs yet. Hit Run to kick the first one off.
+        </p>
+      ) : null}
+      {displayed.length > 0 ? (
+        <ul className="space-y-1.5">
+          {displayed.map((r) => (
+            <RunRow key={r.id} run={r} />
+          ))}
+          {hidden > 0 ? (
+            <li className="text-[10px] uppercase tracking-widest text-zinc-500 italic">
+              + {hidden} earlier run{hidden === 1 ? "" : "s"} (Past Jobs tab
+              ships in a later slice)
+            </li>
+          ) : null}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function RunRow({ run }: { run: PlaybookRun }) {
+  const pillClass = STATUS_PILL_CLASS[run.status];
+  const duration = computeDuration(run.started_at, run.ended_at);
+  return (
+    <li className="flex items-center gap-2 text-xs">
+      <span className={clsx(pillClass, "font-mono shrink-0")}>
+        <span className="w-1.5 h-1.5 rounded-full bg-current opacity-80" />
+        {STATUS_LABEL[run.status]}
+      </span>
+      <span className="font-mono text-zinc-700 dark:text-zinc-300 truncate">
+        #{run.id.slice(0, 8)}
+      </span>
+      <span className="font-mono text-zinc-500">·</span>
+      <span className="font-mono text-zinc-500">{formatTs(run.started_at)}</span>
+      {duration ? (
+        <>
+          <span className="font-mono text-zinc-500">·</span>
+          <span className="font-mono text-zinc-500">{duration}</span>
+        </>
+      ) : null}
+    </li>
+  );
+}
+
+function computeDuration(startedIso: string, endedIso: string | null): string | null {
+  if (!endedIso) return null;
+  try {
+    const ms = new Date(endedIso).getTime() - new Date(startedIso).getTime();
+    if (Number.isNaN(ms) || ms < 0) return null;
+    if (ms < 1000) return `${ms} ms`;
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return `${m}m ${rem}s`;
+  } catch {
+    return null;
+  }
 }
 
 function DetailGroup({ label, items }: { label: string; items: string[] }) {

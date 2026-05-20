@@ -33,6 +33,7 @@ from .auth import PUBLIC_PATHS, AuthSettings, install_auth
 from .dependencies import ServiceRegistry, install_registry
 from .routers import (
     agent_studio_playbooks,
+    agent_studio_runs,
     agents,
     ai_chat,
     branches,
@@ -565,6 +566,7 @@ def create_app(
     app.include_router(org.router)
     app.include_router(agents.router)
     app.include_router(agent_studio_playbooks.router)
+    app.include_router(agent_studio_runs.router)
 
     app.state.auth_token = resolved_token
 

@@ -16,13 +16,16 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from ...agent_studio.models.playbook import Playbook, PlaybookSummary
+from ...agent_studio.models.playbook_run import PlaybookRun
 from ...agent_studio.storage import (
     delete_playbook,
     get_playbook,
     list_playbooks,
+    new_id,
     new_playbook_id,
     now,
     save_playbook,
+    save_run,
 )
 from ..dependencies import ServiceRegistry, get_registry
 
@@ -99,3 +102,52 @@ def delete_route(
 ) -> None:
     if not delete_playbook(registry.config_store.config_dir, playbook_id):
         raise HTTPException(status_code=404, detail="Playbook not found.")
+
+
+@router.post(
+    "/{playbook_id}/run",
+    summary="Start a Playbook run (Phase-1 stub)",
+    status_code=status.HTTP_201_CREATED,
+)
+def run_route(
+    playbook_id: str,
+    payload: dict[str, Any] | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> PlaybookRun:
+    """Phase-1 stub: create a PlaybookRun record and immediately mark
+    it ``done``. No subprocess, no AI CLI, no SSE stream yet — those
+    arrive in slice 2.b once the run loop wires into
+    ``server/agent_runner.py``.
+
+    The stub exists so the React UI can prove the "click Run -> see a
+    new run row appear" data flow end-to-end without waiting for the
+    real execution machinery.
+    """
+
+    config_dir = registry.config_store.config_dir
+    playbook = get_playbook(config_dir, playbook_id)
+    if playbook is None:
+        raise HTTPException(status_code=404, detail="Playbook not found.")
+
+    objective_override: str | None = None
+    if payload and isinstance(payload, dict):
+        raw = payload.get("objective_override")
+        if isinstance(raw, str) and raw.strip():
+            objective_override = raw.strip()
+
+    timestamp = now()
+    run = PlaybookRun(
+        id=new_id(),
+        playbook_id=playbook.id,
+        playbook_revision=playbook.revision,
+        status="done",
+        started_at=timestamp,
+        ended_at=timestamp,
+        summary=(
+            "Phase-1 stub run — no actual execution yet, just the "
+            "data-flow scaffold. Replaced by a real subprocess "
+            "invocation in slice 2.b."
+        ),
+        objective_override=objective_override,
+    )
+    return save_run(config_dir, run)
