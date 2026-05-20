@@ -387,6 +387,11 @@ class JobService(BaseService):
                 status_code=0,
                 error_code=ErrorCode.INVALID_ARGUMENT,
             )
+        # Group enum-membership pre-flight checks together (poll_strategy + mode)
+        # before the numeric/range checks below -- both are O(1) frozenset lookups
+        # and they fail in the same shape (INVALID_ARGUMENT with a sorted list of
+        # accepted values), so keeping them adjacent makes a typo's failure mode
+        # symmetric for callers.
         if mode not in VALID_JOB_MODES:
             raise KeboolaApiError(
                 message=(f"Invalid mode {mode!r}. Expected one of: {sorted(VALID_JOB_MODES)}."),

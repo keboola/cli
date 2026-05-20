@@ -2709,8 +2709,6 @@ class TestCreateJob:
         with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
             client.create_job(component_id="keboola.ex-http", config_id="42")
 
-        import json
-
         body = json.loads(httpx_mock.get_request().content)
         assert body["mode"] == "run"
 
@@ -2729,8 +2727,6 @@ class TestCreateJob:
                 config_id="42",
                 mode="debug",
             )
-
-        import json
 
         body = json.loads(httpx_mock.get_request().content)
         assert body["mode"] == "debug"
