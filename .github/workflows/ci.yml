@@ -57,3 +57,54 @@ jobs:
 
       - name: Tests
         run: uv run pytest tests/ -v -m "not integration"
+
+  # Real wheel build on Windows -- the only place the issue #320 fixes can be
+  # verified end-to-end without a Windows developer machine. GitHub provides
+  # windows-latest runners (with Node/npm preinstalled) for free, so the
+  # `npm.cmd` invocation (Bug 1) and the force-include path resolution (Bug 2)
+  # are exercised against a real `uv build` rather than mocks.
+  build-windows:
+    name: Windows wheel build (issue #320)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Bug 1: with npm present, the hook must resolve `npm.cmd` via
+      # shutil.which and run it (shell=False) instead of crashing with
+      # `FileNotFoundError [WinError 2]`, and the SPA must land in the wheel.
+      - name: Build wheel WITH bundled UI
+        run: uv build --wheel
+
+      - name: Assert the SPA is bundled (Bug 1 fixed)
+        run: python scripts/check_wheel_ui.py --expect-ui
+
+      - name: Install the built wheel and smoke-test the CLI on Windows
+        shell: pwsh
+        run: |
+          $whl = (Get-ChildItem dist/*.whl | Select-Object -First 1).FullName
+          uv run --no-project --with "$whl" kbagent --help
+
+      # Bug 2: with the SPA bundle skipped, the force-include must still
+      # resolve (empty `_ui_dist/`) and the wheel must build successfully.
+      - name: Build CLI-only wheel WITHOUT UI
+        shell: pwsh
+        env:
+          KBAGENT_SKIP_UI_BUILD: "1"
+        run: |
+          Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
+          uv build --wheel
+
+      - name: Assert CLI-only wheel built without the SPA (Bug 2 fixed)
+        run: python scripts/check_wheel_ui.py --no-ui
