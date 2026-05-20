@@ -66,29 +66,57 @@ def _extract_summary(body: str) -> list[str]:
     return lines
 
 
+def audit_changelog_coverage(
+    tags: list[dict], changelog: dict[str, object]
+) -> tuple[list[str], int, int]:
+    """Split release tags into (missing, checked, skipped) against the changelog.
+
+    Pure helper (no I/O) so it is unit-testable. ``tags`` are
+    ``gh release list --json tagName,isPrerelease`` entries.
+
+    Pre-releases (PEP 440 betas / rcs, e.g. ``v0.44.0b1``) are skipped: per the
+    CONTRIBUTING.md beta workflow they are tagged on a feature branch and their
+    ``CHANGELOG`` entry rides along on that branch until the PR merges, so
+    ``main`` must not demand it. This mirrors the auto-update path, which only
+    sees stable releases via GitHub's ``/releases/latest`` and ignores
+    prereleases.
+
+    Returns ``(missing_versions, stable_checked_count, prerelease_skipped_count)``.
+    """
+    missing = []
+    checked = 0
+    skipped = 0
+    for entry in tags:
+        if entry.get("isPrerelease"):
+            skipped += 1
+            continue
+        checked += 1
+        version = entry["tagName"].lstrip("v")
+        if version not in changelog:
+            missing.append(version)
+    return missing, checked, skipped
+
+
 def _check_mode() -> None:
-    """Verify all GitHub releases have entries in changelog.py."""
+    """Verify all stable GitHub releases have entries in changelog.py."""
     from keboola_agent_cli.changelog import CHANGELOG
 
     result = subprocess.run(
-        ["gh", "release", "list", "--limit", "50", "--json", "tagName"],
+        ["gh", "release", "list", "--limit", "50", "--json", "tagName,isPrerelease"],
         capture_output=True,
         text=True,
         check=True,
     )
     tags = json.loads(result.stdout)
 
-    missing = []
-    for entry in tags:
-        version = entry["tagName"].lstrip("v")
-        if version not in CHANGELOG:
-            missing.append(version)
+    missing, checked, skipped = audit_changelog_coverage(tags, CHANGELOG)
 
+    suffix = f" ({skipped} pre-release(s) skipped)" if skipped else ""
     if missing:
-        print(f"Missing changelog entries for: {', '.join(missing)}")
+        print(f"Missing changelog entries for: {', '.join(missing)}{suffix}")
         sys.exit(1)
     else:
-        print(f"All {len(tags)} releases have changelog entries.")
+        print(f"All {checked} stable releases have changelog entries.{suffix}")
 
 
 def main() -> None:
