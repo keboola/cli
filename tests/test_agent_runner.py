@@ -327,3 +327,149 @@ class TestUpstreamEnvAndPrompt:
         assert "upstream task" in prefix
         # AI must know how to fetch the upstream output via HTTP.
         assert f"/agents/A/runs/{run.run_id}" in prefix
+
+
+# ---------------------------------------------------------------------------
+# Codex headless invocation guard + non-timeout error surfacing
+# ---------------------------------------------------------------------------
+
+
+class TestCodexHeadlessRecipe:
+    """Codex CLI 0.131+ refuses to run in any directory the user has not
+    interactively "trusted". A subprocess never sees that dialog, so the
+    `--skip-git-repo-check` flag is the only way to keep `codex exec`
+    usable from `kbagent serve` / scheduled agent runs. Without it codex
+    exits 1 with "Not inside a trusted directory" before reading the
+    prompt — and the failure surfaces as a generic "AI chat failed" in
+    the dashboard. Pin the flag in BOTH recipe tables so a future refactor
+    cannot silently drop it.
+    """
+
+    def test_one_shot_recipe_includes_skip_git_repo_check(self) -> None:
+        from keboola_agent_cli.server.agent_runner import _AI_CLI_RECIPES
+
+        argv = _AI_CLI_RECIPES["codex"]("hi", [])
+        assert argv[0] == "codex"
+        assert argv[1] == "exec"
+        assert "--skip-git-repo-check" in argv
+        # The prompt must remain the LAST positional argument, otherwise
+        # codex would interpret following tokens as part of the prompt.
+        assert argv[-1] == "hi"
+
+    def test_stream_recipe_includes_skip_git_repo_check(self) -> None:
+        from keboola_agent_cli.server.agent_runner import _AI_CLI_STREAM_RECIPES
+
+        argv, jsonl = _AI_CLI_STREAM_RECIPES["codex"]("hi", [])
+        assert argv[0] == "codex"
+        assert argv[1] == "exec"
+        assert "--skip-git-repo-check" in argv
+        assert argv[-1] == "hi"
+        # codex does not support a structured JSONL stream today.
+        assert jsonl is False
+
+    def test_codex_extra_args_land_before_prompt(self) -> None:
+        """User-supplied extra_args must not push the prompt out of its
+        terminal position (otherwise codex would treat the prompt as a
+        subcommand or eat extra_args as part of it).
+        """
+        from keboola_agent_cli.server.agent_runner import (
+            _AI_CLI_RECIPES,
+            _AI_CLI_STREAM_RECIPES,
+        )
+
+        argv = _AI_CLI_RECIPES["codex"]("THE PROMPT", ["--sandbox", "read-only"])
+        assert argv[-3:] == ["--sandbox", "read-only", "THE PROMPT"]
+
+        argv2, _ = _AI_CLI_STREAM_RECIPES["codex"]("THE PROMPT", ["--sandbox", "read-only"])
+        assert argv2[-3:] == ["--sandbox", "read-only", "THE PROMPT"]
+
+
+class _FailingProc:
+    """Stand-in for asyncio.subprocess.Process that exits non-zero.
+
+    Mirrors _FakeProc above but lets the test choose ``returncode`` so we
+    can exercise the non-timeout error path of ``stream_ai_agent_events``.
+    """
+
+    def __init__(self, stdout_bytes: bytes, stderr_bytes: bytes, exit_code: int) -> None:
+        loop = asyncio.get_event_loop()
+        self.stdout = asyncio.StreamReader(loop=loop)
+        self.stderr = asyncio.StreamReader(loop=loop)
+        self.stdout.feed_data(stdout_bytes)
+        self.stdout.feed_eof()
+        self.stderr.feed_data(stderr_bytes)
+        self.stderr.feed_eof()
+        self._exit_code = exit_code
+        self.returncode: int | None = None
+
+    async def wait(self) -> int:
+        self.returncode = self._exit_code
+        return self._exit_code
+
+    def kill(self) -> None:
+        pass
+
+
+class TestStreamErrorSurfacing:
+    """When a CLI exits with non-zero rc (not a timeout), the done event
+    must carry an ``error`` field so the UI does not fall back to a
+    generic "AI chat failed" placeholder. The stderr tail is the most
+    useful diagnostic (codex trust check, claude auth, network blip).
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_timeout_failure_populates_error_with_stderr_tail(
+        self, tmp_path: Path
+    ) -> None:
+        from keboola_agent_cli.server.agent_runner import stream_ai_agent_events
+
+        registry = _make_registry(tmp_path)
+        scripted_stderr = (
+            b"Reading additional input from stdin...\n"
+            b"Not inside a trusted directory and "
+            b"--skip-git-repo-check was not specified.\n"
+        )
+        proc = _FailingProc(b"", scripted_stderr, exit_code=1)
+        with patch(
+            "keboola_agent_cli.server.agent_runner.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=proc),
+        ):
+            events = []
+            async for evt in stream_ai_agent_events(registry, {"cli": "codex", "prompt": "test"}):
+                events.append(evt)
+
+        done = events[-1]
+        assert done["event"] == "done"
+        data = done["data"]
+        assert data["status"] == "error"
+        assert data["exit_code"] == 1
+        # The error field is what the React side reads; it MUST be present
+        # so the placeholder fallback ("AI chat failed") never wins.
+        assert "error" in data
+        assert "exited with code 1" in data["error"]
+        # Stderr tail surfaces the root cause verbatim.
+        assert "trusted directory" in data["error"]
+
+    @pytest.mark.asyncio
+    async def test_successful_run_does_not_set_error_field(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.server.agent_runner import stream_ai_agent_events
+
+        registry = _make_registry(tmp_path)
+        # Reuse the existing _FakeProc (exit 0) — but feed claude-shaped
+        # JSONL so the generator's stream_ai_agent_events accumulator
+        # produces a sensible response.
+        scripted = b'{"type":"result","result":"ok"}\n'
+        proc = _FakeProc(scripted, b"")
+        with patch(
+            "keboola_agent_cli.server.agent_runner.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=proc),
+        ):
+            events = []
+            async for evt in stream_ai_agent_events(registry, {"cli": "claude", "prompt": "ok"}):
+                events.append(evt)
+
+        done = events[-1]["data"]
+        assert done["status"] == "ok"
+        # Success path leaves the error field absent — UI checks for status
+        # before reading error, but absence keeps the wire shape clean.
+        assert "error" not in done
