@@ -1486,7 +1486,9 @@ class McpService(BaseService):
         message = f"MCP server available via: {' '.join(command)} ({transport_info})"
         if is_uvx_fallback:
             status = "warn"
-            message += ". For faster startup, run: uv tool install keboola-mcp-server"
+            # --prerelease=allow is required (issue #324); a copied hint
+            # without it backtracks to the stale v1.32.0 and exits 0.
+            message += f". For faster startup, run: uv tool install {MCP_UV_PRERELEASE_FLAG} keboola-mcp-server"
 
         return {
             "check": "mcp_server",

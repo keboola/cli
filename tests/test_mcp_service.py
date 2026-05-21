@@ -678,6 +678,9 @@ class TestCheckServerAvailable:
         assert result["status"] == "warn"
         assert "uvx" in result["message"]
         assert "uv tool install" in result["message"]
+        # issue #324: the doctor hint must carry the pre-release opt-in, or a
+        # user who copies it hits the same resolver backtrack this PR fixes.
+        assert "--prerelease=allow" in result["message"]
 
     @patch("keboola_agent_cli.services.mcp_service.shutil.which")
     def test_server_available_via_direct_binary(
