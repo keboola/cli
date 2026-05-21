@@ -31,6 +31,8 @@ from .constants import (
     VERSION_CHECK_TIMEOUT,
 )
 from .services.version_service import (
+    MCP_PACKAGE_NAME,
+    MCP_UV_PRERELEASE_FLAG,
     _detect_mcp_install_method,
     _fetch_kbagent_latest_version,
     _fetch_mcp_latest_version,
@@ -366,14 +368,18 @@ def _maybe_update_mcp(cache: dict | None, fetched_now: bool) -> str | None:
                 f"Updated keboola-mcp-server (probe failed; latest on PyPI: v{mcp_latest}).\n"
             )
         else:
-            # Subprocess exit 0 but local version unchanged. Most common
-            # cause: dependency-resolver backtrack (Python or transitive-
-            # dep constraint cannot satisfy the latest). Surface a
-            # diagnostic instead of silently lying.
+            # Subprocess exit 0 but local version unchanged. Cause: uv's
+            # resolver backtracked to an older release that still satisfies
+            # every constraint (a pre-release-only transitive pin, a strict
+            # equality the venv cannot meet, or a Python floor). The upgrade
+            # commands already pass --prerelease=allow (issue #324); if the
+            # version still will not move, force a clean reinstall WITH the
+            # same flag -- a plain reinstall hits the identical wall.
             sys.stderr.write(
                 f"keboola-mcp-server upgrade exit 0 but local version still v{pre_version} "
-                f"(latest: v{mcp_latest}). Possible Python or dependency-version mismatch -- "
-                f"run `uv tool install --reinstall keboola-mcp-server` to diagnose.\n"
+                f"(latest: v{mcp_latest}). The resolver backtracked to an older release -- "
+                f"run `uv tool install --reinstall {MCP_UV_PRERELEASE_FLAG} {MCP_PACKAGE_NAME}` "
+                f"to force the latest.\n"
             )
     else:
         sys.stderr.write(

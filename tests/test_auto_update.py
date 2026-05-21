@@ -632,6 +632,26 @@ class TestMaybeUpdateMcp:
         _maybe_update_mcp(cache=cache, fetched_now=True)
         mock_fetch.assert_called_once()
 
+    @patch("keboola_agent_cli.auto_update._fetch_mcp_latest_version", return_value="1.61.3")
+    # Same version pre and post upgrade -> resolver backtracked (issue #324).
+    @patch("keboola_agent_cli.auto_update._get_local_mcp_version", return_value="1.32.0")
+    @patch("keboola_agent_cli.auto_update._detect_mcp_install_method", return_value="uv_tool")
+    @patch("keboola_agent_cli.auto_update._perform_mcp_update", return_value=(True, "ok"))
+    def test_backtrack_diagnostic_recommends_prerelease_flag(
+        self, mock_perform, mock_detect, mock_local, mock_fetch, capsys
+    ):
+        """issue #324: when the upgrade exits 0 but the version did not move,
+        the diagnostic must recommend a remediation that actually works --
+        i.e. carry --prerelease=allow -- and must NOT print the old
+        Python-blaming text that pointed at a reinstall failing the same way.
+        """
+        _maybe_update_mcp(cache=None, fetched_now=True)
+        err = capsys.readouterr().err
+        assert "--prerelease=allow" in err
+        assert "uv tool install --reinstall" in err
+        # The misleading pre-fix wording must be gone.
+        assert "Possible Python or dependency-version mismatch" not in err
+
 
 # ---------------------------------------------------------------------------
 # maybe_auto_update -- end-to-end MCP integration (since v0.30.1)
