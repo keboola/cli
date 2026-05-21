@@ -109,6 +109,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.list": "read",
     "data-app.detail": "read",
     "data-app.password": "read",
+    "data-app.logs": "read",
     "data-app.create": "write",
     "data-app.deploy": "write",
     "data-app.start": "write",

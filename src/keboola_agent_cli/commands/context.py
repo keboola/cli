@@ -688,6 +688,21 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     persisted, never logged. Password is auto-generated at create time
     and CANNOT be rotated -- delete and recreate the app to mint a new one.
 
+  kbagent data-app logs --project NAME --app-id ID [--lines N] [--since ISO8601]
+    Tail the container log buffer (Data Science /apps/{id}/logs/tail).
+    Plain-text body covering the full spin-up trace ([TIMING] git_clone,
+    Cloning into /app, uv install, supervisord boot, runtime stack traces).
+    Default --lines 500; pass --lines 0 to fetch the full current buffer
+    (no server-side cap). --lines and --since are mutually exclusive;
+    --since requires a timezone (Z or +00:00). App must be running or
+    recently-stopped -- never-started apps return 400 "App X is not
+    running"; recover with 'kbagent data-app start' or 'data-app deploy'.
+    Closes the gap where the upstream keboola-mcp-server's get_data_apps
+    tool hardcodes a 20-line cap on log output (structurally too small to
+    capture a healthy spin-up). The log buffer can echo runtime secrets
+    the app printed to stdout/stderr -- consider hygiene before piping
+    --json output into AI agent context.
+
   kbagent data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE'
         [--secret '#KEY2=VALUE2' ...] [--secrets-file PATH] [--branch ID]
         [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]

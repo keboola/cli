@@ -172,6 +172,36 @@ def password(
     return registry.data_app.get_data_app_password(alias=project, app_id=app_id)
 
 
+@router.get("/{project}/{app_id}/logs", summary="Tail data app container logs")
+def logs(
+    project: str,
+    app_id: str,
+    lines: int | None = None,
+    since: str | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Tail container logs for a data app. Mirrors `kbagent data-app logs`.
+
+    Query params ``lines`` and ``since`` are mutually exclusive (the
+    service raises ``KeboolaApiError(INVALID_ARGUMENT)`` if both are
+    set). ``since`` must be ISO 8601 WITH timezone.
+
+    Default-behavior asymmetry (deliberate): the CLI applies a 500-line
+    default when neither ``--lines`` nor ``--since`` is set (terminal
+    UX: predictable output for an operator at a tty). The REST route
+    and the service preserve the raw API contract: ``lines=None,
+    since=None`` returns the full current container buffer. REST
+    consumers (data-app dashboards, monitoring agents) typically want
+    the whole buffer; pass ``?lines=N`` for a cap that matches the CLI.
+
+    Note: the response ``text`` field can echo runtime secrets the app
+    printed to stdout/stderr; the envelope is reproduced verbatim with
+    no masking. Callers consuming this over SSE / scheduled-agent
+    persisted runs should consider secret hygiene.
+    """
+    return registry.data_app.get_app_logs(alias=project, app_id=app_id, lines=lines, since=since)
+
+
 @router.get("/{project}/{app_id}/secrets", summary="List data app secrets")
 def secrets_list(
     project: str,

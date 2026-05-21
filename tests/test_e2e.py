@@ -7521,6 +7521,120 @@ class TestE2EDataAppLifecycle:
             "second remove of the same key must be idempotent (removed=0, exit 0)"
         )
 
+    @skip_without_data_app_public
+    def test_data_app_logs_validation_and_not_running(self) -> None:
+        """E2E coverage for ``data-app logs`` (since v0.43.8).
+
+        Three assertions against a real Data Science backend:
+
+        1. ``--lines`` + ``--since`` together exits 2 (mutex enforced at
+           the command boundary, never reaches the network).
+        2. ``--since`` without a timezone exits 2 (validated client-side
+           via ``datetime.fromisoformat`` + ``tzinfo`` check before any
+           round-trip; clearer error than the server's bare ``Invalid
+           value`` 400).
+        3. Logs against a never-deployed app surface the server's
+           ``apps.appNotRunning`` 400 verbatim with a non-zero exit. The
+           ``--no-deploy`` flag in step 1 keeps this cheap (no real
+           container build); the resulting app sits at ``state=created``
+           which the Data Science API rejects as "not running" -- which
+           is precisely the path operators will hit when triaging a
+           failed deploy.
+        """
+        _step(1, "Create cheap shell app (--no-deploy)", "no container will start")
+        repo = os.environ[ENV_DATA_APP_GIT_REPO_PUBLIC]
+        slug = f"e2e-logs-{RUN_ID}"[:60]
+        create = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "create",
+                    "--project",
+                    self.alias,
+                    "--name",
+                    f"E2E Logs {RUN_ID}",
+                    "--slug",
+                    slug,
+                    "--git-repo",
+                    repo,
+                    "--git-public",
+                    "--auth",
+                    "public",
+                    "--no-deploy",
+                ],
+            )
+        )
+        app_id = create["data"]["app_id"]
+        self._created_app_ids.append(app_id)
+
+        _step(2, "Mutex: --lines + --since rejected locally (no round-trip)")
+        mutex = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "data-app",
+                "logs",
+                "--project",
+                self.alias,
+                "--app-id",
+                app_id,
+                "--lines",
+                "10",
+                "--since",
+                "2026-05-21T13:00:00Z",
+            ],
+        )
+        assert mutex.exit_code == 2, mutex.output
+        mutex_body = json.loads(mutex.output)
+        assert mutex_body["error"]["code"] == "USAGE_ERROR"
+        assert "mutually exclusive" in mutex_body["error"]["message"]
+
+        _step(3, "Naive --since (no tz) rejected locally")
+        naive = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "data-app",
+                "logs",
+                "--project",
+                self.alias,
+                "--app-id",
+                app_id,
+                "--since",
+                "2026-05-21T13:00:00",
+            ],
+        )
+        assert naive.exit_code == 2, naive.output
+        naive_body = json.loads(naive.output)
+        assert naive_body["error"]["code"] == "USAGE_ERROR"
+        assert "timezone" in naive_body["error"]["message"]
+
+        _step(4, "Logs against never-deployed app surfaces apps.appNotRunning 400")
+        not_running = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "data-app",
+                "logs",
+                "--project",
+                self.alias,
+                "--app-id",
+                app_id,
+                "--lines",
+                "100",
+            ],
+        )
+        # The server returns 400 ``App "X" is not running``; this maps
+        # through BaseHttpClient -> KeboolaApiError -> exit 1.
+        assert not_running.exit_code == 1, not_running.output
+        not_running_body = json.loads(not_running.output)
+        assert not_running_body["status"] == "error"
+        # The verbatim server message must reach the operator -- no
+        # client-side reclassification or message rewriting.
+        assert "is not running" in not_running_body["error"]["message"]
+
 
 # ---------------------------------------------------------------------------
 # Data-app validate-repo (since v0.29.0) -- GitHub-only, no Keboola creds needed
