@@ -403,6 +403,68 @@ HintRegistry.register(
 )
 
 
+# ── data-app logs ──────────────────────────────────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="data-app.logs",
+        description=(
+            "Tail container logs for a deployed data app. Returns the "
+            "full spin-up trace (git clone, uv install, supervisord, "
+            "runtime stack traces) as plain text from the Data Science "
+            "/apps/{id}/logs/tail endpoint."
+        ),
+        steps=[
+            HintStep(
+                comment=(
+                    "GET /apps/{id}/logs/tail. Plain-text response "
+                    "(response.text, not response.json). lines and "
+                    "since are mutually exclusive on the server."
+                ),
+                client=ClientCall(
+                    method="tail_app_logs",
+                    args={
+                        "app_id": "{app_id}",
+                        "lines": "{lines}",
+                        "since": "{since}",
+                    },
+                    client_type="data_science",
+                    result_var="logs",
+                    result_hint="str",
+                ),
+                service=ServiceCall(
+                    service_class="DataAppService",
+                    service_module="data_app_service",
+                    method="get_app_logs",
+                    args={
+                        "alias": "{project}",
+                        "app_id": "{app_id}",
+                        "lines": "{lines}",
+                        "since": "{since}",
+                    },
+                ),
+            ),
+        ],
+        notes=[
+            "App must be running or recently-stopped; never-started apps "
+            "return HTTP 400 'App X is not running'. Run "
+            "`kbagent data-app start --project P --app-id ID` first.",
+            "Plain-text response (str), not JSON. The service envelope "
+            "wraps the text with the request echo (lines_requested, "
+            "since_requested) + a lines_returned count.",
+            "Default --lines 500. Pass --lines 0 (CLI) or lines=None "
+            "(service / client) to opt into the full current container "
+            "buffer with no params sent.",
+            "The log buffer can echo runtime secrets the app printed to "
+            "stdout/stderr (tracebacks, debug os.environ dumps). The "
+            "envelope is reproduced verbatim with no masking; consider "
+            "secret hygiene before piping --json output into AI agent "
+            "context.",
+        ],
+    )
+)
+
+
 # ── data-app secrets set ──────────────────────────────────────────────
 
 HintRegistry.register(

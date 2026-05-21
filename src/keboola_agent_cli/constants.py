@@ -210,6 +210,25 @@ MCP_PROBE_TIMEOUT: float = 5.0
 # `pip install -U` / `uvx --refresh`). Network bound; 180s tolerates a
 # slow PyPI link plus the worst-case dependency-resolution cost.
 MCP_UPGRADE_TIMEOUT: float = 180.0
+# Pre-release opt-in flags for installing/upgrading keboola-mcp-server (#324).
+#
+# keboola-mcp-server >= 1.55.0 declares a pre-release-only transitive
+# dependency: ``toon-format~=0.9.0b1``. On PyPI ``toon-format`` ships exactly
+# two releases -- ``0.1.0`` (stable) and ``0.9.0b1`` (pre-release) -- so the
+# ``~=0.9.0b1`` constraint can ONLY be satisfied by the pre-release.
+#
+# uv refuses pre-releases by default. Crucially, ``--prerelease=if-necessary``
+# does NOT help here: a *stable* toon-format (0.1.0) exists, so uv decides a
+# pre-release is "not necessary", then fails because 0.1.0 violates the pin.
+# Only ``--prerelease=allow`` resolves it (verified empirically, uv 0.10.x).
+# Without the flag ``uv tool upgrade``/``install`` silently backtracks to the
+# last MCP release predating the pin (v1.32.0) and exits 0 -- pinning the
+# fleet to a stale server while reporting a newer version is "available".
+#
+# Scoped to the MCP environment only; never affects the kbagent self-update
+# channel (which stays stable-only unless --beta).
+MCP_UV_PRERELEASE_FLAG: str = "--prerelease=allow"
+MCP_PIP_PRERELEASE_FLAG: str = "--pre"
 
 # --- Auto-Update ---
 ENV_AUTO_UPDATE: str = "KBAGENT_AUTO_UPDATE"

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -468,6 +469,10 @@ class TestDataAppHintMode:
             "password",
             ["data-app", "password", "--project", "prod", "--app-id", "42"],
         ),
+        (
+            "logs",
+            ["data-app", "logs", "--project", "prod", "--app-id", "42"],
+        ),
     )
 
     @pytest.mark.parametrize(
@@ -560,3 +565,250 @@ class TestDataAppErrorMapping:
         assert result.exit_code == 5
         body = json.loads(result.output)
         assert body["error"]["code"] == "CONFIG_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# data-app logs
+# ---------------------------------------------------------------------------
+
+
+class TestDataAppLogs:
+    """CLI-layer tests for ``data-app logs``.
+
+    Service is mocked; tests cover the command's own job (argument
+    parsing, mutex enforcement, --since validation, default-translation,
+    error -> exit-code mapping, dual JSON/human output). The 2 auto-
+    parametrized ``--hint client`` / ``--hint service`` compile checks
+    fire via TestDataAppHintMode._SAMPLE_INVOCATIONS.
+    """
+
+    SAMPLE_LOGS = (
+        "[TIMING] Starting: git_clone\nCloning into '/app'...\nsupervisord started with pid 1\n"
+    )
+
+    def _setup(
+        self, tmp_path: Path, *, lines_returned: int = 3, text: str | None = None
+    ) -> tuple[Any, MagicMock]:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.get_app_logs.return_value = {
+            "project_alias": "prod",
+            "app_id": "42",
+            "lines_requested": 500,
+            "since_requested": None,
+            "lines_returned": lines_returned,
+            "text": self.SAMPLE_LOGS if text is None else text,
+        }
+        return store, mock
+
+    def test_logs_human_output(self, tmp_path: Path) -> None:
+        store, mock = self._setup(tmp_path)
+        result = _invoke(
+            ["data-app", "logs", "--project", "prod", "--app-id", "42"],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        # Header carries the project, app id, and line count
+        assert "42" in result.output
+        assert "prod" in result.output
+        assert "3 lines" in result.output
+        # Body lines are emitted verbatim
+        assert "[TIMING] Starting: git_clone" in result.output
+        assert "supervisord started with pid 1" in result.output
+        # Default --lines=500 is translated to the service call
+        mock.get_app_logs.assert_called_once_with(alias="prod", app_id="42", lines=500, since=None)
+
+    def test_logs_json_output(self, tmp_path: Path) -> None:
+        store, mock = self._setup(tmp_path)
+        result = _invoke(
+            ["--json", "data-app", "logs", "--project", "prod", "--app-id", "42"],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        assert body["status"] == "ok"
+        data = body["data"]
+        assert data["app_id"] == "42"
+        assert data["project_alias"] == "prod"
+        assert data["lines_returned"] == 3
+        assert data["lines_requested"] == 500
+        assert data["since_requested"] is None
+        assert "[TIMING] Starting: git_clone" in data["text"]
+
+    def test_logs_mutex_lines_and_since(self, tmp_path: Path) -> None:
+        store, mock = self._setup(tmp_path)
+        result = _invoke(
+            [
+                "--json",
+                "data-app",
+                "logs",
+                "--project",
+                "prod",
+                "--app-id",
+                "42",
+                "--lines",
+                "100",
+                "--since",
+                "2026-05-21T13:00:00Z",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 2, result.output
+        body = json.loads(result.output)
+        assert body["error"]["code"] == "USAGE_ERROR"
+        assert "mutually exclusive" in body["error"]["message"]
+        mock.get_app_logs.assert_not_called()
+
+    def test_logs_since_invalid_format(self, tmp_path: Path) -> None:
+        store, mock = self._setup(tmp_path)
+        result = _invoke(
+            [
+                "--json",
+                "data-app",
+                "logs",
+                "--project",
+                "prod",
+                "--app-id",
+                "42",
+                "--since",
+                "yesterday",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 2, result.output
+        body = json.loads(result.output)
+        assert body["error"]["code"] == "USAGE_ERROR"
+        assert "ISO 8601" in body["error"]["message"]
+        mock.get_app_logs.assert_not_called()
+
+    def test_logs_since_naive_datetime(self, tmp_path: Path) -> None:
+        store, mock = self._setup(tmp_path)
+        result = _invoke(
+            [
+                "--json",
+                "data-app",
+                "logs",
+                "--project",
+                "prod",
+                "--app-id",
+                "42",
+                "--since",
+                "2026-05-21T13:00:00",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 2, result.output
+        body = json.loads(result.output)
+        assert body["error"]["code"] == "USAGE_ERROR"
+        assert "timezone" in body["error"]["message"]
+        mock.get_app_logs.assert_not_called()
+
+    def test_logs_lines_zero_passes_none_to_service(self, tmp_path: Path) -> None:
+        """--lines 0 is the explicit "no server-side cap" escape hatch."""
+        store, mock = self._setup(tmp_path)
+        mock.get_app_logs.return_value = {
+            "project_alias": "prod",
+            "app_id": "42",
+            "lines_requested": None,
+            "since_requested": None,
+            "lines_returned": 3,
+            "text": self.SAMPLE_LOGS,
+        }
+        result = _invoke(
+            [
+                "--json",
+                "data-app",
+                "logs",
+                "--project",
+                "prod",
+                "--app-id",
+                "42",
+                "--lines",
+                "0",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        mock.get_app_logs.assert_called_once_with(alias="prod", app_id="42", lines=None, since=None)
+
+    def test_logs_lines_negative_rejected(self, tmp_path: Path) -> None:
+        store, mock = self._setup(tmp_path)
+        result = _invoke(
+            [
+                "--json",
+                "data-app",
+                "logs",
+                "--project",
+                "prod",
+                "--app-id",
+                "42",
+                "--lines",
+                "-5",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 2, result.output
+        body = json.loads(result.output)
+        assert body["error"]["code"] == "USAGE_ERROR"
+        mock.get_app_logs.assert_not_called()
+
+    def test_logs_api_error_exit_1(self, tmp_path: Path) -> None:
+        """A 400 'App not running' from the server surfaces as exit 1 with the message verbatim."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.get_app_logs.side_effect = KeboolaApiError(
+            message='App "42" is not running',
+            status_code=400,
+            error_code="API_ERROR",
+            retryable=False,
+        )
+        result = _invoke(
+            ["--json", "data-app", "logs", "--project", "prod", "--app-id", "42"],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 1, result.output
+        body = json.loads(result.output)
+        assert body["error"]["code"] == "API_ERROR"
+        assert "is not running" in body["error"]["message"]
+
+    def test_logs_with_since_passes_through(self, tmp_path: Path) -> None:
+        store, mock = self._setup(tmp_path)
+        mock.get_app_logs.return_value = {
+            "project_alias": "prod",
+            "app_id": "42",
+            "lines_requested": None,
+            "since_requested": "2026-05-21T13:00:00+00:00",
+            "lines_returned": 3,
+            "text": self.SAMPLE_LOGS,
+        }
+        result = _invoke(
+            [
+                "--json",
+                "data-app",
+                "logs",
+                "--project",
+                "prod",
+                "--app-id",
+                "42",
+                "--since",
+                "2026-05-21T13:00:00+00:00",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        mock.get_app_logs.assert_called_once_with(
+            alias="prod", app_id="42", lines=None, since="2026-05-21T13:00:00+00:00"
+        )

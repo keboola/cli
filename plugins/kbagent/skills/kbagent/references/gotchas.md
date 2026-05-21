@@ -589,6 +589,13 @@ events and emits a final `done` SSE frame mirroring the same record.
   (`uv_tool` / `pip_env` / `uvx`) and runs the matching upgrade command
   (`uv tool upgrade` / `pip install -U` / `uvx --refresh`). No re-exec needed
   for the MCP path -- the next `tool call` spawn picks up the new version.
+- Since v0.43.8: every MCP install/upgrade command carries `--prerelease=allow`
+  (uv) / `--pre` (pip). `keboola-mcp-server >= 1.55.0` pins a pre-release-only
+  transitive dep (`toon-format~=0.9.0b1`); without the opt-in uv backtracks to
+  the stale v1.32.0 and exits 0, so the auto-update silently no-ops while every
+  command prints a misleading stderr warning. Fixed in #324. Note:
+  `--prerelease=if-necessary` is insufficient -- a stable `toon-format` 0.1.0
+  exists but violates the pin, so only `--prerelease=allow` resolves it.
 - Critical invariant: **kbagent up-to-date does NOT short-circuit the MCP
   stage**. Both stages always run, regardless of which side has updates.
 - `kbagent update` triggers the same two-stage flow explicitly. JSON output
@@ -774,14 +781,18 @@ events and emits a final `done` SSE frame mirroring the same record.
   with a non-GitHub URL exits 2 / `INVALID_ARGUMENT`.
 - Exit 0 on all checks <= WARN; exit 1 on any BLOCKING. `--strict`
   treats WARNs as failures (exit 1) for CI gating.
-- **Reading the build / runtime log is still NOT available via the
-  CLI.** The Data Science API does not expose Terminal Logs as JSON
-  (per https://help.keboola.com/data-apps/terminal-log-tab/); on
-  `DATA_APP_BUILD_FAILED` / `DATA_APP_DEPLOY_TIMEOUT` the next step is
-  still to open the UI's Terminal Log tab. A `data-app logs` command
-  + auto-log-dump on deploy failure are tracked as
-  [issue #240](https://github.com/padak/keboola_agent_cli/issues/240)
-  (needs platform-side API exposure first).
+- **Reading the build / runtime log** is now available via
+  `kbagent data-app logs --project ALIAS --app-id ID [--lines N |
+  --since ISO8601]` (since v0.43.8). On `DATA_APP_BUILD_FAILED` /
+  `DATA_APP_DEPLOY_TIMEOUT`, fetch the container log tail directly
+  from the CLI instead of opening the UI's Terminal Log tab. See
+  the `data-app logs` section below for the mutex contract, the
+  default-500-lines behavior, and the secret-echo risk (apps that
+  print credentials to stdout will leak them into the buffer; the
+  envelope is reproduced verbatim with no masking).
+  Auto-log-dump on deploy failure (calling `data-app logs` from
+  inside `data-app create` / `data-app deploy` when the job ends in
+  a failure state) is still tracked as a separate follow-up.
 
 ## Manage token: env var is ignored without `--allow-env-manage-token` (since v0.29.0)
 
@@ -1912,3 +1923,50 @@ requires `canManageTokens` privilege, which only **master tokens** carry.
   https://github.com/padak/keboola_agent_cli/issues/<TBD> for the upstream
   request to make `project add` / `project refresh` mint a token with
   `canManageTokens` so OAuth flows work out of the box.
+
+## `data-app logs` is the only unconstrained log surface (since v0.43.8)
+
+- The upstream `keboola-mcp-server` `get_data_apps` MCP tool hardcodes a
+  20-line cap on log output (`_fetch_logs(..., lines=20)` in
+  `keboola_mcp_server/tools/data_apps.py`), which is structurally too
+  small to capture a data-app spin-up trace. The `[TIMING] git_clone` +
+  `uv install` + supervisord boot stanza alone is 30+ lines on a healthy
+  `python-js` app; the 20-line cap silently drops everything before
+  supervisord. Use `kbagent data-app logs --project X --app-id Y`
+  instead — same Data Science endpoint (`/apps/{id}/logs/tail`), no
+  client-side cap. Default `--lines 500`; pass `--lines 0` to opt into
+  the full current container buffer with no server-side limit.
+- `--lines` and `--since` are mutually exclusive on the server (both ->
+  HTTP 400 `Only one of "since" or "lines" can be set`); the CLI
+  rejects the combination locally with exit 2 + `USAGE_ERROR` to save
+  the round-trip. `--since` requires a timezone (`Z` or `+00:00`);
+  naive datetimes are rejected at the command boundary via
+  `datetime.fromisoformat` before the request.
+- Apps that have never started (or were created with `--no-deploy`)
+  surface the server's `App "X" is not running` 400 verbatim — recovery
+  is `kbagent data-app start` or `data-app deploy`. Auto-suspended apps
+  (default `auto_suspend_after_seconds: 900`) hit the same path.
+- **Secret-echo risk**: the log buffer can contain runtime secrets the
+  app printed to stdout/stderr. Real-world examples: pandas/SQLAlchemy
+  tracebacks with embedded connection strings, debug `print(os.environ)`
+  output, OAuth state dumped to console, accidental `print(api_key)` in
+  dev branches. The `--json` envelope reproduces the body verbatim with
+  NO masking — false confidence is worse than honest passthrough. Be
+  mindful when piping `--json` output into AI agent context, scheduled-
+  agent persisted event logs, or `kbagent serve` SSE streams. The
+  permission classification is `read` (no side effects) which is correct
+  under `--deny-writes` / `--deny-destructive`; the secret hygiene
+  consideration is orthogonal to firewall semantics.
+- JSON envelope shape:
+  `{project_alias, app_id, lines_requested, since_requested, lines_returned, text}`.
+  The `text` key carries the raw plain-text body (trailing `\n`
+  preserved as the server emits it); `lines_returned` is
+  `text.splitlines()` length. To split into a pipeline:
+  `kbagent --json data-app logs --project P --app-id 42 | jq -r .data.text | head -50`.
+- Human-mode rendering uses `Console.print(text, markup=False, highlight=False)`
+  for the log body so literal `[TIMING]`, `[INFO]`, etc. aren't
+  interpreted as Rich tags and timestamps/URLs/IPs aren't auto-colored.
+  The header (`Logs for data app <id> in <project>`) keeps Rich
+  styling and escapes the interpolated `app_id` / `project_alias`
+  values via `rich.markup.escape` per the `commands/config.py`
+  precedent.

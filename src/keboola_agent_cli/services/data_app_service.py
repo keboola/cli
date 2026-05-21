@@ -22,6 +22,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from ..constants import DEFAULT_JOB_RUN_TIMEOUT
@@ -897,6 +898,110 @@ class DataAppService(BaseService):
                 "This password is auto-generated and cannot be rotated; "
                 "delete and recreate the app to mint a new one."
             ),
+        }
+
+    def get_app_logs(
+        self,
+        alias: str,
+        app_id: str,
+        *,
+        lines: int | None = None,
+        since: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch the container log tail for a deployed data app.
+
+        Wraps ``GET data-science/apps/{id}/logs/tail``. The two query
+        parameters are mutually exclusive on the server -- the service
+        rejects the combination locally with ``INVALID_ARGUMENT`` rather
+        than letting it round-trip. Passing ``lines=None, since=None``
+        returns the full current container buffer; this is the CLI's
+        ``--lines 0`` semantics.
+
+        The command layer enforces the same mutex with a clean exit-2
+        usage error; this service-layer guard is the contract for
+        ``--hint service`` snippet users and any future programmatic
+        caller (e.g. ``kbagent serve`` route).
+
+        Returns a dict with the raw text, the request echo (so callers
+        can correlate envelopes to invocations), and a line count
+        derived from splitting on newlines.
+
+        Note: the log buffer can echo runtime secrets the app printed
+        to stdout/stderr (tracebacks, debug ``os.environ`` dumps).
+        ``--json`` callers piping into AI agent context should consider
+        secret hygiene. The service does NOT post-process or attempt to
+        mask the response -- false confidence is worse than honest
+        passthrough; see ``gotchas.md``.
+        """
+        if lines is not None and since is not None:
+            raise KeboolaApiError(
+                message=(
+                    "get_app_logs: 'lines' and 'since' are mutually exclusive; "
+                    "pass exactly one (or neither for the full buffer)."
+                ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+                retryable=False,
+            )
+        # Validation paths below are duplicated in the CLI command
+        # (exit-2 USAGE_ERROR for a clean Click UX). The service-layer
+        # guards are the contract for ``--hint service`` snippet users
+        # and the ``kbagent serve`` GET /data-apps/{p}/{id}/logs route;
+        # without them, those audiences would round-trip a 400 the
+        # server can phrase only as "Invalid value".
+        if lines is not None and lines < 0:
+            raise KeboolaApiError(
+                message=(
+                    "get_app_logs: 'lines' must be 0 (full buffer) or a positive "
+                    f"integer; got {lines}."
+                ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+                retryable=False,
+            )
+        if since is not None:
+            try:
+                parsed_since = datetime.fromisoformat(since)
+            except ValueError as exc:
+                raise KeboolaApiError(
+                    message=(
+                        "get_app_logs: 'since' must be ISO 8601 "
+                        f"(e.g. '2026-05-21T13:00:00Z'): {exc}"
+                    ),
+                    status_code=0,
+                    error_code=ErrorCode.INVALID_ARGUMENT,
+                    retryable=False,
+                ) from None
+            if parsed_since.tzinfo is None:
+                raise KeboolaApiError(
+                    message=(
+                        "get_app_logs: 'since' must include a timezone (e.g. 'Z' "
+                        "or '+00:00'); the Data Science endpoint rejects naive "
+                        "datetimes with 'Invalid value'."
+                    ),
+                    status_code=0,
+                    error_code=ErrorCode.INVALID_ARGUMENT,
+                    retryable=False,
+                )
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        ds_client = self._ds_client_factory(project.stack_url, project.token)
+        try:
+            text = ds_client.tail_app_logs(app_id, lines=lines, since=since)
+        finally:
+            ds_client.close()
+
+        # ``splitlines()`` with no separator drops the trailing empty
+        # string the final ``\n`` would create. A 3-line response with a
+        # trailing newline is 3 lines, not 4.
+        line_count = len(text.splitlines()) if text else 0
+        return {
+            "project_alias": alias,
+            "app_id": str(app_id),
+            "lines_requested": lines,
+            "since_requested": since,
+            "lines_returned": line_count,
+            "text": text,
         }
 
     # ------------------------------------------------------------------

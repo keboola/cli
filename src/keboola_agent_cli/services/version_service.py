@@ -21,9 +21,11 @@ from .. import __version__
 from ..constants import (
     KBAGENT_GITHUB_REPO,
     KBAGENT_INSTALL_SOURCE,
+    MCP_PIP_PRERELEASE_FLAG,
     MCP_PROBE_TIMEOUT,
     MCP_PYPI_URL,
     MCP_UPGRADE_TIMEOUT,
+    MCP_UV_PRERELEASE_FLAG,
     VERSION_CHECK_TIMEOUT,
 )
 
@@ -32,6 +34,10 @@ logger = logging.getLogger(__name__)
 # keboola-mcp-server constants
 MCP_PACKAGE_NAME = "keboola-mcp-server"
 MCP_BINARY_NAME = "keboola_mcp_server"
+
+# MCP_UV_PRERELEASE_FLAG / MCP_PIP_PRERELEASE_FLAG are re-exported from
+# constants (imported above) so existing callers can keep importing them from
+# this module. See constants.py for the full toon-format rationale (#324).
 
 
 def _is_uvx_available() -> bool:
@@ -386,12 +392,14 @@ def _perform_mcp_update(
         uv_path = shutil.which("uv")
         if uv_path is None:
             return False, "uv not found on PATH"
-        cmd = [uv_path, "tool", "upgrade", MCP_PACKAGE_NAME]
+        # --prerelease=allow is mandatory: see MCP_UV_PRERELEASE_FLAG (issue
+        # #324). Without it uv backtracks to a stale MCP and exits 0.
+        cmd = [uv_path, "tool", "upgrade", MCP_UV_PRERELEASE_FLAG, MCP_PACKAGE_NAME]
     elif method == "pip_env":
         pip_path = shutil.which("pip")
         if pip_path is None:
             return False, "pip not found on PATH"
-        cmd = [pip_path, "install", "--upgrade", MCP_PACKAGE_NAME]
+        cmd = [pip_path, "install", "--upgrade", MCP_PIP_PRERELEASE_FLAG, MCP_PACKAGE_NAME]
     elif method == "uvx":
         # Promote uvx-cache install to a persistent `uv tool install`.
         # The previous strategy (`uvx --refresh ... <bin> --version`) was
@@ -404,7 +412,7 @@ def _perform_mcp_update(
         uv_path = shutil.which("uv")
         if uv_path is None:
             return False, "uv not found on PATH (needed to promote uvx cache to uv tool)"
-        cmd = [uv_path, "tool", "install", "--upgrade", MCP_PACKAGE_NAME]
+        cmd = [uv_path, "tool", "install", "--upgrade", MCP_UV_PRERELEASE_FLAG, MCP_PACKAGE_NAME]
     elif method == "none":
         return False, "keboola-mcp-server is not installed"
     else:
@@ -617,11 +625,14 @@ class VersionService:
         # (Bug B fix from issue #263), so the user-facing recommendation
         # must reflect that, not the broken `uvx --refresh ... --version`
         # chain the v0.30.1 logic used.
+        # Every command carries the pre-release opt-in (issue #324): the MCP
+        # server pins a pre-release-only transitive dep, so a copy-pasted
+        # command without the flag fails the same way the auto-update does.
         mcp_upgrade_cmd_by_method = {
-            "uv_tool": f"uv tool upgrade {MCP_PACKAGE_NAME}",
-            "pip_env": f"pip install --upgrade {MCP_PACKAGE_NAME}",
-            "uvx": f"uv tool install --upgrade {MCP_PACKAGE_NAME}",
-            "none": f"uv tool install {MCP_PACKAGE_NAME}",
+            "uv_tool": f"uv tool upgrade {MCP_UV_PRERELEASE_FLAG} {MCP_PACKAGE_NAME}",
+            "pip_env": f"pip install --upgrade {MCP_PIP_PRERELEASE_FLAG} {MCP_PACKAGE_NAME}",
+            "uvx": f"uv tool install --upgrade {MCP_UV_PRERELEASE_FLAG} {MCP_PACKAGE_NAME}",
+            "none": f"uv tool install {MCP_UV_PRERELEASE_FLAG} {MCP_PACKAGE_NAME}",
         }
 
         mcp_entry: dict[str, Any] = {

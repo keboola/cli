@@ -225,19 +225,19 @@ yours at runtime.
 | Confirm one secret is present | `data-app secrets-get --app-id N --key '#KEY'` (metadata only) |
 | Remove a secret | `data-app secrets-remove --app-id N --key '#KEY' --yes` (idempotent) |
 | Pre-flight a repo before create | `data-app validate-repo --git-repo URL` (GitHub-only, python-js for now) |
+| Triage a stuck deploy or runtime crash | `data-app logs --app-id N [--lines N \| --since ISO8601]` (since 0.43.8; plain-text container log tail, default `--lines 500`, `--lines 0` for full buffer) |
 | Tear it all down | `data-app delete --app-id N` (cascades to Storage config) |
 
 ## What this command group deliberately does NOT cover
 
-- **Reading the build / runtime log** — the Data Science API does not
-  expose Terminal Logs as JSON; only the Keboola UI ("Terminal Log" tab
-  at https://help.keboola.com/data-apps/terminal-log-tab/) shows them.
-  If `data-app deploy --wait` exits with `DATA_APP_BUILD_FAILED`, the
-  next step is to open the UI link surfaced in the error message.
-  A `data-app logs` command + auto-log-dump on deploy failure are
-  tracked as a follow-up: see `padak/keboola_agent_cli`
-  [issue #240](https://github.com/padak/keboola_agent_cli/issues/240)
-  (needs platform-side API exposure first).
+- **Auto-log-dump on deploy failure** — `data-app deploy --wait` does
+  not yet auto-call `data-app logs` when the job ends in
+  `DATA_APP_BUILD_FAILED` / `DATA_APP_DEPLOY_TIMEOUT`. After such a
+  failure, run `kbagent data-app logs --project P --app-id N` manually
+  to fetch the container log tail (since 0.43.8; before that the only
+  path was opening the Keboola UI's "Terminal Log" tab at
+  https://help.keboola.com/data-apps/terminal-log-tab/). Tracked as a
+  follow-up.
 - **Updating size / auto-suspend / git settings** — those live on the
   Storage config body, not the deployment record. Use
   `kbagent config update --component-id keboola.data-apps --config-id ID
@@ -257,6 +257,7 @@ yours at runtime.
 | `PATCH` | `data-science.<stack>/apps/{id}` | `data-app deploy / start / stop` |
 | `DELETE` | `data-science.<stack>/apps/{id}` | `data-app delete` (cascades to Storage) |
 | `GET` | `data-science.<stack>/apps/{id}/password` | `data-app password` (needs Manage) |
+| `GET` | `data-science.<stack>/apps/{id}/logs/tail` | `data-app logs` (since 0.43.8; `lines` / `since` mutex) |
 | `POST` | `encryption.<stack>/encrypt` | `data-app create` step 2 (private repo) |
 | `PUT` | `connection.<stack>/v2/storage/.../keboola.data-apps/configs/{id}` | `data-app create` step 3, also `config update` |
 | `GET` | `connection.<stack>/v2/storage/.../keboola.data-apps/configs/{id}` | `data-app detail` (latest version), `data-app deploy` (read latest) |

@@ -678,6 +678,9 @@ class TestCheckServerAvailable:
         assert result["status"] == "warn"
         assert "uvx" in result["message"]
         assert "uv tool install" in result["message"]
+        # issue #324: the doctor hint must carry the pre-release opt-in, or a
+        # user who copies it hits the same resolver backtrack this PR fixes.
+        assert "--prerelease=allow" in result["message"]
 
     @patch("keboola_agent_cli.services.mcp_service.shutil.which")
     def test_server_available_via_direct_binary(
@@ -804,6 +807,10 @@ class TestEnsureMcpInstalled:
 
         assert result["method"] == "uv_tool_install"
         assert result["installed"] is True
+        # issue #324: the install must opt into pre-releases or uv backtracks
+        # to the stale v1.32.0 (toon-format~=0.9.0b1 pin) and exits 0.
+        install_cmd = mock_run.call_args_list[1].args[0]
+        assert "--prerelease=allow" in install_cmd
 
     @patch("keboola_agent_cli.services.mcp_service.shutil.which")
     def test_uvx_fallback(self, mock_which: MagicMock) -> None:
@@ -823,6 +830,8 @@ class TestEnsureMcpInstalled:
         assert result["method"] == "uvx_fallback"
         assert result["installed"] is False
         assert "uv tool install" in result["message"]
+        # issue #324: the recommended command must carry the pre-release opt-in.
+        assert "--prerelease=allow" in result["message"]
 
     @patch("keboola_agent_cli.services.mcp_service.shutil.which")
     def test_nothing_available(self, mock_which: MagicMock) -> None:

@@ -1122,3 +1122,239 @@ class TestDataAppEnvelopesNoBareIdKey:
         result = service.remove_data_app_secrets(alias="prod", app_id="42", keys=["#FOO"])
         assert result["app_id"] == "42"
         assert "id" not in result
+
+
+# ---------------------------------------------------------------------------
+# data-app logs (service-layer)
+# ---------------------------------------------------------------------------
+
+
+class TestDataAppLogs:
+    """Service-layer tests for DataAppService.get_app_logs.
+
+    Verifies orchestration (kwarg passthrough, mutex guard, client cleanup
+    in finally, envelope shape, project resolution) -- NOT HTTP shapes
+    (those live in TestTailAppLogsClient below).
+    """
+
+    SAMPLE_LOGS = (
+        "[TIMING] Starting: input_mapping_init\n"
+        "[TIMING] Completed: input_mapping_init (took 0.031s)\n"
+        "[TIMING] Starting: git_clone\n"
+        "Cloning into '/app'...\n"
+        "supervisord started with pid 1\n"
+    )
+
+    def test_logs_with_lines_passes_kwarg_to_client(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.tail_app_logs.return_value = self.SAMPLE_LOGS
+
+        result = service.get_app_logs(alias="prod", app_id="42", lines=500)
+
+        ds_mock.tail_app_logs.assert_called_once_with("42", lines=500, since=None)
+        assert result["lines_requested"] == 500
+        assert result["since_requested"] is None
+        assert result["lines_returned"] == 5
+        assert result["text"] == self.SAMPLE_LOGS
+        assert result["app_id"] == "42"
+        assert result["project_alias"] == "prod"
+        ds_mock.close.assert_called_once()
+
+    def test_logs_with_since_passes_kwarg_to_client(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.tail_app_logs.return_value = self.SAMPLE_LOGS
+
+        result = service.get_app_logs(alias="prod", app_id="42", since="2026-05-21T13:00:00Z")
+
+        ds_mock.tail_app_logs.assert_called_once_with(
+            "42", lines=None, since="2026-05-21T13:00:00Z"
+        )
+        assert result["lines_requested"] is None
+        assert result["since_requested"] == "2026-05-21T13:00:00Z"
+
+    def test_logs_buffer_all_sends_no_params(self, tmp_path: Path) -> None:
+        """``lines=None, since=None`` is the CLI's ``--lines 0`` semantics."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.tail_app_logs.return_value = self.SAMPLE_LOGS
+
+        result = service.get_app_logs(alias="prod", app_id="42")
+
+        ds_mock.tail_app_logs.assert_called_once_with("42", lines=None, since=None)
+        assert result["lines_requested"] is None
+        assert result["since_requested"] is None
+
+    def test_logs_mutex_raises_invalid_argument(self, tmp_path: Path) -> None:
+        """Both lines+since -> KeboolaApiError(INVALID_ARGUMENT) BEFORE client call."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.get_app_logs(alias="prod", app_id="42", lines=100, since="2026-05-21T13:00:00Z")
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert "mutually exclusive" in excinfo.value.message
+        ds_mock.tail_app_logs.assert_not_called()
+        # No client created when the mutex guard fires; close is not called.
+        ds_mock.close.assert_not_called()
+
+    def test_logs_negative_lines_raises_invalid_argument(self, tmp_path: Path) -> None:
+        """Service-layer guard for `kbagent serve` / `--hint service` callers."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.get_app_logs(alias="prod", app_id="42", lines=-5)
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert "positive integer" in excinfo.value.message
+        ds_mock.tail_app_logs.assert_not_called()
+
+    def test_logs_invalid_since_format_raises_invalid_argument(self, tmp_path: Path) -> None:
+        """Service-layer guard rejects garbage --since before the round-trip."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.get_app_logs(alias="prod", app_id="42", since="yesterday")
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert "ISO 8601" in excinfo.value.message
+        ds_mock.tail_app_logs.assert_not_called()
+
+    def test_logs_naive_since_raises_invalid_argument(self, tmp_path: Path) -> None:
+        """Service-layer guard rejects naive (no-tz) --since before the round-trip."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.get_app_logs(alias="prod", app_id="42", since="2026-05-21T13:00:00")
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert "timezone" in excinfo.value.message
+        ds_mock.tail_app_logs.assert_not_called()
+
+    def test_logs_empty_response_returns_zero_lines(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.tail_app_logs.return_value = ""
+
+        result = service.get_app_logs(alias="prod", app_id="42", lines=100)
+
+        assert result["lines_returned"] == 0
+        assert result["text"] == ""
+
+    def test_logs_http_error_propagates(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.tail_app_logs.side_effect = KeboolaApiError(
+            message='App "42" is not running',
+            status_code=400,
+            error_code=ErrorCode.API_ERROR,
+            retryable=False,
+        )
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.get_app_logs(alias="prod", app_id="42", lines=100)
+
+        assert excinfo.value.status_code == 400
+        ds_mock.close.assert_called_once()  # finally block ran
+
+    def test_logs_client_closed_on_exception(self, tmp_path: Path) -> None:
+        """Client.close() must run even when tail_app_logs raises unexpectedly."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.tail_app_logs.side_effect = RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            service.get_app_logs(alias="prod", app_id="42", lines=100)
+
+        ds_mock.close.assert_called_once()
+
+    def test_logs_unknown_alias_raises_config_error(self, tmp_path: Path) -> None:
+        """resolve_projects raises before any client is created."""
+        from keboola_agent_cli.errors import ConfigError
+
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+
+        with pytest.raises(ConfigError):
+            service.get_app_logs(alias="nonexistent", app_id="42", lines=100)
+
+        ds_mock.tail_app_logs.assert_not_called()
+        ds_mock.close.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# data-app logs (client HTTP layer via httpx_mock)
+# ---------------------------------------------------------------------------
+
+
+class TestTailAppLogsClient:
+    """Client-layer round-trip tests for DataScienceClient.tail_app_logs.
+
+    Asserts URL composition, query-param encoding (notably ``+`` in
+    timezone offsets), and plain-text body passthrough.
+    """
+
+    DATA_SCIENCE_BASE = "https://data-science.keboola.com"
+
+    def test_tail_app_logs_with_lines_url_and_params(self, httpx_mock) -> None:
+        from keboola_agent_cli.data_science_client import DataScienceClient
+
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps/42/logs/tail?lines=500",
+            text="line1\nline2\nline3\n",
+            status_code=200,
+            headers={"content-type": "text/plain"},
+        )
+
+        with DataScienceClient(
+            stack_url="https://connection.keboola.com",
+            token="901-test-token",
+        ) as client:
+            text = client.tail_app_logs("42", lines=500)
+
+        assert text == "line1\nline2\nline3\n"
+
+    def test_tail_app_logs_with_since_url_encodes_plus(self, httpx_mock) -> None:
+        """Timezone offset ``+00:00`` must be URL-encoded as ``%2B00%3A00``."""
+        from keboola_agent_cli.data_science_client import DataScienceClient
+
+        # httpx auto-encodes the params dict; assert against the encoded URL.
+        httpx_mock.add_response(
+            url=(
+                f"{self.DATA_SCIENCE_BASE}/apps/42/logs/tail"
+                "?since=2026-05-21T13%3A00%3A00%2B00%3A00"
+            ),
+            text="",
+            status_code=200,
+        )
+
+        with DataScienceClient(
+            stack_url="https://connection.keboola.com",
+            token="901-test-token",
+        ) as client:
+            text = client.tail_app_logs("42", since="2026-05-21T13:00:00+00:00")
+
+        assert text == ""
+
+    def test_tail_app_logs_no_params_sends_clean_url(self, httpx_mock) -> None:
+        """Neither lines nor since -> URL with no query string."""
+        from keboola_agent_cli.data_science_client import DataScienceClient
+
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps/42/logs/tail",
+            text="full buffer\n",
+            status_code=200,
+        )
+
+        with DataScienceClient(
+            stack_url="https://connection.keboola.com",
+            token="901-test-token",
+        ) as client:
+            text = client.tail_app_logs("42")
+
+        assert text == "full buffer\n"

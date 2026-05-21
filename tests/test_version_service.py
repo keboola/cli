@@ -127,6 +127,9 @@ class TestVersionService:
         assert mcp_dep["up_to_date"] is True
         assert mcp_dep["install_method"] == "uv_tool"
         assert "uv tool upgrade" in mcp_dep["upgrade_command"]
+        # issue #324: a copy-pasted command without the opt-in fails the
+        # same way the auto-update does.
+        assert "--prerelease=allow" in mcp_dep["upgrade_command"]
 
     @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
     @patch("keboola_agent_cli.services.version_service._is_uvx_available")
@@ -159,6 +162,8 @@ class TestVersionService:
         assert "uv tool install --upgrade" in mcp_dep["upgrade_command"]
         # The pre-fix broken arg must NOT appear -- it does not work.
         assert "--version" not in mcp_dep["upgrade_command"]
+        # issue #324: pre-release opt-in must be present here too.
+        assert "--prerelease=allow" in mcp_dep["upgrade_command"]
 
     @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
     @patch("keboola_agent_cli.services.version_service._is_uvx_available")
@@ -574,6 +579,9 @@ class TestPerformMcpUpdate:
         # Verify the command shape we are about to run.
         cmd = mock_run.call_args.args[0]
         assert "tool" in cmd and "upgrade" in cmd and MCP_PACKAGE_NAME in cmd
+        # issue #324: the pre-release opt-in is mandatory -- without it uv
+        # backtracks to a stale MCP (toon-format~=0.9.0b1 pin) and exits 0.
+        assert "--prerelease=allow" in cmd
 
     @patch("keboola_agent_cli.services.version_service.shutil.which")
     @patch("keboola_agent_cli.services.version_service.subprocess.run")
@@ -584,6 +592,8 @@ class TestPerformMcpUpdate:
         assert ok is True
         cmd = mock_run.call_args.args[0]
         assert "install" in cmd and "--upgrade" in cmd
+        # issue #324: pip's pre-release opt-in flag is --pre.
+        assert "--pre" in cmd
 
     @patch("keboola_agent_cli.services.version_service.shutil.which")
     @patch("keboola_agent_cli.services.version_service.subprocess.run")
@@ -612,6 +622,8 @@ class TestPerformMcpUpdate:
         assert MCP_PACKAGE_NAME in cmd
         # The broken --version arg must be GONE from the uvx upgrade path.
         assert "--version" not in cmd
+        # issue #324: the uvx->uv-tool promotion must also opt into pre-releases.
+        assert "--prerelease=allow" in cmd
 
     @patch("keboola_agent_cli.services.version_service.shutil.which", return_value=None)
     def test_uvx_promotion_requires_uv(self, mock_which: MagicMock) -> None:
@@ -1009,3 +1021,89 @@ class TestBuildKbagentUpgradeCommand:
         # No tag suffix when prerelease=False, even if target_version supplied.
         assert not cmd[-1].endswith("@v0.43.3")
         assert "@v" not in cmd[-1]
+
+
+# ---------------------------------------------------------------------------
+# issue #324: keboola-mcp-server pre-release dependency opt-in
+# ---------------------------------------------------------------------------
+
+
+class TestMcpPrereleaseOptIn:
+    """Regression tests for issue #324.
+
+    keboola-mcp-server >= 1.55.0 pins a pre-release-only transitive
+    dependency (``toon-format~=0.9.0b1``; on PyPI toon-format ships only
+    0.1.0 stable + 0.9.0b1 pre-release). uv refuses pre-releases by
+    default, so a bare ``uv tool upgrade`` backtracks to the last MCP
+    release predating the pin (v1.32.0) and exits 0 -- pinning the fleet to
+    a stale server while reporting a newer version is "available". Every
+    upgrade path -- run internally AND shown to users -- must opt into
+    pre-releases or the auto-update silently no-ops forever.
+
+    Note: ``--prerelease=if-necessary`` is NOT sufficient -- a *stable*
+    toon-format (0.1.0) exists, so uv judges a pre-release "unnecessary"
+    and then fails the pin. Only ``--prerelease=allow`` resolves it. These
+    tests pin the literal expected flag rather than importing the
+    production constant, so a regression in the constant's value is caught.
+    """
+
+    @pytest.mark.parametrize(
+        ("method", "expected_flag"),
+        [
+            ("uv_tool", "--prerelease=allow"),
+            ("uvx", "--prerelease=allow"),
+            ("pip_env", "--pre"),
+        ],
+    )
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    def test_internal_upgrade_command_opts_into_prereleases(
+        self,
+        mock_run: MagicMock,
+        mock_which: MagicMock,
+        method: str,
+        expected_flag: str,
+    ) -> None:
+        mock_which.return_value = "/usr/local/bin/uv"
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+
+        ok, _info = _perform_mcp_update(method=method)
+
+        assert ok is True
+        cmd = mock_run.call_args.args[0]
+        assert expected_flag in cmd, f"{method} command missing {expected_flag}: {cmd}"
+        assert MCP_PACKAGE_NAME in cmd
+
+    @pytest.mark.parametrize(
+        ("method", "expected_flag"),
+        [
+            ("uv_tool", "--prerelease=allow"),
+            ("uvx", "--prerelease=allow"),
+            ("pip_env", "--pre"),
+            ("none", "--prerelease=allow"),
+        ],
+    )
+    @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
+    @patch("keboola_agent_cli.services.version_service._is_uvx_available")
+    @patch("keboola_agent_cli.services.version_service._get_local_mcp_version")
+    @patch("keboola_agent_cli.services.version_service._detect_mcp_install_method")
+    def test_user_facing_command_opts_into_prereleases(
+        self,
+        mock_detect: MagicMock,
+        mock_local: MagicMock,
+        mock_uvx: MagicMock,
+        mock_mcp_latest: MagicMock,
+        method: str,
+        expected_flag: str,
+    ) -> None:
+        mock_uvx.return_value = True
+        mock_mcp_latest.return_value = "1.61.3"
+        mock_local.return_value = "1.32.0"
+        mock_detect.return_value = method
+
+        result = VersionService().get_versions()
+
+        upgrade_command = result["dependencies"][0]["upgrade_command"]
+        assert expected_flag in upgrade_command, (
+            f"{method} upgrade_command missing {expected_flag}: {upgrade_command!r}"
+        )

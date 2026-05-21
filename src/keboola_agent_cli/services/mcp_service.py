@@ -32,6 +32,7 @@ from ..constants import (
     ENV_MCP_MAX_SESSIONS,
     ENV_MCP_TOOL_TIMEOUT,
     ENV_MCP_TRANSPORT,
+    MCP_UV_PRERELEASE_FLAG,
 )
 from ..errors import ConfigError
 from ..models import ProjectConfig
@@ -164,8 +165,12 @@ def ensure_mcp_installed() -> dict[str, Any]:
     # Try uv tool install (creates permanent binary, ~1s startup vs ~4.5s uvx)
     if shutil.which("uv"):
         try:
+            # --prerelease=allow is mandatory (issue #324): keboola-mcp-server
+            # pins a pre-release-only transitive dep (toon-format~=0.9.0b1).
+            # Without the flag uv backtracks to the stale v1.32.0 and exits 0,
+            # so `doctor --fix` would "succeed" yet install an outdated server.
             result = subprocess.run(
-                ["uv", "tool", "install", "keboola-mcp-server"],
+                ["uv", "tool", "install", MCP_UV_PRERELEASE_FLAG, "keboola-mcp-server"],
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -192,7 +197,10 @@ def ensure_mcp_installed() -> dict[str, Any]:
         return {
             "method": "uvx_fallback",
             "installed": False,
-            "message": "Using uvx (slower). Run 'uv tool install keboola-mcp-server' for faster startup",
+            "message": (
+                "Using uvx (slower). Run "
+                f"'uv tool install {MCP_UV_PRERELEASE_FLAG} keboola-mcp-server' for faster startup"
+            ),
         }
 
     return {
@@ -1478,7 +1486,9 @@ class McpService(BaseService):
         message = f"MCP server available via: {' '.join(command)} ({transport_info})"
         if is_uvx_fallback:
             status = "warn"
-            message += ". For faster startup, run: uv tool install keboola-mcp-server"
+            # --prerelease=allow is required (issue #324); a copied hint
+            # without it backtracks to the stale v1.32.0 and exits 0.
+            message += f". For faster startup, run: uv tool install {MCP_UV_PRERELEASE_FLAG} keboola-mcp-server"
 
         return {
             "check": "mcp_server",
