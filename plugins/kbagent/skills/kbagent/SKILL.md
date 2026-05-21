@@ -151,6 +151,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Stop a running data app (preserves the URL and Storage config) | `kbagent data-app stop --project PROJECT --app-id APP-ID` |
 | Delete the deployment AND the Storage config (cascade, irreversible) | `kbagent data-app delete --project PROJECT --app-id APP-ID` |
 | Retrieve the simpleAuth password for a password-gated data app | `kbagent data-app password --project PROJECT --app-id APP-ID` |
+| Tail the container logs for a deployed data app | `kbagent data-app logs --project PROJECT --app-id APP-ID` |
 | Encrypt and write app-runtime secrets to the linked Storage config | `kbagent data-app secrets-set --project PROJECT --app-id APP-ID` |
 | List the keys in parameters.dataApp.secrets, with derived runtime env-var names | `kbagent data-app secrets-list --project PROJECT --app-id APP-ID` |
 | Show metadata for ONE secret key. | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |

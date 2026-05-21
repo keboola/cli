@@ -28,6 +28,10 @@ validation):
     GET    /apps/{id}/password            -> 200, {password: "<20 hex>"}
                                               (requires both Storage and
                                               Manage tokens)
+    GET    /apps/{id}/logs/tail           -> 200, text/plain container log
+                                              tail. ``lines=N`` and
+                                              ``since=ISO8601`` are mutually
+                                              exclusive on the server.
 """
 
 from __future__ import annotations
@@ -190,3 +194,39 @@ class DataScienceClient(BaseHttpClient):
             headers={"X-KBC-ManageApiToken": manage_token},
         )
         return response.json()
+
+    def tail_app_logs(
+        self,
+        app_id: str,
+        *,
+        lines: int | None = None,
+        since: str | None = None,
+    ) -> str:
+        """Fetch the container log tail from ``/apps/{id}/logs/tail``.
+
+        Returns the response body verbatim as plain text (``text/plain``)
+        -- one log line per ``\\n``, trailing newline preserved as the
+        server sent it. Callers that want a list of lines should call
+        ``text.splitlines()``.
+
+        ``lines`` and ``since`` are mutually exclusive on the server
+        (400 ``Only one of "since" or "lines" can be set``); the caller
+        MUST enforce that constraint before invoking. Passing neither
+        returns the full current container buffer. ``lines=0`` and
+        negative values are rejected by the server with a 400 -- callers
+        opting into the full buffer should pass ``lines=None``.
+
+        ``since`` must be an ISO 8601 timestamp WITH timezone (``Z`` or
+        ``+00:00``); naive datetimes and date-only values are rejected
+        by the server with a 400.
+        """
+        path = f"/apps/{quote(str(app_id), safe='')}/logs/tail"
+        params: dict[str, Any] = {}
+        if lines is not None:
+            params["lines"] = lines
+        if since is not None:
+            params["since"] = since
+        # ``params or None`` keeps the URL clean (no trailing ``?``) when
+        # the caller wants the server's default buffer-all behavior.
+        response = self._do_request("GET", path, params=params or None)
+        return response.text

@@ -69,8 +69,7 @@ a critical failure.
    the #274 ODBC `Actual statement count N != desired 1` crash needs
    0.31.0+, `storage swap-tables` needs 0.28.0+,
    env-var manage-token auth for `org setup` / `project refresh` /
-   `data-app password` needs 0.29.0+ with `--allow-env-manage-token`
-   (the env var is default-deny on 0.29.0+),
+   `data-app password` needs 0.29.0+ with `--allow-env-manage-token`,
    `project invite` / `project member-*` / `project invitation-*`
    need 0.29.0+,
    `data-app secrets-* / validate-repo` need 0.29.0+,
@@ -111,6 +110,7 @@ a critical failure.
    data-app CLI sandbox annotation = 0.42.0+ (#304),
    HTTP `?include_sandbox_annotation=true` = 0.43.1+ #312,
    `kbagent update --beta` = 0.43.3+,
+   `data-app logs` = 0.43.8+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.

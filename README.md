@@ -127,7 +127,7 @@ kbagent workspace query --project prod --workspace-id WS_ID \
 | **Agent Tasks** | Schedule AI agents inside `kbagent serve` (CRON / manual / chained). Three action flavours per task: `claude` / `codex` / `gemini` with prompt, MCP tool call, or raw kbagent CLI. Per-run cost & token timeline with authoritative Claude 4.x pricing built-in; persisted JSONL history (`0600`); live SSE replay; **Artifacts tab** auto-renders long-form markdown reports (GFM tables, Copy / Download `.md`). Subprocesses get `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` auto-injected for self-calls via `kbagent http`. (since 0.40.0) |
 | **Workspaces** | Create Snowflake/BQ workspace, load tables, run SQL. Create from transformation config for instant debugging. Orphan detection + garbage collection. |
 | **Sharing** | Cross-project bucket sharing with org/project/user access control. Share, link, unlink. |
-| **Data apps** | First-class lifecycle for Streamlit / Flask / Node deployments (`keboola.data-apps`). `create / deploy / start / stop / password / delete` (since 0.27.0); `secrets-set / -list / -get / -remove` for `#`-prefixed runtime secrets with per-project KMS encryption (since 0.29.0); `validate-repo` pre-flight Golden Rule check that catches misconfigured git repos before a deploy (since 0.29.0). Hides the redeploy contract and per-project KMS encryption of git PATs. |
+| **Data apps** | First-class lifecycle for Streamlit / Flask / Node deployments (`keboola.data-apps`). `create / deploy / start / stop / password / delete` (since 0.27.0); `secrets-set / -list / -get / -remove` for `#`-prefixed runtime secrets with per-project KMS encryption (since 0.29.0); `validate-repo` pre-flight Golden Rule check that catches misconfigured git repos before a deploy (since 0.29.0); `logs` tails the container log buffer for triaging stuck deploys / runtime crashes (since 0.43.8). Hides the redeploy contract and per-project KMS encryption of git PATs. |
 | **Project members & invitations** | `project invite` (single or `--from-csv` bulk with parallel workers), `project member-list / member-remove / member-set-role`, `project invitation-list / invitation-cancel`. Role whitelist enforced at the CLI layer; Manage API "already invited" treated as `noop` not error (since 0.29.0). |
 | **Lineage** | Column-level dependency analysis across projects. SQL/Python parsing, AI-enhanced detection, interactive web browser, Mermaid/HTML/ER export. |
 | **Kai (AI Assistant)** | Ask Keboola's built-in AI questions about your project. One-shot or chat sessions with full MCP context. |
@@ -195,7 +195,7 @@ kbagent storage     buckets | bucket-detail | create-bucket | delete-bucket
                     files | file-detail | file-upload | file-download | file-tag | file-delete
                     load-file | unload-table
 kbagent sharing     list | share | unshare | link | unlink | edges
-kbagent data-app    list | detail | create | deploy | start | stop | delete | password
+kbagent data-app    list | detail | create | deploy | start | stop | delete | password | logs
                     secrets-set | secrets-list | secrets-get | secrets-remove
                     validate-repo
 kbagent lineage     build | show | info | server

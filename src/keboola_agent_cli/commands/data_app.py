@@ -1,4 +1,4 @@
-"""Data-app commands -- create, list, detail, deploy, start, stop, delete, password.
+"""Data-app commands -- create, list, detail, deploy, start, stop, delete, password, logs.
 
 Thin CLI layer that delegates to :class:`DataAppService`. The underlying
 Keboola Data Science API is not idempotent and has several footguns
@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 import typer
+from rich.console import Console
+from rich.markup import escape
 
 from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
@@ -649,6 +652,145 @@ def data_app_password(
             c.print(f"\n[bold yellow]Password:[/bold yellow] {d['password']}"),
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# data-app logs (Data Science /apps/{id}/logs/tail)
+# ---------------------------------------------------------------------------
+
+
+@data_app_app.command("logs")
+def data_app_logs(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
+    lines: int | None = typer.Option(
+        None,
+        "--lines",
+        help=(
+            "Tail the last N lines (default 500 when neither --lines nor "
+            "--since is set). Pass 0 to fetch the full current container "
+            "buffer (no server-side cap). Mutually exclusive with --since."
+        ),
+    ),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        help=(
+            "Fetch lines since this ISO 8601 timestamp WITH timezone "
+            "(e.g. '2026-05-21T13:00:00Z' or '2026-05-21T13:00:00+00:00'). "
+            "Mutually exclusive with --lines."
+        ),
+    ),
+) -> None:
+    """Tail the container logs for a deployed data app.
+
+    Returns the full container stdout/stderr buffer including the spin-up
+    trace ([TIMING] git_clone, uv install, supervisord, runtime stack
+    traces). App must be running or recently-stopped -- never-started
+    apps return HTTP 400 "App X is not running"; recover with
+    ``kbagent data-app start`` or ``data-app deploy``.
+
+    Auth: project Storage token only. No Manage token required.
+
+    Note: the log buffer can echo runtime secrets the app printed to
+    stdout/stderr (tracebacks, debug os.environ dumps). Consider secret
+    hygiene before piping --json output into AI agent context.
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "data-app.logs",
+            project=project,
+            app_id=app_id,
+            lines=lines,
+            since=since,
+        )
+        return
+
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "data_app_service")
+
+    # Command-layer validations (UX-level usage errors -> exit 2). The
+    # service has its own mutex guard for --hint service / programmatic
+    # callers; see DataAppService.get_app_logs.
+    if lines is not None and since is not None:
+        formatter.error(
+            message="--lines and --since are mutually exclusive; pass exactly one.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2) from None
+
+    if lines is not None and lines < 0:
+        formatter.error(
+            message="--lines must be 0 (full buffer) or a positive integer.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2) from None
+
+    if since is not None:
+        try:
+            parsed = datetime.fromisoformat(since)
+        except ValueError as exc:
+            formatter.error(
+                message=(f"--since must be ISO 8601 (e.g. '2026-05-21T13:00:00Z'): {exc}"),
+                error_code=ErrorCode.USAGE_ERROR,
+            )
+            raise typer.Exit(code=2) from None
+        if parsed.tzinfo is None:
+            formatter.error(
+                message=(
+                    "--since must include a timezone (e.g. 'Z' or '+00:00'); "
+                    "the server rejects naive datetimes."
+                ),
+                error_code=ErrorCode.USAGE_ERROR,
+            )
+            raise typer.Exit(code=2) from None
+
+    # Translate the CLI sentinels into the service kwargs:
+    #   - neither set        -> apply default lines=500
+    #   - lines=0            -> opt-in to full buffer (no params sent)
+    #   - lines>0 or since=Y -> pass through verbatim
+    if lines is None and since is None:
+        lines_arg: int | None = 500
+    elif lines == 0:
+        lines_arg = None
+    else:
+        lines_arg = lines
+
+    try:
+        result = service.get_app_logs(
+            alias=project,
+            app_id=app_id,
+            lines=lines_arg,
+            since=since,
+        )
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+
+    def _print_logs(c: Console, d: dict) -> None:
+        c.print(
+            f"\n[bold]Logs[/bold] for data app [cyan]{escape(str(d['app_id']))}[/cyan] "
+            f"in [magenta]{escape(d['project_alias'])}[/magenta] "
+            f"([dim]{d['lines_returned']} lines[/dim])"
+        )
+        # ``markup=False`` so literal [TIMING], [INFO], etc. in the log
+        # payload are not interpreted as Rich tags. ``highlight=False``
+        # disables Rich's auto-highlighter for URLs / IPs / timestamps
+        # in log lines (false positives that just add visual noise).
+        # ``end=""`` because the server includes a trailing newline.
+        c.print(d["text"], markup=False, highlight=False, end="")
+
+    formatter.output(result, _print_logs)
 
 
 # ---------------------------------------------------------------------------
