@@ -589,6 +589,13 @@ events and emits a final `done` SSE frame mirroring the same record.
   (`uv_tool` / `pip_env` / `uvx`) and runs the matching upgrade command
   (`uv tool upgrade` / `pip install -U` / `uvx --refresh`). No re-exec needed
   for the MCP path -- the next `tool call` spawn picks up the new version.
+- Since v0.43.8: every MCP install/upgrade command carries `--prerelease=allow`
+  (uv) / `--pre` (pip). `keboola-mcp-server >= 1.55.0` pins a pre-release-only
+  transitive dep (`toon-format~=0.9.0b1`); without the opt-in uv backtracks to
+  the stale v1.32.0 and exits 0, so the auto-update silently no-ops while every
+  command prints a misleading stderr warning. Fixed in #324. Note:
+  `--prerelease=if-necessary` is insufficient -- a stable `toon-format` 0.1.0
+  exists but violates the pin, so only `--prerelease=allow` resolves it.
 - Critical invariant: **kbagent up-to-date does NOT short-circuit the MCP
   stage**. Both stages always run, regardless of which side has updates.
 - `kbagent update` triggers the same two-stage flow explicitly. JSON output

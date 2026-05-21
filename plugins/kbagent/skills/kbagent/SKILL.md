@@ -363,7 +363,7 @@ If kbagent is not yet installed:
 uv tool install git+https://github.com/padak/keboola_agent_cli
 # --prerelease=allow is required (issue #324): keboola-mcp-server pins a
 # pre-release-only transitive dep (toon-format), which uv refuses by default.
-uv tool install keboola-mcp-server --prerelease=allow
+uv tool install --prerelease=allow keboola-mcp-server
 kbagent doctor --fix
 ```
 
