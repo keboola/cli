@@ -577,17 +577,21 @@ HintRegistry.register(
     CommandHint(
         cli_command="data-app.secrets-get",
         description=(
-            "Show metadata for ONE secret key. NEVER echoes the decrypted "
-            "value -- the Encryption API is one-way and the CLI does not "
-            "decrypt under any branch."
+            "Show ONE key from parameters.dataApp.secrets (key with or "
+            "without a leading '#'). An ENCRYPTED secret returns metadata "
+            "only -- the Encryption API is one-way and the CLI never echoes "
+            "the decrypted value under any branch. A PLAIN (unencrypted) "
+            "env-var value returns its literal value (encrypted=false), "
+            "which is already visible via config detail."
         ),
         steps=[
             HintStep(
                 comment=(
                     "GET the Storage config, look up one key in "
-                    "parameters.dataApp.secrets, return metadata only. The "
-                    "ciphertext fingerprint is the first 8 chars of the "
-                    "encrypted payload after the KBC::* prefix."
+                    "parameters.dataApp.secrets. For an encrypted secret "
+                    "return metadata only (the ciphertext fingerprint is the "
+                    "first 8 chars of the payload after the KBC::* prefix); "
+                    "for a plain value return the value verbatim."
                 ),
                 client=ClientCall(
                     method="get_config_detail",

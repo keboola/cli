@@ -1430,7 +1430,7 @@ class DataAppService(BaseService):
         """
         if not keys:
             raise KeboolaApiError(
-                message="At least one --key '#KEY' is required.",
+                message="At least one --key 'KEY' is required ('#' optional).",
                 status_code=0,
                 error_code=ErrorCode.DATA_APP_INVALID_SECRET,
                 retryable=False,
