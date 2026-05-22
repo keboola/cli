@@ -1283,11 +1283,13 @@ class DataAppService(BaseService):
         branch_id: int | None = None,
         show_fingerprint: bool = False,
     ) -> dict[str, Any]:
-        """Return metadata for every ``#``-prefixed secret on the app's config.
+        """Return metadata for every key in ``parameters.dataApp.secrets``.
 
-        Never returns the encrypted ciphertext in full and never attempts
-        to decrypt. The Encryption API is one-way; decryption from the CLI
-        is impossible by design.
+        The block holds both ``#``-prefixed encrypted secrets and plain
+        (unencrypted) env-var values; both are enumerated. Never returns an
+        encrypted ciphertext in full and never attempts to decrypt -- the
+        Encryption API is one-way; decryption from the CLI is impossible by
+        design.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
