@@ -126,6 +126,13 @@ ALLOWED_GIT_REPO_SCHEMES: tuple[str, ...] = (
 # derived env var stays under typical shell limits.
 SECRET_KEY_PATTERN = re.compile(r"^#[A-Za-z][A-Za-z0-9_-]{0,63}$")
 
+# Same shape as SECRET_KEY_PATTERN but the leading ``#`` is optional. The
+# ``parameters.dataApp.secrets`` block legitimately holds BOTH ``#``-prefixed
+# encrypted secrets and plain (unencrypted) env-var config values; read/remove
+# operations must accept either, since ``secrets-list`` enumerates both. Only
+# the write path (``secrets-set``) keeps requiring ``#`` -- it encrypts.
+SECRET_OR_PLAIN_KEY_PATTERN = re.compile(r"^#?[A-Za-z][A-Za-z0-9_-]{0,63}$")
+
 # Env vars the data-app runtime auto-injects. Setting a secret whose
 # derived env-var name collides with one of these is silently shadowed
 # at runtime by the platform value. See storage-access canon at
@@ -357,12 +364,25 @@ class DataAppService(BaseService):
                 config_names = self._fetch_data_app_config_names(storage_client, branch_id)
                 merged: list[dict[str, Any]] = []
                 for app in apps:
+                    # The Data Science ``/apps`` collection returns EVERY
+                    # deployment in the project, not just data apps -- that
+                    # includes workspace/sandbox deployments
+                    # (``componentId=keboola.sandboxes``, ``type=snowflake`` /
+                    # ``bigquery``, no name, Snowflake URL). The Apps UI filters
+                    # to ``keboola.data-apps``; mirror that so ``data-app list``
+                    # does not leak sandboxes. Defensive: an item that omits
+                    # ``componentId`` (older API shape) is kept rather than
+                    # hidden -- we never drop a row we cannot classify.
+                    component_id = str(app.get("componentId") or "")
+                    if component_id and component_id != DATA_APP_COMPONENT_ID:
+                        continue
                     config_id = str(app.get("configId") or "")
                     merged.append(
                         {
                             "project_alias": alias,
                             "app_id": str(app.get("id", "")),
                             "config_id": config_id,
+                            "component_id": component_id,
                             "name": config_names.get(config_id, app.get("name", "")),
                             "type": app.get("type", ""),
                             "state": app.get("state", ""),
@@ -1315,15 +1335,26 @@ class DataAppService(BaseService):
         key: str,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """Return metadata for ONE secret. Never echoes the decrypted value.
+        """Return metadata for ONE key in ``parameters.dataApp.secrets``.
 
-        The decrypted plaintext NEVER appears in the return dict, in stderr,
-        in the log stream, or in the change description. The Encryption API
-        does not expose a decrypt endpoint; the CLI cannot decrypt even if
-        it wanted to. The metadata-only contract is the security boundary
-        and is asserted by the test suite.
+        Two cases, dispatched on whether the stored value is a ``KBC::``
+        ciphertext:
+
+        - **Encrypted** (``#`` secret): metadata-only. The decrypted
+          plaintext NEVER appears in the return dict, stderr, the log
+          stream, or the change description. The Encryption API exposes no
+          decrypt endpoint; the CLI cannot decrypt even if it wanted to.
+          This metadata-only contract is the security boundary and is
+          asserted by the test suite.
+        - **Plain** (unencrypted env-var config value): the value is
+          returned verbatim. It is not a secret -- it is already stored in
+          clear in the config and visible via ``config detail`` -- so
+          echoing it leaks nothing the caller could not already read.
+
+        Accepts keys with OR without a leading ``#`` (``require_hash=False``),
+        mirroring ``secrets-list``, which enumerates both kinds.
         """
-        self._validate_secret_key(key)
+        self._validate_secret_key(key, require_hash=False)
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -1348,23 +1379,36 @@ class DataAppService(BaseService):
                     error_code=ErrorCode.NOT_FOUND,
                     retryable=False,
                 )
-            ciphertext = raw_secrets[key]
+            stored_value = raw_secrets[key]
             env_var = _derive_runtime_env_var_name(key)
-            return {
+            is_encrypted = isinstance(stored_value, str) and stored_value.startswith("KBC::")
+            result: dict[str, Any] = {
                 "project_alias": alias,
                 "app_id": str(app_id),
                 "config_id": config_id,
                 "key": key,
                 "env_var": env_var,
                 "shadowed_by_runtime": env_var in RESERVED_RUNTIME_ENV_VARS,
-                "fingerprint": _secret_fingerprint(ciphertext),
-                "encryption_prefix": self._derive_encryption_prefix(ciphertext),
+                "encrypted": is_encrypted,
                 "present": True,
-                "message": (
+            }
+            if is_encrypted:
+                result["value"] = None
+                result["fingerprint"] = _secret_fingerprint(stored_value)
+                result["encryption_prefix"] = self._derive_encryption_prefix(stored_value)
+                result["message"] = (
                     f"Secret '{key}' is set on data app {app_id}. "
                     "Decrypted plaintext is NOT exposed by the CLI."
-                ),
-            }
+                )
+            else:
+                result["value"] = stored_value
+                result["fingerprint"] = ""
+                result["encryption_prefix"] = ""
+                result["message"] = (
+                    f"'{key}' is a plaintext (unencrypted) config value on data app "
+                    f"{app_id}; it is stored in clear in the config."
+                )
+            return result
         finally:
             ds_client.close()
             storage_client.close()
@@ -1378,7 +1422,12 @@ class DataAppService(BaseService):
         branch_id: int | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Remove one or more ``#``-prefixed secrets. Idempotent."""
+        """Remove one or more keys from ``parameters.dataApp.secrets``. Idempotent.
+
+        Accepts both ``#``-prefixed secrets and plain (unencrypted) env-var
+        keys (``require_hash=False``), mirroring ``secrets-list`` -- anything
+        that can be listed can be removed.
+        """
         if not keys:
             raise KeboolaApiError(
                 message="At least one --key '#KEY' is required.",
@@ -1387,7 +1436,7 @@ class DataAppService(BaseService):
                 retryable=False,
             )
         for key in keys:
-            self._validate_secret_key(key)
+            self._validate_secret_key(key, require_hash=False)
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -1482,22 +1531,39 @@ class DataAppService(BaseService):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _validate_secret_key(self, key: str) -> None:
-        """Reject any key that does not match SECRET_KEY_PATTERN.
+    def _validate_secret_key(self, key: str, *, require_hash: bool = True) -> None:
+        """Reject any key that is not a valid data-app env-var identifier.
 
-        The check enforces the ``#``-prefix convention AND that the rest
-        of the key forms a valid env-var identifier after the runtime
-        translation rule. Service-boundary check; the command layer also
-        validates so the error surfaces with the friendliest exit code.
+        With ``require_hash=True`` (the default, used by the encrypting
+        ``secrets-set`` path) the ``#``-prefix convention is mandatory.
+        With ``require_hash=False`` (read/remove paths) the ``#`` is
+        optional, so plain unencrypted env-var keys -- which
+        ``secrets-list`` enumerates alongside ``#`` secrets -- can be read
+        and removed. Either way the rest of the key must form a valid
+        env-var identifier after the runtime translation rule.
+
+        Service-boundary check; the command layer also validates so the
+        error surfaces with the friendliest exit code.
         """
-        if not isinstance(key, str) or not SECRET_KEY_PATTERN.match(key):
-            raise KeboolaApiError(
-                message=(
+        pattern = SECRET_KEY_PATTERN if require_hash else SECRET_OR_PLAIN_KEY_PATTERN
+        if not isinstance(key, str) or not pattern.match(key):
+            message = (
+                (
                     f"Invalid secret key '{key}'. Keys must start with '#' and "
                     "the rest must match [A-Za-z][A-Za-z0-9_-]{0,63} so the "
                     "derived runtime env-var name (uppercase, '-' to '_') is a "
                     "valid identifier."
-                ),
+                )
+                if require_hash
+                else (
+                    f"Invalid key '{key}'. The key must form a valid env-var "
+                    "identifier -- [A-Za-z][A-Za-z0-9_-]{0,63} with an optional "
+                    "leading '#' -- so the derived runtime env-var name "
+                    "(uppercase, '-' to '_') is valid."
+                )
+            )
+            raise KeboolaApiError(
+                message=message,
                 status_code=0,
                 error_code=ErrorCode.DATA_APP_INVALID_SECRET,
                 retryable=False,

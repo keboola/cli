@@ -30,6 +30,9 @@ ENV/
 .claude/
 .audit/
 
+# Browser-automation MCP scratch (console logs, page snapshots)
+.playwright-mcp/
+
 # Testing
 .pytest_cache/
 .coverage
@@ -55,6 +58,7 @@ Thumbs.db
 tmp/
 
 # web/ Node + React build artifacts
+/node_modules/
 web/backend/node_modules/
 web/backend/dist/
 web/frontend/node_modules/

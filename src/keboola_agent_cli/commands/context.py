@@ -721,18 +721,22 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     env-var names. Never echoes encrypted ciphertext in full and never
     decrypts. --show-fingerprint includes a short fingerprint per key.
 
-  kbagent data-app secrets-get --project ALIAS --app-id ID --key '#KEY'
+  kbagent data-app secrets-get --project ALIAS --app-id ID --key 'KEY'
         [--branch ID]
-    Show metadata for ONE secret. NEVER echoes the decrypted value --
-    the Encryption API has no decrypt endpoint and the CLI cannot
-    decrypt. NOT_FOUND on absent key; never enumerates sibling keys.
+    Show ONE key from parameters.dataApp.secrets. Leading '#' is OPTIONAL
+    -- the block holds both encrypted secrets (#) and plain env-var
+    values, both enumerated by secrets-list. ENCRYPTED secret -> metadata
+    only (encrypted: true, value: null); the decrypted plaintext is NEVER
+    echoed (Encryption API has no decrypt endpoint). PLAIN value -> the
+    literal value (encrypted: false), already visible via config detail.
+    NOT_FOUND on absent key (exact match); never enumerates siblings.
 
-  kbagent data-app secrets-remove --project ALIAS --app-id ID --key '#KEY'
-        [--key '#KEY2' ...] [--branch ID] [--yes] [--dry-run]
-    Remove one or more secrets. Idempotent (missing keys -> exit 0,
-    removed: 0). Destructive: a removal can break the running app at
-    next deploy if it depends on the value. Confirmation prompt unless
-    --yes or --json.
+  kbagent data-app secrets-remove --project ALIAS --app-id ID --key 'KEY'
+        [--key 'KEY2' ...] [--branch ID] [--yes] [--dry-run]
+    Remove one or more keys (encrypted secrets OR plain env vars; leading
+    '#' optional). Idempotent (missing keys -> exit 0, removed: 0).
+    Destructive: a removal can break the running app at next deploy if it
+    depends on the value. Confirmation prompt unless --yes or --json.
 
   kbagent data-app validate-repo --git-repo URL [--git-branch BRANCH]
         [--git-public/--no-git-public] [--git-pat-env VAR | --git-pat-file PATH]
