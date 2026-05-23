@@ -237,7 +237,7 @@ Manage Keboola metastore models -- datasets, metrics, relationships, constraints
 
 Reads `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` env vars. The scheduler auto-injects these (plus `KBAGENT_CONFIG_DIR`) into every AI-agent / `cli_command` subprocess. Outside a serve subprocess context the command refuses to run with exit code 2. **Inside a scheduled-agent task, prefer `kbagent http get /openapi.json` then a typed call over forking another `kbagent` CLI -- the HTTP path always sees the operator's live config (not the global `~/.config/keboola-agent-cli/` one).**
 
-## Agent Tasks (since v0.42.0)
+## Agent Tasks (since v0.44.0)
 
 CLI parity for the `/agents` REST surface. Reads/writes `<config_dir>/agents.json` -- the same on-disk format the in-process scheduler inside `kbagent serve` consumes. CRUD + ad-hoc `run` work offline; the cron loop that fires scheduled tasks still requires `kbagent serve` running. See [agent-tasks-cli-workflow.md](agent-tasks-cli-workflow.md) for full walkthroughs; [agent-tasks-rest-workflow.md](agent-tasks-rest-workflow.md) covers the REST/SSE form for AI-agent subprocesses.
 

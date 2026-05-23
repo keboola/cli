@@ -550,3 +550,15 @@ class TestAgentIdAlias:
         )
         assert result.exit_code == 1
         assert json.loads(result.output)["error"]["code"] == "NOT_FOUND"
+
+    def test_run_accepts_id_flag(self, tmp_path: Path) -> None:
+        """run wires --id; a missing task resolves then 404s (avoids a real subprocess)."""
+        result = _invoke(tmp_path, "agent", "run", "--id", "ffffffffffff", json_mode=True)
+        assert result.exit_code == 1
+        assert json.loads(result.output)["error"]["code"] == "NOT_FOUND"
+
+    def test_runs_accepts_id_flag(self, tmp_path: Path) -> None:
+        task_id = self._create(tmp_path)
+        result = _invoke(tmp_path, "agent", "runs", "--id", task_id, json_mode=True)
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"]["runs"] == []

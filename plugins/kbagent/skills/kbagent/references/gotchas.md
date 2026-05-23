@@ -1995,7 +1995,7 @@ requires `canManageTokens` privilege, which only **master tokens** carry.
   values via `rich.markup.escape` per the `commands/config.py`
   precedent.
 
-## `kbagent agent` CRUD works offline; cron firing needs `kbagent serve` running (since v0.42.0)
+## `kbagent agent` CRUD works offline; cron firing needs `kbagent serve` running (since v0.44.0)
 
 The `kbagent agent <verb>` command tree reads/writes `<config_dir>/agents.json`
 directly via `AgentService`, so `agent list / show / create / update / delete /
@@ -2020,7 +2020,7 @@ This is the SAME on-disk format the REST router writes via `POST /agents`,
 so CLI-created tasks are interchangeable with UI-created and REST-created
 tasks -- the only difference is who fires them.
 
-## `agent` action helpers are shared between REST + CLI (since v0.42.0)
+## `agent` action helpers are shared between REST + CLI (since v0.44.0)
 
 The `validate_trigger` (cycle/self-loop check) and `merge_runtime_input`
 (per-action-type runtime input merge) helpers live in

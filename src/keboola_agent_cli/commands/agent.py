@@ -285,6 +285,18 @@ def _render_task_detail(console: Any, task: dict[str, Any]) -> None:
     console.print(Syntax(action_json, "json", theme="ansi_dark", word_wrap=True))
 
 
+def _render_created_task(console: Any, task: dict[str, Any]) -> None:
+    """Confirmation line + full detail panel after `agent create`."""
+    console.print(f"[bold green]Created[/bold green] task [cyan]{task['id']}[/cyan]")
+    _render_task_detail(console, task)
+
+
+def _render_updated_task(console: Any, task: dict[str, Any]) -> None:
+    """Confirmation line + full detail panel after `agent update`."""
+    console.print(f"[bold green]Updated[/bold green] task [cyan]{task['id']}[/cyan]")
+    _render_task_detail(console, task)
+
+
 def _render_runs_table(console: Any, data: dict[str, Any]) -> None:
     runs = data.get("runs") or []
     if not runs:
@@ -563,13 +575,7 @@ def agent_create(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
-    formatter.output(
-        task.model_dump(mode="json"),
-        lambda c, d: (
-            c.print(f"[bold green]Created[/bold green] task [cyan]{d['id']}[/cyan]"),
-            _render_task_detail(c, d),
-        ),
-    )
+    formatter.output(task.model_dump(mode="json"), _render_created_task)
 
 
 @agent_app.command("update")
@@ -619,13 +625,7 @@ def agent_update(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
-    formatter.output(
-        task.model_dump(mode="json"),
-        lambda c, d: (
-            c.print(f"[bold green]Updated[/bold green] task [cyan]{d['id']}[/cyan]"),
-            _render_task_detail(c, d),
-        ),
-    )
+    formatter.output(task.model_dump(mode="json"), _render_updated_task)
 
 
 @agent_app.command("delete")
