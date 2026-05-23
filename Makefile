@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-mcp install-server sync test test-unit test-integration test-e2e test-e2e-invite test-file lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
+.PHONY: help install install-mcp install-server sync test test-unit test-integration test-e2e test-e2e-invite test-file lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean web-gen-types web-types-check
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -123,3 +123,16 @@ web-build: ## Build the React app into web/frontend/dist
 web-clean: ## Remove web/* build artifacts and node_modules
 	rm -rf web/frontend/dist web/frontend/node_modules
 	rm -rf web/backend/dist web/backend/node_modules
+
+web-gen-types: ## Regenerate web/frontend/src/api/{openapi.json,generated.ts} from kbagent serve schema
+	cd web/frontend && npm run gen-types
+
+web-types-check: ## Check web/frontend/src/api/generated.ts is up-to-date (fails if stale)
+	@cd web/frontend && npm run gen-types > /dev/null 2>&1
+	@if git diff --quiet web/frontend/src/api/openapi.json web/frontend/src/api/generated.ts; then \
+		echo "Frontend API types are up-to-date"; \
+	else \
+		echo "ERROR: web/frontend/src/api/generated.ts is out-of-date. Run 'make web-gen-types' and commit."; \
+		git diff --stat web/frontend/src/api/openapi.json web/frontend/src/api/generated.ts; \
+		exit 1; \
+	fi

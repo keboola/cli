@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "gen-types": "uv run --project ../.. python ../../scripts/dump_openapi.py && openapi-typescript src/api/openapi.json -o src/api/generated.ts"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
@@ -26,6 +27,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.20",
+    "openapi-typescript": "^7.13.0",
     "postcss": "^8.4.41",
     "tailwindcss": "^3.4.10",
     "typescript": "^5.5.4",

@@ -1,5 +1,6 @@
 import {
   Activity,
+  BookOpen,
   Bot,
   Boxes,
   Braces,
@@ -11,6 +12,7 @@ import {
   Heart,
   Layers,
   LayoutDashboard,
+  LayoutGrid,
   Lock,
   MessageSquare,
   Network,
@@ -23,8 +25,9 @@ import {
 } from "lucide-react";
 import { clsx } from "clsx";
 import { type PageId, useUIState } from "../state";
+import { APPS, appPageId } from "../apps/_registry";
 
-const SECTIONS: Array<{
+const BUILTIN_SECTIONS: Array<{
   title: string;
   items: Array<{ id: PageId; label: string; icon: React.ComponentType<{ className?: string }> }>;
 }> = [
@@ -80,6 +83,18 @@ const SECTIONS: Array<{
       { id: "mcp", label: "MCP Tools", icon: Sparkles },
       { id: "localai", label: "Local AI", icon: MessageSquare },
       { id: "agents", label: "Agent Tasks", icon: Bot },
+      // Agent Studio Phase 1 surface -- see `docs/agents-v2.md` § 20.1.
+      // Lives next to Agent Tasks because both are "scheduled agentic
+      // work" from the user's mental model; Playbooks are the
+      // higher-level abstraction (SOP + connections + skills + budget)
+      // and will eventually subsume Agent Tasks once the migration
+      // path in § 23 lands.
+      { id: "playbooks", label: "Playbooks", icon: BookOpen },
+      // Read-only catalogue of forkable Playbook templates --
+      // `docs/mockups/02-blueprints-catalog.png`, § 20.1 of
+      // `docs/agents-v2.md`. Sits right after Playbooks since "fork a
+      // Blueprint" is the fastest path to a working Playbook.
+      { id: "blueprints", label: "Blueprints", icon: LayoutGrid },
     ],
   },
   {
@@ -92,8 +107,32 @@ const SECTIONS: Array<{
   },
 ];
 
+/**
+ * Group registered apps by their `section` field. Apps without an explicit
+ * section land under "Apps". Hidden apps are filtered out -- the sidebar is
+ * not their entry point.
+ *
+ * Sections are appended after `BUILTIN_SECTIONS` so first-party pages
+ * always lead, regardless of how many user apps are registered.
+ */
+function buildAppSections() {
+  const byTitle = new Map<
+    string,
+    Array<{ id: PageId; label: string; icon: React.ComponentType<{ className?: string }> }>
+  >();
+  for (const app of APPS) {
+    if (app.hidden) continue;
+    const title = app.section ?? "Apps";
+    const items = byTitle.get(title) ?? [];
+    items.push({ id: appPageId(app.slug), label: app.label, icon: app.icon });
+    byTitle.set(title, items);
+  }
+  return Array.from(byTitle.entries()).map(([title, items]) => ({ title, items }));
+}
+
 export function Sidebar() {
   const { page, setPage } = useUIState();
+  const SECTIONS = [...BUILTIN_SECTIONS, ...buildAppSections()];
   return (
     <aside className="w-56 shrink-0 border-r border-zinc-200 bg-white/80 backdrop-blur p-3 overflow-y-auto dark:border-zinc-900 dark:bg-zinc-950/60">
       <div className="px-2 py-3 mb-3 border-b border-zinc-200 dark:border-zinc-900">

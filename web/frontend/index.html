@@ -10,6 +10,12 @@
       synchronously BEFORE React mounts, so the very first paint already has
       the correct ``dark`` class on <html>. ThemeProvider then takes over and
       keeps localStorage + DOM in sync going forward.
+
+      Resolution order (since May 2026 light-primary pivot):
+        1. localStorage["kbagent.theme"] (explicit user choice — wins)
+        2. OS prefers-color-scheme: dark   → use dark
+        3. otherwise                       → use light (the default)
+      A user with no saved preference and no dark OS pref lands in light.
     -->
     <script>
       (function () {
@@ -19,12 +25,13 @@
             saved === "light" || saved === "dark"
               ? saved
               : window.matchMedia &&
-                  window.matchMedia("(prefers-color-scheme: light)").matches
-                ? "light"
-                : "dark";
+                  window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
           if (theme === "dark") document.documentElement.classList.add("dark");
         } catch (e) {
-          document.documentElement.classList.add("dark");
+          // localStorage / matchMedia blew up — fall through to the
+          // default light surface (no class manipulation needed).
         }
       })();
     </script>

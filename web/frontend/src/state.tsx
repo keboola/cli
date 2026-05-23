@@ -5,7 +5,7 @@
 import { createContext, useCallback, useContext, useState } from "react";
 import type { ReactNode } from "react";
 
-export type PageId =
+export type BuiltinPageId =
   | "dashboard"
   | "projects"
   | "configs"
@@ -23,12 +23,23 @@ export type PageId =
   | "mcp"
   | "localai"
   | "agents"
+  | "playbooks"
+  | "blueprints"
   | "search"
   | "encrypt"
   | "org"
   | "members"
   | "doctor"
   | "changelog";
+
+/**
+ * Dynamically registered apps live in the `app:<slug>` namespace -- see
+ * `src/apps/_registry.tsx`. They share the UI state machine with builtin
+ * pages so navigation, breadcrumbs, etc. stay uniform.
+ */
+export type AppPageId = `app:${string}`;
+
+export type PageId = BuiltinPageId | AppPageId;
 
 interface UIState {
   page: PageId;
