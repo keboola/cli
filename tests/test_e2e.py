@@ -7410,6 +7410,7 @@ class TestE2EDataAppLifecycle:
             )
         )["data"]
         app_id = create["app_id"]
+        config_id = create["config_id"]
         self._created_app_ids.append(app_id)
 
         _step(2, "secrets-set: encrypt and write")
@@ -7475,11 +7476,82 @@ class TestE2EDataAppLifecycle:
             )
         )
         assert get_result["data"]["key"] == secret_key
+        assert get_result["data"]["encrypted"] is True, (
+            "an encrypted secret must report encrypted=true"
+        )
+        assert get_result["data"]["value"] is None, "an encrypted secret must NOT expose a value"
         assert secret_plaintext not in get_result["raw_output"], (
             "secrets-get MUST NEVER echo the decrypted plaintext (Encryption API is one-way)"
         )
 
-        _step(5, "secrets-remove: first call removes the key")
+        _step(5, "secrets-get: a PLAIN (unencrypted) key returns its value (0.43.9+)")
+        # Inject a plain (no-'#') env-var value the way a user/UI would, then
+        # confirm secrets-get reads it back verbatim and secrets-remove drops
+        # it -- both paths reject plain keys before 0.43.9.
+        plain_val = "plain-not-a-secret"
+        _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "config",
+                    "update",
+                    "--project",
+                    self.alias,
+                    "--component-id",
+                    "keboola.data-apps",
+                    "--config-id",
+                    config_id,
+                    "--set",
+                    f"parameters.dataApp.secrets.E2E_PLAIN_KEY={plain_val}",
+                    "--merge",
+                ],
+            )
+        )
+        plain_get = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "secrets-get",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                    "--key",
+                    "E2E_PLAIN_KEY",
+                ],
+            )
+        )
+        assert plain_get["data"]["encrypted"] is False, (
+            "a plain (non-KBC::) value must report encrypted=false"
+        )
+        assert plain_get["data"]["value"] == plain_val, (
+            "secrets-get must return the literal value for a plain key"
+        )
+        plain_remove = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "secrets-remove",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                    "--key",
+                    "E2E_PLAIN_KEY",
+                    "--yes",
+                ],
+            )
+        )
+        assert "E2E_PLAIN_KEY" in plain_remove["data"]["removed"], (
+            "secrets-remove must accept and remove a plain (no-'#') key"
+        )
+
+        _step(6, "secrets-remove: first call removes the key")
         remove_result = _json_ok(
             _invoke(
                 self.config_dir,
@@ -7497,9 +7569,12 @@ class TestE2EDataAppLifecycle:
                 ],
             )
         )
-        assert remove_result["data"]["removed"] == 1, "first remove must report removed=1"
+        # `removed` is a list of derived env-var names, not a count.
+        assert remove_result["data"]["removed"] == ["E2E_TEST_KEY"], (
+            f"first remove must report the removed env-var; got {remove_result['data']['removed']}"
+        )
 
-        _step(6, "secrets-remove: second call is idempotent (removed=0)")
+        _step(7, "secrets-remove: second call is idempotent (removed=[])")
         idempotent = _json_ok(
             _invoke(
                 self.config_dir,
@@ -7517,8 +7592,8 @@ class TestE2EDataAppLifecycle:
                 ],
             )
         )
-        assert idempotent["data"]["removed"] == 0, (
-            "second remove of the same key must be idempotent (removed=0, exit 0)"
+        assert idempotent["data"]["removed"] == [], (
+            "second remove of the same key must be idempotent (removed=[], exit 0)"
         )
 
     @skip_without_data_app_public

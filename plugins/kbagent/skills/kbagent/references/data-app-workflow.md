@@ -151,17 +151,21 @@ kbagent --json data-app secrets-set \
 # exact command; suppress it with --no-hint-next for scripted callers.
 kbagent data-app deploy --project prod --app-id 12345678 --wait
 
-# Inspect what's set without echoing the encrypted ciphertext:
+# Inspect what's set -- lists BOTH encrypted (#) secrets and plain env-var
+# values; never echoes the encrypted ciphertext in full:
 kbagent data-app secrets-list --project prod --app-id 12345678
 # -> #ANTHROPIC_API_KEY -> env ANTHROPIC_API_KEY
-# -> #my-database-url  -> env MY_DATABASE_URL
+# -> #my-database-url   -> env MY_DATABASE_URL
+# -> ADMIN_EMAILS       -> env ADMIN_EMAILS   (plain, unencrypted)
 
-# Confirm presence of one key (NEVER decrypts):
-kbagent data-app secrets-get --project prod --app-id 12345678 --key '#ANTHROPIC_API_KEY'
+# Read one key. Leading '#' is OPTIONAL (since v0.43.9). Encrypted secret
+# -> metadata only (NEVER decrypts). Plain value -> the literal value:
+kbagent data-app secrets-get --project prod --app-id 12345678 --key '#ANTHROPIC_API_KEY'  # metadata only
+kbagent data-app secrets-get --project prod --app-id 12345678 --key ADMIN_EMAILS          # shows value
 
-# Remove (idempotent -- absent keys exit 0 with removed=0):
+# Remove (idempotent -- absent keys exit 0 with removed=0). '#' optional:
 kbagent data-app secrets-remove --project prod --app-id 12345678 \
-  --key '#my-database-url' --yes
+  --key '#my-database-url' --key ADMIN_EMAILS --yes
 ```
 
 The runtime exposes each secret as an env var with `#` stripped, `-`
@@ -221,9 +225,9 @@ yours at runtime.
 | Pause a running app temporarily | `data-app stop --app-id N` |
 | Read the simpleAuth password | `data-app password --app-id N` (needs Manage token) |
 | Set or rotate app-runtime secrets | `data-app secrets-set --app-id N --secret '#KEY=VAL'` then `data-app deploy --wait` |
-| Inspect what secrets are set | `data-app secrets-list --app-id N` (metadata only, never decrypts) |
-| Confirm one secret is present | `data-app secrets-get --app-id N --key '#KEY'` (metadata only) |
-| Remove a secret | `data-app secrets-remove --app-id N --key '#KEY' --yes` (idempotent) |
+| Inspect what's set (secrets + plain env vars) | `data-app secrets-list --app-id N` (metadata only, never decrypts) |
+| Read one key | `data-app secrets-get --app-id N --key KEY` (`#` optional; encrypted → metadata only, plain → value) |
+| Remove a key | `data-app secrets-remove --app-id N --key KEY --yes` (`#` optional; idempotent) |
 | Pre-flight a repo before create | `data-app validate-repo --git-repo URL` (GitHub-only, python-js for now) |
 | Triage a stuck deploy or runtime crash | `data-app logs --app-id N [--lines N \| --since ISO8601]` (since 0.43.8; plain-text container log tail, default `--lines 500`, `--lines 0` for full buffer) |
 | Tear it all down | `data-app delete --app-id N` (cascades to Storage config) |

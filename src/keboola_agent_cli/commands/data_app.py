@@ -1085,17 +1085,21 @@ def data_app_secrets_get(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
-    key: str = typer.Option(..., "--key", help="Secret key, including '#' prefix."),
+    key: str = typer.Option(
+        ..., "--key", help="Env-var key (with optional '#' prefix for encrypted secrets)."
+    ),
     branch: int | None = typer.Option(
         None,
         "--branch",
         help="Storage branch ID for the linked config (defaults to production).",
     ),
 ) -> None:
-    """Show metadata for ONE secret key. NEVER echoes the decrypted value.
+    """Show ONE key from parameters.dataApp.secrets.
 
-    The Encryption API has no decrypt endpoint; the CLI cannot decrypt
-    even if asked. This command confirms presence + ciphertext metadata.
+    For an ENCRYPTED ('#') secret this is metadata only -- the Encryption
+    API has no decrypt endpoint, so the CLI never echoes the decrypted
+    value. For a PLAIN (unencrypted) config value the literal value is
+    shown; it is already stored in clear and visible via `config detail`.
 
     Reference: https://help.keboola.com/data-apps/python-js/
     """
@@ -1138,9 +1142,16 @@ def data_app_secrets_get(
     formatter.console.print(
         f"\n[bold]{result['key']}[/bold] -> env [cyan]{result['env_var']}[/cyan]"
     )
-    formatter.console.print(
-        f"  [dim]fingerprint={result['fingerprint']}  prefix={result['encryption_prefix']}[/dim]"
-    )
+    if result.get("encrypted"):
+        formatter.console.print(
+            f"  [dim]fingerprint={result['fingerprint']}  prefix={result['encryption_prefix']}[/dim]"
+        )
+    else:
+        formatter.console.print(f"  value (plaintext, unencrypted): {result['value']}")
+        formatter.err_console.print(
+            "  [yellow]Note:[/yellow] this value is stored unencrypted in the config. "
+            "Use `data-app secrets-set '#KEY=...'` to store sensitive values encrypted."
+        )
     if result.get("shadowed_by_runtime"):
         # Same stdout/stderr-separation rationale as secrets-set: keep
         # warnings off stdout so a script piping the metadata to a parser
@@ -1158,7 +1169,9 @@ def data_app_secrets_remove(
     project: str = typer.Option(..., "--project", help="Project alias"),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     key: list[str] = typer.Option(
-        ..., "--key", help="Secret key to remove (with '#' prefix). Repeatable."
+        ...,
+        "--key",
+        help="Env-var key to remove (with optional '#' prefix). Repeatable.",
     ),
     branch: int | None = typer.Option(
         None,

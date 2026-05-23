@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "kbagent",
-      "version": "0.43.8",
+      "version": "0.43.9",
       "source": "./plugins/kbagent",
       "description": "AI-friendly interface to Keboola Connection projects — explore configs, jobs, lineage, call MCP tools, manage dev branches, and debug SQL in workspaces",
       "category": "development"

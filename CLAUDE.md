@@ -418,8 +418,8 @@ kbagent data-app password --project NAME --app-id ID
 kbagent data-app logs --project NAME --app-id ID [--lines N] [--since ISO8601]
 kbagent data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE' [--secret ...] [--secrets-file PATH] [--branch ID] [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]
 kbagent data-app secrets-list --project ALIAS --app-id ID [--branch ID] [--show-fingerprint]
-kbagent data-app secrets-get --project ALIAS --app-id ID --key '#KEY' [--branch ID]
-kbagent data-app secrets-remove --project ALIAS --app-id ID --key '#KEY' [--key ...] [--branch ID] [--yes] [--dry-run]
+kbagent data-app secrets-get --project ALIAS --app-id ID --key 'KEY' [--branch ID]   # '#' optional; plain values return their value, encrypted return metadata only
+kbagent data-app secrets-remove --project ALIAS --app-id ID --key 'KEY' [--key ...] [--branch ID] [--yes] [--dry-run]   # '#' optional
 kbagent data-app validate-repo --git-repo URL [--git-branch BRANCH] [--git-public/--no-git-public] [--git-pat-env VAR | --git-pat-file PATH] [--type python-js] [--strict]
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]

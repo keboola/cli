@@ -735,15 +735,39 @@ events and emits a final `done` SSE frame mirroring the same record.
   `parameters.dataApp` -- slug, git block, id back-pointer, `parameters`
   itself, and the top-level `runtime`/`authorization`/`storage`) is
   preserved bit-identical.
+- **`data-app list` hides workspace/sandbox deployments (since v0.43.9).**
+  The Data Science `GET /apps` collection returns EVERY deployment in the
+  project, not just data apps -- interactive Snowflake/BigQuery
+  workspaces (`componentId=keboola.sandboxes`, `type=snowflake`/`bigquery`,
+  no name, a `*.snowflakecomputing.com` URL) live in the same collection.
+  Before 0.43.9 they showed up as phantom unnamed `(snowflake)` rows that
+  do NOT appear in the Apps UI. The command now keeps only
+  `componentId == keboola.data-apps` (items missing `componentId` are kept
+  defensively); the JSON envelope carries `component_id` per app.
 - **`secrets-remove` is idempotent.** Removing a key that isn't set is
   exit 0 with `removed: 0`, `not_found: [<derived env-var name>]`. The
   Storage version is not bumped on a no-op. Do NOT script around this
   with a precondition lookup -- the idempotent path is the contract.
-- **`secrets-get` NEVER echoes the decrypted plaintext.** The Encryption
-  API has no decrypt endpoint; the CLI cannot decrypt under any branch.
-  The command returns metadata only -- key name, derived env-var name,
-  ciphertext fingerprint, encryption prefix, presence flag. NOT_FOUND on
-  an absent key never enumerates sibling keys.
+- **`secrets-get` NEVER echoes the decrypted plaintext of an ENCRYPTED
+  (`#` / `KBC::`) secret.** The Encryption API has no decrypt endpoint;
+  the CLI cannot decrypt under any branch. For an encrypted secret the
+  command returns metadata only -- key name, derived env-var name,
+  ciphertext fingerprint, encryption prefix, `encrypted: true`,
+  `value: null`. NOT_FOUND on an absent key never enumerates sibling
+  keys. (Plain unencrypted values ARE returned in full -- see next entry.)
+- **`secrets-get` / `secrets-remove` accept keys WITHOUT a leading `#`
+  (since v0.43.9).** The `parameters.dataApp.secrets` block holds BOTH
+  `#`-prefixed encrypted secrets and plain unencrypted env-var config
+  values (e.g. `ADMIN_EMAILS`, `SMTP_HOST`), and `secrets-list`
+  enumerates both. Before 0.43.9 `get`/`remove` rejected any key without
+  `#` (`Invalid secret key ... Keys must start with '#'`), so a listable
+  plain key was neither readable nor removable. Now the `#` is optional on
+  these two read/remove commands. `secrets-get` on a PLAIN value returns
+  the literal value (`encrypted: false`) -- it is already stored in clear
+  and visible via `config detail`, so this leaks nothing new. Lookup is
+  exact-match (no `#KEY`<->`KEY` fuzzing). `secrets-set` is UNCHANGED: it
+  still requires `#` because it encrypts; to add a plain env var use
+  `config update`, not `secrets-set`.
 - **Runtime env-var translation rule:** strip `#`, replace `-` with `_`,
   uppercase. Documented at https://help.keboola.com/data-apps/python-js/.
   Examples: `#KBC_TOKEN` -> `KBC_TOKEN`, `#my-api-key` -> `MY_API_KEY`,
