@@ -54,10 +54,16 @@ fi
 
 uv run --quiet ruff format --quiet "$FILE_PATH" || true
 
-# ty: report but do NOT fail the hook -- type checker is in warning-only mode
-# while we migrate. Switch this to FAILED=1 when the codebase is clean.
-if ! uv run --quiet ty check "$FILE_PATH" 2>&1 | tail -5; then
-    : # warnings only
+# ty: runs on every edited .py file but does NOT fail the hook -- the type
+# checker is in warning-only mode while the codebase carries pre-existing
+# diagnostics (~100 across src/; clearing that backlog is tracked as a separate
+# task). Running it here still surfaces NEW type regressions in the edited file
+# immediately. Flip the warning-only block below to `FAILED=1` once the backlog
+# is clean, so type errors start blocking edits.
+TY_OUTPUT="$(uv run --quiet ty check "$FILE_PATH" 2>&1 || true)"
+if printf '%s\n' "$TY_OUTPUT" | grep -qE '^(error|warning)'; then
+    echo "post-edit: ty (warning-only) flagged $FILE_PATH -- review, edit not blocked:" >&2
+    printf '%s\n' "$TY_OUTPUT" | grep -E '^(error|warning)' | head -10 >&2
 fi
 
 exit $FAILED

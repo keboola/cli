@@ -908,6 +908,11 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
   cron loop inside `kbagent serve` consumes. CLI CRUD + ad-hoc `run`
   work offline; cron firing still requires the live server.
 
+  Every subcommand below that takes TASK_ID / RUN_ID accepts it either
+  positionally (`agent show TASK_ID`) or via flag (`--id` / `--task-id`,
+  plus `--run-id` for run-detail / run-events) -- the flag form matches
+  the rest of the CLI (`--job-id`, `--config-id`, ...).
+
   kbagent agent list
     List all registered tasks (id, name, cron, type, state, last/next run).
 

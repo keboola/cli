@@ -575,8 +575,8 @@ users safe from accidentally landing on a beta:
 1. Bump `pyproject.toml` to the PEP 440 pre-release version
    (e.g. `0.43.0b1`).
 2. Add a changelog entry under that key in `src/keboola_agent_cli/changelog.py`.
-3. `make version-sync` propagates the version to `plugin.json` /
-   `marketplace.json`.
+3. `make version-sync` propagates the version to `plugin.json`,
+   `marketplace.json`, and the `uv.lock` self-version pin.
 4. Tag and push: `git tag v0.43.0b1 && git push origin v0.43.0b1`.
 5. Create the GitHub release **with the `--prerelease` flag**:
    ```bash
@@ -590,6 +590,25 @@ users safe from accidentally landing on a beta:
 7. Once the beta cooks long enough, bump to the stable equivalent
    (`0.43.0`), retag, and create the release **without** `--prerelease`
    so auto-update picks it up.
+
+**Rebasing a beta onto a moved `main`.** Tags are immutable and pinned to a
+commit; rebasing the feature branch (to clear merge conflicts or pull in
+newer `main` fixes) leaves the existing `vX.Y.Zb1` tag pointing at the
+now-orphaned pre-rebase commit. Do **not** force-move a published tag --
+cut the next pre-release number instead:
+
+1. Rebase the branch and force-push it (`git push --force-with-lease`).
+2. Bump `pyproject.toml` to the next beta (`0.44.0b1` -> `0.44.0b2`), add a
+   short changelog entry noting "rebased onto current main, no behaviour
+   change", and `make version-sync`.
+3. Commit + push, then tag the rebased HEAD:
+   `git tag v0.44.0b2 && git push origin v0.44.0b2`.
+4. `gh release create v0.44.0b2 --prerelease ...`. Leave the old `b1`
+   tag/release intact as history -- it documents the earlier base.
+
+Every published tag stays immutable (a tester who pinned `b1` still gets
+exactly what `b1` always was), while `kbagent update --beta` resolves to the
+highest PEP 440 version -- the freshly rebased `b2`.
 
 **Users opt in two ways:**
 

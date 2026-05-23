@@ -481,7 +481,9 @@ kbagent agent prompt-improve --goal "..." [--draft "..."] [--cli claude|codex|ge
 # serve required for CRUD + ad-hoc run). The cron loop that fires scheduled
 # tasks still requires `kbagent serve` running. Three action flavours
 # (ai_agent / cli_command / mcp_tool) mirror the /agents REST surface
-# byte-for-byte.
+# byte-for-byte. Every subcommand taking TASK_ID / RUN_ID accepts it
+# positionally OR via flag (--id / --task-id; --run-id for run-detail /
+# run-events) -- the flag form matches the rest of the CLI (--job-id, ...).
 
 kbagent kai ping [--project NAME]
 kbagent kai preflight [--project NAME]

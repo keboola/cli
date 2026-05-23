@@ -300,14 +300,14 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | PATCH an endpoint on the running kbagent serve | `kbagent http patch <PATH>` |
 | DELETE an endpoint on the running kbagent serve | `kbagent http delete <PATH>` |
 | List all registered agent tasks | `kbagent agent list` |
-| Show one task's full configuration | `kbagent agent show <TASK-ID>` |
+| Show one task's full configuration | `kbagent agent show [TASK-ID]` |
 | Register a new scheduled task | `kbagent agent create --name NAME` |
-| Patch one or more fields on a task. | `kbagent agent update <TASK-ID>` |
-| Remove a task. | `kbagent agent delete <TASK-ID>` |
-| Trigger a task immediately (does not wait for the next cron firing) | `kbagent agent run <TASK-ID>` |
-| Show the run history of a task (most recent first) | `kbagent agent runs <TASK-ID>` |
-| Show a single AgentRun record (status, summary, output, error) | `kbagent agent run-detail <TASK-ID> <RUN-ID>` |
-| Replay the persisted event timeline of an ai_agent run (line-by-line) | `kbagent agent run-events <TASK-ID> <RUN-ID>` |
+| Patch one or more fields on a task. | `kbagent agent update [TASK-ID]` |
+| Remove a task. | `kbagent agent delete [TASK-ID]` |
+| Trigger a task immediately (does not wait for the next cron firing) | `kbagent agent run [TASK-ID]` |
+| Show the run history of a task (most recent first) | `kbagent agent runs [TASK-ID]` |
+| Show a single AgentRun record (status, summary, output, error) | `kbagent agent run-detail [TASK-ID] [RUN-ID]` |
+| Replay the persisted event timeline of an ai_agent run (line-by-line) | `kbagent agent run-events [TASK-ID] [RUN-ID]` |
 | Execute an action ad-hoc (no persistence, no scheduling) | `kbagent agent test` |
 | Show the next N firings of a cron expression | `kbagent agent cron-preview --cron CRON` |
 | Polish a plain-English goal into an unattended-agent-ready prompt | `kbagent agent prompt-improve --goal GOAL` |

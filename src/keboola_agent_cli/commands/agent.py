@@ -178,6 +178,40 @@ def _trigger_from_flags(
     return Trigger(on=trigger_on, task_id=trigger_task_id)  # type: ignore[arg-type]
 
 
+def _resolve_id(
+    formatter: OutputFormatter,
+    positional: str | None,
+    option: str | None,
+    *,
+    label: str,
+    flag: str,
+) -> str:
+    """Resolve an ID passed either positionally or via a named flag.
+
+    Every agent subcommand accepts its task/run ID both ways: positionally
+    (``agent show TASK_ID``) for terse interactive use, and via a named flag
+    (``--id`` / ``--task-id`` / ``--run-id``) for consistency with the rest of
+    the CLI, which identifies entities by flag everywhere else (``--job-id``,
+    ``--config-id``, ``--app-id``, ...). Exactly one must be supplied; passing
+    both with conflicting values is a usage error rather than a silent pick.
+    """
+    if positional is not None and option is not None and positional != option:
+        formatter.error(
+            message=f"{label} given both positionally ({positional!r}) and via {flag} "
+            f"({option!r}) -- pass it only one way.",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2) from None
+    resolved = positional if positional is not None else option
+    if not resolved:
+        formatter.error(
+            message=f"{label} is required: pass it positionally or via {flag}.",
+            error_code=ErrorCode.MISSING_PARAMETER,
+        )
+        raise typer.Exit(code=2) from None
+    return resolved
+
+
 # ── Output renderers ──────────────────────────────────────────────────
 
 
@@ -419,11 +453,15 @@ def agent_list(ctx: typer.Context) -> None:
 @agent_app.command("show")
 def agent_show(
     ctx: typer.Context,
-    task_id: str = typer.Argument(..., help="Task ID (12-char hex)"),
+    task_id: str | None = typer.Argument(None, help="Task ID (12-char hex). Or use --id."),
+    task_id_opt: str | None = typer.Option(
+        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
+    ),
 ) -> None:
     """Show one task's full configuration."""
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
+    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
     try:
         task = service.get_task(task_id)
     except ConfigError as exc:
@@ -537,7 +575,10 @@ def agent_create(
 @agent_app.command("update")
 def agent_update(
     ctx: typer.Context,
-    task_id: str = typer.Argument(..., help="Task ID to update"),
+    task_id: str | None = typer.Argument(None, help="Task ID to update. Or use --id."),
+    task_id_opt: str | None = typer.Option(
+        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
+    ),
     name: str | None = typer.Option(None, "--name"),
     description: str | None = typer.Option(None, "--description"),
     cron: str | None = typer.Option(None, "--cron"),
@@ -562,6 +603,7 @@ def agent_update(
     """Patch one or more fields on a task. Omitted flags leave the field unchanged."""
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
+    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
     trigger = _trigger_from_flags(trigger_task_id, trigger_on)
     try:
         task = service.update_task(
@@ -589,7 +631,10 @@ def agent_update(
 @agent_app.command("delete")
 def agent_delete(
     ctx: typer.Context,
-    task_id: str = typer.Argument(..., help="Task ID to delete"),
+    task_id: str | None = typer.Argument(None, help="Task ID to delete. Or use --id."),
+    task_id_opt: str | None = typer.Option(
+        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
 ) -> None:
     """Remove a task. Run history on disk is preserved.
@@ -600,6 +645,7 @@ def agent_delete(
     """
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
+    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
     if not yes and not formatter.json_mode:
         confirm = typer.confirm(f"Delete task '{task_id}'?")
         if not confirm:
@@ -619,7 +665,10 @@ def agent_delete(
 @agent_app.command("run")
 def agent_run(
     ctx: typer.Context,
-    task_id: str = typer.Argument(..., help="Task ID to run"),
+    task_id: str | None = typer.Argument(None, help="Task ID to run. Or use --id."),
+    task_id_opt: str | None = typer.Option(
+        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
+    ),
     stream: bool = typer.Option(
         False,
         "--stream",
@@ -648,6 +697,7 @@ def agent_run(
     """
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
+    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
     runtime: dict[str, Any] | None = None
     if runtime_input:
         raw = _read_payload(runtime_input, formatter)
@@ -684,12 +734,16 @@ def agent_run(
 @agent_app.command("runs")
 def agent_runs(
     ctx: typer.Context,
-    task_id: str = typer.Argument(..., help="Task ID whose history to show"),
+    task_id: str | None = typer.Argument(None, help="Task ID whose history to show. Or use --id."),
+    task_id_opt: str | None = typer.Option(
+        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
+    ),
     limit: int = typer.Option(50, "--limit", help="Max rows to return."),
 ) -> None:
     """Show the run history of a task (most recent first)."""
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
+    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
     try:
         runs = service.list_runs(task_id, limit=limit)
     except ConfigError as exc:
@@ -702,12 +756,20 @@ def agent_runs(
 @agent_app.command("run-detail")
 def agent_run_detail(
     ctx: typer.Context,
-    task_id: str = typer.Argument(..., help="Task ID"),
-    run_id: str = typer.Argument(..., help="Run ID (12-char hex)"),
+    task_id: str | None = typer.Argument(None, help="Task ID. Or use --id/--task-id."),
+    run_id: str | None = typer.Argument(None, help="Run ID (12-char hex). Or use --run-id."),
+    task_id_opt: str | None = typer.Option(
+        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
+    ),
+    run_id_opt: str | None = typer.Option(
+        None, "--run-id", help="Run ID (alias for the positional argument)."
+    ),
 ) -> None:
     """Show a single AgentRun record (status, summary, output, error)."""
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
+    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
+    run_id = _resolve_id(formatter, run_id, run_id_opt, label="Run ID", flag="--run-id")
     try:
         run = service.get_run(task_id, run_id)
     except ConfigError as exc:
@@ -735,12 +797,20 @@ def agent_run_detail(
 @agent_app.command("run-events")
 def agent_run_events(
     ctx: typer.Context,
-    task_id: str = typer.Argument(..., help="Task ID"),
-    run_id: str = typer.Argument(..., help="Run ID"),
+    task_id: str | None = typer.Argument(None, help="Task ID. Or use --id/--task-id."),
+    run_id: str | None = typer.Argument(None, help="Run ID. Or use --run-id."),
+    task_id_opt: str | None = typer.Option(
+        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
+    ),
+    run_id_opt: str | None = typer.Option(
+        None, "--run-id", help="Run ID (alias for the positional argument)."
+    ),
 ) -> None:
     """Replay the persisted event timeline of an ai_agent run (line-by-line)."""
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
+    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
+    run_id = _resolve_id(formatter, run_id, run_id_opt, label="Run ID", flag="--run-id")
     try:
         events = service.get_run_events(task_id, run_id)
     except ConfigError as exc:
