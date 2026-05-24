@@ -3,6 +3,7 @@
 import json
 import sys
 from io import StringIO
+from typing import cast
 
 from rich.console import Console
 
@@ -245,7 +246,7 @@ class TestFormatJobsTable:
         }
 
         format_jobs_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "Jobs" in output
         assert "Project" in output
@@ -263,7 +264,7 @@ class TestFormatJobsTable:
         data = {"jobs": [], "errors": []}
 
         format_jobs_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "No jobs found" in output
 
@@ -282,7 +283,7 @@ class TestFormatJobsTable:
         }
 
         format_jobs_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "Warning" in output
         assert "bad" in output
@@ -316,7 +317,7 @@ class TestFormatJobsTable:
         }
 
         format_jobs_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "prod" in output
         assert "dev" in output
@@ -341,7 +342,7 @@ class TestFormatJobsTable:
         }
 
         format_jobs_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "1h 1m" in output
 
@@ -363,7 +364,7 @@ class TestFormatJobsTable:
         }
 
         format_jobs_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         # Should contain a dash for missing duration
         assert "-" in output
@@ -396,7 +397,7 @@ class TestFormatJobDetail:
         }
 
         format_job_detail(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "1001" in output
         assert "prod" in output
@@ -428,7 +429,7 @@ class TestFormatJobDetail:
         }
 
         format_job_detail(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "2001" in output
         assert "dev" in output
@@ -446,7 +447,7 @@ class TestFormatJobDetail:
         }
 
         format_job_detail(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "3001" in output
         assert "processing" in output
@@ -558,7 +559,7 @@ class TestFormatLineageTable:
         }
 
         format_lineage_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "Data Flow" in output
         assert "in.c-shared" in output
@@ -584,7 +585,7 @@ class TestFormatLineageTable:
         }
 
         format_lineage_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "No bucket sharing" in output
 
@@ -610,7 +611,7 @@ class TestFormatLineageTable:
         }
 
         format_lineage_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "Warning" in output
         assert "bad" in output
@@ -641,7 +642,7 @@ class TestFormatLineageTable:
         }
 
         format_lineage_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "Shared Buckets" in output
         assert "in.c-shared" in output
@@ -670,7 +671,7 @@ class TestFormatToolResult:
         }
 
         format_tool_result(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "prod" in output
         assert "OK" in output
@@ -696,7 +697,7 @@ class TestFormatToolResult:
         }
 
         format_tool_result(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "Tool Error" in output
         assert "same error across 2 projects" in output
@@ -709,7 +710,7 @@ class TestFormatToolResult:
         data = {"results": [], "errors": []}
 
         format_tool_result(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "No results" in output
 
@@ -728,7 +729,7 @@ class TestFormatToolResult:
         }
 
         format_tool_result(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "prod" in output
         assert "table_id" in output
@@ -763,7 +764,7 @@ class TestFormatToolsTable:
         }
 
         format_tools_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "MCP Tools" in output
         assert "list_tables" in output
@@ -777,7 +778,7 @@ class TestFormatToolsTable:
         data = {"tools": [], "errors": []}
 
         format_tools_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "No MCP tools found" in output
 
@@ -795,7 +796,7 @@ class TestFormatToolsTable:
         }
 
         format_tools_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "Warning" in output
         assert "bad" in output
@@ -827,7 +828,7 @@ class TestFormatConfigDetail:
         }
 
         format_config_detail(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "Configuration Detail" in output
         assert "Production Load" in output
@@ -847,7 +848,7 @@ class TestFormatConfigDetail:
         }
 
         format_config_detail(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "Minimal" in output
         assert "1" in output
@@ -887,7 +888,7 @@ class TestFormatConfigsTable:
         }
 
         format_configs_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "Configurations" in output
         assert "prod" in output
@@ -901,7 +902,7 @@ class TestFormatConfigsTable:
         data = {"configs": [], "errors": []}
 
         format_configs_table(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "No configurations found" in output
 
@@ -947,7 +948,7 @@ class TestFormatDoctorPanel:
         }
 
         format_doctor_panel(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "kbagent doctor" in output
         assert "PASS" in output
@@ -982,7 +983,7 @@ class TestFormatDoctorPanel:
         }
 
         format_doctor_panel(console, data)
-        output = console.file.getvalue()
+        output = cast(StringIO, console.file).getvalue()
 
         assert "FAIL" in output
         assert "WARN" in output

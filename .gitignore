@@ -27,7 +27,13 @@ ENV/
 *.swp
 *.swo
 *~
-.claude/
+# Ignore .claude/ contents (use /* so a single file can be re-included below;
+# git cannot un-ignore a file whose parent dir is excluded with a bare `.claude/`).
+.claude/*
+# ...but DO track the shared project hooks: the PostToolUse hook wires the
+# blocking ruff/ty quality gate, so every contributor using Claude Code gets it.
+# Local-only overrides still belong in the (ignored) .claude/settings.local.json.
+!.claude/settings.json
 .audit/
 
 # Browser-automation MCP scratch (console logs, page snapshots)

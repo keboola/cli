@@ -12,6 +12,27 @@ from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
 
 
+def metastore_scope_available(url: str, token: str) -> bool:
+    """Probe whether a project has a usable metastore scope (E2E preflight).
+
+    Semantic-layer is a gated feature; a project that does not have it returns
+    HTTP 502 "Failed to create project scope" on every metastore call -- an
+    environment limitation, not a test failure. The semantic-layer E2E suites
+    call this and ``pytest.skip()`` when it returns False, so they skip cleanly
+    instead of reporting a wall of false-positive failures.
+    """
+    from keboola_agent_cli.metastore_client import SEMANTIC_TYPES, MetastoreClient
+
+    try:
+        with MetastoreClient(stack_url=url, token=token) as mc:
+            mc.list_items(SEMANTIC_TYPES[0])  # ty: ignore[invalid-argument-type]  # probe; str vs SemanticType Literal
+        return True
+    except KeboolaApiError as exc:
+        if exc.status_code == 502 or "scope" in (exc.message or "").lower():
+            return False
+        raise
+
+
 def make_mock_client(
     project_name: str = "Test Project",
     project_id: int = 1234,

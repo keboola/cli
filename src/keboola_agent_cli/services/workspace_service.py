@@ -886,6 +886,8 @@ class WorkspaceService(BaseService):
             )
 
             workspace_id = ws_data.get("id")
+            # create_config_workspace always returns an id for the new workspace
+            assert workspace_id is not None
             connection = ws_data.get("connection", {})
 
             # Build table load definitions from input mapping

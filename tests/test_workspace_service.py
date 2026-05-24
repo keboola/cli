@@ -1289,6 +1289,7 @@ class TestResolveBranchId:
 
         svc = WorkspaceService(config_store=store)
         project = store.get_project("prod")
+        assert project is not None
 
         branch_id = svc._resolve_branch_id("prod", project)
 
@@ -1306,6 +1307,7 @@ class TestResolveBranchId:
         )
 
         project = store.get_project("prod")
+        assert project is not None
         branch_id = svc._resolve_branch_id("prod", project)
 
         assert branch_id == 100  # main branch
@@ -1326,6 +1328,7 @@ class TestResolveBranchId:
         )
 
         project = store.get_project("prod")
+        assert project is not None
         with pytest.raises(ConfigError, match="No default branch found"):
             svc._resolve_branch_id("prod", project)
 

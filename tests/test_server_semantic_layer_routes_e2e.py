@@ -30,6 +30,7 @@ if importlib.util.find_spec("fastapi") is None:  # pragma: no cover
 
 from fastapi.testclient import TestClient
 
+from helpers import metastore_scope_available
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.server import create_app
@@ -61,6 +62,9 @@ def http_session(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str,
     token = os.environ[ENV_TOKEN]
     raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
     url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+
+    if not metastore_scope_available(url, token):
+        pytest.skip("metastore/semantic-layer scope not available for this project")
 
     config_dir = tmp_path_factory.mktemp("kbagent-sl-http-config")
     store = ConfigStore(config_dir=config_dir)
@@ -100,7 +104,7 @@ def _direct_delete(state: dict[str, Any], item_type: str, item_id: str) -> None:
     from keboola_agent_cli.metastore_client import MetastoreClient
 
     with MetastoreClient(stack_url=state["url"], token=state["token"]) as mc:
-        mc.delete_item(item_type, item_id)  # type: ignore[arg-type]
+        mc.delete_item(item_type, item_id)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
 
 def _cleanup(state: dict[str, Any]) -> None:
@@ -128,7 +132,7 @@ def _cleanup(state: dict[str, Any]) -> None:
         with MetastoreClient(stack_url=state["url"], token=state["token"]) as mc:
             residue: list[str] = []
             for stype in SEMANTIC_TYPES:
-                for item in mc.list_items(stype):  # type: ignore[arg-type]
+                for item in mc.list_items(stype):  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
                     attrs = item.get("attributes") or {}
                     name = attrs.get("name") or attrs.get("term", "")
                     if isinstance(name, str) and name.startswith(state["tag"]):
@@ -366,6 +370,7 @@ def test_post_diff_project_vs_file(http_session: dict[str, Any]) -> None:
     inline-file branch of the body validator works.
     """
     snapshot = http_session.get("exported_snapshot")
+    assert snapshot is not None, "exported_snapshot must be set by prior test"
     # Strip the model wrapping that export adds (just keep the diffable
     # bare child lists — diff service expects raw side data).
     snapshot_for_file = {
@@ -536,14 +541,21 @@ def test_negative_unknown_project_returns_400(http_session: dict[str, Any]) -> N
     assert res.json()["error"]["code"] == "CONFIG_ERROR"
 
 
-def test_negative_unknown_kind_returns_404(http_session: dict[str, Any]) -> None:
-    """POST /semantic-layer/items/<unknown> → 404."""
+def test_negative_unknown_kind_rejected(http_session: dict[str, Any]) -> None:
+    """POST /semantic-layer/items/<unknown> is rejected, not silently accepted.
+
+    ``kind`` is a typed ``ItemKind`` path parameter, so FastAPI rejects an
+    unknown value ("widget") with 422 at the validation layer before the handler
+    runs. (404 is also acceptable if the path ever resolves differently.) The
+    earlier ``== 404`` assertion was wrong -- it only never tripped because this
+    suite used to skip when the project lacked metastore scope.
+    """
     res = http_session["client"].post(
         "/semantic-layer/items/widget",
         headers=_auth(),
         json={"project": _PROJECT_ALIAS, "name": "x"},
     )
-    assert res.status_code == 404
+    assert res.status_code in (404, 422)
 
 
 def test_negative_invalid_constraint_name_returns_4xx(

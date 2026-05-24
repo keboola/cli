@@ -172,6 +172,12 @@ class LineageService(BaseService):
         edges_by_key: dict[tuple[int, str, int, str], dict[str, Any]],
     ) -> None:
         """Process buckets from a single project, extracting shared/linked info and edges."""
+        # project_id is required to build edge keys; projects without one are
+        # already warned in get_lineage() but still pass through _run_parallel
+        # (the skip only prevents them from appearing in project_id_to_alias).
+        if project.project_id is None:
+            return
+        project_id: int = project.project_id
         for bucket in buckets:
             sharing = bucket.get("sharing")
             linked_by = bucket.get("linkedBy", [])
@@ -197,10 +203,10 @@ class LineageService(BaseService):
                     target_bucket_id = link.get("id", "")
 
                     edge_key = (
-                        project.project_id,
+                        project_id,
                         bucket.get("id", ""),
-                        target_project_id,
-                        target_bucket_id,
+                        int(target_project_id),
+                        str(target_bucket_id),
                     )
 
                     edge = edges_by_key.get(edge_key, {})
@@ -240,9 +246,9 @@ class LineageService(BaseService):
                 source_bucket_id = source_bucket.get("id", "")
 
                 edge_key = (
-                    source_project_id,
-                    source_bucket_id,
-                    project.project_id,
+                    int(source_project_id),
+                    str(source_bucket_id),
+                    project_id,
                     bucket.get("id", ""),
                 )
 

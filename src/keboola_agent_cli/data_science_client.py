@@ -41,7 +41,6 @@ import logging
 from typing import Any
 from urllib.parse import quote
 
-from . import __version__
 from .constants import DEFAULT_TIMEOUT
 from .http_base import BaseHttpClient
 
@@ -59,7 +58,6 @@ class DataScienceClient(BaseHttpClient):
         ds_base_url = self._derive_service_url(self._stack_url, "data-science")
         headers = {
             "X-StorageApi-Token": token,
-            "User-Agent": f"keboola-agent-cli/{__version__}",
         }
         super().__init__(
             base_url=ds_base_url,

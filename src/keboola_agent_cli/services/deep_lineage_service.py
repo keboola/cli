@@ -263,6 +263,7 @@ class LineageGraph:
     edges: list[Edge] = field(default_factory=list)
     _upstream: dict[str, list[int]] = field(default_factory=dict)
     _downstream: dict[str, list[int]] = field(default_factory=dict)
+    _project_id_to_alias: dict[int, str] = field(default_factory=dict)
 
     def add_edge(self, edge: Edge) -> None:
         idx = len(self.edges)
@@ -532,7 +533,7 @@ class DeepLineageService:
                 self._scan_one_project(project_dir, project_dir.name, project_id_to_alias, graph)
 
         # Store mapping for cross-project resolution
-        graph._project_id_to_alias = project_id_to_alias  # type: ignore[attr-defined]
+        graph._project_id_to_alias = project_id_to_alias
         return graph
 
     def _resolve_alias_from_manifest(self, manifest_path: Path, *, fallback: str) -> str:

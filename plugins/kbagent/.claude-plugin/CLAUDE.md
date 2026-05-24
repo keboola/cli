@@ -88,7 +88,7 @@ a clean slate per task.
   main context can answer from the skill.
 - User explicitly asks for a raw command (`just show me the curl
   equivalent`): subagent would refuse; politely decline and show the
-  `kbagent --hint client <cmd>` snippet instead.
+  `kbagent --hint client <cmd>` snippet instead. (Note: `--hint` is deprecated since 0.45.0; use `kbagent serve` REST API for new integrations.)
 
 ### When NOT to delegate (Path B, `kbagent-pr-reviewer`)
 

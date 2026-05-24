@@ -110,7 +110,9 @@ def _run_repl(
 
     # Build command tree for completion
     click_app = typer.main.get_command(typer_app)
-    command_tree = _build_command_tree(click_app)
+    # typer.main.get_command returns a click.Group for multi-command Typer apps.
+    # The isinstance guard narrows the type and gracefully handles test mocks.
+    command_tree = _build_command_tree(click_app) if isinstance(click_app, click.Group) else {}
 
     # Add REPL-specific commands
     command_tree["help"] = "Show available commands"

@@ -42,7 +42,7 @@ class OutputFormatter:
         )
 
     def output(
-        self, data: Any, human_formatter: Callable[[Console, Any], None] | None = None
+        self, data: Any, human_formatter: Callable[[Console, Any], object] | None = None
     ) -> None:
         """Output data in the appropriate format.
 
@@ -573,7 +573,7 @@ def format_tool_result(console: Console, data: dict[str, Any]) -> None:
         content = result.get("content", [])
 
         status_label = "[bold red]ERROR[/bold red]" if is_error else "[bold green]OK[/bold green]"
-        lines = [f"[bold]Status:[/bold] {status_label}"]
+        lines: list[str] = [f"[bold]Status:[/bold] {status_label}"]
 
         for item in content:
             if isinstance(item, str):

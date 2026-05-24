@@ -7,7 +7,7 @@ On push: reads code files back into config parameters.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from keboola_agent_cli.sync.sql_split import split_statements
 
@@ -189,13 +189,15 @@ def normalize_blocks_codes_script(
     for block_idx, block in enumerate(blocks):
         if not isinstance(block, dict):
             continue
-        codes = block.get("codes")
+        block_d = cast("dict[str, Any]", block)
+        codes = block_d.get("codes")
         if not isinstance(codes, list):
             continue
         for code_idx, code in enumerate(codes):
             if not isinstance(code, dict):
                 continue
-            script = code.get("script")
+            code_d = cast("dict[str, Any]", code)
+            script = code_d.get("script")
             if isinstance(script, str):
                 if is_sql:
                     new_script = split_statements(script)
@@ -207,7 +209,7 @@ def normalize_blocks_codes_script(
                     # treats both as no-op.
                     new_script = [script] if script.strip() else []
                     action = "wrap_array"
-                code["script"] = new_script
+                code_d["script"] = new_script
                 normalizations.append(
                     {
                         "path": f"parameters.blocks[{block_idx}].codes[{code_idx}].script",
@@ -229,7 +231,7 @@ def normalize_blocks_codes_script(
                             continue
                     rebuilt.append(element)
                 if resplits:
-                    code["script"] = rebuilt
+                    code_d["script"] = rebuilt
                     for el_idx, after_count in resplits:
                         normalizations.append(
                             {

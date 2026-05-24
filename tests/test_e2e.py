@@ -17,13 +17,30 @@ Exercises the FULL CLI surface against a real (empty) Keboola project:
 
 All resources are prefixed with 'e2e-{run_id}' and cleaned up even on failure.
 
-Requires environment variables:
-  - E2E_API_TOKEN: Storage API token
-  - E2E_URL: Stack URL (e.g. connection.keboola.com)
+Two ways to supply credentials:
 
-Run:
-    E2E_API_TOKEN=xxx E2E_URL=connection.keboola.com \
-        uv run pytest tests/test_e2e.py -v -s --tb=long
+1. Explicit env vars (CI / one-off):
+     - E2E_API_TOKEN: Storage API token
+     - E2E_URL: Stack URL (e.g. connection.keboola.com)
+
+   Run:
+       E2E_API_TOKEN=xxx E2E_URL=connection.keboola.com \
+           uv run pytest tests/test_e2e.py -v -s --tb=long
+
+2. Config-dir mode -- run against a project already registered in a local
+   kbagent config.json, without ever typing the token:
+     - KBAGENT_E2E_CONFIG_DIR: path to a .kbagent directory (holds config.json)
+     - KBAGENT_E2E_ALIAS: alias of the project inside that config.json
+
+   Run:
+       KBAGENT_E2E_CONFIG_DIR=/tmp/kbagent/.kbagent KBAGENT_E2E_ALIAS=kbagent-e2e \
+           uv run pytest tests/test_e2e.py -v -s --tb=long
+
+   The token is read from config.json by this process at import time and
+   promoted into E2E_API_TOKEN / E2E_URL, so the rest of the harness (token
+   masking, skip gate, per-class fixtures, cleanup client) is unchanged. The
+   token is never typed on the command line and never written back to disk.
+   Explicit E2E_API_TOKEN always wins over config-dir mode.
 """
 
 from __future__ import annotations
@@ -35,6 +52,7 @@ import os
 import shutil
 import subprocess
 import time
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -42,6 +60,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
+from helpers import metastore_scope_available
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.config_store import ConfigStore
@@ -53,6 +72,42 @@ from keboola_agent_cli.models import ProjectConfig
 
 ENV_TOKEN = "E2E_API_TOKEN"
 ENV_URL = "E2E_URL"
+
+# Config-dir mode: populate the token/URL env vars from an existing kbagent
+# config.json (selected by KBAGENT_E2E_CONFIG_DIR + KBAGENT_E2E_ALIAS) so the
+# harness can run against a pre-registered project without the token being
+# typed on the command line. Explicit E2E_API_TOKEN always takes precedence.
+ENV_CONFIG_DIR = "KBAGENT_E2E_CONFIG_DIR"
+ENV_ALIAS = "KBAGENT_E2E_ALIAS"
+
+
+def _hydrate_credentials_from_config_dir() -> None:
+    """Promote a config.json project's token/URL into E2E_API_TOKEN / E2E_URL.
+
+    No-op when E2E_API_TOKEN is already set (explicit env wins) or when
+    config-dir mode is not requested (either env var missing). Fails fast with
+    a clear message when the requested alias is absent, so a typo never
+    silently degrades into "all E2E tests skipped".
+    """
+    if os.environ.get(ENV_TOKEN):
+        return  # explicit token wins -- never override a hand-set value
+    config_dir = os.environ.get(ENV_CONFIG_DIR)
+    alias = os.environ.get(ENV_ALIAS)
+    if not config_dir or not alias:
+        return  # config-dir mode not requested
+    store = ConfigStore(config_dir=Path(config_dir))
+    project = store.get_project(alias)
+    if project is None:
+        available = ", ".join(sorted(store.load().projects)) or "(none)"
+        raise RuntimeError(
+            f"{ENV_ALIAS}={alias!r} not found in {config_dir}/config.json. "
+            f"Available aliases: {available}."
+        )
+    os.environ[ENV_TOKEN] = project.token
+    os.environ[ENV_URL] = project.stack_url
+
+
+_hydrate_credentials_from_config_dir()
 
 HAS_CREDENTIALS = os.environ.get(ENV_TOKEN) is not None
 
@@ -166,7 +221,7 @@ def _json_ok(result) -> dict[str, Any]:
     return data
 
 
-def _step(num: int, title: str, detail: str = "") -> None:
+def _step(num: int | float | str, title: str, detail: str = "") -> None:
     """Print a visible step marker for -s output."""
     suffix = f" — {detail}" if detail else ""
     print(f"\n{_BOLD}{'=' * 60}")
@@ -542,7 +597,7 @@ class TestFullE2E:
         # PHASE 12: Sharing & Lineage
         # ==============================================================
 
-        _step(37, "sharing list / lineage show", "read-only checks")
+        _step(37, "sharing list", "read-only checks")
         self._test_sharing_and_lineage()
 
         # ==============================================================
@@ -2617,10 +2672,9 @@ class TestFullE2E:
         data = self._run_ok("sharing", "list", "--project", self.alias)
         assert "shared_buckets" in data["data"] or "errors" in data["data"]
 
-        # lineage show
-        data = self._run_ok("lineage", "show", "--project", self.alias)
-        # Lineage may be empty on a single-project setup
-        assert data["status"] == "ok"
+        # NOTE: `lineage show` requires a pre-built graph (--load PATH), so it is
+        # not a bare read check. Its E2E coverage lives in test_e2e_lineage_deep.py
+        # (build + show against real synced data).
 
     def _test_kai_commands(self) -> None:
         """Test Kai AI Assistant commands (gracefully skip if not available)."""
@@ -3092,7 +3146,7 @@ class TestFullE2E:
 
         def _direct_delete(item_type: str, item_id: str) -> None:
             with MetastoreClient(stack_url=self.url, token=self.token) as mc:
-                mc.delete_item(item_type, item_id)
+                mc.delete_item(item_type, item_id)  # ty: ignore[invalid-argument-type]
 
         try:
             # 1. model create
@@ -3516,7 +3570,7 @@ class TestFullE2E:
                 with MetastoreClient(stack_url=self.url, token=self.token) as mc:
                     residue: list[str] = []
                     for stype in SEMANTIC_TYPES:
-                        for item in mc.list_items(stype):
+                        for item in mc.list_items(stype):  # ty: ignore[invalid-argument-type]
                             attrs = item.get("attributes") or {}
                             name = attrs.get("name") or attrs.get("term", "")
                             if isinstance(name, str) and name.startswith(tag):
@@ -3749,7 +3803,8 @@ class TestE2EJsonConsistency:
             ["component", "list", "--project", self.alias],
             ["branch", "list", "--project", self.alias],
             ["sharing", "list", "--project", self.alias],
-            ["lineage", "show", "--project", self.alias],
+            # `lineage show` needs --load (pre-built graph) -- not a bare read;
+            # covered in test_e2e_lineage_deep.py instead.
             ["doctor"],
             ["permissions", "list"],
             ["permissions", "show"],
@@ -4266,7 +4321,7 @@ class TestE2EJobRunVariableValues:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -4614,7 +4669,7 @@ class TestE2EJobRunMode:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -4946,7 +5001,7 @@ class TestE2EFlowOperations:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -5497,7 +5552,7 @@ class TestE2EScheduleOperations:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -6009,7 +6064,13 @@ class TestE2EPR8WorkspaceGC:
         _step(1, "workspace create")
         result = self._run("workspace", "create", "--project", self.alias)
         if result.exit_code != 0:
-            pytest.skip(f"workspace create not supported: {result.output}")
+            # Not a "feature unsupported" case -- workspace create works wherever
+            # the token carries the sandbox/workspace-create scope. Skip the GC
+            # roundtrip (which needs a freshly created workspace) and surface the
+            # real CLI error so the cause (e.g. token scope) is visible.
+            pytest.skip(
+                f"workspace create unavailable for this token (skipping GC roundtrip): {result.output}"
+            )
 
         data = _json_ok(result)
         ws_id = data["data"]["workspace_id"]
@@ -6337,7 +6398,7 @@ class TestE2EJobRunQueuePollingParity:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path, request: pytest.FixtureRequest) -> None:
+    def setup(self, tmp_path: Path, request: pytest.FixtureRequest) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -6778,7 +6839,7 @@ class TestE2EStorageNativeTypesAndBranchMaterialize:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -6978,7 +7039,7 @@ class TestE2EStorageSwapTables:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -8706,6 +8767,8 @@ class TestE2ESemanticLayerLifecycle:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        if not metastore_scope_available(self.url, self.token):
+            pytest.skip("metastore/semantic-layer scope not available for this project")
         self.alias = f"{RUN_ID}-sl-proj"
         self.config_dir = tmp_path / "config"
         self.config_dir.mkdir()
@@ -8749,7 +8812,7 @@ class TestE2ESemanticLayerLifecycle:
 
         def _direct_delete(item_type: str, item_id: str) -> None:
             with MetastoreClient(stack_url=self.url, token=self.token) as mc:
-                mc.delete_item(item_type, item_id)  # type: ignore[arg-type]
+                mc.delete_item(item_type, item_id)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
         try:
             _step(1, "semantic-layer model create")
@@ -9241,7 +9304,7 @@ class TestE2ESemanticLayerLifecycle:
                 with MetastoreClient(stack_url=self.url, token=self.token) as mc:
                     residue: list[str] = []
                     for stype in SEMANTIC_TYPES:
-                        for item in mc.list_items(stype):  # type: ignore[arg-type]
+                        for item in mc.list_items(stype):  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
                             attrs = item.get("attributes") or {}
                             name = attrs.get("name") or attrs.get("term", "")
                             if isinstance(name, str) and name.startswith(tag):
@@ -9308,7 +9371,7 @@ class TestE2ESemanticLayerLifecycle:
 
         def _direct_delete(item_type: str, item_id: str) -> None:
             with MetastoreClient(stack_url=self.url, token=self.token) as mc:
-                mc.delete_item(item_type, item_id)  # type: ignore[arg-type]
+                mc.delete_item(item_type, item_id)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
         try:
             # --- 1. Create model A with children spanning the cascade order ---
@@ -9523,7 +9586,7 @@ class TestE2ESemanticLayerLifecycle:
                 with MetastoreClient(stack_url=self.url, token=self.token) as mc:
                     residue: list[str] = []
                     for stype in SEMANTIC_TYPES:
-                        for item in mc.list_items(stype):  # type: ignore[arg-type]
+                        for item in mc.list_items(stype):  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
                             attrs = item.get("attributes") or {}
                             name = attrs.get("name") or attrs.get("term", "")
                             if isinstance(name, str) and name.startswith(tag):

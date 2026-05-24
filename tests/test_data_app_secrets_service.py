@@ -24,7 +24,7 @@ from keboola_agent_cli.services.data_app_service import (
     _secret_fingerprint,
 )
 
-TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
 
 def _make_store(tmp_path: Path) -> ConfigStore:

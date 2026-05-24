@@ -22,7 +22,7 @@ from keboola_agent_cli.models import AppConfig, ProjectConfig
 
 runner = CliRunner()
 
-TEST_STORAGE_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+TEST_STORAGE_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 SENTINEL_MANAGE_TOKEN = "manage-sentinel-7af3e9c1-test-only"
 
 

@@ -168,6 +168,7 @@ class TestClientRenderer:
         import keboola_agent_cli.hints.definitions.job  # noqa: F401 — trigger registration
 
         hint = HintRegistry.get("job.run")
+        assert hint is not None
         code = ClientRenderer.render(
             hint,
             params={

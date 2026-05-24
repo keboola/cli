@@ -1675,7 +1675,9 @@ scope to that branch:
 This means you can have production and dev branch configs side by side on disk
 without them overwriting each other.
 
-## --hint mode: generate Python code
+## --hint mode: generate Python code (deprecated since 0.45.0 — use `kbagent serve` REST API)
+
+> **Deprecated since 0.45.0.** `--hint` still works but prints a deprecation warning. Use the `kbagent serve` REST API for new integrations.
 
 Use `--hint` to generate equivalent Python code instead of executing a command:
 
@@ -2029,3 +2031,18 @@ The `validate_trigger` (cycle/self-loop check) and `merge_runtime_input`
 new action type, update **both** the runner dispatcher (`agent_runner.py`)
 **and** `merge_runtime_input` to keep CRUD parity. Tests in
 `tests/test_agent_service.py` + `tests/test_agent_cli.py` catch drift.
+
+## `--hint` flag is deprecated (since v0.45.0)
+
+`--hint client` and `--hint service` are **deprecated since v0.45.0**. The flag
+still works and still generates Python code, but it now prints a deprecation
+warning to stderr. It will be removed in a future release.
+
+**Preferred alternative**: use the `kbagent serve` REST API, which exposes every
+command as an HTTP endpoint and is the recommended integration surface for AI
+agents and scripts. The REST API covers all commands that `--hint` covered, plus
+commands that never had `--hint` support.
+
+AI agents should prefer the REST surface over `--hint` for new integrations. Do
+not add new examples or workflows that teach `--hint`; point readers to
+`kbagent serve` instead.

@@ -122,6 +122,7 @@ class LineageGraph:
     # Indexes for fast lookup
     _upstream: dict[str, list[int]] = field(default_factory=dict)  # node_fqn -> edge indices
     _downstream: dict[str, list[int]] = field(default_factory=dict)  # node_fqn -> edge indices
+    _project_id_to_alias: dict[int, str] = field(default_factory=dict)  # project_id -> alias
 
     def add_edge(self, edge: Edge) -> None:
         idx = len(self.edges)
@@ -305,7 +306,7 @@ def scan_projects(root: Path) -> LineageGraph:
             _scan_configuration(project_dir, config_entry, project_alias, project_id, graph)
 
     # Store the project_id->alias mapping for cross-project resolution
-    graph._project_id_to_alias = project_id_to_alias  # type: ignore[attr-defined]
+    graph._project_id_to_alias = project_id_to_alias
     return graph
 
 

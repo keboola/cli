@@ -100,14 +100,16 @@ def terminate(
         return registry.job.terminate_jobs(
             alias=project, job_ids=body.job_ids, dry_run=body.dry_run
         )
-    job_ids = registry.job.resolve_job_ids_by_filter(
+    matched = registry.job.resolve_job_ids_by_filter(
         alias=project,
         status=body.status,
         component_id=body.component_id,
         config_id=body.config_id,
         branch_id=body.branch_id,
-        limit=body.limit,
+        limit=body.limit if body.limit is not None else 100,
     )
+    # resolve_job_ids_by_filter returns full job dicts; extract string IDs
+    job_ids = [str(j.get("id")) for j in matched if j.get("id")]
     return registry.job.terminate_jobs(alias=project, job_ids=job_ids, dry_run=body.dry_run)
 
 

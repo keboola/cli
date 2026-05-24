@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections.abc import Mapping
 
 
 def _fetch_releases() -> list[dict]:
@@ -67,7 +68,7 @@ def _extract_summary(body: str) -> list[str]:
 
 
 def audit_changelog_coverage(
-    tags: list[dict], changelog: dict[str, object]
+    tags: list[dict], changelog: Mapping[str, object]
 ) -> tuple[list[str], int, int]:
     """Split release tags into (missing, checked, skipped) against the changelog.
 

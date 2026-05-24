@@ -1,5 +1,7 @@
 # Programming with kbagent CLI as a Python SDK
 
+> **⚠️ Deprecated since 0.45.0.** The `--hint` flag is superseded by the REST API (`kbagent serve`), which covers every command. `--hint` still works but prints a deprecation warning and will be removed in a future release. New integrations should call the REST endpoints instead.
+
 kbagent is not just a command-line tool -- it is also a Python SDK. When you
 install kbagent (`uv tool install keboola-agent-cli`), you get importable
 Python modules that you can use directly in your scripts.

@@ -186,7 +186,9 @@ class KaiService(BaseService):
                 response_parts: list[str] = []
                 async for event in client.send_message(cid, message):
                     if event.type == "text":
-                        response_parts.append(event.text)  # type: ignore[attr-defined]
+                        text = getattr(event, "text", None)
+                        if text is not None:
+                            response_parts.append(text)
 
                 return {
                     "project_alias": alias,

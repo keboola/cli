@@ -20,6 +20,7 @@ from ..agent_runner import (
 from ..agents_store import (
     AgentAction,
     AgentRun,
+    AgentStore,
     AgentTask,
     Trigger,
     merge_runtime_input,
@@ -28,6 +29,33 @@ from ..agents_store import (
 from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+class _NullStore(AgentStore):
+    """Drop-in AgentStore for one-off /test runs: all mutations are no-ops.
+
+    Extends AgentStore so run_task_once's type annotation is satisfied.
+    We pass a non-existent sentinel path; the no-op overrides never call
+    _ensure_dirs so no filesystem access happens. The path is never touched,
+    so the Unix-only ``/dev/null`` form is harmless on Windows too.
+    """
+
+    def __init__(self) -> None:
+        from pathlib import Path
+
+        super().__init__(config_dir=Path("/dev/null/_kbagent_test"))
+
+    def append_run(self, run: AgentRun) -> None:
+        return None
+
+    def upsert_task(self, task: AgentTask) -> AgentTask:
+        return task
+
+    def get_task(self, task_id: str) -> AgentTask | None:
+        return None
+
+    def append_events(self, task_id: str, run_id: str, events: list[dict[str, Any]]) -> str:
+        return f"{task_id}/{run_id}.jsonl"
 
 
 def _validate_trigger(
@@ -334,21 +362,6 @@ async def test_action(
     store = _NullStore()
     run: AgentRun = await run_task_once(transient, registry, store)
     return run.model_dump(mode="json")
-
-
-class _NullStore:
-    """Drop-in replacement for AgentStore for one-off /test runs.
-
-    Implements the two methods run_task_once calls -- ``append_run`` and
-    ``upsert_task`` -- as no-ops so neither the run record nor the task's
-    last_run_at update touch disk.
-    """
-
-    def append_run(self, _run: Any) -> None:
-        return None
-
-    def upsert_task(self, task: AgentTask) -> AgentTask:
-        return task
 
 
 def _sse(event: str, data: Any) -> bytes:

@@ -293,7 +293,7 @@ plugins/kbagent/
 > "Plugin synchronization map" for the full list.
 
 ```
-# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service, --deny-writes, --deny-destructive, --allow-env-manage-token
+# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service (deprecated, use kbagent serve REST API), --deny-writes, --deny-destructive, --allow-env-manage-token
 
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list

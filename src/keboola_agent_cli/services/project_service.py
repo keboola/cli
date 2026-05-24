@@ -203,7 +203,8 @@ class ProjectService(BaseService):
                 client.close()
             updates["token"] = token
             updates["project_name"] = token_info.project_name
-            updates["project_id"] = token_info.project_id
+            if token_info.project_id is not None:
+                updates["project_id"] = token_info.project_id
 
         if updates:
             self._config_store.edit_project(alias, **updates)

@@ -1,6 +1,7 @@
 """Unit tests for ProjectService.get_info()."""
 
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -31,7 +32,7 @@ RAW_API_RESPONSE = {
 }
 
 
-def _make_service(tmp_config_dir: Path, raw_response: dict) -> ProjectService:
+def _make_service(tmp_config_dir: Path, raw_response: dict) -> tuple[ProjectService, MagicMock]:
     """Create ProjectService with one project and a client returning raw_response."""
     store = ConfigStore(config_dir=tmp_config_dir)
     store.add_project(
@@ -169,8 +170,11 @@ class TestGetInfo:
 
     def test_get_info_bigquery_backend(self, tmp_config_dir: Path) -> None:
         """get_info correctly reads defaultBackend = bigquery."""
+
+        raw_owner: dict[str, Any] = cast(dict[str, Any], RAW_API_RESPONSE["owner"])
+        owner: dict[str, Any] = dict(raw_owner)
         response = dict(RAW_API_RESPONSE)
-        response["owner"] = dict(RAW_API_RESPONSE["owner"])
+        response["owner"] = owner
         response["owner"]["defaultBackend"] = "bigquery"
 
         service, _ = _make_service(tmp_config_dir, response)

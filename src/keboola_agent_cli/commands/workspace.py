@@ -476,8 +476,13 @@ def workspace_query(
         )
         raise typer.Exit(code=2)
 
-    # Read SQL from file if needed
-    effective_sql = sql if sql else file.read_text(encoding="utf-8")
+    # Read SQL from file if needed.
+    # After the guards above: either sql is truthy, or (not sql and file is non-None).
+    if sql:
+        effective_sql = sql
+    else:
+        assert file is not None  # guaranteed: guard above exits if both sql and file absent
+        effective_sql = file.read_text(encoding="utf-8")
 
     try:
         result = service.execute_query(

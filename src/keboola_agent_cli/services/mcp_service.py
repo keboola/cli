@@ -266,7 +266,7 @@ async def _connect_and_list_tools(
     logger.info("Starting MCP server for project %s", project.project_name or "unknown")
     try:
         read_stream, write_stream = await asyncio.wait_for(
-            exit_stack.enter_async_context(stdio_client(params, errlog=subprocess.DEVNULL)),
+            exit_stack.enter_async_context(stdio_client(params, errlog=subprocess.DEVNULL)),  # ty: ignore[invalid-argument-type]  # mcp types errlog as TextIO but accepts int (DEVNULL) at runtime
             timeout=_get_init_timeout(),
         )
 
@@ -315,7 +315,7 @@ async def _open_session(
     params = _build_server_params(project, branch_id=branch_id)
 
     read_stream, write_stream = await asyncio.wait_for(
-        exit_stack.enter_async_context(stdio_client(params, errlog=subprocess.DEVNULL)),
+        exit_stack.enter_async_context(stdio_client(params, errlog=subprocess.DEVNULL)),  # ty: ignore[invalid-argument-type]  # mcp types errlog as TextIO but accepts int (DEVNULL) at runtime
         timeout=_get_init_timeout(),
     )
 

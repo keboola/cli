@@ -1,6 +1,6 @@
 [project]
 name = "keboola-agent-cli"
-version = "0.44.0"
+version = "0.45.0"
 description = "AI-friendly CLI for managing Keboola projects"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -113,6 +113,11 @@ dev = [
 
 [tool.ty.src]
 include = ["src", "tests", "scripts"]
+
+[tool.ty.environment]
+# tests/ import shared fixtures via bare `from helpers import ...` (pytest adds
+# tests/ to sys.path at runtime); list it here so ty resolves the import too.
+extra-paths = ["tests"]
 
 [tool.ty.rules]
 unresolved-import = "warn"

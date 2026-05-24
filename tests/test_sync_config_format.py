@@ -1,5 +1,7 @@
 """Tests for sync config_format module -- API JSON <-> local YAML conversion."""
 
+from typing import Any
+
 import pytest
 
 from keboola_agent_cli.sync.config_format import (
@@ -11,7 +13,7 @@ from keboola_agent_cli.sync.config_format import (
     local_row_to_api,
 )
 
-SAMPLE_API_CONFIG = {
+SAMPLE_API_CONFIG: dict[str, Any] = {
     "id": "cfg-123",
     "name": "My Extractor",
     "description": "Extracts data from API",

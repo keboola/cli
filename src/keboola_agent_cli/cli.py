@@ -224,8 +224,9 @@ def main(
     hint: str | None = typer.Option(
         None,
         "--hint",
-        help="Show equivalent Python code instead of executing. "
-        "Values: 'client' (direct API usage, default) or 'service' (uses CLI config).",
+        help="[DEPRECATED -- use the `kbagent serve` REST API] Show equivalent Python "
+        "code instead of executing. Values: 'client' (direct API usage) or 'service' "
+        "(uses CLI config).",
     ),
     deny_writes: bool = typer.Option(
         False,
@@ -268,6 +269,18 @@ def main(
                 err=True,
             )
             raise typer.Exit(code=2) from None
+        # Only warn interactively: --hint streams machine-consumed Python code to
+        # stdout, so a stderr warning is for a human at a terminal. Suppressing it
+        # when stderr is not a TTY keeps piped/redirected output (and the snippet
+        # compile-check tests) clean.
+        if sys.stderr.isatty():
+            typer.secho(
+                "Warning: --hint is deprecated and will be removed in a future release. "
+                "The REST surface now covers every command -- run `kbagent serve` and call "
+                "the equivalent endpoint instead. See docs/hint-mode.md for the migration.",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
     else:
         maybe_auto_update()
 

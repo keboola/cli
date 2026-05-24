@@ -151,6 +151,8 @@ class SyncService(BaseService):
             branches = client.list_dev_branches()
 
         project_id = token_info.project_id
+        if project_id is None:
+            raise ConfigError("Token verification returned no project ID; cannot build manifest.")
         api_host = project.stack_url.replace("https://", "").rstrip("/")
         default_branch_info = next(
             (b for b in branches if b.get("isDefault")),
@@ -167,15 +169,15 @@ class SyncService(BaseService):
             default_branch_name = get_default_branch(project_root)
             git_branching_config = ManifestGitBranching(
                 enabled=True,
-                default_branch=default_branch_name,
+                defaultBranch=default_branch_name,
             )
 
         # Build manifest
         manifest = Manifest(
             version=MANIFEST_VERSION,
-            project=ManifestProject(id=project_id, api_host=api_host),
-            allow_target_env=True,
-            git_branching=git_branching_config,
+            project=ManifestProject(id=project_id, apiHost=api_host),
+            allowTargetEnv=True,
+            gitBranching=git_branching_config,
             naming=ManifestNaming(),
             branches=[
                 ManifestBranch(
@@ -680,8 +682,8 @@ class SyncService(BaseService):
                     }
                 new_configurations.append(
                     ManifestConfiguration(
-                        branch_id=branch_id or 0,
-                        component_id=component_id,
+                        branchId=branch_id or 0,
+                        componentId=component_id,
                         id=config_id,
                         path=rel_path,
                         metadata=cfg_metadata,
@@ -1207,8 +1209,8 @@ class SyncService(BaseService):
                                 cfg_hash = ""
                             manifest.configurations.append(
                                 ManifestConfiguration(
-                                    branch_id=branch_id or 0,
-                                    component_id=component_id,
+                                    branchId=branch_id or 0,
+                                    componentId=component_id,
                                     id=new_id,
                                     path=config_path_str,
                                     metadata={

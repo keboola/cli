@@ -1,14 +1,22 @@
 """Tests for BaseHttpClient - retry logic, error sanitization, shared HTTP behavior."""
 
+import platform
+from typing import SupportsIndex
+
 import httpx
 import pytest
 
-from keboola_agent_cli.constants import MAX_API_ERROR_LENGTH, MAX_RETRIES
+from keboola_agent_cli.constants import APP_NAME, MAX_API_ERROR_LENGTH, MAX_RETRIES
 from keboola_agent_cli.errors import KeboolaApiError
-from keboola_agent_cli.http_base import BaseHttpClient
+from keboola_agent_cli.http_base import BaseHttpClient, build_user_agent
+
+
+def _noop_sleep(seconds: SupportsIndex | float, /) -> None:
+    """No-op replacement for time.sleep used in retry tests."""
+
 
 STACK_URL = "https://connection.keboola.com"
-TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
 
 class TestBaseHttpClientRetry:
@@ -36,7 +44,7 @@ class TestBaseHttpClientRetry:
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             response = client._do_request("GET", "/test-path")
             assert response.status_code == 200
@@ -64,7 +72,7 @@ class TestBaseHttpClientRetry:
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client._do_request("GET", "/test-path")
@@ -97,7 +105,7 @@ class TestBaseHttpClientRetry:
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             response = client._do_request("GET", "/test-path")
             assert response.status_code == 200
@@ -145,7 +153,7 @@ class TestBaseHttpClientRetry:
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client._do_request("GET", "/test-path")
@@ -172,7 +180,7 @@ class TestBaseHttpClientRetry:
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client._do_request("GET", "/test-path")
@@ -512,7 +520,7 @@ class TestBaseHttpClientErrorSanitization:
         # Full token must NOT appear in the error message
         assert TOKEN not in exc_info.value.message
         # Masked form should appear
-        assert "901-...pt0k" in exc_info.value.message
+        assert "901-...XXXX" in exc_info.value.message
         client.close()
 
 
@@ -581,6 +589,58 @@ class TestConversationIdHeader:
 
         request = httpx_mock.get_request()
         assert "X-Conversation-ID" not in request.headers
+
+
+class TestUserAgent:
+    """Test the centralized User-Agent that signs every Keboola API call."""
+
+    def test_build_user_agent_components(self) -> None:
+        """UA carries product/version plus OS, arch, and Python interpreter."""
+        ua = build_user_agent()
+        assert ua.startswith(f"{APP_NAME}/")
+        # Comment section with host metadata: "(<os> <release>; <arch>; <impl> <ver>)"
+        assert platform.system() in ua
+        assert platform.machine() in ua
+        assert platform.python_implementation() in ua
+        assert platform.python_version() in ua
+
+    def test_build_user_agent_no_hostname_pii(self) -> None:
+        """Hostname (platform.node()) is PII and must never leak into the UA."""
+        node = platform.node()
+        if node:
+            assert node not in build_user_agent()
+
+    def test_base_client_sends_enriched_user_agent(self, httpx_mock) -> None:
+        """BaseHttpClient sets the enriched UA centrally, even if caller omits it."""
+        httpx_mock.add_response(url=f"{STACK_URL}/test-path", json={"ok": True}, status_code=200)
+
+        client = BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"X-StorageApi-Token": TOKEN},
+        )
+        client._do_request("GET", "/test-path")
+        client.close()
+
+        request = httpx_mock.get_request()
+        assert request.headers["User-Agent"] == build_user_agent()
+        assert platform.system() in request.headers["User-Agent"]
+
+    def test_base_client_overrides_caller_user_agent(self, httpx_mock) -> None:
+        """A caller-supplied UA is replaced by the canonical one (one signature for the fleet)."""
+        httpx_mock.add_response(url=f"{STACK_URL}/test-path", json={"ok": True}, status_code=200)
+
+        client = BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"X-StorageApi-Token": TOKEN, "User-Agent": "stale/0.0.1"},
+        )
+        client._do_request("GET", "/test-path")
+        client.close()
+
+        request = httpx_mock.get_request()
+        assert request.headers["User-Agent"] == build_user_agent()
+        assert "stale/0.0.1" not in request.headers["User-Agent"]
 
 
 class TestBaseHttpClientContextManager:

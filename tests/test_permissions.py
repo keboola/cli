@@ -306,11 +306,13 @@ class TestOperationRegistryCompleteness:
         """Every command in every sub-app should have a registry entry."""
 
         # Get the Click command object
+        import click
         import typer.main
 
         from keboola_agent_cli import cli as cli_module
 
         click_app = typer.main.get_command(cli_module.app)
+        assert isinstance(click_app, click.Group)
 
         missing: list[str] = []
 

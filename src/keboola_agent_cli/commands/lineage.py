@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 import typer
 
 from ..errors import ErrorCode
+from ..services.deep_lineage_service import DeepLineageService, LineageGraph
 from ._helpers import (
     check_cli_permission,
     emit_hint,
@@ -1309,8 +1310,8 @@ class _LineageHandler(http.server.BaseHTTPRequestHandler):
 
     html_content: str = ""
     json_content: str = ""
-    service = None  # DeepLineageService instance
-    graph = None  # LineageGraph instance
+    service: DeepLineageService | None = None
+    graph: LineageGraph | None = None
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -1338,6 +1339,7 @@ class _LineageHandler(http.server.BaseHTTPRequestHandler):
             self._serve(json.dumps({"error": "Missing 'node' parameter"}), "application/json")
             return
 
+        assert self.service is not None and self.graph is not None
         if direction == "upstream":
             result = self.service.query_upstream(self.graph, node, depth=depth)
         else:
@@ -1358,6 +1360,7 @@ class _LineageHandler(http.server.BaseHTTPRequestHandler):
             self._serve("graph LR\n  empty[No node specified]", "text/plain")
             return
 
+        assert self.service is not None and self.graph is not None
         if direction == "upstream":
             result = self.service.query_upstream(self.graph, node, depth=depth)
         else:

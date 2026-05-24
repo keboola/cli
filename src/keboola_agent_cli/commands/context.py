@@ -47,7 +47,7 @@ observability -- all API requests will include the X-Conversation-ID header.
   --verbose / -v    Verbose output
   --no-color        Disable colors (auto-disabled in non-TTY)
   --config-dir      Override config directory path
-  --hint MODE       Generate Python code instead of executing (MODE: client or service)
+  --hint MODE       [DEPRECATED since 0.45.0 -- use `kbagent serve` REST API] Generate Python code instead of executing (MODE: client or service)
   --deny-writes     Session-only firewall: block the WIDE NET -- every write, destructive, AND admin op (project add/remove/edit, org setup, all storage mutations)
   --deny-destructive  Session-only firewall: NARROW -- block only data-destructive ops in Keboola (delete-table/bucket/column, terminate-job, branch delete). Admin ops (project remove, org setup) stay allowed -- use --deny-writes for those
 
@@ -1105,7 +1105,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 3. Multi-project: most read commands accept repeatable --project flag.
    Omit --project to query ALL connected projects in parallel.
 
-4. Tokens are always masked in output (e.g. 901-...pt0k) -- expected behavior.
+4. Tokens are always masked in output (e.g. 901-...XXXX) -- expected behavior.
 
 5. Common workflow -- explore a project:
      kbagent --json project list
@@ -1149,7 +1149,8 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
        kbagent --json tool call get_configs --project prod --branch 456 \\
          --input '{{"configs": [{{"component_id": "keboola.snowflake-transformation", "configuration_id": "12345"}}]}}'
 
-10. Python code generation with --hint:
+10. Python code generation with --hint (DEPRECATED since 0.45.0 -- prefer the
+    `kbagent serve` REST API, which covers every command; --hint still works but warns):
      kbagent --hint client config list --project prod   # Direct API calls (KeboolaClient)
      kbagent --hint service config list --project prod  # Service layer (uses CLI config)
      Two modes:

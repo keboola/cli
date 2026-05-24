@@ -260,8 +260,12 @@ class SharingService(BaseService):
 
     def _fetch_shared_buckets(
         self, alias: str, project: ProjectConfig
-    ) -> tuple[str, list[dict[str, Any]], bool]:
-        """Fetch shared buckets for a single project (worker for _run_parallel)."""
+    ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, Any]]:
+        """Fetch shared buckets for a single project (worker for _run_parallel).
+
+        Returns a 3-tuple on success (alias, buckets, True) or a 2-tuple
+        (alias, error_dict) on failure, matching the _run_parallel protocol.
+        """
         client = self._client_factory(project.stack_url, project.token)
         try:
             raw_buckets = client.list_shared_buckets()

@@ -10,7 +10,7 @@ avoids one service importing another's internals.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, TypeGuard
 
 from ..errors import ErrorCode, KeboolaApiError
 
@@ -19,8 +19,12 @@ logger = logging.getLogger(__name__)
 _ENCRYPTED_PREFIX = "KBC::"
 
 
-def is_secret_key(key: str) -> bool:
-    """True if ``key`` is a Keboola secret key (starts with ``#``)."""
+def is_secret_key(key: object) -> TypeGuard[str]:
+    """True if ``key`` is a Keboola secret key (a ``str`` starting with ``#``).
+
+    Accepts ``object`` because callers walk untyped JSON (dict keys infer as
+    ``object``); the ``TypeGuard`` narrows a positive result back to ``str``.
+    """
     return isinstance(key, str) and key.startswith("#")
 
 
@@ -29,7 +33,7 @@ def is_already_encrypted(value: Any) -> bool:
     return isinstance(value, str) and value.startswith(_ENCRYPTED_PREFIX)
 
 
-def _is_secret_name_value_pair(item: Any) -> bool:
+def _is_secret_name_value_pair(item: Any) -> TypeGuard[dict[str, str]]:
     """True if ``item`` is a row-hoisted secret entry like ``{"name": "#x", "value": "..."}``.
 
     ``keboola.variables`` rows store each variable as ``{name, value}`` inside

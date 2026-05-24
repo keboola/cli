@@ -135,6 +135,9 @@ class VariablesService(BaseService):
             # project_id is needed for the Encryption API scope; not present on
             # the config response, so fetch from verify_token.
             project_id = client.verify_token().project_id
+            # A valid storage token always has a project_id; None only on
+            # master tokens which cannot be used here.
+            assert project_id is not None
 
             linked_vars_id = variables_id or parent_configuration.get("variables_id")
             linked_values_id = values_id or parent_configuration.get("variables_values_id")

@@ -17,7 +17,6 @@ from urllib.parse import quote
 
 import httpx
 
-from . import __version__
 from .constants import (
     DEFAULT_GROUPED_JOBS_LIMIT,
     DEFAULT_JOB_LIMIT,
@@ -85,7 +84,6 @@ class KeboolaClient(BaseHttpClient):
         self._stack_url = stack_url.rstrip("/")
         headers = {
             "X-StorageApi-Token": token,
-            "User-Agent": f"keboola-agent-cli/{__version__}",
         }
         super().__init__(
             base_url=self._stack_url,
@@ -1038,7 +1036,7 @@ class KeboolaClient(BaseHttpClient):
         self,
         key: str,
         branch_id: int | str = "default",
-    ) -> str | None:
+    ) -> str | None | object:
         """Return the value for a single metadata key on a branch, or None if absent.
 
         Convenience wrapper around ``list_branch_metadata`` that filters by key.

@@ -109,6 +109,7 @@ async def measure_raw_stdio_call(
 
     store = ConfigStore()
     project = store.get_project(project_alias)
+    assert project is not None, f"Unknown project alias: {project_alias}"
 
     total_start = time.perf_counter()
 
@@ -118,7 +119,7 @@ async def measure_raw_stdio_call(
     exit_stack = AsyncExitStack()
 
     read_stream, write_stream = await asyncio.wait_for(
-        exit_stack.enter_async_context(stdio_client(params, errlog=subprocess.DEVNULL)),
+        exit_stack.enter_async_context(stdio_client(params, errlog=subprocess.DEVNULL)),  # ty: ignore[invalid-argument-type]  # MCP stub types errlog as TextIO; DEVNULL (int) works at runtime
         timeout=30,
     )
     spawn_time = time.perf_counter() - spawn_start
@@ -164,6 +165,7 @@ async def measure_raw_http_call(
 
     store = ConfigStore()
     project = store.get_project(project_alias)
+    assert project is not None, f"Unknown project alias: {project_alias}"
 
     total_start = time.perf_counter()
 

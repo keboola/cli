@@ -120,7 +120,7 @@ HintRegistry.register(
                         "alias": "{project}",
                         "aliases": "{project}",
                         "component_id": "{component_id}",
-                        "config_id": None,
+                        "config_id": "None",
                         "branch_id": "{branch}",
                         "with_state": "{with_state}",
                     },
@@ -479,7 +479,7 @@ HintRegistry.register(
                         "metadata_id": "{metadata_id}",
                         "branch_id": "{branch}",
                     },
-                    result_var=None,
+                    result_var="_",
                     result_hint="None",
                 ),
                 service=ServiceCall(
