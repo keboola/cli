@@ -60,6 +60,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
+from helpers import metastore_scope_available
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.config_store import ConfigStore
@@ -596,7 +597,7 @@ class TestFullE2E:
         # PHASE 12: Sharing & Lineage
         # ==============================================================
 
-        _step(37, "sharing list / lineage show", "read-only checks")
+        _step(37, "sharing list", "read-only checks")
         self._test_sharing_and_lineage()
 
         # ==============================================================
@@ -8719,27 +8720,6 @@ class TestE2EMcpParityCommands:
 
 @skip_without_credentials
 @pytest.mark.e2e
-def _metastore_scope_available(url: str, token: str) -> bool:
-    """Probe whether the project has a usable metastore scope.
-
-    Semantic-layer is a gated feature; a project that does not have it returns
-    HTTP 502 "Failed to create project scope" on every metastore call -- an
-    environment limitation, not a test failure. The SL suites skip cleanly in
-    that case instead of reporting a wall of false-positive failures.
-    """
-    from keboola_agent_cli.errors import KeboolaApiError
-    from keboola_agent_cli.metastore_client import SEMANTIC_TYPES, MetastoreClient
-
-    try:
-        with MetastoreClient(stack_url=url, token=token) as mc:
-            mc.list_items(SEMANTIC_TYPES[0])  # ty: ignore[invalid-argument-type]  # probe; str vs SemanticType Literal
-        return True
-    except KeboolaApiError as exc:
-        if exc.status_code == 502 or "scope" in (exc.message or "").lower():
-            return False
-        raise
-
-
 class TestE2ESemanticLayerLifecycle:
     """E2E coverage for the ``kbagent semantic-layer`` command group.
 
@@ -8781,7 +8761,7 @@ class TestE2ESemanticLayerLifecycle:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
-        if not _metastore_scope_available(self.url, self.token):
+        if not metastore_scope_available(self.url, self.token):
             pytest.skip("metastore/semantic-layer scope not available for this project")
         self.alias = f"{RUN_ID}-sl-proj"
         self.config_dir = tmp_path / "config"

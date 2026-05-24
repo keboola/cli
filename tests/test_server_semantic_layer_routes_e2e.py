@@ -30,6 +30,7 @@ if importlib.util.find_spec("fastapi") is None:  # pragma: no cover
 
 from fastapi.testclient import TestClient
 
+from helpers import metastore_scope_available
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.server import create_app
@@ -47,27 +48,6 @@ _RUN_TAG = f"kbagent_e2e_{int(time.time())}"
 _PROJECT_ALIAS = "e2e-http-sl"
 
 
-def _metastore_scope_available(url: str, token: str) -> bool:
-    """Probe whether the project has a usable metastore scope.
-
-    Semantic-layer is a gated feature; a project that does not have it returns
-    HTTP 502 "Failed to create project scope" on every metastore call. That is
-    an environment limitation, not a test failure -- so the suite skips cleanly
-    instead of reporting a wall of false-positive failures.
-    """
-    from keboola_agent_cli.errors import KeboolaApiError
-    from keboola_agent_cli.metastore_client import SEMANTIC_TYPES, MetastoreClient
-
-    try:
-        with MetastoreClient(stack_url=url, token=token) as mc:
-            mc.list_items(SEMANTIC_TYPES[0])  # ty: ignore[invalid-argument-type]  # probe call; str vs SemanticType Literal
-        return True
-    except KeboolaApiError as exc:
-        if exc.status_code == 502 or "scope" in (exc.message or "").lower():
-            return False
-        raise
-
-
 @pytest.fixture(scope="session")
 def http_session(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Any]]:
     """Bootstrap a semantic-layer model + return a TestClient + tracking dict.
@@ -83,7 +63,7 @@ def http_session(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str,
     raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
     url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
 
-    if not _metastore_scope_available(url, token):
+    if not metastore_scope_available(url, token):
         pytest.skip("metastore/semantic-layer scope not available for this project")
 
     config_dir = tmp_path_factory.mktemp("kbagent-sl-http-config")
