@@ -17,13 +17,30 @@ Exercises the FULL CLI surface against a real (empty) Keboola project:
 
 All resources are prefixed with 'e2e-{run_id}' and cleaned up even on failure.
 
-Requires environment variables:
-  - E2E_API_TOKEN: Storage API token
-  - E2E_URL: Stack URL (e.g. connection.keboola.com)
+Two ways to supply credentials:
 
-Run:
-    E2E_API_TOKEN=xxx E2E_URL=connection.keboola.com \
-        uv run pytest tests/test_e2e.py -v -s --tb=long
+1. Explicit env vars (CI / one-off):
+     - E2E_API_TOKEN: Storage API token
+     - E2E_URL: Stack URL (e.g. connection.keboola.com)
+
+   Run:
+       E2E_API_TOKEN=xxx E2E_URL=connection.keboola.com \
+           uv run pytest tests/test_e2e.py -v -s --tb=long
+
+2. Config-dir mode -- run against a project already registered in a local
+   kbagent config.json, without ever typing the token:
+     - KBAGENT_E2E_CONFIG_DIR: path to a .kbagent directory (holds config.json)
+     - KBAGENT_E2E_ALIAS: alias of the project inside that config.json
+
+   Run:
+       KBAGENT_E2E_CONFIG_DIR=/tmp/kbagent/.kbagent KBAGENT_E2E_ALIAS=kbagent-e2e \
+           uv run pytest tests/test_e2e.py -v -s --tb=long
+
+   The token is read from config.json by this process at import time and
+   promoted into E2E_API_TOKEN / E2E_URL, so the rest of the harness (token
+   masking, skip gate, per-class fixtures, cleanup client) is unchanged. The
+   token is never typed on the command line and never written back to disk.
+   Explicit E2E_API_TOKEN always wins over config-dir mode.
 """
 
 from __future__ import annotations
@@ -54,6 +71,42 @@ from keboola_agent_cli.models import ProjectConfig
 
 ENV_TOKEN = "E2E_API_TOKEN"
 ENV_URL = "E2E_URL"
+
+# Config-dir mode: populate the token/URL env vars from an existing kbagent
+# config.json (selected by KBAGENT_E2E_CONFIG_DIR + KBAGENT_E2E_ALIAS) so the
+# harness can run against a pre-registered project without the token being
+# typed on the command line. Explicit E2E_API_TOKEN always takes precedence.
+ENV_CONFIG_DIR = "KBAGENT_E2E_CONFIG_DIR"
+ENV_ALIAS = "KBAGENT_E2E_ALIAS"
+
+
+def _hydrate_credentials_from_config_dir() -> None:
+    """Promote a config.json project's token/URL into E2E_API_TOKEN / E2E_URL.
+
+    No-op when E2E_API_TOKEN is already set (explicit env wins) or when
+    config-dir mode is not requested (either env var missing). Fails fast with
+    a clear message when the requested alias is absent, so a typo never
+    silently degrades into "all E2E tests skipped".
+    """
+    if os.environ.get(ENV_TOKEN):
+        return  # explicit token wins -- never override a hand-set value
+    config_dir = os.environ.get(ENV_CONFIG_DIR)
+    alias = os.environ.get(ENV_ALIAS)
+    if not config_dir or not alias:
+        return  # config-dir mode not requested
+    store = ConfigStore(config_dir=Path(config_dir))
+    project = store.get_project(alias)
+    if project is None:
+        available = ", ".join(sorted(store.load().projects)) or "(none)"
+        raise RuntimeError(
+            f"{ENV_ALIAS}={alias!r} not found in {config_dir}/config.json. "
+            f"Available aliases: {available}."
+        )
+    os.environ[ENV_TOKEN] = project.token
+    os.environ[ENV_URL] = project.stack_url
+
+
+_hydrate_credentials_from_config_dir()
 
 HAS_CREDENTIALS = os.environ.get(ENV_TOKEN) is not None
 

@@ -380,6 +380,9 @@ before the PR is mergeable.
 - [ ] **Service-layer tests** -- mock the client, test business logic, edge cases, error propagation
 - [ ] **CLI-layer tests** -- use `CliRunner`, test JSON output, error exit codes
 - [ ] **E2E tests** -- add a test in `tests/test_e2e.py` that exercises the command against a real Keboola project (requires `E2E_API_TOKEN` + `E2E_URL`). Run `make test-e2e` to verify. Every CLI command must have E2E coverage
+
+  > **Running locally without exporting a token:** if the target project is already registered in a kbagent `config.json`, use config-dir mode -- `make test-e2e-local CONFIG_DIR=/path/to/.kbagent ALIAS=my-proj`. The harness reads the token from `config.json` at import time and promotes it into `E2E_API_TOKEN` / `E2E_URL`; an explicit `E2E_API_TOKEN` still wins.
+
 - [ ] **Run `make check`** before committing (lint + format + full test suite)
 - [ ] **Run `make typecheck`** -- `ty` must pass clean (0 diagnostics; the backlog was cleared in 0.45.0, so the gate is blocking, not warning-only)
 - [ ] **No new `tuple[...]` returns** -- multi-value returns use a `@dataclass` ([Code Quality Patterns](#code-quality-patterns))
