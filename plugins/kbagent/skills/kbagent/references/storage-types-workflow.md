@@ -229,7 +229,8 @@ kbagent --json storage create-table \
 - Client-mode `--hint` returns raw CLI strings in `columns=[...]`; adapt
   them to the API shape `[{"name": ..., "definition": {...}}]` before
   sending via `KeboolaClient.create_table()`. Service-mode `--hint` uses
-  the service layer which does the parsing for you.
+  the service layer which does the parsing for you. (Note: `--hint` is
+  deprecated since 0.45.0 — use the `kbagent serve` REST API instead.)
 
 ## Promoting a typed rebuild back into the original name (since v0.28.0)
 

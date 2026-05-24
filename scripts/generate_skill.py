@@ -68,14 +68,14 @@ def _format_param(param: click.Parameter) -> str:
     Optional params are omitted from the compact command string.
     """
     if isinstance(param, click.Argument):
-        human_name = param.name.upper().replace("_", "-")
+        human_name = (param.name or "").upper().replace("_", "-")
         return f"<{human_name}>" if param.required else f"[{human_name}]"
 
     if isinstance(param, click.Option):
         if not param.required:
             return ""
         # Use the longest option string (e.g. --alias over -a)
-        opt_str = max(param.opts, key=len)
+        opt_str = max(param.opts, key=lambda o: len(o))
         # Convert underscores to hyphens for display
         opt_str = opt_str.replace("_", "-")
         human_name = param.human_readable_name.upper().replace("_", "-")
@@ -199,6 +199,7 @@ def main() -> None:
     """Entry point: introspect CLI, generate table, inject into SKILL.md."""
     click_app = typer.main.get_command(app)
 
+    assert isinstance(click_app, click.Group)
     with click.Context(click_app) as ctx:
         commands = _collect_commands(click_app, ctx)
 

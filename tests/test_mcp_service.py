@@ -1074,6 +1074,7 @@ class TestBuildServerParamsBranchId:
             project_id=1234,
         )
         params = _build_server_params(project, branch_id="456")
+        assert params.env is not None
         assert params.env["KBC_BRANCH_ID"] == "456"
         assert params.env["KBC_STORAGE_TOKEN"] == "tok-test"
         assert params.env["KBC_STORAGE_API_URL"] == "https://connection.keboola.com"
@@ -1090,6 +1091,7 @@ class TestBuildServerParamsBranchId:
             project_id=1234,
         )
         params = _build_server_params(project, branch_id=None)
+        assert params.env is not None
         assert "KBC_BRANCH_ID" not in params.env
         assert params.env["KBC_STORAGE_TOKEN"] == "tok-test"
 
@@ -1105,6 +1107,7 @@ class TestBuildServerParamsBranchId:
             project_id=1234,
         )
         params = _build_server_params(project)
+        assert params.env is not None
         assert "KBC_BRANCH_ID" not in params.env
 
 

@@ -30,7 +30,7 @@ FULL_INFO = {
 }
 
 
-def _make_service_with_info(info: dict, tmp_path: Path) -> ProjectService:
+def _make_service_with_info(info: dict, tmp_path: Path) -> tuple[MagicMock, ConfigStore]:
     """Return a ProjectService whose get_info() returns the given dict."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()

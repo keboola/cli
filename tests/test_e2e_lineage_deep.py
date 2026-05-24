@@ -113,7 +113,7 @@ def _find_table_with_downstream(cache_path: Path) -> str | None:
             sources[e["source_fqn"]] = sources.get(e["source_fqn"], 0) + 1
     if not sources:
         return None
-    return max(sources, key=sources.get)
+    return max(sources, key=lambda k: sources.get(k, 0))
 
 
 def _find_table_with_upstream(cache_path: Path) -> str | None:
@@ -126,7 +126,7 @@ def _find_table_with_upstream(cache_path: Path) -> str | None:
             targets[e["target_fqn"]] = targets.get(e["target_fqn"], 0) + 1
     if not targets:
         return None
-    return max(targets, key=targets.get)
+    return max(targets, key=lambda k: targets.get(k, 0))
 
 
 def _find_table_with_columns(cache_path: Path) -> tuple[str | None, str | None]:

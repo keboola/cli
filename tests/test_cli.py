@@ -19,7 +19,7 @@ from keboola_agent_cli.services.job_service import JobService
 from keboola_agent_cli.services.lineage_service import LineageService
 from keboola_agent_cli.services.project_service import ProjectService
 
-TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
 runner = CliRunner()
 
@@ -67,7 +67,7 @@ class TestProjectAdd:
         assert output["data"]["project_name"] == "Prod Project"
         assert output["data"]["project_id"] == 5678
         # Token should be masked
-        assert "10493007" not in output["data"]["token"]
+        assert "55555" not in output["data"]["token"]
 
     def test_project_add_success_human(self, tmp_path: Path) -> None:
         """project add in human mode outputs success message."""
@@ -1180,7 +1180,7 @@ class TestConfigList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -1218,7 +1218,7 @@ class TestConfigList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -1257,7 +1257,7 @@ class TestConfigList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
                 "dev": {"token": "532-abcdef-ghijklmnopqrst"},
             },
         )
@@ -1309,7 +1309,7 @@ class TestConfigList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
                 "dev": {"token": "532-abcdef-ghijklmnopqrst"},
             },
         )
@@ -1365,7 +1365,7 @@ class TestConfigList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -1409,7 +1409,7 @@ class TestConfigList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -1595,7 +1595,7 @@ class TestConfigList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -1629,7 +1629,7 @@ class TestConfigList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -1666,7 +1666,7 @@ class TestConfigList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -1713,7 +1713,7 @@ class TestConfigList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -1766,7 +1766,7 @@ class TestConfigDetail:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -1841,7 +1841,7 @@ class TestConfigDetail:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -1909,7 +1909,7 @@ class TestConfigDetail:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -1964,7 +1964,7 @@ class TestConfigDetail:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -2021,7 +2021,7 @@ class TestConfigDetail:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -2110,7 +2110,7 @@ class TestConfigDetail:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -2164,7 +2164,7 @@ class TestConfigDetail:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -2210,7 +2210,7 @@ class TestConfigDetail:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -2267,7 +2267,7 @@ class TestConfigDetail:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         bulk_result = {
@@ -2337,7 +2337,7 @@ class TestConfigDetail:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
                 "stage": {"token": "532-abcdef-ghijklmnopqrst"},
             },
         )
@@ -2407,7 +2407,7 @@ class TestConfigDetail:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
                 "stage": {"token": "532-abcdef-ghijklmnopqrst"},
             },
         )
@@ -2458,7 +2458,7 @@ class TestConfigDetail:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -2502,7 +2502,7 @@ class TestConfigDetail:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -2550,7 +2550,7 @@ class TestConfigDetail:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         bulk_result = {
@@ -2605,7 +2605,7 @@ class TestConfigDetail:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -2637,7 +2637,7 @@ class TestConfigDetail:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -2703,7 +2703,7 @@ class TestConfigListIncludeRows:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -2740,7 +2740,7 @@ class TestConfigListIncludeRows:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -2807,7 +2807,7 @@ class TestJobList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -2847,7 +2847,7 @@ class TestJobList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -2884,7 +2884,7 @@ class TestJobList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
                 "dev": {"token": "532-abcdef-ghijklmnopqrst"},
             },
         )
@@ -3052,7 +3052,7 @@ class TestJobList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -3110,7 +3110,7 @@ class TestJobDetail:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -3153,7 +3153,7 @@ class TestJobDetail:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -3224,7 +3224,7 @@ class TestJobDetail:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -3266,7 +3266,7 @@ class TestJobRun:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -3320,7 +3320,7 @@ class TestJobRun:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
         # Set active branch for the project
@@ -3374,7 +3374,7 @@ class TestJobRun:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -3425,7 +3425,7 @@ class TestJobRun:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -3465,7 +3465,7 @@ class TestJobRun:
         config_dir.mkdir()
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -3509,7 +3509,7 @@ class TestJobRun:
         config_dir.mkdir()
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -3555,7 +3555,7 @@ class TestJobRun:
         config_dir.mkdir()
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -3599,7 +3599,7 @@ class TestJobRun:
         config_dir.mkdir()
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -3645,7 +3645,7 @@ class TestJobRun:
         config_dir.mkdir()
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -3685,7 +3685,7 @@ class TestJobRun:
         config_dir.mkdir()
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -3733,7 +3733,7 @@ class TestJobRun:
         config_dir.mkdir()
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -3776,7 +3776,7 @@ class TestJobRun:
         config_dir.mkdir()
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -3819,7 +3819,7 @@ class TestJobRun:
         config_dir.mkdir()
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -3863,7 +3863,7 @@ class TestJobRun:
         config_dir.mkdir()
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -3907,7 +3907,7 @@ class TestJobRun:
         config_dir.mkdir()
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -3952,7 +3952,7 @@ class TestJobRunQueuePollingFlags:
         config_dir.mkdir()
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
         return store
 
@@ -4153,7 +4153,7 @@ class TestJobTerminate:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
         return store
@@ -4659,7 +4659,7 @@ class TestDoctor:
             "test",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
                 project_name="Test",
                 project_id=1234,
             ),
@@ -4727,7 +4727,7 @@ class TestDoctor:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
                 project_name="Prod",
                 project_id=1234,
             ),
@@ -5054,7 +5054,7 @@ class TestExitCodes:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -5103,7 +5103,7 @@ class TestExitCodes:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -5696,7 +5696,7 @@ class TestToolList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -5739,7 +5739,7 @@ class TestToolList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -5811,7 +5811,7 @@ class TestToolList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
                 "dev": {"token": "532-abcdef-ghijklmnopqrst"},
             },
         )
@@ -5863,7 +5863,7 @@ class TestToolCall:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
                 "dev": {"token": "532-abcdef-ghijklmnopqrst"},
             },
         )
@@ -5912,7 +5912,7 @@ class TestToolCall:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -5968,7 +5968,7 @@ class TestToolCall:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -6013,7 +6013,7 @@ class TestToolCall:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         payload_file = tmp_path / "payload.json"
@@ -6064,7 +6064,7 @@ class TestToolCall:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -6104,7 +6104,7 @@ class TestToolCall:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -6181,7 +6181,7 @@ class TestToolCall:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -6257,7 +6257,7 @@ class TestSharingEdgesIntegration:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -6300,7 +6300,7 @@ class TestSharingEdgesIntegration:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -6340,7 +6340,7 @@ class TestSharingEdgesIntegration:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -6381,7 +6381,7 @@ class TestSharingEdgesIntegration:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
                 "dev": {"token": "532-abcdef-ghijklmnopqrst"},
             },
         )
@@ -6421,7 +6421,7 @@ class TestSharingEdgesIntegration:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -6896,7 +6896,7 @@ class TestSharingEdges:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -6931,7 +6931,7 @@ class TestSharingEdges:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -7026,7 +7026,7 @@ class TestSharingEdges:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -7337,7 +7337,7 @@ class TestBranchList:
         store = _setup_config_test(
             config_dir,
             {
-                "prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"},
+                "prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"},
             },
         )
 
@@ -7426,7 +7426,7 @@ class TestBranchList:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -7474,7 +7474,7 @@ class TestBranchRequiresProject:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -7504,7 +7504,7 @@ class TestBranchRequiresProject:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -7536,7 +7536,7 @@ class TestBranchRequiresProject:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -7657,7 +7657,7 @@ class TestBranchCreate:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -7717,7 +7717,7 @@ class TestBranchCreate:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -7771,7 +7771,7 @@ class TestBranchUse:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -7815,7 +7815,7 @@ class TestBranchUse:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -7859,7 +7859,7 @@ class TestBranchReset:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -7906,7 +7906,7 @@ class TestBranchDelete:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -7955,7 +7955,7 @@ class TestBranchMerge:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -8003,7 +8003,7 @@ class TestBranchMerge:
 
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
 
         with (
@@ -8053,7 +8053,7 @@ class TestToolAutoResolveBranch:
         # Set up a project with an active branch
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
         store.set_project_branch("prod", 456)
 
@@ -8093,7 +8093,7 @@ class TestToolAutoResolveBranch:
         # Set up a project with an active branch
         store = _setup_config_test(
             config_dir,
-            {"prod": {"token": "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"}},
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
         )
         store.set_project_branch("prod", 456)
 

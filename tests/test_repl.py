@@ -5,6 +5,7 @@ import stat
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import click
 import platformdirs
 import pytest
 import typer.main
@@ -24,6 +25,7 @@ class TestBuildCommandTree:
         from keboola_agent_cli.cli import app
 
         click_app = typer.main.get_command(app)
+        assert isinstance(click_app, click.Group)
         tree = _build_command_tree(click_app)
 
         # Should contain top-level groups and their subcommands
@@ -38,6 +40,7 @@ class TestBuildCommandTree:
         from keboola_agent_cli.cli import app
 
         click_app = typer.main.get_command(app)
+        assert isinstance(click_app, click.Group)
         tree = _build_command_tree(click_app)
 
         # At least some commands should have help text
@@ -49,6 +52,7 @@ class TestBuildCommandTree:
         from keboola_agent_cli.cli import app
 
         click_app = typer.main.get_command(app)
+        assert isinstance(click_app, click.Group)
         tree = _build_command_tree(click_app)
 
         assert "doctor" in tree

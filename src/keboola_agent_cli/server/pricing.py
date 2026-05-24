@@ -117,7 +117,7 @@ def get_rate(model: str | None) -> tuple[dict[str, float], bool]:
     # match ``claude-opus-4-5``.
     candidates = sorted(
         (k for k in PRICING_USD_PER_MTOK if norm.startswith(k)),
-        key=len,
+        key=lambda k: len(k),
         reverse=True,
     )
     if candidates:

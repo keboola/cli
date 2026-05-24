@@ -9,7 +9,6 @@ Inherits shared retry/error logic from BaseHttpClient.
 
 from typing import Any
 
-from . import __version__
 from .constants import DEFAULT_TIMEOUT
 from .http_base import BaseHttpClient
 
@@ -28,7 +27,6 @@ class ManageClient(BaseHttpClient):
         self._stack_url = stack_url.rstrip("/")
         headers = {
             "X-KBC-ManageApiToken": manage_token,
-            "User-Agent": f"keboola-agent-cli/{__version__}",
         }
         super().__init__(
             base_url=self._stack_url,

@@ -30,14 +30,14 @@ class TestAddProject:
         result = service.add_project(
             alias="prod",
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         assert result["alias"] == "prod"
         assert result["project_name"] == "Production"
         assert result["project_id"] == 9999
         assert result["stack_url"] == "https://connection.keboola.com"
-        assert "901-...pt0k" in result["token"]
+        assert "901-...XXXX" in result["token"]
 
         # Verify it's persisted
         project = store.get_project("prod")
@@ -89,14 +89,14 @@ class TestAddProject:
         service.add_project(
             alias="test",
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         with pytest.raises(ConfigError, match="already exists"):
             service.add_project(
                 alias="test",
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             )
 
     def test_add_project_network_error(self, tmp_config_dir: Path) -> None:
@@ -120,7 +120,7 @@ class TestAddProject:
             service.add_project(
                 alias="timeout",
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             )
 
         assert exc_info.value.error_code == "TIMEOUT"
@@ -142,7 +142,7 @@ class TestRemoveProject:
         service.add_project(
             alias="test",
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         result = service.remove_project("test")
@@ -175,7 +175,7 @@ class TestEditProject:
         service.add_project(
             alias="test",
             stack_url="https://old.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         # Reset mock to track new calls
@@ -209,7 +209,7 @@ class TestEditProject:
         service.add_project(
             alias="test",
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         result = service.edit_project(
@@ -232,7 +232,7 @@ class TestEditProject:
         service.add_project(
             alias="test",
             stack_url="https://a.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         with pytest.raises(ConfigError, match="No changes"):
@@ -270,7 +270,7 @@ class TestListProjects:
         service.add_project(
             alias="prod",
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         service.add_project(
             alias="dev",
@@ -286,7 +286,7 @@ class TestListProjects:
 
         # Tokens must be masked
         for p in result:
-            assert "10493007" not in p["token"]
+            assert "55555" not in p["token"]
             assert "abcdef" not in p["token"]
 
         # First project should be default
@@ -305,7 +305,7 @@ class TestListProjects:
         service.add_project(
             alias="demo",
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         result = service.list_projects()
@@ -324,7 +324,7 @@ class TestListProjects:
         service.add_project(
             alias="prod",
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         result = service.list_projects()
@@ -334,7 +334,7 @@ class TestListProjects:
     def test_list_projects_token_never_fully_shown(self, tmp_config_dir: Path) -> None:
         """list_projects never returns the full token."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        full_token = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+        full_token = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
         mock_client = make_mock_client()
         service = ProjectService(
             config_store=store,
@@ -349,7 +349,7 @@ class TestListProjects:
 
         result = service.list_projects()
         assert result[0]["token"] != full_token
-        assert result[0]["token"] == "901-...pt0k"
+        assert result[0]["token"] == "901-...XXXX"
 
 
 class TestGetStatus:
@@ -367,7 +367,7 @@ class TestGetStatus:
         service.add_project(
             alias="prod",
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         result = service.get_status()
@@ -461,11 +461,14 @@ class TestGetStatus:
                 # org_id, org_name intentionally omitted -> default None
             ),
         )
-        assert store.get_project("legacy").org_id is None
+        legacy_before = store.get_project("legacy")
+        assert legacy_before is not None
+        assert legacy_before.org_id is None
 
         service.get_status()
 
         refreshed = store.get_project("legacy")
+        assert refreshed is not None
         assert refreshed.org_id == 438
         assert refreshed.org_name == "Keboola Demo"
 
@@ -494,6 +497,7 @@ class TestGetStatus:
         service.get_status()
 
         refreshed = store.get_project("with-org")
+        assert refreshed is not None
         assert refreshed.org_id == 438
         assert refreshed.org_name == "Already Set"
 
@@ -519,6 +523,7 @@ class TestGetStatus:
         service.get_status()
 
         refreshed = store.get_project("no-org-stack")
+        assert refreshed is not None
         assert refreshed.org_id is None
         assert refreshed.org_name is None
 
@@ -561,7 +566,7 @@ class TestGetStatus:
     def test_status_token_masked(self, tmp_config_dir: Path) -> None:
         """get_status always masks tokens in output."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        full_token = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+        full_token = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
         mock_client = make_mock_client()
         service = ProjectService(
             config_store=store,
@@ -578,7 +583,7 @@ class TestGetStatus:
 
         result = service.get_status()
         assert result[0]["token"] != full_token
-        assert result[0]["token"] == "901-...pt0k"
+        assert result[0]["token"] == "901-...XXXX"
 
 
 # ---------------------------------------------------------------------------
@@ -828,7 +833,7 @@ class TestConfigServiceListConfigs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
                 project_name="Production",
                 project_id=1234,
             ),
@@ -864,7 +869,7 @@ class TestConfigServiceListConfigs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
                 project_name="Production",
                 project_id=1234,
             ),
@@ -913,7 +918,7 @@ class TestConfigServiceListConfigs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -943,7 +948,7 @@ class TestConfigServiceListConfigs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -967,7 +972,7 @@ class TestConfigServiceListConfigs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
         store.add_project(
@@ -1059,7 +1064,7 @@ class TestConfigServiceListConfigs:
             "empty",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1098,7 +1103,7 @@ class TestConfigServiceListConfigs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1118,7 +1123,7 @@ class TestConfigServiceListConfigs:
             "bad",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1144,7 +1149,7 @@ class TestConfigServiceListConfigs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1226,7 +1231,7 @@ class TestConfigServiceListConfigs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1249,7 +1254,7 @@ class TestConfigServiceListConfigs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
                 active_branch_id=99,
             ),
         )
@@ -1277,7 +1282,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1332,7 +1337,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1366,7 +1371,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1395,7 +1400,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1439,7 +1444,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
                 active_branch_id=77,
             ),
         )
@@ -1479,7 +1484,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1527,7 +1532,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1562,7 +1567,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1611,7 +1616,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1685,7 +1690,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
         store.add_project(
@@ -1749,7 +1754,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
         store.add_project(
@@ -1809,7 +1814,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1871,7 +1876,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1938,7 +1943,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -1979,7 +1984,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -2025,7 +2030,7 @@ class TestConfigServiceGetConfigDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -2061,7 +2066,7 @@ class TestConfigServiceSandboxAnnotation:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
         return store
@@ -2259,7 +2264,7 @@ class TestConfigServiceListConfigsIncludeRows:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -2313,7 +2318,7 @@ class TestConfigServiceListConfigsIncludeRows:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -2344,7 +2349,7 @@ class TestConfigServiceSearchConfigs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -2376,7 +2381,7 @@ class TestConfigServiceSearchConfigs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
                 active_branch_id=88,
             ),
         )
@@ -2406,7 +2411,7 @@ class TestResolveProjects:
             "prod",
             ProjectConfig(
                 stack_url="https://a.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
         store.add_project(
@@ -2428,7 +2433,7 @@ class TestResolveProjects:
             "prod",
             ProjectConfig(
                 stack_url="https://a.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
         store.add_project(
@@ -2458,7 +2463,7 @@ class TestResolveProjects:
             "prod",
             ProjectConfig(
                 stack_url="https://a.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -2518,7 +2523,7 @@ class TestJobServiceListJobs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
                 project_name="Production",
                 project_id=1234,
             ),
@@ -2547,7 +2552,7 @@ class TestJobServiceListJobs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
         store.add_project(
@@ -2634,7 +2639,7 @@ class TestJobServiceListJobs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -2673,7 +2678,7 @@ class TestJobServiceListJobs:
             "empty",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -2703,7 +2708,7 @@ class TestJobServiceListJobs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -2723,7 +2728,7 @@ class TestJobServiceListJobs:
             "bad",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -2749,7 +2754,7 @@ class TestJobServiceListJobs:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
         store.add_project(
@@ -2791,7 +2796,7 @@ class TestJobServiceGetJobDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -2834,7 +2839,7 @@ class TestJobServiceGetJobDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 
@@ -2864,7 +2869,7 @@ class TestJobServiceGetJobDetail:
             "prod",
             ProjectConfig(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ),
         )
 

@@ -209,7 +209,7 @@ kbagent encrypt     values
 kbagent permissions list | show | set | reset | check
 kbagent             init | context | doctor | version | update | changelog
 
-# Global flags: --json, --verbose, --no-color, --config-dir, --hint client|service
+# Global flags: --json, --verbose, --no-color, --config-dir, --hint client|service (deprecated since 0.45.0; use `kbagent serve` REST API)
 #               --deny-writes, --deny-destructive (session-only firewall)
 #               --allow-env-manage-token (CI opt-in for KBC_MANAGE_API_TOKEN; default-deny since 0.29.0)
 ```

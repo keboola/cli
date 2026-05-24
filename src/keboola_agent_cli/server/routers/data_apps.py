@@ -2,14 +2,37 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from ..dependencies import ServiceRegistry, get_registry
+from ..dependencies import ServiceRegistry, get_manage_token, get_registry
 
 router = APIRouter(prefix="/data-apps", tags=["data-apps"])
+
+
+def _resolve_git_pat(git_pat_env: str | None, git_pat_file: str | None) -> str | None:
+    """Resolve git PAT from env var name or file path to the actual token value."""
+    if git_pat_env is not None:
+        value = os.environ.get(git_pat_env, "")
+        if not value:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Environment variable {git_pat_env!r} is unset or empty.",
+            )
+        return value
+    if git_pat_file is not None:
+        try:
+            return Path(git_pat_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot read PAT file {git_pat_file!r}: {exc}",
+            ) from exc
+    return None
 
 
 class DataAppCreate(BaseModel):
@@ -121,7 +144,7 @@ def deploy(
     return registry.data_app.deploy_data_app(
         alias=project,
         app_id=app_id,
-        config_version=config_version,
+        config_version=str(config_version) if config_version is not None else None,
         wait=wait,
         timeout_seconds=timeout_seconds,
         branch_id=branch_id,
@@ -166,10 +189,17 @@ def delete(
 
 @router.get("/{project}/{app_id}/password", summary="Get data app access password")
 def password(
-    project: str, app_id: str, registry: ServiceRegistry = Depends(get_registry)
+    project: str,
+    app_id: str,
+    manage_token: str | None = Depends(get_manage_token),
+    registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Fetch the password for a password-protected data app. Mirrors `kbagent data-app password`."""
-    return registry.data_app.get_data_app_password(alias=project, app_id=app_id)
+    if not manage_token:
+        raise HTTPException(status_code=401, detail="Missing X-KBC-ManageApiToken header.")
+    return registry.data_app.get_data_app_password(
+        alias=project, app_id=app_id, manage_token=manage_token
+    )
 
 
 @router.get("/{project}/{app_id}/logs", summary="Tail data app container logs")
@@ -273,12 +303,12 @@ def validate_repo(
     body: RepoValidate, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
     """Validate that a git repo is a deployable data app. Mirrors `kbagent data-app validate-repo`."""
-    return registry.repo_validate.validate(
+    git_pat = _resolve_git_pat(body.git_pat_env, body.git_pat_file)
+    return registry.repo_validate.validate_repo(
         git_repo=body.git_repo,
         git_branch=body.git_branch,
         git_public=body.git_public,
-        git_pat_env=body.git_pat_env,
-        git_pat_file=body.git_pat_file,
+        git_pat=git_pat,
         type_=body.type,
         strict=body.strict,
     )

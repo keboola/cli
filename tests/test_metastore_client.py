@@ -20,7 +20,7 @@ from keboola_agent_cli.metastore_client import (
 
 STACK_URL_US = "https://connection.keboola.com"
 METASTORE_URL_US = "https://metastore.keboola.com"
-TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
 
 @pytest.fixture(autouse=True)

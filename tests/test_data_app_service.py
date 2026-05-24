@@ -26,7 +26,7 @@ from keboola_agent_cli.services.data_app_service import (
     _redact_storage_config,
 )
 
-TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 TEST_MANAGE_TOKEN = "manage-test-token"
 
 
@@ -82,7 +82,7 @@ class TestDataAppCreateValidation:
     """The service is the single source of truth for input shape."""
 
     def _create(self, service: DataAppService, **overrides: Any) -> Any:
-        kwargs = dict(
+        kwargs: dict[str, Any] = dict(
             alias="prod",
             name="My App",
             description="",

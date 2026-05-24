@@ -16,7 +16,7 @@ from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.models import AppConfig, ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services.storage_service import StorageService
 
-TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
 _META_RESPONSE = [
     {

@@ -25,7 +25,6 @@ Verified contract (probed 2026-05-14 against e2e-1143):
 import logging
 from typing import Any, Literal
 
-from . import __version__
 from .errors import ErrorCode, KeboolaApiError
 from .http_base import BaseHttpClient
 
@@ -72,7 +71,6 @@ class MetastoreClient(BaseHttpClient):
         base_url = self._derive_service_url(self._stack_url, "metastore")
         headers = {
             "X-StorageApi-Token": token,
-            "User-Agent": f"keboola-agent-cli/{__version__}",
         }
         super().__init__(base_url=base_url, token=token, headers=headers)
 

@@ -5,6 +5,7 @@ Tests use tmp_path for filesystem operations and MagicMock for API client.
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1453,8 +1454,8 @@ class TestPushRows:
         )
 
         parent = ManifestConfiguration(
-            branch_id=12345,
-            component_id="keboola.variables",
+            branchId=12345,
+            componentId="keboola.variables",
             id="vars-001",
             path="other/keboola.variables/shared-variables",
             rows=[ManifestConfigRow(id="vals-default", path="rows/default", metadata={})],
@@ -1505,8 +1506,8 @@ class TestPushRows:
         )
 
         parent = ManifestConfiguration(
-            branch_id=12345,
-            component_id="keboola.variables",
+            branchId=12345,
+            componentId="keboola.variables",
             id="vars-001",
             path="other/keboola.variables/shared-variables",
             rows=[ManifestConfigRow(id="vals-default", path="rows/default", metadata={})],
@@ -2074,7 +2075,7 @@ class TestEnsureBranchRegistered:
     """Tests for SyncService._ensure_branch_registered()."""
 
     @staticmethod
-    def _make_manifest(branches: list[dict] | None = None) -> Manifest:
+    def _make_manifest(branches: list[dict[str, Any]] | None = None) -> Manifest:
         """Build a minimal Manifest with given branches."""
         from keboola_agent_cli.sync.manifest import (
             ManifestBranch,
@@ -2083,12 +2084,13 @@ class TestEnsureBranchRegistered:
             ManifestProject,
         )
 
+        default_branches: list[dict[str, Any]] = [{"id": 12345, "path": "main"}]
         return Manifest(
             version=MANIFEST_VERSION,
-            project=ManifestProject(id=258, api_host="connection.keboola.com"),
+            project=ManifestProject(id=258, apiHost="connection.keboola.com"),
             naming=ManifestNaming(),
-            git_branching=ManifestGitBranching(),
-            branches=[ManifestBranch(**b) for b in (branches or [{"id": 12345, "path": "main"}])],
+            gitBranching=ManifestGitBranching(),
+            branches=[ManifestBranch(**b) for b in (branches or default_branches)],
             configurations=[],
         )
 

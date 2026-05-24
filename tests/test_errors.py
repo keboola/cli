@@ -8,8 +8,8 @@ class TestMaskToken:
 
     def test_normal_token(self) -> None:
         """A standard Keboola token is masked to show prefix and last 4 chars."""
-        result = mask_token("901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k")
-        assert result == "901-...pt0k"
+        result = mask_token("901-55555-fakeTestTokenDoNotUseXXXXXXXX")
+        assert result == "901-...XXXX"
 
     def test_short_prefix_token(self) -> None:
         """Token with a short numeric prefix still masks correctly."""

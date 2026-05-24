@@ -1,5 +1,7 @@
 # --hint Mode: Use kbagent as a Python SDK
 
+> **⚠️ Deprecated since 0.45.0.** The `--hint` flag is superseded by the REST API (`kbagent serve`), which covers every command. `--hint` still works but prints a deprecation warning and will be removed in a future release. New integrations should call the REST endpoints instead.
+
 The `--hint` flag generates equivalent Python code for any CLI command, without
 executing it. This lets you use `kbagent` not just as a CLI tool, but as a
 programming reference and SDK.

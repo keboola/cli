@@ -8,6 +8,7 @@ and message sanitization code.
 import json
 import logging
 import os
+import platform
 import time
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -15,6 +16,7 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 
 from .constants import (
+    APP_NAME,
     BACKOFF_BASE,
     ENV_CONVERSATION_ID,
     MAX_API_ERROR_LENGTH,
@@ -25,6 +27,29 @@ from .constants import (
 from .errors import ErrorCode, KeboolaApiError, mask_token
 
 logger = logging.getLogger(__name__)
+
+
+def build_user_agent() -> str:
+    """Build the User-Agent that signs every Keboola API call.
+
+    Format (RFC 7231 product + comment):
+
+        keboola-agent-cli/<version> (<os> <release>; <arch>; <impl> <pyver>)
+        e.g. keboola-agent-cli/0.45.0 (Darwin 25.3.0; arm64; CPython 3.12.7)
+
+    Keboola's edge logs this verbatim (DataDog access logs), so the fleet can
+    be segmented by version and OS/arch. Only neutral host metadata is sent --
+    never ``platform.node()`` (the hostname is PII). Identity ("which project /
+    user") is resolved server-side from the token, never derived client-side.
+    """
+    from . import __version__
+
+    return (
+        f"{APP_NAME}/{__version__} "
+        f"({platform.system()} {platform.release()}; "
+        f"{platform.machine()}; "
+        f"{platform.python_implementation()} {platform.python_version()})"
+    )
 
 
 class BaseHttpClient:
@@ -51,6 +76,9 @@ class BaseHttpClient:
         self._base_url = base_url.rstrip("/")
         self._token = token
         self._masked_token = mask_token(token)
+        # Sign every request centrally so all subclasses share one UA string
+        # (and OS/version enrichment) instead of hardcoding it five times.
+        headers["User-Agent"] = build_user_agent()
         conversation_id = os.environ.get(ENV_CONVERSATION_ID, "")
         if conversation_id:
             headers["X-Conversation-ID"] = conversation_id

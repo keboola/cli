@@ -435,7 +435,7 @@ HintRegistry.register(
                         "column_name": "{column}",
                         "branch_id": "{branch}",
                     },
-                    result_var=None,
+                    result_var="_",
                 ),
                 service=ServiceCall(
                     service_class="StorageService",

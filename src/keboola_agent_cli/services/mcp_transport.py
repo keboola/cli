@@ -172,7 +172,7 @@ class McpServerManager:
             stderr_output = ""
             if self._process.stderr:
                 with contextlib.suppress(Exception):
-                    stderr_output = self._process.stderr.read1(4096).decode(errors="replace")  # type: ignore[attr-defined]
+                    stderr_output = self._process.stderr.read1(4096).decode(errors="replace")  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]  # read1 is on BufferedIOBase but stderr is typed IO[bytes]
             self.stop()
             raise RuntimeError(
                 f"MCP server failed to start within {MCP_SERVER_STARTUP_TIMEOUT}s. "

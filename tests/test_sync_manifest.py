@@ -22,7 +22,7 @@ class TestManifestProject:
 
     def test_manifest_project_model(self) -> None:
         """ManifestProject stores id and apiHost correctly."""
-        project = ManifestProject(id=12345, api_host="connection.keboola.com")
+        project = ManifestProject(id=12345, apiHost="connection.keboola.com")
         assert project.id == 12345
         assert project.api_host == "connection.keboola.com"
 
@@ -43,7 +43,7 @@ class TestManifestGitBranching:
 
     def test_manifest_git_branching_custom(self) -> None:
         """Custom values override defaults."""
-        branching = ManifestGitBranching(enabled=True, default_branch="develop")
+        branching = ManifestGitBranching(enabled=True, defaultBranch="develop")
         assert branching.enabled is True
         assert branching.default_branch == "develop"
 
@@ -117,13 +117,13 @@ class TestManifestRoundTrip:
         """Create a full manifest for testing."""
         return Manifest(
             version=2,
-            project=ManifestProject(id=42, api_host="connection.keboola.com"),
-            allow_target_env=True,
-            git_branching=ManifestGitBranching(enabled=False, default_branch="main"),
-            sort_by="id",
+            project=ManifestProject(id=42, apiHost="connection.keboola.com"),
+            allowTargetEnv=True,
+            gitBranching=ManifestGitBranching(enabled=False, defaultBranch="main"),
+            sortBy="id",
             naming=ManifestNaming(),
-            allowed_branches=["main"],
-            ignored_components=["keboola.sandboxes"],
+            allowedBranches=["main"],
+            ignoredComponents=["keboola.sandboxes"],
             branches=[ManifestBranch(id=1, path="main")],
             configurations=[
                 ManifestConfiguration(

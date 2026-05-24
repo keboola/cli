@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+from typing import SupportsIndex
 from unittest.mock import patch
 from urllib.parse import parse_qs, quote
 
@@ -11,6 +12,11 @@ import pytest
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.constants import MAX_RETRIES
 from keboola_agent_cli.errors import KeboolaApiError
+
+
+def _noop_sleep(seconds: SupportsIndex | float, /) -> None:
+    """No-op replacement for time.sleep used in retry tests."""
+
 
 VERIFY_TOKEN_RESPONSE = {
     "id": "12345",
@@ -45,7 +51,7 @@ class TestVerifyToken:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         result = client.verify_token()
 
@@ -85,7 +91,7 @@ class TestVerifyToken:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         result = client.verify_token()
 
@@ -114,7 +120,7 @@ class TestVerifyToken:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         result = client.verify_token()
 
@@ -132,7 +138,7 @@ class TestVerifyToken:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         with pytest.raises(KeboolaApiError) as exc_info:
@@ -153,7 +159,7 @@ class TestVerifyToken:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         with pytest.raises(KeboolaApiError) as exc_info:
@@ -177,7 +183,7 @@ class TestProjectFeatures:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         try:
             features = client.get_project_features()
@@ -201,7 +207,7 @@ class TestProjectFeatures:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         try:
             client.verify_token()
@@ -220,7 +226,7 @@ class TestProjectFeatures:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         try:
             assert client.has_feature("storage-branches") is False
@@ -247,14 +253,14 @@ class TestRetryBehavior:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         # Monkeypatch time.sleep to avoid actual delays in tests
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             result = client.verify_token()
             assert result.project_name == "Test Project"
@@ -273,13 +279,13 @@ class TestRetryBehavior:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.verify_token()
@@ -303,13 +309,13 @@ class TestRetryBehavior:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             result = client.verify_token()
             assert result.project_name == "Test Project"
@@ -327,7 +333,7 @@ class TestRetryBehavior:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         with pytest.raises(KeboolaApiError) as exc_info:
@@ -358,13 +364,13 @@ class TestTimeoutHandling:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.verify_token()
@@ -391,13 +397,13 @@ class TestTimeoutHandling:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
 
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.verify_token()
@@ -419,7 +425,7 @@ class TestTokenMaskingInErrors:
             status_code=401,
         )
 
-        full_token = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+        full_token = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
             token=full_token,
@@ -431,7 +437,7 @@ class TestTokenMaskingInErrors:
         # Full token must NOT appear in the error message
         assert full_token not in exc_info.value.message
         # Masked form should appear
-        assert "901-...pt0k" in exc_info.value.message
+        assert "901-...XXXX" in exc_info.value.message
         client.close()
 
     def test_timeout_error_masks_token(self, httpx_mock) -> None:
@@ -442,7 +448,7 @@ class TestTokenMaskingInErrors:
                 url="https://connection.keboola.com/v2/storage/tokens/verify",
             )
 
-        full_token = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+        full_token = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
             token=full_token,
@@ -451,12 +457,12 @@ class TestTokenMaskingInErrors:
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.verify_token()
             assert full_token not in exc_info.value.message
-            assert "901-...pt0k" in exc_info.value.message
+            assert "901-...XXXX" in exc_info.value.message
         finally:
             http_base_module.time.sleep = original_sleep
             client.close()
@@ -475,7 +481,7 @@ class TestClientHeaders:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         client.verify_token()
 
@@ -491,7 +497,7 @@ class TestClientHeaders:
             status_code=200,
         )
 
-        token = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+        token = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
             token=token,
@@ -516,7 +522,7 @@ class TestContextManager:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.verify_token()
             assert result.project_name == "Test Project"
@@ -538,7 +544,7 @@ class TestListComponents:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_components()
             assert len(result) == 1
@@ -554,7 +560,7 @@ class TestListComponents:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_components(component_type="extractor")
             assert result == []
@@ -572,7 +578,7 @@ class TestListComponents:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_components(branch_id=123)
             assert len(result) == 1
@@ -593,7 +599,7 @@ class TestGetConfigDetail:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.get_config_detail("keboola.ex-db-snowflake", "42")
             assert result["id"] == "42"
@@ -610,7 +616,7 @@ class TestGetConfigDetail:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.get_config_detail("keboola.ex-db-snowflake", "42", branch_id=123)
             assert result["id"] == "42"
@@ -635,7 +641,7 @@ class TestGetConfigState:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             state = client.get_config_state("keboola.ex-db-snowflake", "42")
             assert state == {"cursor": "2026-04-23T10:00:00Z", "count": 42}
@@ -650,7 +656,7 @@ class TestGetConfigState:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             state = client.get_config_state("keboola.ex-db-snowflake", "42")
             assert state == {}
@@ -665,7 +671,7 @@ class TestGetConfigState:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             state = client.get_config_state("keboola.ex-db-snowflake", "42", branch_id=123)
             assert state == {"key": "value"}
@@ -684,7 +690,7 @@ class TestListComponentsWithConfigs:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_components_with_configs()
             assert result == []
@@ -699,7 +705,7 @@ class TestListComponentsWithConfigs:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_components_with_configs(include_state=True)
             assert result == []
@@ -714,7 +720,7 @@ class TestListComponentsWithConfigs:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_components_with_configs(branch_id=123, include_state=True)
             assert result == []
@@ -744,11 +750,11 @@ class TestMalformedJsonResponse:
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             with KeboolaClient(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ) as client:
                 with pytest.raises(KeboolaApiError) as exc_info:
                     client.verify_token()
@@ -770,7 +776,7 @@ class TestMalformedJsonResponse:
         with (
             KeboolaClient(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ) as client,
             pytest.raises((ValueError, KeyError)),
         ):
@@ -787,7 +793,7 @@ class TestMalformedJsonResponse:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.verify_token()
@@ -819,11 +825,11 @@ class TestEmptyResponse:
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             with KeboolaClient(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ) as client:
                 with pytest.raises(KeboolaApiError) as exc_info:
                     client.verify_token()
@@ -842,7 +848,7 @@ class TestEmptyResponse:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_components()
             assert result == []
@@ -857,7 +863,7 @@ class TestEmptyResponse:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.verify_token()
             assert result.token_id == "1"
@@ -899,7 +905,7 @@ class TestLargeResponse:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_components()
             assert len(result) == 200
@@ -936,7 +942,7 @@ class TestLargeResponse:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.get_config_detail("keboola.ex-db-snowflake", "42")
             assert result["id"] == "42"
@@ -957,7 +963,7 @@ class TestStackUrlNormalization:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com/",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.verify_token()
             assert result.project_name == "Test Project"
@@ -972,7 +978,7 @@ class TestStackUrlNormalization:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.get_config_detail("nonexistent", "999")
@@ -988,7 +994,7 @@ class TestQueueBaseUrl:
         """Queue URL replaces 'connection.' with 'queue.' for AWS stack."""
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         assert client._queue_base_url == "https://queue.keboola.com"
         client.close()
@@ -997,7 +1003,7 @@ class TestQueueBaseUrl:
         """Queue URL replaces 'connection.' for Azure stack."""
         client = KeboolaClient(
             stack_url="https://connection.north-europe.azure.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         assert client._queue_base_url == "https://queue.north-europe.azure.keboola.com"
         client.close()
@@ -1006,7 +1012,7 @@ class TestQueueBaseUrl:
         """Queue URL replaces 'connection.' for GCP stack."""
         client = KeboolaClient(
             stack_url="https://connection.europe-west3.gcp.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         assert client._queue_base_url == "https://queue.europe-west3.gcp.keboola.com"
         client.close()
@@ -1015,7 +1021,7 @@ class TestQueueBaseUrl:
         """Queue URL derivation works when stack URL has trailing slash."""
         client = KeboolaClient(
             stack_url="https://connection.keboola.com/",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         assert client._queue_base_url == "https://queue.keboola.com"
         client.close()
@@ -1044,7 +1050,7 @@ class TestListJobs:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_jobs()
             assert len(result) == 1
@@ -1061,7 +1067,7 @@ class TestListJobs:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_jobs(
                 component_id="keboola.ex-db-snowflake",
@@ -1081,7 +1087,7 @@ class TestListJobs:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.list_jobs()
@@ -1103,11 +1109,11 @@ class TestListJobs:
         import keboola_agent_cli.http_base as http_base_module
 
         original_sleep = http_base_module.time.sleep
-        http_base_module.time.sleep = lambda x: None
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
         try:
             with KeboolaClient(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ) as client:
                 result = client.list_jobs()
                 assert len(result) == 1
@@ -1124,7 +1130,7 @@ class TestListJobs:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_jobs()
             assert result == []
@@ -1137,7 +1143,7 @@ class TestCloseWithQueueClient:
         """close() works when queue client was never created."""
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         assert client._queue_client is None
         client.close()  # Should not raise
@@ -1152,7 +1158,7 @@ class TestCloseWithQueueClient:
 
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         )
         # Trigger queue client creation
         client.list_jobs()
@@ -1182,7 +1188,7 @@ class TestGetJobDetail:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.get_job_detail("1001")
             assert result["id"] == "1001"
@@ -1199,7 +1205,7 @@ class TestGetJobDetail:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.get_job_detail("999999")
@@ -1238,7 +1244,7 @@ class TestListDevBranches:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_dev_branches()
             assert len(result) == 2
@@ -1258,7 +1264,7 @@ class TestListDevBranches:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_dev_branches()
             assert result == []
@@ -1273,7 +1279,7 @@ class TestListDevBranches:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.list_dev_branches()
@@ -1309,7 +1315,7 @@ class TestListBuckets:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_buckets()
             assert len(result) == 2
@@ -1325,7 +1331,7 @@ class TestListBuckets:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_buckets(include="linkedBuckets")
             assert len(result) == 1
@@ -1342,7 +1348,7 @@ class TestListBuckets:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_buckets()
             assert result == []
@@ -1357,7 +1363,7 @@ class TestListBuckets:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_buckets(branch_id=123)
             assert len(result) == 2
@@ -1373,7 +1379,7 @@ class TestListBuckets:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.list_buckets(include="linkedBuckets", branch_id=123)
             assert len(result) == 1
@@ -1393,7 +1399,7 @@ class TestApiErrorMessageTruncation:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.verify_token()
@@ -1414,7 +1420,7 @@ class TestApiErrorMessageTruncation:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.verify_token()
@@ -1434,7 +1440,7 @@ class TestApiErrorMessageTruncation:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.verify_token()
@@ -1453,7 +1459,7 @@ class TestApiErrorMessageTruncation:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client.verify_token()
@@ -1480,7 +1486,7 @@ class TestUrlPathEncoding:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.get_config_detail("keboola.ex-db/../admin", "42")
             assert result["id"] == "42"
@@ -1498,7 +1504,7 @@ class TestUrlPathEncoding:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.get_config_detail("keboola.ex-db-snowflake", "42/../secret")
             assert result["id"] == "42"
@@ -1515,7 +1521,7 @@ class TestUrlPathEncoding:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.get_job_detail("1001/../admin")
             assert result["id"] == "1001"
@@ -1530,7 +1536,7 @@ class TestUrlPathEncoding:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.get_config_detail("keboola.ex-db-snowflake", "42")
             assert result["id"] == "42"
@@ -1555,17 +1561,17 @@ class TestRetryAfterHeader:
 
         import keboola_agent_cli.http_base as http_base_module
 
-        sleep_calls: list[float] = []
+        sleep_calls: list[SupportsIndex | float] = []
         original_sleep = http_base_module.time.sleep
 
-        def capture_sleep(seconds: float) -> None:
+        def capture_sleep(seconds: SupportsIndex | float, /) -> None:
             sleep_calls.append(seconds)
 
-        http_base_module.time.sleep = capture_sleep
+        http_base_module.time.sleep = capture_sleep  # ty: ignore[invalid-assignment]
         try:
             with KeboolaClient(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ) as client:
                 result = client.verify_token()
                 assert result.project_name == "Test Project"
@@ -1591,17 +1597,17 @@ class TestRetryAfterHeader:
 
         import keboola_agent_cli.http_base as http_base_module
 
-        sleep_calls: list[float] = []
+        sleep_calls: list[SupportsIndex | float] = []
         original_sleep = http_base_module.time.sleep
 
-        def capture_sleep(seconds: float) -> None:
+        def capture_sleep(seconds: SupportsIndex | float, /) -> None:
             sleep_calls.append(seconds)
 
-        http_base_module.time.sleep = capture_sleep
+        http_base_module.time.sleep = capture_sleep  # ty: ignore[invalid-assignment]
         try:
             with KeboolaClient(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ) as client:
                 result = client.verify_token()
                 assert result.project_name == "Test Project"
@@ -1627,17 +1633,17 @@ class TestRetryAfterHeader:
 
         import keboola_agent_cli.http_base as http_base_module
 
-        sleep_calls: list[float] = []
+        sleep_calls: list[SupportsIndex | float] = []
         original_sleep = http_base_module.time.sleep
 
-        def capture_sleep(seconds: float) -> None:
+        def capture_sleep(seconds: SupportsIndex | float, /) -> None:
             sleep_calls.append(seconds)
 
-        http_base_module.time.sleep = capture_sleep
+        http_base_module.time.sleep = capture_sleep  # ty: ignore[invalid-assignment]
         try:
             with KeboolaClient(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ) as client:
                 result = client.verify_token()
                 assert result.project_name == "Test Project"
@@ -1662,17 +1668,17 @@ class TestRetryAfterHeader:
 
         import keboola_agent_cli.http_base as http_base_module
 
-        sleep_calls: list[float] = []
+        sleep_calls: list[SupportsIndex | float] = []
         original_sleep = http_base_module.time.sleep
 
-        def capture_sleep(seconds: float) -> None:
+        def capture_sleep(seconds: SupportsIndex | float, /) -> None:
             sleep_calls.append(seconds)
 
-        http_base_module.time.sleep = capture_sleep
+        http_base_module.time.sleep = capture_sleep  # ty: ignore[invalid-assignment]
         try:
             with KeboolaClient(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ) as client:
                 result = client.verify_token()
                 assert result.project_name == "Test Project"
@@ -1692,7 +1698,7 @@ class TestQueueUrlWarning:
         with patch("keboola_agent_cli.http_base.logger") as mock_logger:
             client = KeboolaClient(
                 stack_url="https://custom.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             )
             # Access _queue_base_url to trigger derivation
             _ = client._queue_base_url
@@ -1705,7 +1711,7 @@ class TestQueueUrlWarning:
         with patch("keboola_agent_cli.http_base.logger") as mock_logger:
             client = KeboolaClient(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             )
             _ = client._queue_base_url
             mock_logger.warning.assert_not_called()
@@ -1732,7 +1738,7 @@ class TestCreateDevBranch:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.create_dev_branch("my-feature")
             assert result["id"] == 789
@@ -1754,7 +1760,7 @@ class TestCreateDevBranch:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.create_dev_branch("my-feature", description="A feature branch")
             assert result["id"] == 790
@@ -1800,7 +1806,7 @@ class TestCreateDevBranch:
             patch("keboola_agent_cli.client.time.sleep"),
             KeboolaClient(
                 stack_url="https://connection.keboola.com",
-                token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
             ) as client,
         ):
             result = client.create_dev_branch("polled-branch")
@@ -1820,7 +1826,7 @@ class TestDeleteDevBranch:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             # Should not raise any exception
             client.delete_dev_branch(789)
@@ -1840,7 +1846,7 @@ class TestCreateSandboxConfigBranch:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.create_sandbox_config(name="test")
             assert result["id"] == "cfg-1"
@@ -1856,7 +1862,7 @@ class TestCreateSandboxConfigBranch:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.create_sandbox_config(name="branch-ws", branch_id=200)
             assert result["id"] == "cfg-2"
@@ -1875,7 +1881,7 @@ class TestDeleteConfigBranch:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             client.delete_config("keboola.sandboxes", "cfg-1")
 
@@ -1889,7 +1895,7 @@ class TestDeleteConfigBranch:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             client.delete_config("keboola.sandboxes", "cfg-1", branch_id=200)
 
@@ -1903,7 +1909,7 @@ class TestConfigRowMethods:
     HTTP contract: URL, method, form-encoding, ``configuration`` JSON-stringified.
     """
 
-    TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+    TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
     @staticmethod
     def _parse_form_body(request: httpx.Request) -> dict[str, str]:
@@ -2108,7 +2114,7 @@ class TestLoadWorkspaceTablesPreserve:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.load_workspace_tables(
                 workspace_id=42,
@@ -2135,7 +2141,7 @@ class TestLoadWorkspaceTablesPreserve:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.load_workspace_tables(
                 workspace_id=42,
@@ -2161,7 +2167,7 @@ class TestLoadWorkspaceTablesPreserve:
 
         with KeboolaClient(
             stack_url="https://connection.keboola.com",
-            token="901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             result = client.load_workspace_tables(
                 workspace_id=42,
@@ -2181,7 +2187,7 @@ class TestLoadWorkspaceTablesPreserve:
 """Client tests for async table upload: prepare_file_upload, _upload_to_cloud,
 import_table_async, upload_table -- appended to test_client.py via script."""
 
-_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 _BASE = "https://connection.keboola.com"
 
 

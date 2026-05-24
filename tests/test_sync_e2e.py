@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import time
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -98,7 +99,7 @@ class TestSyncGitBranchingE2E:
         self._created_branch_ids: list[int] = []
 
     @pytest.fixture(autouse=True)
-    def cleanup_branches(self) -> None:
+    def cleanup_branches(self) -> Generator[None, None, None]:
         """Clean up any Keboola dev branches created during the test."""
         yield
         client = KeboolaClient(stack_url=self.url, token=self.token)

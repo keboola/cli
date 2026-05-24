@@ -12,7 +12,6 @@ import logging
 from typing import Any
 from urllib.parse import quote
 
-from . import __version__
 from .constants import AI_SERVICE_TIMEOUT
 from .http_base import BaseHttpClient
 
@@ -34,7 +33,6 @@ class AiServiceClient(BaseHttpClient):
         ai_base_url = self._derive_service_url(self._stack_url, "ai")
         headers = {
             "X-StorageApi-Token": token,
-            "User-Agent": f"keboola-agent-cli/{__version__}",
         }
         super().__init__(
             base_url=ai_base_url,

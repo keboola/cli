@@ -116,6 +116,8 @@ class OrgService:
                 if not org_id and projects:
                     org_id = projects[0].get("organization", {}).get("id")
             else:
+                # org_id is non-None here: the guard above raises if both are None
+                assert org_id is not None
                 projects = manage_client.list_organization_projects(org_id)
                 fetch_failed = []
 
@@ -462,6 +464,8 @@ class OrgService:
         )
 
         # Create a new Storage API token via Manage API
+        # project_id is always set on registered projects (populated by verify_token at add time)
+        assert project.project_id is not None
         manage_client = self._manage_client_factory(project.stack_url, manage_token)
         try:
             token_data = manage_client.create_project_token(

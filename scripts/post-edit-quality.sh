@@ -54,16 +54,15 @@ fi
 
 uv run --quiet ruff format --quiet "$FILE_PATH" || true
 
-# ty: runs on every edited .py file but does NOT fail the hook -- the type
-# checker is in warning-only mode while the codebase carries pre-existing
-# diagnostics (~100 across src/; clearing that backlog is tracked as a separate
-# task). Running it here still surfaces NEW type regressions in the edited file
-# immediately. Flip the warning-only block below to `FAILED=1` once the backlog
-# is clean, so type errors start blocking edits.
+# ty: the backlog is now fully cleared (0 diagnostics across src/tests/scripts,
+# see issue #280 PR-3, shipped in 0.45.0), so the type checker BLOCKS the edit
+# on any error -- a newly introduced type error must be fixed before continuing.
+# Warnings (e.g. the downgraded unresolved-import rule) do NOT block.
 TY_OUTPUT="$(uv run --quiet ty check "$FILE_PATH" 2>&1 || true)"
-if printf '%s\n' "$TY_OUTPUT" | grep -qE '^(error|warning)'; then
-    echo "post-edit: ty (warning-only) flagged $FILE_PATH -- review, edit not blocked:" >&2
+if printf '%s\n' "$TY_OUTPUT" | grep -qE '^error'; then
+    echo "post-edit: ty found type errors in $FILE_PATH (blocking -- fix before continuing):" >&2
     printf '%s\n' "$TY_OUTPUT" | grep -E '^(error|warning)' | head -10 >&2
+    FAILED=1
 fi
 
 exit $FAILED

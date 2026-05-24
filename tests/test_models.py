@@ -313,7 +313,7 @@ class TestTokenVerifyResponseValidation:
     def test_token_verify_response_rejects_missing_fields(self) -> None:
         """TokenVerifyResponse with missing required fields raises ValidationError."""
         with pytest.raises(ValidationError):
-            TokenVerifyResponse(
+            TokenVerifyResponse(  # ty: ignore[missing-argument]
                 token_id="123",
                 token_description="My Token",
                 # project_name missing
@@ -323,7 +323,7 @@ class TestTokenVerifyResponseValidation:
     def test_token_verify_response_rejects_missing_owner_name(self) -> None:
         """TokenVerifyResponse with missing owner_name raises ValidationError."""
         with pytest.raises(ValidationError, match="owner_name"):
-            TokenVerifyResponse(
+            TokenVerifyResponse(  # ty: ignore[missing-argument]
                 token_id="123",
                 token_description="My Token",
                 project_name="Test Project",
@@ -333,7 +333,7 @@ class TestTokenVerifyResponseValidation:
     def test_token_verify_response_rejects_missing_token_id(self) -> None:
         """TokenVerifyResponse with missing token_id raises ValidationError."""
         with pytest.raises(ValidationError, match="token_id"):
-            TokenVerifyResponse(
+            TokenVerifyResponse(  # ty: ignore[missing-argument]
                 token_description="My Token",
                 project_name="Test Project",
                 owner_name="Test Owner",
@@ -342,7 +342,7 @@ class TestTokenVerifyResponseValidation:
     def test_token_verify_response_rejects_missing_token_description(self) -> None:
         """TokenVerifyResponse with missing token_description raises ValidationError."""
         with pytest.raises(ValidationError, match="token_description"):
-            TokenVerifyResponse(
+            TokenVerifyResponse(  # ty: ignore[missing-argument]
                 token_id="123",
                 project_name="Test Project",
                 owner_name="Test Owner",
@@ -351,7 +351,7 @@ class TestTokenVerifyResponseValidation:
     def test_token_verify_response_rejects_missing_project_name(self) -> None:
         """TokenVerifyResponse with missing project_name raises ValidationError."""
         with pytest.raises(ValidationError, match="project_name"):
-            TokenVerifyResponse(
+            TokenVerifyResponse(  # ty: ignore[missing-argument]
                 token_id="123",
                 token_description="My Token",
                 owner_name="Test Owner",

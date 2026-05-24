@@ -293,7 +293,9 @@ class StorageService(BaseService):
         """
         projects = self.resolve_projects(aliases)
 
-        def _worker(alias: str, project: ProjectConfig) -> tuple[str, list[dict[str, Any]], bool]:
+        def _worker(
+            alias: str, project: ProjectConfig
+        ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, Any]]:
             return self._fetch_buckets(alias, project, branch_id=branch_id)
 
         successes, errors = self._run_parallel(projects, _worker)
@@ -606,7 +608,9 @@ class StorageService(BaseService):
         """
         projects = self.resolve_projects(aliases)
 
-        def _worker(alias: str, project: ProjectConfig) -> tuple[str, list[dict[str, Any]], bool]:
+        def _worker(
+            alias: str, project: ProjectConfig
+        ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, Any]]:
             return self._fetch_tables(
                 alias,
                 project,
@@ -1636,6 +1640,10 @@ class StorageService(BaseService):
                 return result
 
             effective_output = output_path or file_name
+            if output_path and Path(output_path).is_dir():
+                # Caller passed a directory (e.g. the REST file-download endpoint);
+                # save inside it under the file's own name instead of clobbering it.
+                effective_output = str(Path(output_path) / file_name)
             if is_sliced:
                 bytes_written = client.download_sliced_file(file_detail, effective_output)
             else:
@@ -2226,8 +2234,12 @@ class StorageService(BaseService):
         alias: str,
         project: ProjectConfig,
         branch_id: int | None = None,
-    ) -> tuple[str, list[dict[str, Any]], bool]:
-        """Fetch buckets for a single project (worker for _run_parallel)."""
+    ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, Any]]:
+        """Fetch buckets for a single project (worker for _run_parallel).
+
+        Returns a 3-tuple on success (alias, buckets, True) or a 2-tuple
+        (alias, error_dict) on failure, matching the _run_parallel protocol.
+        """
         from ..errors import KeboolaApiError
 
         client = self._client_factory(project.stack_url, project.token)
@@ -2252,11 +2264,13 @@ class StorageService(BaseService):
         project: ProjectConfig,
         bucket_id: str | None = None,
         branch_id: int | None = None,
-    ) -> tuple[str, list[dict[str, Any]], bool]:
+    ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, Any]]:
         """Fetch tables for a single project (worker for _run_parallel).
 
         Per-project failures (e.g. bucket not found in this project, invalid
         token) are returned as error tuples so other projects still complete.
+        Returns a 3-tuple on success (alias, tables, True) or a 2-tuple
+        (alias, error_dict) on failure, matching the _run_parallel protocol.
         """
         from ..errors import KeboolaApiError
 

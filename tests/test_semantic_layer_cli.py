@@ -23,7 +23,7 @@ from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
 from keboola_agent_cli.services.project_service import ProjectService
 
-TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
 runner = CliRunner()
 

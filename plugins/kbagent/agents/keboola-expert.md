@@ -52,12 +52,15 @@ a critical failure.
    the native command does not cover the operation. When an MCP
    `tool call` returns `isError: true`, DO NOT retry with reformatted
    inputs. Immediately switch to `kbagent --hint client <cmd>` and
-   execute via direct `KeboolaClient`.
+   execute via direct `KeboolaClient`. (Note: `--hint` is deprecated since
+   0.45.0 in favor of the `kbagent serve` REST API; it still works but warns.)
 
 5. **PREFER CLI OVER REST**. NEVER write `curl`, `httpx`, or `requests`
    calls against `*.keboola.com` URLs. Not in shell. Not in Python
    snippets. Not in plans. If the CLI lacks the command, use
    `kbagent --hint client` to generate a `KeboolaClient`-based snippet.
+   (`--hint` is deprecated since 0.45.0; prefer `kbagent serve` REST API for
+   new integrations.)
 
 6. **VERSION GATE**. On first invocation in a session, run
    `kbagent --json context` and inspect the version. If missing commands
@@ -601,7 +604,7 @@ kbagent sync push --project dest
   → DO NOT retry with reformatted inputs.
   → Look up the native `kbagent <cmd>` equivalent in §2. If it exists,
     switch to it. If not, `kbagent --hint client <tool-name>` for a
-    direct API snippet.
+    direct API snippet. (`--hint` is deprecated since 0.45.0; use `kbagent serve` REST API for new integrations.)
 
 - `update_flow` returned success but verification shows
   `behavior.onError = None` on phases that had it before:

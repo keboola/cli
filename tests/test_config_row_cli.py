@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from click.testing import Result
 from typer.testing import CliRunner
 
 from helpers import setup_single_project
@@ -61,7 +62,7 @@ def _make_service(tmp_config_dir: Path) -> ConfigService:
     )
 
 
-def _invoke(tmp_config_dir: Path, subcmd: str, args: list[str]) -> object:
+def _invoke(tmp_config_dir: Path, subcmd: str, args: list[str]) -> Result:
     return runner.invoke(
         app,
         ["--json", "--config-dir", str(tmp_config_dir), "config", subcmd, *args],

@@ -35,6 +35,7 @@ import os
 import shutil
 import subprocess
 import time
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -166,7 +167,7 @@ def _json_ok(result) -> dict[str, Any]:
     return data
 
 
-def _step(num: int, title: str, detail: str = "") -> None:
+def _step(num: int | float | str, title: str, detail: str = "") -> None:
     """Print a visible step marker for -s output."""
     suffix = f" — {detail}" if detail else ""
     print(f"\n{_BOLD}{'=' * 60}")
@@ -3092,7 +3093,7 @@ class TestFullE2E:
 
         def _direct_delete(item_type: str, item_id: str) -> None:
             with MetastoreClient(stack_url=self.url, token=self.token) as mc:
-                mc.delete_item(item_type, item_id)
+                mc.delete_item(item_type, item_id)  # ty: ignore[invalid-argument-type]
 
         try:
             # 1. model create
@@ -3516,7 +3517,7 @@ class TestFullE2E:
                 with MetastoreClient(stack_url=self.url, token=self.token) as mc:
                     residue: list[str] = []
                     for stype in SEMANTIC_TYPES:
-                        for item in mc.list_items(stype):
+                        for item in mc.list_items(stype):  # ty: ignore[invalid-argument-type]
                             attrs = item.get("attributes") or {}
                             name = attrs.get("name") or attrs.get("term", "")
                             if isinstance(name, str) and name.startswith(tag):
@@ -4266,7 +4267,7 @@ class TestE2EJobRunVariableValues:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -4614,7 +4615,7 @@ class TestE2EJobRunMode:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -4946,7 +4947,7 @@ class TestE2EFlowOperations:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -5497,7 +5498,7 @@ class TestE2EScheduleOperations:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -6337,7 +6338,7 @@ class TestE2EJobRunQueuePollingParity:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path, request: pytest.FixtureRequest) -> None:
+    def setup(self, tmp_path: Path, request: pytest.FixtureRequest) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -6778,7 +6779,7 @@ class TestE2EStorageNativeTypesAndBranchMaterialize:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -6978,7 +6979,7 @@ class TestE2EStorageSwapTables:
     """
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
@@ -8749,7 +8750,7 @@ class TestE2ESemanticLayerLifecycle:
 
         def _direct_delete(item_type: str, item_id: str) -> None:
             with MetastoreClient(stack_url=self.url, token=self.token) as mc:
-                mc.delete_item(item_type, item_id)  # type: ignore[arg-type]
+                mc.delete_item(item_type, item_id)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
         try:
             _step(1, "semantic-layer model create")
@@ -9241,7 +9242,7 @@ class TestE2ESemanticLayerLifecycle:
                 with MetastoreClient(stack_url=self.url, token=self.token) as mc:
                     residue: list[str] = []
                     for stype in SEMANTIC_TYPES:
-                        for item in mc.list_items(stype):  # type: ignore[arg-type]
+                        for item in mc.list_items(stype):  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
                             attrs = item.get("attributes") or {}
                             name = attrs.get("name") or attrs.get("term", "")
                             if isinstance(name, str) and name.startswith(tag):
@@ -9308,7 +9309,7 @@ class TestE2ESemanticLayerLifecycle:
 
         def _direct_delete(item_type: str, item_id: str) -> None:
             with MetastoreClient(stack_url=self.url, token=self.token) as mc:
-                mc.delete_item(item_type, item_id)  # type: ignore[arg-type]
+                mc.delete_item(item_type, item_id)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
         try:
             # --- 1. Create model A with children spanning the cascade order ---
@@ -9523,7 +9524,7 @@ class TestE2ESemanticLayerLifecycle:
                 with MetastoreClient(stack_url=self.url, token=self.token) as mc:
                     residue: list[str] = []
                     for stype in SEMANTIC_TYPES:
-                        for item in mc.list_items(stype):  # type: ignore[arg-type]
+                        for item in mc.list_items(stype):  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
                             attrs = item.get("attributes") or {}
                             name = attrs.get("name") or attrs.get("term", "")
                             if isinstance(name, str) and name.startswith(tag):

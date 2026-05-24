@@ -79,7 +79,7 @@ class TestSingleSubscriber:
         registry: Any = MagicMock()
 
         out: list[dict[str, Any]] = []
-        async for evt in bcast.start_or_attach(task, registry, store):
+        async for evt in bcast.start_or_attach(task, registry, store):  # ty: ignore[invalid-argument-type]
             out.append(evt)
 
         # init + 3 scripted events = 3 (the broadcaster doesn't add init -- that
@@ -117,13 +117,13 @@ class TestLateAttach:
         b_out: list[dict[str, Any]] = []
 
         async def consume_a() -> None:
-            async for evt in bcast.start_or_attach(task, registry, store):
+            async for evt in bcast.start_or_attach(task, registry, store):  # ty: ignore[invalid-argument-type]
                 a_out.append(evt)
 
         async def consume_b() -> None:
             # Attach mid-flight.
             await asyncio.sleep(0.025)
-            async for evt in bcast.start_or_attach(task, registry, store):
+            async for evt in bcast.start_or_attach(task, registry, store):  # ty: ignore[invalid-argument-type]
                 b_out.append(evt)
 
         await asyncio.gather(consume_a(), consume_b())

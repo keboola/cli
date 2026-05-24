@@ -83,7 +83,9 @@ def metadata_list(
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List all metadata keys for a branch. Mirrors `kbagent branch metadata-list`."""
-    return registry.branch.list_branch_metadata(alias=project, branch_id=branch_id)
+    return registry.branch.list_branch_metadata(
+        alias=project, branch_id=branch_id if branch_id is not None else "default"
+    )
 
 
 @router.get("/{project}/metadata/{key}", summary="Get a branch metadata value")
@@ -94,7 +96,9 @@ def metadata_get(
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Fetch a single branch metadata entry. Mirrors `kbagent branch metadata-get`."""
-    return registry.branch.get_branch_metadata(alias=project, key=key, branch_id=branch_id)
+    return registry.branch.get_branch_metadata(
+        alias=project, key=key, branch_id=branch_id if branch_id is not None else "default"
+    )
 
 
 @router.put("/{project}/metadata/{key}", summary="Set a branch metadata value")
@@ -107,7 +111,10 @@ def metadata_set(
 ) -> dict[str, Any]:
     """Write a branch metadata entry. Mirrors `kbagent branch metadata-set`."""
     return registry.branch.set_branch_metadata(
-        alias=project, key=key, value=body.value, branch_id=branch_id
+        alias=project,
+        key=key,
+        value=body.value,
+        branch_id=branch_id if branch_id is not None else "default",
     )
 
 
@@ -120,5 +127,7 @@ def metadata_delete(
 ) -> dict[str, Any]:
     """Remove a branch metadata entry by id. Mirrors `kbagent branch metadata-delete`."""
     return registry.branch.delete_branch_metadata(
-        alias=project, metadata_id=metadata_id, branch_id=branch_id
+        alias=project,
+        metadata_id=metadata_id,
+        branch_id=branch_id if branch_id is not None else "default",
     )

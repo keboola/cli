@@ -24,7 +24,7 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
-TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
 runner = CliRunner()
 

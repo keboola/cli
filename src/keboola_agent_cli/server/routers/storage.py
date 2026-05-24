@@ -257,7 +257,7 @@ async def upload_table(
         return registry.storage.upload_table(
             alias=project,
             table_id=table_id,
-            file_path=tmp_path,
+            file_path=str(tmp_path),
             incremental=incremental,
             branch_id=branch_id,
         )
@@ -367,7 +367,7 @@ def describe_columns(
     return registry.storage.describe_columns(
         alias=project,
         table_id=table_id,
-        column_descriptions=body.columns,
+        columns=body.columns,
         branch_id=body.branch_id,
     )
 
@@ -413,7 +413,7 @@ async def upload_file(
     try:
         return registry.storage.upload_file(
             alias=project,
-            file_path=tmp_path,
+            file_path=str(tmp_path),
             name=name or file.filename,
             tags=tag,
             is_permanent=permanent,
@@ -441,7 +441,9 @@ def file_download(
 ) -> FileResponse:
     """Download a Storage file. Mirrors `kbagent storage file-download`."""
     out_dir = Path(tempfile.mkdtemp(prefix="kbagent-file-"))
-    result = registry.storage.download_file(alias=project, file_id=file_id, output_dir=out_dir)
+    result = registry.storage.download_file(
+        alias=project, file_id=file_id, output_path=str(out_dir)
+    )
     file_path = result.get("local_path") if isinstance(result, dict) else None
     if not file_path or not Path(file_path).exists():
         raise HTTPException(status_code=500, detail="Download produced no file.")

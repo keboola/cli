@@ -2,6 +2,7 @@
 
 import copy
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -14,7 +15,7 @@ from keboola_agent_cli.sync.code_extraction import (
 # Sample data fixtures
 # ---------------------------------------------------------------------------
 
-SAMPLE_SQL_CONFIG = {
+SAMPLE_SQL_CONFIG: dict[str, Any] = {
     "version": 2,
     "name": "Clean Data",
     "description": "Cleans raw data",
@@ -50,7 +51,7 @@ SAMPLE_SQL_CONFIG = {
     },
 }
 
-SAMPLE_PYTHON_TRANSFORM_CONFIG = {
+SAMPLE_PYTHON_TRANSFORM_CONFIG: dict[str, Any] = {
     "version": 2,
     "name": "Python Analysis",
     "description": "Runs Python analysis",
@@ -78,7 +79,7 @@ SAMPLE_PYTHON_TRANSFORM_CONFIG = {
     },
 }
 
-SAMPLE_PYTHON_APP_CONFIG = {
+SAMPLE_PYTHON_APP_CONFIG: dict[str, Any] = {
     "version": 2,
     "name": "Custom Script",
     "description": "Custom Python app",

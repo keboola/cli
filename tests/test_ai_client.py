@@ -9,7 +9,7 @@ from keboola_agent_cli.errors import KeboolaApiError
 
 STACK_URL = "https://connection.keboola.com"
 AI_BASE_URL = "https://ai.keboola.com"
-TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
 SAMPLE_COMPONENT_DETAIL = {
     "componentId": "keboola.ex-http",

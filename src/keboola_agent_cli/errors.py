@@ -116,8 +116,8 @@ def mask_token(token: str) -> str:
     replacing the middle with '...'.
 
     Examples:
-        mask_token("901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k")
-        -> "901-...pt0k"
+        mask_token("901-55555-fakeTestTokenDoNotUseXXXXXXXX")
+        -> "901-...XXXX"
 
         mask_token("abc") -> "***"
         mask_token("") -> "***"

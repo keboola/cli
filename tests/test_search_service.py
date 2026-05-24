@@ -241,7 +241,7 @@ class TestSearchServiceTextual:
             mock = MagicMock()
             if token == "bad-token":
                 mock.verify_token.side_effect = KeboolaApiError(
-                    "INVALID_TOKEN", "Token is invalid."
+                    "Token is invalid.", error_code="INVALID_TOKEN"
                 )
             else:
                 mock.verify_token.return_value = _make_verify_response()

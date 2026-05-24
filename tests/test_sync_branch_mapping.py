@@ -153,15 +153,23 @@ class TestBranchMapping:
             },
         }
         mapping = BranchMapping.from_dict(data)
-        assert mapping.get("main").keboola_id is None
-        assert mapping.get("feature/auth").keboola_id == 972851
-        assert mapping.get("bugfix/123").keboola_id == 88888
+        main_entry = mapping.get("main")
+        assert main_entry is not None
+        assert main_entry.keboola_id is None
+        feature_entry = mapping.get("feature/auth")
+        assert feature_entry is not None
+        assert feature_entry.keboola_id == 972851
+        bugfix_entry = mapping.get("bugfix/123")
+        assert bugfix_entry is not None
+        assert bugfix_entry.keboola_id == 88888
 
     def test_branch_mapping_from_dict_empty_string_id(self) -> None:
         """Empty string id (rare legacy shape) is treated as production (None)."""
         data = {"version": 1, "mappings": {"main": {"id": "", "name": "Main"}}}
         mapping = BranchMapping.from_dict(data)
-        assert mapping.get("main").keboola_id is None
+        main_entry = mapping.get("main")
+        assert main_entry is not None
+        assert main_entry.keboola_id is None
 
     def test_branch_mapping_from_dict_invalid_id_descriptive_error(self) -> None:
         """Issue #269 sec-20: hand-edited mapping with non-numeric id raises a

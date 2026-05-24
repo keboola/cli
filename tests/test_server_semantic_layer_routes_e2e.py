@@ -100,7 +100,7 @@ def _direct_delete(state: dict[str, Any], item_type: str, item_id: str) -> None:
     from keboola_agent_cli.metastore_client import MetastoreClient
 
     with MetastoreClient(stack_url=state["url"], token=state["token"]) as mc:
-        mc.delete_item(item_type, item_id)  # type: ignore[arg-type]
+        mc.delete_item(item_type, item_id)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
 
 def _cleanup(state: dict[str, Any]) -> None:
@@ -128,7 +128,7 @@ def _cleanup(state: dict[str, Any]) -> None:
         with MetastoreClient(stack_url=state["url"], token=state["token"]) as mc:
             residue: list[str] = []
             for stype in SEMANTIC_TYPES:
-                for item in mc.list_items(stype):  # type: ignore[arg-type]
+                for item in mc.list_items(stype):  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
                     attrs = item.get("attributes") or {}
                     name = attrs.get("name") or attrs.get("term", "")
                     if isinstance(name, str) and name.startswith(state["tag"]):
@@ -366,6 +366,7 @@ def test_post_diff_project_vs_file(http_session: dict[str, Any]) -> None:
     inline-file branch of the body validator works.
     """
     snapshot = http_session.get("exported_snapshot")
+    assert snapshot is not None, "exported_snapshot must be set by prior test"
     # Strip the model wrapping that export adds (just keep the diffable
     # bare child lists — diff service expects raw side data).
     snapshot_for_file = {

@@ -41,7 +41,7 @@ runner = CliRunner()
 
 # Synthetic test fixture -- not a real credential (matches the repo-wide
 # fixture token used across the data-app test suite).
-TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
 ENCRYPTED_VALUE = "KBC::ProjectSecureGKMS::abcdef0123456789"
 

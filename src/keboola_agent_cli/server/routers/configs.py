@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Query
@@ -99,7 +100,7 @@ def search_configs(
         aliases=aliases,
         component_type=component_type,
         ignore_case=ignore_case,
-        regex=regex,
+        use_regex=regex,
         branch_id=branch_id,
     )
 
@@ -188,7 +189,7 @@ def config_create(
         alias=project,
         component_id=component_id,
         name=body.name,
-        description=body.description,
+        description=body.description or "",
         configuration=body.configuration,
         branch_id=body.branch_id,
     )
@@ -230,9 +231,9 @@ def config_rename(
         alias=project,
         component_id=component_id,
         config_id=config_id,
-        new_name=body.name,
+        name=body.name,
         branch_id=body.branch_id,
-        directory=body.directory,
+        directory=Path(body.directory) if body.directory else None,
     )
 
 
@@ -337,7 +338,7 @@ def set_folder(
         alias=project,
         component_id=component_id,
         config_id=config_id,
-        folder=folder,
+        folder_name=folder,
         branch_id=branch_id,
     )
 
@@ -356,7 +357,7 @@ def row_create(
         component_id=component_id,
         config_id=config_id,
         name=body.name,
-        description=body.description,
+        description=body.description or "",
         configuration=body.configuration,
         is_disabled=body.is_disabled,
         branch_id=body.branch_id,
@@ -440,7 +441,6 @@ class VariablesSet(BaseModel):
     variables_id: str | None = None
     values_id: str | None = None
     branch_id: int | None = None
-    dry_run: bool = False
 
 
 @router.get(
@@ -484,7 +484,6 @@ def variables_set(
         variables_id=body.variables_id,
         values_id=body.values_id,
         branch_id=body.branch_id,
-        dry_run=body.dry_run,
     )
 
 

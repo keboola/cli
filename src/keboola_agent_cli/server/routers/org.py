@@ -83,10 +83,12 @@ def refresh(
             status_code=401,
             detail="Missing X-Manage-Token header. Refresh requires a manage token.",
         )
+    # Service has no refresh_all param: pass aliases=None to refresh all,
+    # or aliases=body.aliases to scope the refresh.
+    effective_aliases = None if body.refresh_all else body.aliases
     return registry.org.refresh_tokens(
         manage_token=manage_token,
-        aliases=body.aliases,
-        refresh_all=body.refresh_all,
+        aliases=effective_aliases,
         token_description=body.token_description,
         dry_run=body.dry_run,
         force=body.force,

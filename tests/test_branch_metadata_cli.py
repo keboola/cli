@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from click.testing import Result
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -16,7 +17,7 @@ from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 
-TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
 runner = CliRunner()
 
@@ -41,7 +42,7 @@ def _run(
     args: list[str],
     *,
     input_text: str | None = None,
-) -> object:
+) -> Result:
     """Invoke the CLI with a mocked BranchService while letting everything else construct normally."""
     with (
         patch("keboola_agent_cli.cli.ConfigStore") as MockStore,

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from click.testing import Result
 from typer.testing import CliRunner
 
 from helpers import setup_single_project
@@ -213,7 +214,7 @@ class TestConfigServiceUpdateConfiguration:
 class TestConfigUpdateCli:
     """CLI-level tests for config update command."""
 
-    def _invoke(self, tmp_config_dir: Path, args: list[str]) -> object:
+    def _invoke(self, tmp_config_dir: Path, args: list[str]) -> Result:
         return runner.invoke(
             app,
             ["--json", "--config-dir", str(tmp_config_dir), "config", "update", *args],

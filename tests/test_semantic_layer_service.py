@@ -30,7 +30,7 @@ from keboola_agent_cli.services.semantic_layer_service import (
     _derive_fqn,
 )
 
-TEST_TOKEN = "901-10493007-VDtlEDWDF6Tx5V8jjE8FshFlqM0Hl0c08KHqpt0k"
+TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
 
 # ---------------------------------------------------------------------------
