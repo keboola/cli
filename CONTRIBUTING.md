@@ -238,13 +238,13 @@ rows = [_parse_storage_row(r) for r in raw]
 items.sort(key=lambda x: x.priority)
 ```
 
-### Type checking -- `ty` is mandatory (warnings) for new code
+### Type checking -- `ty` is mandatory and BLOCKING
 
-We use Astral's [`ty`](https://github.com/astral-sh/ty) (same vendor as `uv` and `ruff`). It is fast (Rust), installs in <1s, and runs on every edit via the post-edit hook in `.claude/settings.json`. It also runs in the pre-commit hook in warning mode (does not block commits) and is exposed via `make typecheck`.
+We use Astral's [`ty`](https://github.com/astral-sh/ty) (same vendor as `uv` and `ruff`). It is fast (Rust), installs in <1s, and runs on every edit via the post-edit hook in `.claude/settings.json`. It also runs in the pre-commit hook and **blocks the commit on any type error** (the whole backlog was cleared in 0.45.0, see issue #280 PR-3), and is exposed via `make typecheck`.
 
 Rules:
-- **New code** -- must pass `make typecheck` clean. Adding any `# type: ignore` requires a one-line comment explaining why.
-- **Existing code** -- grandfathered; do not regress existing warnings, but cleanups outside the PR's scope are not required.
+- **All code** -- `make typecheck` must stay clean (0 diagnostics). Adding any `# ty: ignore[rule]` requires a one-line comment explaining why (reserve it for genuinely dynamic surfaces, e.g. third-party stubs that mistype a runtime-valid argument).
+- **No regressions** -- a newly introduced type error blocks both the post-edit and pre-commit hooks; fix it before continuing. Warnings (e.g. the downgraded `unresolved-import` rule) do not block.
 - Type-hint every function signature (already a rule in "Python conventions" above); `ty` enforces that the hints are *correct*, not just present.
 
 ```bash
@@ -381,7 +381,7 @@ before the PR is mergeable.
 - [ ] **CLI-layer tests** -- use `CliRunner`, test JSON output, error exit codes
 - [ ] **E2E tests** -- add a test in `tests/test_e2e.py` that exercises the command against a real Keboola project (requires `E2E_API_TOKEN` + `E2E_URL`). Run `make test-e2e` to verify. Every CLI command must have E2E coverage
 - [ ] **Run `make check`** before committing (lint + format + full test suite)
-- [ ] **Run `make typecheck`** -- `ty` must pass for any new code (existing warnings grandfathered)
+- [ ] **Run `make typecheck`** -- `ty` must pass clean (0 diagnostics; the backlog was cleared in 0.45.0, so the gate is blocking, not warning-only)
 - [ ] **No new `tuple[...]` returns** -- multi-value returns use a `@dataclass` ([Code Quality Patterns](#code-quality-patterns))
 - [ ] **No raw error-code strings** -- `make check-error-codes` enforces `ErrorCode` enum usage
 - [ ] **File-size budgets respected** -- see the table in [Code Quality Patterns](#code-quality-patterns); split before crossing the hard ceiling

@@ -36,7 +36,8 @@ class _NullStore(AgentStore):
 
     Extends AgentStore so run_task_once's type annotation is satisfied.
     We pass a non-existent sentinel path; the no-op overrides never call
-    _ensure_dirs so no filesystem access happens.
+    _ensure_dirs so no filesystem access happens. The path is never touched,
+    so the Unix-only ``/dev/null`` form is harmless on Windows too.
     """
 
     def __init__(self) -> None:

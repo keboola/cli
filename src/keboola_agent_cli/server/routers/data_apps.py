@@ -196,7 +196,7 @@ def password(
 ) -> dict[str, Any]:
     """Fetch the password for a password-protected data app. Mirrors `kbagent data-app password`."""
     if not manage_token:
-        raise HTTPException(status_code=401, detail="Missing X-KBC-ManageApiToken header.")
+        raise HTTPException(status_code=401, detail="Missing X-Manage-Token header.")
     return registry.data_app.get_data_app_password(
         alias=project, app_id=app_id, manage_token=manage_token
     )

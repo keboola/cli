@@ -1,6 +1,8 @@
 # --hint Mode: Use kbagent as a Python SDK
 
 > **⚠️ Deprecated since 0.45.0.** The `--hint` flag is superseded by the REST API (`kbagent serve`), which covers every command. `--hint` still works but prints a deprecation warning and will be removed in a future release. New integrations should call the REST endpoints instead.
+>
+> **CI / automation note:** the deprecation warning is printed only when stderr is an interactive terminal (TTY), so it stays out of piped/redirected output. Pipelines that capture stderr to a log will **not** see it — if you automate `kbagent --hint ...` in CI, track your `kbagent version` against the removal timeline proactively rather than relying on the warning.
 
 The `--hint` flag generates equivalent Python code for any CLI command, without
 executing it. This lets you use `kbagent` not just as a CLI tool, but as a

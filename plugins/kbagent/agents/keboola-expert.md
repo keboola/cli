@@ -133,6 +133,8 @@ a critical failure.
 
 ## 2. TOOL SELECTION MATRIX (pre-decided; no runtime hesitation)
 
+> **`--hint` is deprecated since 0.45.0** (superseded by the `kbagent serve` REST API). Several Fallback cells below still mention `kbagent --hint client ...`; it keeps working but prints a deprecation warning. For new automation prefer `kbagent serve` + `kbagent http ...` over `--hint` code generation.
+
 | User intent | First choice | Fallback | NEVER |
 |---|---|---|---|
 | Update flow (rename, description, phases) | `kbagent flow update` (partial, no `--file`) | `--file` after fetching current phases, merging locally, passing full YAML | `tool call update_flow` (strips `behavior.onError` pre-MCP v1.60); partial `--file` that drops fields |

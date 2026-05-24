@@ -24,15 +24,17 @@ if [ -n "$STAGED" ]; then
         exit 1
     fi
 
-    # Type check (ty -- warnings only, does NOT block commits while migrating)
-    # Switch this to a hard `exit 1` once the codebase is clean.
+    # Type check (ty -- BLOCKS the commit on any error; backlog cleared in 0.45.0,
+    # see issue #280 PR-3). Warnings (e.g. the downgraded unresolved-import rule)
+    # do not block.
     if command -v uv >/dev/null 2>&1; then
         TY_OUTPUT="$(uv run --quiet ty check $STAGED 2>&1 || true)"
-        if echo "$TY_OUTPUT" | grep -qiE "^(error|warning)"; then
+        if echo "$TY_OUTPUT" | grep -qiE "^error"; then
             echo ""
-            echo "pre-commit: ty type-check reported issues (warnings, not blocking):"
+            echo "pre-commit: ty type-check found errors (blocking -- fix before committing):"
             echo "$TY_OUTPUT" | tail -20
             echo "Run 'make typecheck' for full output."
+            exit 1
         fi
     fi
 fi

@@ -227,7 +227,7 @@ class TestSearchServiceTextual:
         assert project_aliases == {"prod", "dev"}
 
     def test_project_api_error_accumulates(self, tmp_path: Path) -> None:
-        from keboola_agent_cli.errors import KeboolaApiError
+        from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 
         store = _make_store(
             tmp_path,
@@ -241,7 +241,7 @@ class TestSearchServiceTextual:
             mock = MagicMock()
             if token == "bad-token":
                 mock.verify_token.side_effect = KeboolaApiError(
-                    "Token is invalid.", error_code="INVALID_TOKEN"
+                    "Token is invalid.", error_code=ErrorCode.INVALID_TOKEN
                 )
             else:
                 mock.verify_token.return_value = _make_verify_response()
