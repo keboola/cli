@@ -299,6 +299,11 @@ def _render_updated_task(console: Any, task: dict[str, Any]) -> None:
     _render_task_detail(console, task)
 
 
+def _render_deleted_task(console: Any, data: dict[str, Any]) -> None:
+    """Confirmation line after `agent delete`."""
+    console.print(f"[bold green]Deleted[/bold green] task [cyan]{data['id']}[/cyan]")
+
+
 def _render_run_result(console: Any, run: dict[str, Any]) -> None:
     """One-line run status + timing after `agent run`."""
     status = run.get("status")
@@ -684,10 +689,7 @@ def agent_delete(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.NOT_FOUND)
         raise typer.Exit(code=1) from None
-    formatter.output(
-        {"status": "deleted", "id": task_id},
-        lambda c, d: c.print(f"[bold green]Deleted[/bold green] task [cyan]{d['id']}[/cyan]"),
-    )
+    formatter.output({"status": "deleted", "id": task_id}, _render_deleted_task)
 
 
 @agent_app.command("run")
@@ -830,7 +832,7 @@ def agent_run_events(
         formatter.error(message=exc.message, error_code=ErrorCode.NOT_FOUND)
         raise typer.Exit(code=1) from None
     if formatter.json_mode:
-        formatter.output({"events": events, "count": len(events)}, lambda c, d: None)
+        formatter.output({"events": events, "count": len(events)})
         return
     for evt in events:
         _render_stream_event(formatter, evt)
