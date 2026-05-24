@@ -2671,10 +2671,9 @@ class TestFullE2E:
         data = self._run_ok("sharing", "list", "--project", self.alias)
         assert "shared_buckets" in data["data"] or "errors" in data["data"]
 
-        # lineage show
-        data = self._run_ok("lineage", "show", "--project", self.alias)
-        # Lineage may be empty on a single-project setup
-        assert data["status"] == "ok"
+        # NOTE: `lineage show` requires a pre-built graph (--load PATH), so it is
+        # not a bare read check. Its E2E coverage lives in test_e2e_lineage_deep.py
+        # (build + show against real synced data).
 
     def _test_kai_commands(self) -> None:
         """Test Kai AI Assistant commands (gracefully skip if not available)."""
@@ -3803,7 +3802,8 @@ class TestE2EJsonConsistency:
             ["component", "list", "--project", self.alias],
             ["branch", "list", "--project", self.alias],
             ["sharing", "list", "--project", self.alias],
-            ["lineage", "show", "--project", self.alias],
+            # `lineage show` needs --load (pre-built graph) -- not a bare read;
+            # covered in test_e2e_lineage_deep.py instead.
             ["doctor"],
             ["permissions", "list"],
             ["permissions", "show"],
@@ -8719,6 +8719,27 @@ class TestE2EMcpParityCommands:
 
 @skip_without_credentials
 @pytest.mark.e2e
+def _metastore_scope_available(url: str, token: str) -> bool:
+    """Probe whether the project has a usable metastore scope.
+
+    Semantic-layer is a gated feature; a project that does not have it returns
+    HTTP 502 "Failed to create project scope" on every metastore call -- an
+    environment limitation, not a test failure. The SL suites skip cleanly in
+    that case instead of reporting a wall of false-positive failures.
+    """
+    from keboola_agent_cli.errors import KeboolaApiError
+    from keboola_agent_cli.metastore_client import SEMANTIC_TYPES, MetastoreClient
+
+    try:
+        with MetastoreClient(stack_url=url, token=token) as mc:
+            mc.list_items(SEMANTIC_TYPES[0])  # ty: ignore[invalid-argument-type]  # probe; str vs SemanticType Literal
+        return True
+    except KeboolaApiError as exc:
+        if exc.status_code == 502 or "scope" in (exc.message or "").lower():
+            return False
+        raise
+
+
 class TestE2ESemanticLayerLifecycle:
     """E2E coverage for the ``kbagent semantic-layer`` command group.
 
@@ -8760,6 +8781,8 @@ class TestE2ESemanticLayerLifecycle:
         self.token = os.environ[ENV_TOKEN]
         raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
         self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        if not _metastore_scope_available(self.url, self.token):
+            pytest.skip("metastore/semantic-layer scope not available for this project")
         self.alias = f"{RUN_ID}-sl-proj"
         self.config_dir = tmp_path / "config"
         self.config_dir.mkdir()
