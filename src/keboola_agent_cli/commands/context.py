@@ -902,6 +902,82 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     the operator configured (not the global ~/.config one). Outside a serve
     subprocess context the command refuses to run.
 
+### Agent Tasks (CLI parity with the `/agents` REST surface)
+
+  Reads/writes <config_dir>/agents.json -- the same on-disk format the
+  cron loop inside `kbagent serve` consumes. CLI CRUD + ad-hoc `run`
+  work offline; cron firing still requires the live server.
+
+  Every subcommand below that takes TASK_ID / RUN_ID accepts it either
+  positionally (`agent show TASK_ID`) or via flag (`--id` / `--task-id`,
+  plus `--run-id` for run-detail / run-events) -- the flag form matches
+  the rest of the CLI (`--job-id`, `--config-id`, ...).
+
+  kbagent agent list
+    List all registered tasks (id, name, cron, type, state, last/next run).
+
+  kbagent agent show TASK_ID
+    Full task detail including the action payload.
+
+  kbagent agent create --name N [--description D] [--cron CRON] [--manual]
+                       [--enabled/--disabled]
+                       (--type ai_agent --cli claude|codex|gemini --prompt P
+                                        [--extra-arg ARG ...] [--timeout SECONDS]
+                       |--type cli_command --argv ARG [--argv ARG ...]
+                                           [--timeout SECONDS]
+                       |--type mcp_tool --tool TOOL [--mcp-project ALIAS]
+                                        [--mcp-branch ID] [--input JSON|@file|-]
+                                        [--timeout SECONDS]
+                       |--from-file PATH|@path|-)
+                       [--trigger-task-id ID --trigger-on success|error|always]
+    Persist a new scheduled task. --manual skips the cron loop. Use
+    --from-file for the full {{"type":..., "params":...}} JSON envelope
+    when prompts/args grow large.
+
+  kbagent agent update TASK_ID [--name N] [--description D] [--cron C]
+                                [--enabled/--disabled] [--manual/--auto]
+                                [--clear-trigger]
+                                [--trigger-task-id ID --trigger-on ...]
+    Patch one or more fields. Omitted flags leave the field unchanged.
+    --manual nulls next_run_at; --auto recomputes it from the cron expr.
+
+  kbagent agent delete TASK_ID [--yes]
+    Permanent removal. Run history on disk is preserved.
+
+  kbagent agent run TASK_ID [--stream]
+                            [--runtime-prompt TEXT | --runtime-input JSON|@file|-]
+    Trigger immediately. --stream emits live events (one line per event;
+    NDJSON in --json mode). --runtime-prompt appends ad-hoc text to an
+    ai_agent's persisted prompt for this run only; --runtime-input merges
+    arbitrary JSON into the action params.
+
+  kbagent agent runs TASK_ID [--limit N]
+    Run history (newest first).
+
+  kbagent agent run-detail TASK_ID RUN_ID
+    Single AgentRun record (status, summary, output, error).
+
+  kbagent agent run-events TASK_ID RUN_ID
+    Replay the persisted ai_agent event timeline.
+
+  kbagent agent test [--type ... | --from-file PATH] [--stream] [--name N]
+                     [common action flags from `create`]
+    Execute an action ad-hoc -- nothing is persisted. Useful for
+    sanity-checking a prompt / tool / argv before saving.
+
+  kbagent agent cron-preview --cron "0 6 * * 1" [--count N]
+    Validate a cron expression and show the next N firings (UTC, max 20).
+
+  kbagent agent prompt-improve --goal "..." [--draft "..."]
+                                [--cli claude|codex|gemini] [--project ALIAS]
+                                [--extra-arg X ...] [--stream/--no-stream]
+    AI-polished single-shot prompt for an unattended agent task. Spawns
+    the chosen AI CLI with a meta-prompt; the final `done` event's
+    `data.prompt` carries the cleaned body ready to paste into
+    `agent create --prompt ...`.
+
+  See agent-tasks-cli-workflow.md skill reference for full walkthroughs.
+
 ### MCP Tools (Multi-Project)
 
   kbagent tool list [--project NAME] [--branch ID]

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import typer
 
+from .commands.agent import agent_app
 from .commands.branch import branch_app
 from .commands.changelog import changelog_command
 from .commands.component import component_app
@@ -40,6 +41,7 @@ from .errors import ErrorCode, PermissionDeniedError
 from .models import PermissionPolicy
 from .output import OutputFormatter
 from .permissions import PermissionEngine
+from .services.agent_service import AgentService
 from .services.branch_service import BranchService
 from .services.component_service import ComponentService
 from .services.config_service import ConfigService
@@ -122,6 +124,7 @@ app.add_typer(encrypt_app, name="encrypt", rich_help_panel=_DEV)
 app.add_typer(semantic_layer_app, name="semantic-layer", rich_help_panel=_DEV)
 app.add_typer(semantic_layer_app, name="sl", rich_help_panel=_DEV, hidden=True)
 app.add_typer(http_app, name="http", rich_help_panel=_DEV)
+app.add_typer(agent_app, name="agent", rich_help_panel=_DEV)
 
 
 def apply_firewall_flags(
@@ -340,6 +343,7 @@ def main(
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
     version_service = VersionService()
     http_forwarder_service = HttpForwarderService()
+    agent_service = AgentService(config_store=config_store, mcp_service=mcp_service)
 
     try:
         config = config_store.load()
@@ -399,6 +403,7 @@ def main(
     ctx.obj["doctor_service"] = doctor_service
     ctx.obj["version_service"] = version_service
     ctx.obj["http_forwarder_service"] = http_forwarder_service
+    ctx.obj["agent_service"] = agent_service
 
     # Warn if empty local config shadows global with projects (#104)
     if source == "local" and not json_output and ctx.invoked_subcommand != "init":

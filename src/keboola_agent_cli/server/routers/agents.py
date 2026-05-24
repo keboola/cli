@@ -17,7 +17,14 @@ from ..agent_runner import (
     run_task_once,
     stream_ai_agent_events,
 )
-from ..agents_store import AgentAction, AgentRun, AgentTask, Trigger
+from ..agents_store import (
+    AgentAction,
+    AgentRun,
+    AgentTask,
+    Trigger,
+    merge_runtime_input,
+    validate_trigger,
+)
 from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -26,26 +33,16 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 def _validate_trigger(
     store: Any, trigger: Trigger | None, *, owner_task_id: str | None = None
 ) -> None:
-    """Reject obviously broken trigger configs at API boundary.
+    """HTTP wrapper around :func:`validate_trigger`.
 
-    - downstream task_id must exist
-    - no self-loop (task triggering itself)
-
-    Deeper cycle detection (A→B→A) is left to runtime safety; the value of
-    a deep check here is low compared to the implementation cost.
+    The core check (existence + no self-loop) lives in ``agents_store`` so
+    the CLI service can reuse it. The router translates ``ValueError`` into
+    the 422 response shape the existing tests assert on.
     """
-    if trigger is None:
-        return
-    if owner_task_id is not None and trigger.task_id == owner_task_id:
-        raise HTTPException(
-            status_code=422,
-            detail="Trigger target cannot be the task itself (would self-loop).",
-        )
-    if store.get_task(trigger.task_id) is None:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Trigger target task '{trigger.task_id}' not found.",
-        )
+    try:
+        validate_trigger(store, trigger, owner_task_id=owner_task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class AgentTaskCreate(BaseModel):
@@ -191,43 +188,6 @@ class RunNowBody(BaseModel):
     runtime_input: dict[str, Any] | None = None
 
 
-def _merge_runtime_input(task: AgentTask, runtime_input: dict[str, Any] | None) -> AgentTask:
-    """Return a shallow-copied task with runtime_input merged into its action.
-
-    The original task is NOT mutated; we copy because ``run_task_once``
-    persists ``task.last_run_at`` / ``next_run_at`` and we want those side
-    effects to land on the real stored task, not the merged ghost.
-    """
-    if not runtime_input:
-        return task
-    merged_params = dict(task.action.params)
-    if task.action.type == "ai_agent":
-        extra = runtime_input.get("prompt")
-        if isinstance(extra, str) and extra.strip():
-            base_prompt = str(merged_params.get("prompt", ""))
-            # Append rather than replace so the persisted instructions still
-            # dominate; the runtime ask comes in as a clearly-labeled section.
-            merged_params["prompt"] = (
-                f"{base_prompt}\n\n[Operator's runtime input for this run]\n{extra.strip()}"
-            )
-    elif task.action.type == "cli_command":
-        extra_argv = runtime_input.get("argv")
-        if isinstance(extra_argv, list) and extra_argv:
-            base_argv = list(merged_params.get("argv") or [])
-            merged_params["argv"] = [*base_argv, *(str(a) for a in extra_argv)]
-    elif task.action.type == "mcp_tool":
-        # Shallow-merge into the tool input; runtime keys win.
-        base_input = dict(merged_params.get("input") or {})
-        base_input.update(runtime_input)
-        merged_params["input"] = base_input
-    merged_action = AgentAction(type=task.action.type, params=merged_params)
-    # AgentTask.model_copy with update returns a shallow copy with the action
-    # replaced — task.last_run_at / next_run_at on the *real* stored record
-    # still update via run_task_once.upsert_task(task) because that path uses
-    # the original task object passed in.
-    return task.model_copy(update={"action": merged_action})
-
-
 @router.post("/{task_id}/run", summary="Run a task now (blocking)")
 async def run_now(
     task_id: str,
@@ -250,7 +210,7 @@ async def run_now(
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
     runtime_input = body.runtime_input if body is not None else None
-    task_for_run = _merge_runtime_input(task, runtime_input)
+    task_for_run = merge_runtime_input(task, runtime_input)
     run = await run_task_once(task_for_run, registry, store)
     return run.model_dump(mode="json")
 
@@ -502,6 +462,68 @@ class PromptHelperRequest(BaseModel):
     draft: str = ""
     project: str | None = None
     extra_args: list[str] = []
+
+
+@router.post("/prompt/improve", summary="AI-rewrite a prompt (blocking)")
+async def improve_prompt(
+    body: PromptHelperRequest,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Blocking variant of ``/prompt/improve/stream`` -- consumes the SSE
+    generator server-side and returns the final ``done`` payload.
+
+    Drives the same ``stream_ai_agent_events`` machinery the streaming
+    variant uses, so the resulting ``data.prompt`` is byte-for-byte
+    identical to what the SSE consumer would see in its last event.
+    Useful for scripted callers (``kbagent http`` from inside a scheduled
+    task, batch wrappers) where opening an SSE connection just to read
+    the final frame is needless ceremony.
+
+    Returns the enriched ``done.data`` payload directly: ``{status,
+    exit_code, elapsed_seconds, response, prompt, raw_response, ...}``.
+    The CLI's ``kbagent agent prompt-improve --no-stream`` consumes this
+    endpoint's shape verbatim.
+    """
+    from ..agent_runner import (
+        build_prompt_helper_meta_prompt,
+        clean_prompt_helper_response,
+    )
+
+    goal = body.goal.strip()
+    if not goal:
+        raise HTTPException(status_code=400, detail="goal must not be empty")
+    meta_prompt = build_prompt_helper_meta_prompt(
+        goal=goal,
+        draft=body.draft,
+        project=body.project,
+    )
+    params: dict[str, Any] = {
+        "cli": body.cli,
+        "prompt": meta_prompt,
+        "extra_args": body.extra_args,
+        "timeout": AI_PROMPT_HELPER_TIMEOUT,
+    }
+    final_done: dict[str, Any] | None = None
+    try:
+        async for evt in stream_ai_agent_events(registry, params):
+            if evt["event"] == "done":
+                raw = str(evt["data"].get("response") or "")
+                final_done = {
+                    **evt["data"],
+                    "prompt": clean_prompt_helper_response(raw),
+                    "raw_response": raw,
+                }
+    except ValueError as exc:
+        # Same translation the streaming variant uses (bad CLI, empty
+        # prompt, malformed extra_args). 400 surfaces it cleanly to the
+        # caller without leaking a stack trace.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if final_done is None:
+        raise HTTPException(
+            status_code=502,
+            detail="ai_agent stream ended without a done event",
+        )
+    return final_done
 
 
 @router.post("/prompt/improve/stream", summary="AI-rewrite a prompt (SSE stream)")

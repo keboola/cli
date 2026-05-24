@@ -6206,6 +6206,111 @@ class TestE2EIssue304WorkspaceDiscoverability:
 
 
 # ---------------------------------------------------------------------------
+# Agent tasks (kbagent agent ...): CRUD + cron preview + cli_command run
+# Local-only commands; no Keboola API required. Still gated on credentials so
+# they run as part of the standard E2E batch.
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EAgentTasks:
+    """End-to-end coverage for the `kbagent agent` command tree.
+
+    Exercises the full local lifecycle (create -> show -> list -> update ->
+    run -> runs -> delete) plus the cron-preview + test utilities. Uses a
+    cli_command action that just invokes ``kbagent version`` so no live
+    Keboola endpoint is touched -- the value of the test is verifying the
+    on-disk format and CLI plumbing under a real install.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self.created_ids: list[str] = []
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self) -> Any:
+        yield
+        for task_id in self.created_ids:
+            with contextlib.suppress(Exception):
+                _invoke(self.config_dir, ["agent", "delete", task_id, "--yes"])
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_agent_cron_preview(self) -> None:
+        _step(1, "agent cron-preview emits the next N firings")
+        data = self._run_ok("agent", "cron-preview", "--cron", "0 6 * * 1", "--count", "3")
+        firings = data["data"]["firings"]
+        assert len(firings) == 3
+        for ts in firings:
+            assert "T" in ts  # ISO timestamps
+
+    def test_agent_full_lifecycle(self) -> None:
+        _step(1, "agent create -- cli_command action")
+        data = self._run_ok(
+            "agent",
+            "create",
+            "--name",
+            f"{RUN_ID}-task",
+            "--description",
+            "E2E lifecycle smoke",
+            "--cron",
+            "0 12 * * *",
+            "--type",
+            "cli_command",
+            "--argv",
+            "version",
+        )
+        task_id = data["data"]["id"]
+        self.created_ids.append(task_id)
+        assert data["data"]["action"]["type"] == "cli_command"
+        assert data["data"]["next_run_at"] is not None
+
+        _step(2, "agent list -- task appears")
+        listed = self._run_ok("agent", "list")
+        assert task_id in [t["id"] for t in listed["data"]["tasks"]]
+
+        _step(3, "agent show -- round-trip the task")
+        shown = self._run_ok("agent", "show", task_id)
+        assert shown["data"]["name"] == f"{RUN_ID}-task"
+
+        _step(4, "agent update -- disable + flip to manual")
+        updated = self._run_ok("agent", "update", task_id, "--disabled", "--manual")
+        assert updated["data"]["enabled"] is False
+        assert updated["data"]["manual"] is True
+        assert updated["data"]["next_run_at"] is None
+
+        _step(5, "agent run -- executes the cli_command action")
+        run = self._run_ok("agent", "run", task_id)
+        assert run["data"]["status"] == "ok"
+
+        _step(6, "agent runs -- history now has one entry")
+        runs = self._run_ok("agent", "runs", task_id)
+        assert len(runs["data"]["runs"]) == 1
+
+        _step(7, "agent delete -- task removed")
+        self._run_ok("agent", "delete", task_id, "--yes")
+        self.created_ids.remove(task_id)
+        # show on deleted task returns NOT_FOUND
+        gone = self._run("agent", "show", task_id)
+        assert gone.exit_code == 1
+
+    def test_agent_test_command(self) -> None:
+        _step(1, "agent test -- ad-hoc cli_command without persistence")
+        result = self._run_ok("agent", "test", "--type", "cli_command", "--argv", "version")
+        assert result["data"]["status"] == "ok"
+        # No tasks were persisted by the test path.
+        listed = self._run_ok("agent", "list")
+        assert listed["data"]["tasks"] == []
+
+
+# ---------------------------------------------------------------------------
 # Queue polling parity (PR4 / P0-3): exponential curve, log tail, timeout kill
 # ---------------------------------------------------------------------------
 

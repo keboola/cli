@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Sync version across the three version-bearing files.
+"""Sync version across the version-bearing files.
 
-Single source of truth: ``pyproject.toml``. The plugin manifest and the
-marketplace catalogue are kept in lock-step so Claude Code sees the
-same version string everywhere.
+Single source of truth: ``pyproject.toml``. The plugin manifest, the
+marketplace catalogue, and the lockfile's own package pin are kept in
+lock-step so Claude Code -- and uv -- see the same version string
+everywhere.
 
 Files kept in sync:
 - ``pyproject.toml``                                        (source)
 - ``plugins/kbagent/.claude-plugin/plugin.json``            (plugin manifest)
 - ``.claude-plugin/marketplace.json`` -> ``plugins[*].version``
   (per-plugin entry the marketplace descriptor exposes to Claude Code)
+- ``uv.lock`` -> the ``keboola-agent-cli`` package's own ``version`` pin
+  (uv records the workspace package version; a pyproject bump leaves it
+  stale until ``uv lock`` reruns, which ``version-check`` then flags)
 
 The marketplace's own top-level ``version`` key is NOT touched here: it
 is the version of the marketplace *descriptor shape*, bumped only when
@@ -33,9 +37,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 PLUGIN_JSON = REPO_ROOT / "plugins" / "kbagent" / ".claude-plugin" / "plugin.json"
 MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
+UV_LOCK = REPO_ROOT / "uv.lock"
 
 # Plugin name inside marketplace.json whose version must track the CLI/plugin.
 KBAGENT_PLUGIN_NAME = "kbagent"
+
+# Distribution name of this project as it appears in uv.lock's [[package]] table.
+KBAGENT_DIST_NAME = "keboola-agent-cli"
 
 
 def get_pyproject_version() -> str:
@@ -112,6 +120,34 @@ def sync_marketplace_json(version: str) -> bool:
     return True
 
 
+def sync_uv_lock(version: str) -> bool:
+    """Update this project's own ``version`` pin in uv.lock. Returns True if changed.
+
+    uv.lock records the workspace package's version in its ``[[package]]``
+    table; a ``pyproject.toml`` bump leaves it stale until ``uv lock``
+    reruns. We patch just that one entry with a scoped regex (the
+    distribution name is unique in the lockfile) so the lock stays
+    consistent without shelling out to uv. A full ``uv lock`` is still the
+    way to refresh *dependencies*; this only keeps the self-version honest.
+    """
+    if not UV_LOCK.is_file():
+        return False
+    text = UV_LOCK.read_text(encoding="utf-8")
+    # Match the version line that immediately follows our package's name line.
+    pattern = re.compile(r'(name = "' + re.escape(KBAGENT_DIST_NAME) + r'"\nversion = ")[^"]+(")')
+    new_text, count = pattern.subn(rf"\g<1>{version}\g<2>", text)
+    if count == 0:
+        print(
+            f"WARN: uv.lock has no '{KBAGENT_DIST_NAME}' package entry; skipping lock sync.",
+            file=sys.stderr,
+        )
+        return False
+    if new_text == text:
+        return False
+    UV_LOCK.write_text(new_text, encoding="utf-8")
+    return True
+
+
 def main() -> None:
     version = get_pyproject_version()
 
@@ -126,6 +162,12 @@ def main() -> None:
         print(f"Updated marketplace.json plugins[{KBAGENT_PLUGIN_NAME}].version to {version}")
     else:
         print(f"marketplace.json plugins[{KBAGENT_PLUGIN_NAME}].version already at {version}")
+
+    uv_lock_changed = sync_uv_lock(version)
+    if uv_lock_changed:
+        print(f"Updated uv.lock {KBAGENT_DIST_NAME} version to {version}")
+    else:
+        print(f"uv.lock {KBAGENT_DIST_NAME} version already at {version}")
 
 
 if __name__ == "__main__":

@@ -66,16 +66,29 @@ def isolated_repo(tmp_path: Path, monkeypatch):
         encoding="utf-8",
     )
 
+    # Minimal uv.lock with our package entry plus an unrelated one, so we can
+    # assert the version patch is scoped to keboola-agent-cli only.
+    uv_lock = tmp_path / "uv.lock"
+    uv_lock.write_text(
+        '[[package]]\nname = "keboola-agent-cli"\nversion = "0.0.0"\n'
+        'source = { editable = "." }\n\n'
+        '[[package]]\nname = "croniter"\nversion = "1.2.3"\n'
+        'source = { registry = "https://pypi.org/simple" }\n',
+        encoding="utf-8",
+    )
+
     monkeypatch.setattr(_sync, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(_sync, "PYPROJECT", pyproject)
     monkeypatch.setattr(_sync, "PLUGIN_JSON", plugin_json)
     monkeypatch.setattr(_sync, "MARKETPLACE_JSON", marketplace_json)
+    monkeypatch.setattr(_sync, "UV_LOCK", uv_lock)
 
     return {
         "root": tmp_path,
         "pyproject": pyproject,
         "plugin_json": plugin_json,
         "marketplace_json": marketplace_json,
+        "uv_lock": uv_lock,
     }
 
 
@@ -181,9 +194,51 @@ def test_main_runs_end_to_end(isolated_repo: dict, capsys) -> None:
     out = capsys.readouterr().out
     assert "Updated plugin.json to 9.9.9" in out
     assert "Updated marketplace.json" in out
+    assert "Updated uv.lock keboola-agent-cli version to 9.9.9" in out
 
-    # Second run prints the idempotent message on both targets.
+    # Second run prints the idempotent message on all targets.
     _sync.main()
     out = capsys.readouterr().out
     assert "plugin.json already at 9.9.9" in out
     assert "marketplace.json" in out and "already at 9.9.9" in out
+    assert "uv.lock keboola-agent-cli version already at 9.9.9" in out
+
+
+def test_sync_uv_lock_updates_self_version(isolated_repo: dict) -> None:
+    changed = _sync.sync_uv_lock("9.9.9")
+    assert changed is True
+    text = isolated_repo["uv_lock"].read_text(encoding="utf-8")
+    assert 'name = "keboola-agent-cli"\nversion = "9.9.9"' in text
+
+
+def test_sync_uv_lock_does_not_touch_other_packages(isolated_repo: dict) -> None:
+    """The scoped regex must only rewrite our own package's version pin."""
+    _sync.sync_uv_lock("9.9.9")
+    text = isolated_repo["uv_lock"].read_text(encoding="utf-8")
+    # The unrelated croniter entry keeps its version.
+    assert 'name = "croniter"\nversion = "1.2.3"' in text
+    # Only one version line was rewritten to the new value.
+    assert text.count('version = "9.9.9"') == 1
+
+
+def test_sync_uv_lock_idempotent(isolated_repo: dict) -> None:
+    _sync.sync_uv_lock("9.9.9")
+    assert _sync.sync_uv_lock("9.9.9") is False
+
+
+def test_sync_uv_lock_absent_file_is_skipped(isolated_repo: dict, monkeypatch) -> None:
+    """Repos without a uv.lock (e.g. a fresh checkout pre-lock) must not crash."""
+    missing = isolated_repo["root"] / "no-such-uv.lock"
+    monkeypatch.setattr(_sync, "UV_LOCK", missing)
+    assert _sync.sync_uv_lock("9.9.9") is False
+
+
+def test_sync_uv_lock_missing_package_entry_warns(isolated_repo: dict, capsys) -> None:
+    """A lockfile without our package entry warns rather than silently passing."""
+    isolated_repo["uv_lock"].write_text(
+        '[[package]]\nname = "croniter"\nversion = "1.2.3"\n',
+        encoding="utf-8",
+    )
+    changed = _sync.sync_uv_lock("9.9.9")
+    assert changed is False
+    assert "keboola-agent-cli" in capsys.readouterr().err.lower()

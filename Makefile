@@ -69,13 +69,13 @@ skill-check: ## Check SKILL.md is up-to-date (fails if stale)
 version-sync: ## Sync version from pyproject.toml to plugin.json
 	uv run python scripts/sync_version.py
 
-version-check: ## Check plugin.json version matches pyproject.toml (fails if mismatched)
+version-check: ## Check version-bearing files match pyproject.toml (fails if mismatched)
 	@uv run python scripts/sync_version.py > /dev/null 2>&1
-	@if git diff --quiet plugins/kbagent/.claude-plugin/plugin.json; then \
-		echo "plugin.json version is in sync"; \
+	@if git diff --quiet plugins/kbagent/.claude-plugin/plugin.json .claude-plugin/marketplace.json uv.lock; then \
+		echo "version is in sync (plugin.json, marketplace.json, uv.lock)"; \
 	else \
-		echo "ERROR: plugin.json version mismatch. Run 'make version-sync' and commit."; \
-		git diff plugins/kbagent/.claude-plugin/plugin.json; \
+		echo "ERROR: version mismatch. Run 'make version-sync' and commit."; \
+		git diff plugins/kbagent/.claude-plugin/plugin.json .claude-plugin/marketplace.json uv.lock; \
 		exit 1; \
 	fi
 
