@@ -139,7 +139,7 @@ def _action_from_flags(
                 error_code=ErrorCode.MISSING_PARAMETER,
             )
             raise typer.Exit(code=2) from None
-        params = {"argv": list(argv)}
+        params: dict[str, Any] = {"argv": list(argv)}
         if timeout is not None:
             params["timeout"] = timeout
         return AgentAction(type="cli_command", params=params)
@@ -151,7 +151,7 @@ def _action_from_flags(
                 error_code=ErrorCode.MISSING_PARAMETER,
             )
             raise typer.Exit(code=2) from None
-        params = {"tool": tool}
+        params: dict[str, Any] = {"tool": tool}
         if mcp_project:
             params["project"] = mcp_project
         if mcp_branch is not None:
@@ -175,7 +175,9 @@ def _trigger_from_flags(
     """Build a Trigger from --trigger-task-id / --trigger-on flags."""
     if not trigger_task_id:
         return None
-    return Trigger(on=trigger_on, task_id=trigger_task_id)  # type: ignore[arg-type]
+    # ty: trigger_on is a plain str here; Trigger.on is a Literal[success|error|always].
+    # The value is constrained to that set by the CLI/REST boundary before reaching here.
+    return Trigger(on=trigger_on, task_id=trigger_task_id)  # ty: ignore[invalid-argument-type]
 
 
 def _resolve_id(
@@ -295,6 +297,32 @@ def _render_updated_task(console: Any, task: dict[str, Any]) -> None:
     """Confirmation line + full detail panel after `agent update`."""
     console.print(f"[bold green]Updated[/bold green] task [cyan]{task['id']}[/cyan]")
     _render_task_detail(console, task)
+
+
+def _render_run_result(console: Any, run: dict[str, Any]) -> None:
+    """One-line run status + timing after `agent run`."""
+    status = run.get("status")
+    status_styled = f"[green]{status}[/green]" if status == "ok" else f"[red]{status}[/red]"
+    console.print(f"[bold]Run[/bold] [cyan]{run['run_id']}[/cyan] status={status_styled}")
+    console.print(f"started: [dim]{run['started_at']}[/dim]")
+    console.print(f"ended:   [dim]{run.get('ended_at') or '-'}[/dim]")
+    if run.get("error"):
+        console.print(f"[red]error:[/red] {run['error']}")
+
+
+def _render_test_result(console: Any, run: dict[str, Any]) -> None:
+    """Ad-hoc `agent test` preview: status + optional output / error."""
+    console.print(f"[bold]Preview[/bold] status={run.get('status')}")
+    if run.get("output"):
+        console.print(json.dumps(run["output"], indent=2, ensure_ascii=False))
+    if run.get("error"):
+        console.print(f"[red]error:[/red] {run['error']}")
+
+
+def _render_improved_prompt(console: Any, data: dict[str, Any]) -> None:
+    """`agent prompt-improve` result: header + the cleaned prompt body."""
+    console.print(f"[bold]Cleaned prompt[/bold] (status={data.get('status', '?')}):")
+    console.print(data.get("prompt") or "[dim]<empty>[/dim]")
 
 
 def _render_runs_table(console: Any, data: dict[str, Any]) -> None:
@@ -713,22 +741,7 @@ def agent_run(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.NOT_FOUND)
         raise typer.Exit(code=1) from None
-    formatter.output(
-        run.model_dump(mode="json"),
-        lambda c, d: (
-            c.print(
-                f"[bold]Run[/bold] [cyan]{d['run_id']}[/cyan] status="
-                + (
-                    f"[green]{d['status']}[/green]"
-                    if d["status"] == "ok"
-                    else f"[red]{d['status']}[/red]"
-                )
-            ),
-            c.print(f"started: [dim]{d['started_at']}[/dim]"),
-            c.print(f"ended:   [dim]{d.get('ended_at') or '-'}[/dim]"),
-            d.get("error") and c.print(f"[red]error:[/red] {d['error']}"),
-        ),
-    )
+    formatter.output(run.model_dump(mode="json"), _render_run_result)
 
 
 @agent_app.command("runs")
@@ -867,14 +880,7 @@ def agent_test(
         _stream_to_stdout(formatter, service.stream_test_action(action, name=name))
         return
     run = asyncio.run(service.test_action(action, name=name))
-    formatter.output(
-        run.model_dump(mode="json"),
-        lambda c, d: (
-            c.print(f"[bold]Preview[/bold] status={d.get('status')}"),
-            d.get("output") and c.print(json.dumps(d["output"], indent=2, ensure_ascii=False)),
-            d.get("error") and c.print(f"[red]error:[/red] {d['error']}"),
-        ),
-    )
+    formatter.output(run.model_dump(mode="json"), _render_test_result)
 
 
 @agent_app.command("cron-preview")
@@ -957,10 +963,4 @@ def agent_prompt_improve(
             error_code=ErrorCode.UNKNOWN_ERROR,
         )
         raise typer.Exit(code=1) from None
-    formatter.output(
-        final,
-        lambda c, d: (
-            c.print(f"[bold]Cleaned prompt[/bold] (status={d.get('status', '?')}):"),
-            c.print(d.get("prompt") or "[dim]<empty>[/dim]"),
-        ),
-    )
+    formatter.output(final, _render_improved_prompt)

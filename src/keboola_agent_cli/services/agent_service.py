@@ -262,7 +262,9 @@ class AgentService:
         """Run an action ad-hoc without persisting -- the /agents/test endpoint."""
         transient = AgentTask(name=name, enabled=False, action=action)
         registry = self._build_registry()
-        return await run_task_once(transient, registry, _NullStore())  # type: ignore[arg-type]
+        # ty: _NullStore is a no-op AgentStore stand-in -- test_action runs ad-hoc and
+        # never persists, so run_task_once's store argument is intentionally unused here.
+        return await run_task_once(transient, registry, _NullStore())  # ty: ignore[invalid-argument-type]
 
     # ── Execution (streaming) ──────────────────────────────────────────
     # The two streaming methods return AsyncIterator[dict] mirroring the
