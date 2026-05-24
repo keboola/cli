@@ -541,14 +541,21 @@ def test_negative_unknown_project_returns_400(http_session: dict[str, Any]) -> N
     assert res.json()["error"]["code"] == "CONFIG_ERROR"
 
 
-def test_negative_unknown_kind_returns_404(http_session: dict[str, Any]) -> None:
-    """POST /semantic-layer/items/<unknown> → 404."""
+def test_negative_unknown_kind_rejected(http_session: dict[str, Any]) -> None:
+    """POST /semantic-layer/items/<unknown> is rejected, not silently accepted.
+
+    ``kind`` is a typed ``ItemKind`` path parameter, so FastAPI rejects an
+    unknown value ("widget") with 422 at the validation layer before the handler
+    runs. (404 is also acceptable if the path ever resolves differently.) The
+    earlier ``== 404`` assertion was wrong -- it only never tripped because this
+    suite used to skip when the project lacked metastore scope.
+    """
     res = http_session["client"].post(
         "/semantic-layer/items/widget",
         headers=_auth(),
         json={"project": _PROJECT_ALIAS, "name": "x"},
     )
-    assert res.status_code == 404
+    assert res.status_code in (404, 422)
 
 
 def test_negative_invalid_constraint_name_returns_4xx(

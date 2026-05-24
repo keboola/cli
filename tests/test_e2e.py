@@ -6064,7 +6064,13 @@ class TestE2EPR8WorkspaceGC:
         _step(1, "workspace create")
         result = self._run("workspace", "create", "--project", self.alias)
         if result.exit_code != 0:
-            pytest.skip(f"workspace create not supported: {result.output}")
+            # Not a "feature unsupported" case -- workspace create works wherever
+            # the token carries the sandbox/workspace-create scope. Skip the GC
+            # roundtrip (which needs a freshly created workspace) and surface the
+            # real CLI error so the cause (e.g. token scope) is visible.
+            pytest.skip(
+                f"workspace create unavailable for this token (skipping GC roundtrip): {result.output}"
+            )
 
         data = _json_ok(result)
         ws_id = data["data"]["workspace_id"]
