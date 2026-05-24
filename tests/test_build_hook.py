@@ -28,12 +28,12 @@ from unittest import mock
 
 import pytest
 
-# ``hatch_build.py`` lives at the repo root (not under ``src/``), so it is not
-# importable as a normal package. Load it by file path and register it in
-# ``sys.modules`` so ``mock.patch("hatch_build.<attr>")`` resolves to *this*
-# instance. The hatchling import inside is guarded, so this works in a plain
-# dev venv that has no hatchling installed.
-_HOOK_PATH = Path(__file__).resolve().parents[1] / "hatch_build.py"
+# ``scripts/hatch_build.py`` is not under ``src/``, so it is not importable as a
+# normal package. Load it by file path and register it in ``sys.modules`` so
+# ``mock.patch("hatch_build.<attr>")`` resolves to *this* instance. The hatchling
+# import inside is guarded, so this works in a plain dev venv that has no
+# hatchling installed.
+_HOOK_PATH = Path(__file__).resolve().parents[1] / "scripts" / "hatch_build.py"
 _spec = importlib.util.spec_from_file_location("hatch_build", _HOOK_PATH)
 assert _spec is not None and _spec.loader is not None
 hatch_build = importlib.util.module_from_spec(_spec)

@@ -43,7 +43,9 @@ handled here:
 Set ``KBAGENT_SKIP_UI_BUILD=1`` to skip the on-the-fly npm build and ship a
 CLI-only wheel deliberately (fast builds; CI exercising the no-UI path).
 
-Wired in via ``[tool.hatch.build.hooks.custom]`` in pyproject.toml.
+Wired in via ``[tool.hatch.build.targets.wheel.hooks.custom]`` in pyproject.toml
+(``path = "scripts/hatch_build.py"``). hatchling resolves the hook by that
+explicit path, so this file does not need to sit at the repo root.
 """
 
 from __future__ import annotations
