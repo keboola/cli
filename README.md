@@ -130,6 +130,7 @@ kbagent workspace query --project prod --workspace-id WS_ID \
 | **Data apps** | First-class lifecycle for Streamlit / Flask / Node deployments (`keboola.data-apps`). `create / deploy / start / stop / password / delete` (since 0.27.0); `secrets-set / -list / -get / -remove` for `#`-prefixed runtime secrets with per-project KMS encryption (since 0.29.0); `validate-repo` pre-flight Golden Rule check that catches misconfigured git repos before a deploy (since 0.29.0); `logs` tails the container log buffer for triaging stuck deploys / runtime crashes (since 0.43.8). Hides the redeploy contract and per-project KMS encryption of git PATs. |
 | **Project members & invitations** | `project invite` (single or `--from-csv` bulk with parallel workers), `project member-list / member-remove / member-set-role`, `project invitation-list / invitation-cancel`. Role whitelist enforced at the CLI layer; Manage API "already invited" treated as `noop` not error (since 0.29.0). |
 | **Lineage** | Column-level dependency analysis across projects. SQL/Python parsing, AI-enhanced detection, interactive web browser, Mermaid/HTML/ER export. |
+| **Semantic layer** | Define and manage a metastore semantic model per project — datasets, metrics, relationships, constraints, glossary. Validate (incl. `--deep`), export, diff two models/files, import/promote across projects, AI-assisted `build` from tables. `kbagent semantic-layer ...` (alias `sl`). |
 | **Kai (AI Assistant)** | Ask Keboola's built-in AI questions about your project. One-shot or chat sessions with full MCP context. |
 | **Encryption** | Encrypt secrets (`#password`, `#api_token`) via Keboola Encryption API. Works with sync push and MCP. |
 | **Permissions** | Firewall for AI agents: read-only, deny-writes, deny-destructive (session-only flags or persisted policy). Project pin + `KBAGENT_PROJECT` env override. Code-level enforcement, stable `ErrorCode` enum, not prompt tricks. |
@@ -199,14 +200,21 @@ kbagent data-app    list | detail | create | deploy | start | stop | delete | pa
                     secrets-set | secrets-list | secrets-get | secrets-remove
                     validate-repo
 kbagent lineage     build | show | info | server
+kbagent semantic-layer  model | show | validate | export | diff | import | promote | build | token
+                    add | edit | remove   (metric/dataset/relationship/constraint/glossary; alias: sl)
 kbagent branch      list | create | use | reset | delete | merge
                     metadata-list | metadata-get | metadata-set | metadata-delete
 kbagent workspace   create | list | detail | delete | password | load | query | from-transformation | gc
 kbagent tool        list | call
 kbagent sync        init | pull | status | diff | push | branch-link | branch-unlink | branch-status
+kbagent schedule    list | detail | find
 kbagent kai         ping | ask | chat | history
 kbagent encrypt     values
 kbagent permissions list | show | set | reset | check
+kbagent agent       list | show | create | update | delete | run | runs | run-detail | run-events
+                    test | cron-preview | prompt-improve
+kbagent serve       [--host HOST] [--port PORT] [--ui]   # HTTP API + Web UI server
+kbagent http        get | post | patch | delete          # calls a running `kbagent serve`
 kbagent             init | context | doctor | version | update | changelog
 
 # Global flags: --json, --verbose, --no-color, --config-dir, --hint client|service (deprecated since 0.45.0; use `kbagent serve` REST API)
