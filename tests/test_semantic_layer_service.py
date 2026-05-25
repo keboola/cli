@@ -2397,3 +2397,267 @@ class TestModuleConstants:
 
     def test_constraint_severities(self) -> None:
         assert set(CONSTRAINT_SEVERITIES) == {"error", "warning", "info"}
+
+
+# ---------------------------------------------------------------------------
+# search-context / get-context (v0.47.0)
+# ---------------------------------------------------------------------------
+
+
+class TestSearchContext:
+    """Project-wide name-pattern search across semantic-layer entities."""
+
+    def _setup(
+        self, tmp_path: Path, items_by_type: dict[str, list[dict[str, Any]]]
+    ) -> tuple[SemanticLayerService, MagicMock]:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            return items_by_type.get(item_type, [])
+
+        mock.list_items.side_effect = _list
+        return service, mock
+
+    def test_default_pattern_matches_everything(self, tmp_path: Path) -> None:
+        items = {
+            "semantic-dataset": [_child_item("semantic-dataset", "d1", {"name": "users"})],
+            "semantic-metric": [_child_item("semantic-metric", "m1", {"name": "revenue"})],
+        }
+        service, _ = self._setup(tmp_path, items)
+
+        result = service.search_context("prod")
+
+        assert result["project"] == "prod"
+        assert result["total_count"] == 2
+        names = sorted(c["name"] for c in result["contexts"])
+        assert names == ["revenue", "users"]
+        # Types are CLI-friendly singular (no "semantic-" prefix).
+        types = {c["type"] for c in result["contexts"]}
+        assert types == {"dataset", "metric"}
+
+    def test_pattern_glob_narrows_results(self, tmp_path: Path) -> None:
+        items = {
+            "semantic-dataset": [
+                _child_item("semantic-dataset", "d1", {"name": "DIM_users"}),
+                _child_item("semantic-dataset", "d2", {"name": "FACT_orders"}),
+                _child_item("semantic-dataset", "d3", {"name": "DIM_products"}),
+            ],
+        }
+        service, _ = self._setup(tmp_path, items)
+
+        result = service.search_context("prod", patterns=["DIM_*"])
+
+        assert result["total_count"] == 2
+        names = sorted(c["name"] for c in result["contexts"])
+        assert names == ["DIM_products", "DIM_users"]
+
+    def test_pattern_is_case_sensitive(self, tmp_path: Path) -> None:
+        items = {
+            "semantic-dataset": [
+                _child_item("semantic-dataset", "d1", {"name": "DIM_x"}),
+                _child_item("semantic-dataset", "d2", {"name": "dim_y"}),
+            ],
+        }
+        service, _ = self._setup(tmp_path, items)
+
+        upper = service.search_context("prod", patterns=["DIM_*"])
+        lower = service.search_context("prod", patterns=["dim_*"])
+
+        assert [c["name"] for c in upper["contexts"]] == ["DIM_x"]
+        assert [c["name"] for c in lower["contexts"]] == ["dim_y"]
+
+    def test_multiple_patterns_take_union(self, tmp_path: Path) -> None:
+        items = {
+            "semantic-dataset": [
+                _child_item("semantic-dataset", "d1", {"name": "DIM_a"}),
+                _child_item("semantic-dataset", "d2", {"name": "FACT_b"}),
+                _child_item("semantic-dataset", "d3", {"name": "AGG_c"}),
+            ],
+        }
+        service, _ = self._setup(tmp_path, items)
+
+        result = service.search_context("prod", patterns=["DIM_*", "FACT_*"])
+
+        assert result["total_count"] == 2
+        assert {c["name"] for c in result["contexts"]} == {"DIM_a", "FACT_b"}
+
+    def test_type_filter_narrows_to_one_kind(self, tmp_path: Path) -> None:
+        items = {
+            "semantic-dataset": [_child_item("semantic-dataset", "d1", {"name": "users"})],
+            "semantic-metric": [_child_item("semantic-metric", "m1", {"name": "revenue"})],
+            "semantic-relationship": [_child_item("semantic-relationship", "r1", {"name": "r"})],
+            "semantic-constraint": [_child_item("semantic-constraint", "c1", {"name": "c"})],
+            "semantic-glossary": [_child_item("semantic-glossary", "g1", {"name": "term"})],
+        }
+        service, mock = self._setup(tmp_path, items)
+
+        result = service.search_context("prod", type_filter="metric")
+
+        assert result["total_count"] == 1
+        assert result["contexts"][0]["type"] == "metric"
+        called_types = {call.args[0] for call in mock.list_items.call_args_list}
+        assert called_types == {"semantic-metric"}, (
+            "type_filter must short-circuit the per-type loop"
+        )
+
+    def test_type_filter_model(self, tmp_path: Path) -> None:
+        items = {"semantic-model": [_model_item("u1", "default")]}
+        service, mock = self._setup(tmp_path, items)
+
+        result = service.search_context("prod", type_filter="model")
+
+        assert result["total_count"] == 1
+        assert result["contexts"][0]["type"] == "model"
+        assert mock.list_items.call_args_list[0].args[0] == "semantic-model"
+
+    def test_type_filter_all_iterates_every_child(self, tmp_path: Path) -> None:
+        items = {t: [_child_item(t, "x", {"name": "n"})] for t in (
+            "semantic-dataset", "semantic-metric", "semantic-relationship",
+            "semantic-constraint", "semantic-glossary",
+        )}
+        service, mock = self._setup(tmp_path, items)
+
+        result = service.search_context("prod", type_filter="all")
+
+        assert result["total_count"] == 5
+        called_types = {call.args[0] for call in mock.list_items.call_args_list}
+        assert called_types == set(items)
+        assert "semantic-model" not in called_types, (
+            "type=all means every CHILD type, not the model itself"
+        )
+
+    def test_limit_caps_results_and_short_circuits(self, tmp_path: Path) -> None:
+        items = {
+            "semantic-dataset": [
+                _child_item("semantic-dataset", f"d{i}", {"name": f"n{i}"}) for i in range(10)
+            ],
+            "semantic-metric": [
+                _child_item("semantic-metric", "m1", {"name": "rev"}),
+            ],
+        }
+        service, mock = self._setup(tmp_path, items)
+
+        result = service.search_context("prod", limit=3)
+
+        assert result["total_count"] == 3
+        # short-circuit: never reached semantic-metric
+        called_types = [call.args[0] for call in mock.list_items.call_args_list]
+        assert "semantic-metric" not in called_types
+
+    def test_invalid_type_filter_rejected(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path, {})
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.search_context("prod", type_filter="bogus")
+
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_empty_pattern_rejected(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path, {})
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.search_context("prod", patterns=["valid", ""])
+
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_zero_limit_rejected(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path, {})
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.search_context("prod", limit=0)
+
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_client_closed_even_on_api_error(self, tmp_path: Path) -> None:
+        """try/finally must close the client even when list_items raises."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.side_effect = KeboolaApiError(
+            message="boom", status_code=500, error_code=ErrorCode.API_ERROR
+        )
+
+        with pytest.raises(KeboolaApiError):
+            service.search_context("prod")
+
+        mock.close.assert_called_once()
+
+
+class TestGetContext:
+    """Single-id lookup across every semantic type."""
+
+    def _setup(self, tmp_path: Path) -> tuple[SemanticLayerService, MagicMock]:
+        return _make_service(_make_store(tmp_path))
+
+    def test_finds_dataset(self, tmp_path: Path) -> None:
+        service, mock = self._setup(tmp_path)
+
+        def _get(item_type: str, item_id: str) -> dict[str, Any]:
+            if item_type == "semantic-dataset" and item_id == "d1":
+                return _child_item("semantic-dataset", "d1", {"name": "users"})
+            raise KeboolaApiError(
+                message="404", status_code=404, error_code=ErrorCode.NOT_FOUND
+            )
+
+        mock.get_item.side_effect = _get
+        result = service.get_context("prod", "d1")
+
+        assert result["id"] == "d1"
+        assert result["type"] == "dataset"
+        assert result["name"] == "users"
+
+    def test_finds_model(self, tmp_path: Path) -> None:
+        """Lookup probes model first; a model hit short-circuits the scan."""
+        service, mock = self._setup(tmp_path)
+        mock.get_item.return_value = _model_item("u-model", "default")
+
+        result = service.get_context("prod", "u-model")
+
+        assert result["type"] == "model"
+        # Only one client call needed when model is the first probe.
+        assert mock.get_item.call_count == 1
+        assert mock.get_item.call_args.args[0] == "semantic-model"
+
+    def test_missing_id_raises_not_found(self, tmp_path: Path) -> None:
+        service, mock = self._setup(tmp_path)
+        mock.get_item.side_effect = KeboolaApiError(
+            message="404", status_code=404, error_code=ErrorCode.NOT_FOUND
+        )
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.get_context("prod", "missing")
+
+        assert excinfo.value.error_code == ErrorCode.NOT_FOUND
+        # Probed every type before giving up: model + 5 child types = 6 calls.
+        assert mock.get_item.call_count == 6
+
+    def test_non_404_error_propagates_immediately(self, tmp_path: Path) -> None:
+        """A 500 on one type must surface as-is, not be swallowed."""
+        service, mock = self._setup(tmp_path)
+        mock.get_item.side_effect = KeboolaApiError(
+            message="boom", status_code=500, error_code=ErrorCode.API_ERROR
+        )
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.get_context("prod", "x")
+
+        assert excinfo.value.error_code == ErrorCode.API_ERROR
+
+    def test_empty_id_rejected(self, tmp_path: Path) -> None:
+        service, _ = self._setup(tmp_path)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.get_context("prod", "")
+
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_client_closed_even_on_api_error(self, tmp_path: Path) -> None:
+        service, mock = self._setup(tmp_path)
+        mock.get_item.side_effect = KeboolaApiError(
+            message="500", status_code=500, error_code=ErrorCode.API_ERROR
+        )
+
+        with pytest.raises(KeboolaApiError):
+            service.get_context("prod", "x")
+
+        mock.close.assert_called_once()

@@ -1610,3 +1610,199 @@ class TestPermissions:
         )
         assert result.exit_code == 6, result.output
         assert "PERMISSION_DENIED" in result.output
+
+
+# ---------------------------------------------------------------------------
+# semantic-layer search-context / get-context (v0.47.0)
+# ---------------------------------------------------------------------------
+
+
+class TestSearchContext:
+    """CLI surface for the project-wide name-pattern search."""
+
+    def test_default_pattern_json(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.search_context.return_value = {
+            "project": "prod",
+            "contexts": [
+                {
+                    "id": "d1",
+                    "type": "dataset",
+                    "name": "users",
+                    "description": "",
+                    "attributes": {"name": "users"},
+                }
+            ],
+            "total_count": 1,
+        }
+        result = _invoke(
+            ["--json", "semantic-layer", "search-context", "--project", "prod"],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        assert body["data"]["total_count"] == 1
+        assert body["data"]["contexts"][0]["type"] == "dataset"
+        # Default pattern propagates to the service.
+        call_kwargs = mock.search_context.call_args.kwargs
+        assert call_kwargs["patterns"] == ["*"]
+
+    def test_pattern_and_type_filter_propagate(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.search_context.return_value = {
+            "project": "prod",
+            "contexts": [],
+            "total_count": 0,
+        }
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "search-context",
+                "--project",
+                "prod",
+                "--pattern",
+                "DIM_*",
+                "--pattern",
+                "FACT_*",
+                "--type",
+                "dataset",
+                "--limit",
+                "5",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        call_kwargs = mock.search_context.call_args.kwargs
+        assert call_kwargs["alias"] == "prod"
+        assert call_kwargs["patterns"] == ["DIM_*", "FACT_*"]
+        assert call_kwargs["type_filter"] == "dataset"
+        assert call_kwargs["limit"] == 5
+
+    def test_human_renders_table(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.search_context.return_value = {
+            "project": "prod",
+            "contexts": [
+                {
+                    "id": "m1",
+                    "type": "metric",
+                    "name": "revenue",
+                    "description": "GMV",
+                    "attributes": {},
+                }
+            ],
+            "total_count": 1,
+        }
+        result = _invoke(
+            ["semantic-layer", "search-context", "--project", "prod"],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0
+        assert "revenue" in result.output
+
+    def test_service_error_maps_to_exit_1(self, store: ConfigStore) -> None:
+        from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+
+        mock = MagicMock()
+        mock.search_context.side_effect = KeboolaApiError(
+            message="Invalid type", error_code=ErrorCode.VALIDATION_ERROR
+        )
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "search-context",
+                "--project",
+                "prod",
+                "--type",
+                "bogus",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 1, result.output
+
+
+class TestGetContext:
+    """CLI surface for the single-id semantic context lookup."""
+
+    def test_get_context_json(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.get_context.return_value = {
+            "project": "prod",
+            "id": "u-model",
+            "type": "model",
+            "name": "default",
+            "description": "",
+            "attributes": {"name": "default", "sql_dialect": "Snowflake"},
+        }
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "get-context",
+                "--project",
+                "prod",
+                "--context-id",
+                "u-model",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        assert body["data"]["id"] == "u-model"
+        assert body["data"]["type"] == "model"
+
+    def test_get_context_not_found_exits_nonzero(self, store: ConfigStore) -> None:
+        from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+
+        mock = MagicMock()
+        mock.get_context.side_effect = KeboolaApiError(
+            message="not found", status_code=404, error_code=ErrorCode.NOT_FOUND
+        )
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "get-context",
+                "--project",
+                "prod",
+                "--context-id",
+                "ghost",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code != 0
+        assert "not found" in result.output.lower() or "NOT_FOUND" in result.output
+
+    def test_get_context_human_renders_attributes(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.get_context.return_value = {
+            "project": "prod",
+            "id": "d1",
+            "type": "dataset",
+            "name": "users",
+            "description": "User dimension table",
+            "attributes": {"name": "users", "primary_key": ["id"]},
+        }
+        result = _invoke(
+            [
+                "semantic-layer",
+                "get-context",
+                "--project",
+                "prod",
+                "--context-id",
+                "d1",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0
+        assert "users" in result.output
+        assert "dataset" in result.output
