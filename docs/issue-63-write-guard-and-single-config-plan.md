@@ -1,7 +1,7 @@
 # Write Guard + Single-Config Sync: Implementation Plan
 
-Epic: [#63](https://github.com/padak/keboola_agent_cli/issues/63)
-Issues: [#59](https://github.com/padak/keboola_agent_cli/issues/59) (single-config sync), [#60](https://github.com/padak/keboola_agent_cli/issues/60) (branch protection)
+Epic: [#63](https://github.com/keboola/cli/issues/63)
+Issues: [#59](https://github.com/keboola/cli/issues/59) (single-config sync), [#60](https://github.com/keboola/cli/issues/60) (branch protection)
 
 ## Why these must be built together
 

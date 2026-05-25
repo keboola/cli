@@ -1200,7 +1200,7 @@ When you receive a non-zero exit code, use --json to get structured error detail
 
 If you are using Claude Code, install the kbagent plugin for richer guidance:
 
-  /plugin marketplace add padak/keboola_agent_cli
+  /plugin marketplace add keboola/cli
   /plugin install kbagent@keboola-agent-cli
 
 The plugin provides a skill with detailed workflow references including:

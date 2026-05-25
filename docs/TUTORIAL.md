@@ -15,7 +15,7 @@ Pick the section that matches your situation; skip the rest.
 Install the CLI once (auto-updates on every launch):
 
 ```bash
-uv tool install git+https://github.com/padak/keboola_agent_cli
+uv tool install git+https://github.com/keboola/cli
 ```
 
 Verify:
@@ -307,7 +307,7 @@ cannot use the plugin without the CLI.
 In Claude Code, run:
 
 ```
-/plugin marketplace add padak/keboola_agent_cli
+/plugin marketplace add keboola/cli
 /plugin install kbagent@keboola-agent-cli
 ```
 

@@ -115,7 +115,7 @@ When the subagent returns:
 
 ## For Claude Code users
 
-- Install the kbagent CLI: `uv tool install git+https://github.com/padak/keboola_agent_cli`
+- Install the kbagent CLI: `uv tool install git+https://github.com/keboola/cli`
 - Initialize a project workspace: `kbagent init --from-global`
   (writes `.kbagent/config.json` whose first field is a `_warning`
   steering any LLM that reads the file away from direct REST calls)

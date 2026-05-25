@@ -2,7 +2,7 @@
 
 End-users install this package via:
 
-- ``uv tool install git+https://github.com/padak/keboola_agent_cli`` --
+- ``uv tool install git+https://github.com/keboola/cli`` --
   uv clones the repo, runs ``hatchling`` to produce a wheel, installs it,
   then deletes the clone. The user does NOT have a checkout on disk.
 - ``pip install keboola-agent-cli`` (PyPI) -- prebuilt wheel.

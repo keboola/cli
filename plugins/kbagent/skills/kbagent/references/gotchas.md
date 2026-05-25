@@ -1946,7 +1946,7 @@ requires `canManageTokens` privilege, which only **master tokens** carry.
 - AI agents creating the project token via `kbagent project add` /
   `kbagent project refresh` get a non-master token by default — they must
   switch to a master token before calling `config oauth-url`. See
-  https://github.com/padak/keboola_agent_cli/issues/<TBD> for the upstream
+  https://github.com/keboola/cli/issues/<TBD> for the upstream
   request to make `project add` / `project refresh` mint a token with
   `canManageTokens` so OAuth flows work out of the box.
 
