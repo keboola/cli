@@ -446,6 +446,14 @@ def sync_pull(
         "--max-samples",
         help="Max number of tables to sample (default 50)",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help=(
+            "Dev branch ID. Overrides the manifest / 'branch use' active "
+            "branch for this single invocation. Requires exactly one --project."
+        ),
+    ),
 ) -> None:
     """Download configurations from a Keboola project to local files.
 
@@ -464,6 +472,12 @@ def sync_pull(
     if not all_projects and not project:
         formatter.error(
             message="Specify --project ALIAS or --all-projects",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+    if branch is not None and all_projects:
+        formatter.error(
+            message="--branch requires --project (branch id is per-project)",
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
@@ -515,6 +529,7 @@ def sync_pull(
             with_samples=with_samples,
             sample_limit=sample_limit,
             max_samples=max_samples,
+            branch_override=branch,
         )
     except FileNotFoundError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
@@ -615,6 +630,14 @@ def sync_diff(
         "-d",
         help="Project root directory (must contain .keboola/)",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help=(
+            "Dev branch ID. Overrides the manifest / 'branch use' active "
+            "branch for this single invocation. Requires exactly one --project."
+        ),
+    ),
 ) -> None:
     """Show detailed diff between local and remote configurations.
 
@@ -636,6 +659,12 @@ def sync_diff(
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
+    if branch is not None and all_projects:
+        formatter.error(
+            message="--branch requires --project (branch id is per-project)",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
 
     if all_projects:
         base_dir = _safe_resolve_dir(directory)
@@ -654,7 +683,7 @@ def sync_diff(
     project_root = _resolve_project_root(directory, project)
 
     try:
-        result = service.diff(alias=project, project_root=project_root)
+        result = service.diff(alias=project, project_root=project_root, branch_override=branch)
     except FileNotFoundError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
         raise typer.Exit(code=1) from None
@@ -791,6 +820,22 @@ def sync_push(
         "--allow-plaintext-on-encrypt-failure",
         help="Allow push even if secret encryption fails (DANGEROUS: secrets stored as plaintext)",
     ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help=(
+            "Dev branch ID. Overrides the manifest / 'branch use' active "
+            "branch for this single invocation. Requires exactly one --project."
+        ),
+    ),
+    no_name_drift_warnings: bool = typer.Option(
+        False,
+        "--no-name-drift-warnings",
+        help=(
+            "Suppress the cosmetic name_drift_warnings array in the result "
+            "envelope (the underlying detection still runs)."
+        ),
+    ),
 ) -> None:
     """Push local configuration changes to a Keboola project.
 
@@ -809,6 +854,12 @@ def sync_push(
     if not all_projects and not project:
         formatter.error(
             message="Specify --project ALIAS or --all-projects",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+    if branch is not None and all_projects:
+        formatter.error(
+            message="--branch requires --project (branch id is per-project)",
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
@@ -841,6 +892,8 @@ def sync_push(
             dry_run=dry_run,
             force=force,
             allow_plaintext_fallback=allow_plaintext,
+            branch_override=branch,
+            no_name_drift_warnings=no_name_drift_warnings,
         )
     except FileNotFoundError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)

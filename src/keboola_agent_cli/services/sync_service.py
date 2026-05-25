@@ -281,6 +281,7 @@ class SyncService(BaseService):
         with_samples: bool = False,
         sample_limit: int = DEFAULT_SAMPLE_LIMIT,
         max_samples: int = DEFAULT_MAX_SAMPLES,
+        branch_override: int | None = None,
     ) -> dict[str, Any]:
         """Download all configurations from Keboola to local filesystem.
 
@@ -295,6 +296,8 @@ class SyncService(BaseService):
             with_samples: Download table data samples (opt-in).
             sample_limit: Max rows per sample (default 100).
             max_samples: Max number of tables to sample (default 50).
+            branch_override: If set, pull from this branch ID rather than
+                the resolved active/manifest branch (CLI ``--branch``).
 
         Returns:
             Dict with pull statistics (configs, rows, files written).
@@ -306,7 +309,9 @@ class SyncService(BaseService):
         manifest = load_manifest(project_root)
 
         # Determine branch to pull from (git-branching aware)
-        branch_id = self._resolve_branch_id(project, manifest, project_root)
+        branch_id = self._resolve_branch_id(
+            project, manifest, project_root, branch_override=branch_override
+        )
 
         # Fetch all components with configs from API (+ storage metadata + jobs)
         client = self._client_factory(project.stack_url, project.token)
@@ -840,11 +845,18 @@ class SyncService(BaseService):
         self,
         alias: str,
         project_root: Path,
+        branch_override: int | None = None,
     ) -> dict[str, Any]:
         """Compare local configs against the remote API state.
 
         Fetches current state from API, reads local _config.yml files,
         and runs the diff engine to produce a detailed changeset.
+
+        Args:
+            alias: Project alias.
+            project_root: Sync working-tree root.
+            branch_override: If set, diff against this branch ID rather
+                than the resolved active/manifest branch.
 
         Returns:
             Dict with 'changes' list and summary counts.
@@ -853,7 +865,9 @@ class SyncService(BaseService):
         project = projects[alias]
         manifest = load_manifest(project_root)
 
-        branch_id = self._resolve_branch_id(project, manifest, project_root)
+        branch_id = self._resolve_branch_id(
+            project, manifest, project_root, branch_override=branch_override
+        )
 
         # Fetch remote state
         client = self._client_factory(project.stack_url, project.token)
@@ -1086,6 +1100,8 @@ class SyncService(BaseService):
         dry_run: bool = False,
         force: bool = False,
         allow_plaintext_fallback: bool = False,
+        branch_override: int | None = None,
+        no_name_drift_warnings: bool = False,
     ) -> dict[str, Any]:
         """Push local changes to Keboola.
 
@@ -1097,11 +1113,20 @@ class SyncService(BaseService):
             project_root: Root directory of the sync working tree.
             dry_run: If True, compute changes but don't execute them.
             force: If True, allow deletions without extra confirmation.
+            allow_plaintext_fallback: If True, allow push when secret
+                encryption fails (DANGEROUS).
+            branch_override: If set, target this dev-branch ID for the push.
+                Wins over ``active_branch_id`` / ``manifest.branches[0]`` /
+                git-branching mapping. Used by the CLI ``--branch`` flag.
+            no_name_drift_warnings: If True, omit the ``name_drift_warnings``
+                array from the result envelope (the underlying detection
+                still runs; only the report is suppressed). Used by the CLI
+                ``--no-name-drift-warnings`` flag.
 
         Returns:
             Dict with push results (created, updated, deleted, errors).
         """
-        diff_result = self.diff(alias, project_root)
+        diff_result = self.diff(alias, project_root, branch_override=branch_override)
         all_changes = diff_result["changes"]
 
         # Only push local-side changes (added, modified, deleted).
@@ -1136,7 +1161,9 @@ class SyncService(BaseService):
         project = projects[alias]
         manifest = load_manifest(project_root)
 
-        branch_id = self._resolve_branch_id(project, manifest, project_root)
+        branch_id = self._resolve_branch_id(
+            project, manifest, project_root, branch_override=branch_override
+        )
 
         # Detect name drift: local dir name doesn't match config name
         name_drift_warnings = self._detect_name_drift(manifest, project_root)
@@ -1316,7 +1343,7 @@ class SyncService(BaseService):
             "errors": errors,
             "pushed_details": pushed_details,
         }
-        if name_drift_warnings:
+        if name_drift_warnings and not no_name_drift_warnings:
             result_data["name_drift_warnings"] = name_drift_warnings
         return result_data
 
@@ -2204,10 +2231,12 @@ class SyncService(BaseService):
         project: Any,
         manifest: "Manifest",
         project_root: Path,
+        branch_override: int | None = None,
     ) -> int | None:
         """Resolve the Keboola branch ID for sync operations.
 
         Priority:
+        0. ``branch_override`` (CLI ``--branch <id>``) -- wins over everything
         1. Git-branching mode: read branch-mapping.json for current git branch
         2. ``active_branch_id`` from project config (``kbagent branch use``)
         3. First branch in manifest (production fallback)
@@ -2222,6 +2251,12 @@ class SyncService(BaseService):
         """
         from ..sync.branch_mapping import load_branch_mapping
         from ..sync.git_utils import get_current_branch
+
+        # CLI override beats every persisted source so a user can target a
+        # dev branch from a clean git workspace without first running
+        # `branch use` or `branch-link`.
+        if branch_override is not None:
+            return branch_override
 
         if manifest.git_branching.enabled:
             git_branch = get_current_branch(project_root)

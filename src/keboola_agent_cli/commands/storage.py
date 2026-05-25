@@ -586,6 +586,16 @@ def storage_create_table(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    if_not_exists: bool = typer.Option(
+        False,
+        "--if-not-exists",
+        help=(
+            "Treat a duplicate-display-name failure as a successful no-op "
+            "when the table already exists at the expected id. Safe for "
+            "parallel workers (FIIA scaffold pattern). A different table "
+            "with the same display name still surfaces the original error."
+        ),
+    ),
 ) -> None:
     """Create a new storage table with typed columns.
 
@@ -622,6 +632,7 @@ def storage_create_table(
             not_null=not_null,
             default=default,
             branch=branch,
+            if_not_exists=if_not_exists,
         )
 
     formatter = get_formatter(ctx)
@@ -639,6 +650,7 @@ def storage_create_table(
             branch_id=effective_branch,
             not_null_columns=not_null,
             defaults=default,
+            if_not_exists=if_not_exists,
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)

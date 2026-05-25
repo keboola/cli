@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import AppConfig, ProjectConfig
 from keboola_agent_cli.services.storage_service import StorageService
 
@@ -1042,6 +1042,128 @@ class TestCreateBucketCLI:
 
 
 # ---------------------------------------------------------------------------
+# Service tests: create_table --if-not-exists (v0.47.0)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateTableIfNotExists:
+    """`if_not_exists=True` turns duplicate-display-name into a skip."""
+
+    @staticmethod
+    def _duplicate_display_name_error() -> KeboolaApiError:
+        return KeboolaApiError(
+            message=(
+                "Bucket in.c-b.users already has the same display name in "
+                "bucket in.c-b. Please rename one of them."
+            ),
+            status_code=500,
+            error_code=ErrorCode.STORAGE_JOB_FAILED,
+        )
+
+    def test_skip_on_existing_when_flag_set(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.side_effect = self._duplicate_display_name_error()
+        mock_client.get_table_detail.return_value = {"id": "in.c-b.users", "name": "users"}
+        service = _make_service(store, mock_client)
+
+        result = service.create_table(
+            alias="test",
+            bucket_id="in.c-b",
+            name="users",
+            columns=["id:INTEGER", "name:STRING"],
+            if_not_exists=True,
+        )
+
+        assert result["action"] == "skipped"
+        assert result["skip_reason"] == "table already exists"
+        assert result["table_id"] == "in.c-b.users"
+        mock_client.get_table_detail.assert_called_once_with("in.c-b.users", branch_id=None)
+        mock_client.close.assert_called_once()
+
+    def test_reraises_when_flag_unset(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.side_effect = self._duplicate_display_name_error()
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.create_table(
+                alias="test",
+                bucket_id="in.c-b",
+                name="users",
+                columns=["id:INTEGER"],
+            )
+        assert excinfo.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+        # No probe when flag is off.
+        mock_client.get_table_detail.assert_not_called()
+        mock_client.close.assert_called_once()
+
+    def test_reraises_when_target_table_missing(self, tmp_path: Path) -> None:
+        """Duplicate-name error but the table at the expected id doesn't
+        resolve → a different table is conflicting; surface the real error."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.side_effect = self._duplicate_display_name_error()
+        mock_client.get_table_detail.side_effect = KeboolaApiError(
+            message="404", status_code=404, error_code=ErrorCode.NOT_FOUND
+        )
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.create_table(
+                alias="test",
+                bucket_id="in.c-b",
+                name="users",
+                columns=["id:INTEGER"],
+                if_not_exists=True,
+            )
+        # The ORIGINAL error must propagate, not the lookup error.
+        assert excinfo.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+
+    def test_non_duplicate_error_reraises_even_with_flag(self, tmp_path: Path) -> None:
+        """A non-duplicate STORAGE_JOB_FAILED still surfaces — the IF-NOT-
+        EXISTS path is gated on the specific message substring."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.side_effect = KeboolaApiError(
+            message="quota exceeded",
+            status_code=500,
+            error_code=ErrorCode.STORAGE_JOB_FAILED,
+        )
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.create_table(
+                alias="test",
+                bucket_id="in.c-b",
+                name="users",
+                columns=["id:INTEGER"],
+                if_not_exists=True,
+            )
+        assert "quota" in str(excinfo.value.message).lower()
+        mock_client.get_table_detail.assert_not_called()
+
+    def test_success_path_unchanged_with_flag(self, tmp_path: Path) -> None:
+        """When the create succeeds, the flag has no effect on the envelope."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.return_value = {"id": "in.c-b.users"}
+        service = _make_service(store, mock_client)
+
+        result = service.create_table(
+            alias="test",
+            bucket_id="in.c-b",
+            name="users",
+            columns=["id:INTEGER"],
+            if_not_exists=True,
+        )
+
+        assert result["action"] == "created"
+        assert result["table_id"] == "in.c-b.users"
+
+
+# ---------------------------------------------------------------------------
 # CLI tests: create-table
 # ---------------------------------------------------------------------------
 
@@ -1097,6 +1219,7 @@ class TestCreateTableCLI:
             branch_id=None,
             not_null_columns=None,
             defaults=None,
+            if_not_exists=False,
         )
 
     def test_create_table_native_types_and_attributes(self, tmp_path: Path) -> None:

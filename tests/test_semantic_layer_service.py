@@ -2512,10 +2512,16 @@ class TestSearchContext:
         assert mock.list_items.call_args_list[0].args[0] == "semantic-model"
 
     def test_type_filter_all_iterates_every_child(self, tmp_path: Path) -> None:
-        items = {t: [_child_item(t, "x", {"name": "n"})] for t in (
-            "semantic-dataset", "semantic-metric", "semantic-relationship",
-            "semantic-constraint", "semantic-glossary",
-        )}
+        items = {
+            t: [_child_item(t, "x", {"name": "n"})]
+            for t in (
+                "semantic-dataset",
+                "semantic-metric",
+                "semantic-relationship",
+                "semantic-constraint",
+                "semantic-glossary",
+            )
+        }
         service, mock = self._setup(tmp_path, items)
 
         result = service.search_context("prod", type_filter="all")
@@ -2595,9 +2601,7 @@ class TestGetContext:
         def _get(item_type: str, item_id: str) -> dict[str, Any]:
             if item_type == "semantic-dataset" and item_id == "d1":
                 return _child_item("semantic-dataset", "d1", {"name": "users"})
-            raise KeboolaApiError(
-                message="404", status_code=404, error_code=ErrorCode.NOT_FOUND
-            )
+            raise KeboolaApiError(message="404", status_code=404, error_code=ErrorCode.NOT_FOUND)
 
         mock.get_item.side_effect = _get
         result = service.get_context("prod", "d1")

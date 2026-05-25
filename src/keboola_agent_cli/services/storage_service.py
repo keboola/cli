@@ -711,6 +711,7 @@ class StorageService(BaseService):
         branch_id: int | None = None,
         not_null_columns: list[str] | None = None,
         defaults: list[str] | None = None,
+        if_not_exists: bool = False,
     ) -> dict[str, Any]:
         """Create a new table with typed columns.
 
@@ -777,28 +778,63 @@ class StorageService(BaseService):
         project = projects[alias]
 
         client = self._client_factory(project.stack_url, project.token)
+        target_table_id = f"{bucket_id}.{name}"
         try:
             auto_created_bucket = _ensure_bucket_exists_in_branch(client, bucket_id, branch_id)
-            results = client.create_table(
-                bucket_id=bucket_id,
-                name=name,
-                columns=parsed_columns,
-                primary_key=primary_key,
-                branch_id=branch_id,
-            )
+            try:
+                results = client.create_table(
+                    bucket_id=bucket_id,
+                    name=name,
+                    columns=parsed_columns,
+                    primary_key=primary_key,
+                    branch_id=branch_id,
+                )
+            except KeboolaApiError as exc:
+                # IF-NOT-EXISTS: if the create failed because the table
+                # already has the same display name AND the table at the
+                # expected id resolves, treat as a successful skip. A
+                # different table with the same display name still
+                # surfaces the original error (the user has a real
+                # conflict to resolve).
+                if (
+                    if_not_exists
+                    and exc.error_code == ErrorCode.STORAGE_JOB_FAILED
+                    and "already has the same display name" in (exc.message or "")
+                ):
+                    try:
+                        existing = client.get_table_detail(target_table_id, branch_id=branch_id)
+                    except KeboolaApiError:
+                        existing = None
+                    if existing is not None:
+                        return {
+                            "project_alias": alias,
+                            "table_id": target_table_id,
+                            "name": name,
+                            "bucket_id": bucket_id,
+                            "primary_key": primary_key or [],
+                            "columns": [c["name"] for c in parsed_columns],
+                            "auto_created_bucket": auto_created_bucket,
+                            "legacy_branch_storage": _detect_legacy_branch_storage(
+                                client, branch_id
+                            ),
+                            "action": "skipped",
+                            "skip_reason": "table already exists",
+                        }
+                raise
             legacy_branch_storage = _detect_legacy_branch_storage(client, branch_id)
         finally:
             client.close()
 
         return {
             "project_alias": alias,
-            "table_id": results.get("id", f"{bucket_id}.{name}"),
+            "table_id": results.get("id", target_table_id),
             "name": name,
             "bucket_id": bucket_id,
             "primary_key": primary_key or [],
             "columns": [c["name"] for c in parsed_columns],
             "auto_created_bucket": auto_created_bucket,
             "legacy_branch_storage": legacy_branch_storage,
+            "action": "created",
         }
 
     def upload_table(

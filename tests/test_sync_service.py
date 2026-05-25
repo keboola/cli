@@ -3124,3 +3124,199 @@ class TestFreshCreateWriteback:
         assert result2["status"] in ("no_changes", "pushed")
         assert result2.get("created", 0) == 0, "re-push must be idempotent"
         push_client2.create_config.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Ergonomics: --branch override + --no-name-drift-warnings (v0.47.0)
+# ---------------------------------------------------------------------------
+
+
+class TestBranchOverrideAndNameDriftFlag:
+    """Cover the `--branch` override (push / pull / diff) and the
+    `--no-name-drift-warnings` opt-out at the service boundary."""
+
+    def test_resolve_branch_id_override_wins(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.sync.manifest import (
+            ManifestBranch,
+            ManifestNaming,
+            ManifestProject,
+        )
+
+        project = MagicMock()
+        project.active_branch_id = 12345
+        manifest = Manifest.model_construct(
+            project=ManifestProject(id=1, apiHost="connection.keboola.com"),
+            naming=ManifestNaming(),
+            branches=[ManifestBranch(id=999, path="main", metadata={})],
+        )
+
+        # Without override -> falls back to active_branch_id (priority 2).
+        assert (
+            SyncService._resolve_branch_id(project, manifest, tmp_path, branch_override=None)
+            == 12345
+        )
+        # Override wins (priority 0).
+        assert (
+            SyncService._resolve_branch_id(project, manifest, tmp_path, branch_override=388071)
+            == 388071
+        )
+
+    def test_push_branch_override_reaches_client(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """push(branch_override=X) must thread X into list_components_with_configs."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        init_svc.init_sync(alias="prod", project_root=project_root)
+
+        push_client = _make_sync_mock_client(components_response=[])
+        push_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client,
+        )
+
+        push_svc.push(alias="prod", project_root=project_root, branch_override=99999)
+
+        push_client.list_components_with_configs.assert_called()
+        call = push_client.list_components_with_configs.call_args
+        assert call.kwargs.get("branch_id") == 99999
+
+    def test_diff_branch_override_reaches_client(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        init_svc.init_sync(alias="prod", project_root=project_root)
+
+        diff_client = _make_sync_mock_client(components_response=[])
+        diff_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: diff_client,
+        )
+
+        diff_svc.diff(alias="prod", project_root=project_root, branch_override=77777)
+
+        diff_client.list_components_with_configs.assert_called()
+        call = diff_client.list_components_with_configs.call_args
+        assert call.kwargs.get("branch_id") == 77777
+
+    def test_no_name_drift_warnings_flag_suppresses_field(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """When name drift is detected, the suppression flag drops the
+        ``name_drift_warnings`` array from the result envelope."""
+        from keboola_agent_cli.constants import CONFIG_YML_VERSION
+        from keboola_agent_cli.sync.manifest import (
+            ManifestConfiguration,
+            save_manifest,
+        )
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        init_svc.init_sync(alias="prod", project_root=project_root)
+
+        # Author a tracked manifest entry whose dirname does NOT match the
+        # config name -> name-drift detector will surface a warning.
+        manifest = load_manifest(project_root)
+        cfg_path = "transformation/keboola.snowflake-transformation/dir-name-NEQ-config-name"
+        manifest.configurations.append(
+            ManifestConfiguration(
+                branchId=12345,
+                componentId="keboola.snowflake-transformation",
+                id="01abc",
+                path=cfg_path,
+                # No pull_hash -> diff falls into 2-way mode and any
+                # difference is classified "modified" (a pushable change),
+                # so the name-drift detector actually runs end-to-end.
+                metadata={},
+            )
+        )
+        save_manifest(project_root, manifest)
+        branch_path = manifest.branches[0].path
+        config_dir = project_root / branch_path / cfg_path
+        config_dir.mkdir(parents=True)
+        (config_dir / CONFIG_FILENAME).write_text(
+            yaml.dump(
+                {
+                    "version": CONFIG_YML_VERSION,
+                    "name": "Some Pretty Config Name",
+                    "description": "",
+                    "parameters": {"x": "y_new"},
+                    "_keboola": {
+                        "component_id": "keboola.snowflake-transformation",
+                        "config_id": "01abc",
+                    },
+                },
+                default_flow_style=False,
+            ),
+            encoding="utf-8",
+        )
+
+        # Remote returns a stale param value so the diff sees a "modified"
+        # change and the push actually enters the warning-emitting path.
+        push_client = _make_sync_mock_client(
+            components_response=[
+                {
+                    "id": "keboola.snowflake-transformation",
+                    "type": "transformation",
+                    "configurations": [
+                        {
+                            "id": "01abc",
+                            "name": "Some Pretty Config Name",
+                            "description": "",
+                            "configuration": {"parameters": {"x": "y_old"}},
+                            "rows": [],
+                        }
+                    ],
+                }
+            ],
+        )
+        push_client.update_config.return_value = {"id": "01abc"}
+        push_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client,
+        )
+
+        default_result = push_svc.push(alias="prod", project_root=project_root)
+        assert "name_drift_warnings" in default_result, (
+            "control: the warning must surface without the suppression flag"
+        )
+
+        suppressed_result = push_svc.push(
+            alias="prod",
+            project_root=project_root,
+            no_name_drift_warnings=True,
+        )
+        assert "name_drift_warnings" not in suppressed_result, (
+            "--no-name-drift-warnings must drop the field from the envelope"
+        )
