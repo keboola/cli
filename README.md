@@ -9,7 +9,7 @@ No more switching between the UI, old CLI, MCP server, and raw API calls. `kbage
 ## Install
 
 ```bash
-uv tool install git+https://github.com/padak/keboola_agent_cli
+uv tool install git+https://github.com/keboola/cli
 ```
 
 Auto-updates kbagent **and** its `keboola-mcp-server` dependency on every launch (since 0.30.1) -- no more silently running on a six-month-old MCP server. Run `kbagent changelog` to see what changed.
@@ -19,7 +19,7 @@ Auto-updates kbagent **and** its `keboola-mcp-server` dependency on every launch
 Want a browser dashboard? One command:
 
 ```bash
-uv tool install --with 'keboola-agent-cli[server]' 'git+https://github.com/padak/keboola_agent_cli'
+uv tool install --with 'keboola-agent-cli[server]' 'git+https://github.com/keboola/cli'
 kbagent serve --ui
 # Open the URL printed at startup -- the browser is auto-authenticated.
 ```
@@ -43,7 +43,7 @@ Build the agent once, schedule it, walk away — the platform handles auth, sche
 The scheduler runs **inside `kbagent serve`** -- the same single Python process that hosts the Web UI. If you already installed kbagent with the `[server]` extras (see [Web UI](#web-ui-optional) above), you're set; otherwise:
 
 ```bash
-uv tool install --with 'keboola-agent-cli[server]' 'git+https://github.com/padak/keboola_agent_cli'
+uv tool install --with 'keboola-agent-cli[server]' 'git+https://github.com/keboola/cli'
 kbagent serve --ui
 # Open the URL printed at startup -> sidebar "Agent Tasks" -> "+ New task".
 ```
@@ -57,7 +57,7 @@ This CLI is built AI-first. Every command outputs structured JSON (`--json`), er
 **Claude Code plugin** (agent learns all 100+ commands + gets a specialist subagent for writes):
 
 ```
-/plugin marketplace add padak/keboola_agent_cli
+/plugin marketplace add keboola/cli
 /plugin install kbagent@keboola-agent-cli
 ```
 
@@ -235,7 +235,7 @@ kbagent             init | context | doctor | version | update | changelog
 Read [CONTRIBUTING.md](CONTRIBUTING.md) first -- it covers the 3-layer architecture, coding conventions, security principles, and the full checklist for adding new commands.
 
 ```bash
-git clone https://github.com/padak/keboola_agent_cli.git && cd keboola_agent_cli
+git clone https://github.com/keboola/cli.git && cd keboola_agent_cli
 make install   # uv pip install -e ".[dev]"
 make check     # lint + format + test
 make hooks     # install pre-commit hook

@@ -11,7 +11,7 @@ be able to read this single document plus `/openapi.json` and synthesise a
 working client without asking further questions.**
 
 If you find an answer you needed and the doc did not give you, [open an
-issue](https://github.com/padak/keboola_agent_cli/issues) — drift on this
+issue](https://github.com/keboola/cli/issues) — drift on this
 file blocks the use case it exists for.
 
 ---

@@ -324,7 +324,7 @@ class DoctorService:
                 "status": "skip",
                 "message": (
                     "Claude Code not detected (~/.claude/ absent). "
-                    "Install instructions: https://github.com/padak/keboola_agent_cli#claude-code-plugin"
+                    "Install instructions: https://github.com/keboola/cli#claude-code-plugin"
                 ),
             }
 
@@ -342,7 +342,7 @@ class DoctorService:
                 "status": "warn",
                 "message": (
                     "kbagent Claude Code plugin not installed. In Claude Code, run:\n"
-                    "  /plugin marketplace add padak/keboola_agent_cli\n"
+                    "  /plugin marketplace add keboola/cli\n"
                     "  /plugin install kbagent@keboola-agent-cli\n"
                     "This enables the /keboola slash command and the "
                     "keboola-expert specialist subagent."

@@ -374,7 +374,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 If kbagent is not yet installed:
 
 ```bash
-uv tool install git+https://github.com/padak/keboola_agent_cli
+uv tool install git+https://github.com/keboola/cli
 # --prerelease=allow is required (issue #324): keboola-mcp-server pins a
 # pre-release-only transitive dep (toon-format), which uv refuses by default.
 uv tool install --prerelease=allow keboola-mcp-server

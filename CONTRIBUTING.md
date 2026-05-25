@@ -469,7 +469,7 @@ citation.
 
    ```
    /kbagent:review 234
-   /kbagent:review https://github.com/padak/keboola_agent_cli/pull/234
+   /kbagent:review https://github.com/keboola/cli/pull/234
    /kbagent:review 234 focus on the new cache semantics
    ```
 

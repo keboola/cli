@@ -27,7 +27,7 @@ caller.
 
 ```bash
 # Install (no extras required for the agent CLI; croniter is core since 0.42.0)
-uv tool install 'git+https://github.com/padak/keboola_agent_cli'
+uv tool install 'git+https://github.com/keboola/cli'
 
 # Optional: start serve so the cron loop actually fires the tasks
 # (the CLI commands work without it, but tasks won't auto-run on schedule).

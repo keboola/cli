@@ -74,7 +74,7 @@ posts ONE comment review on the PR.
 ```
 /kbagent:review                              # auto-detect PR for current branch
 /kbagent:review 227                          # explicit PR number
-/kbagent:review https://github.com/padak/keboola_agent_cli/pull/227
+/kbagent:review https://github.com/keboola/cli/pull/227
 /kbagent:review 227 focus on the new cache semantics  # forwarded as <focus>
 ```
 

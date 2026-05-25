@@ -110,9 +110,7 @@ class TestIsDevInstall:
     def test_normal_install(self):
         """Non-editable, non-dev version should return False."""
         mock_dist = MagicMock()
-        mock_dist.read_text.return_value = json.dumps(
-            {"url": "https://github.com/padak/keboola_agent_cli"}
-        )
+        mock_dist.read_text.return_value = json.dumps({"url": "https://github.com/keboola/cli"})
         with (
             patch("keboola_agent_cli.auto_update.__version__", "1.0.0"),
             patch("keboola_agent_cli.auto_update.distribution", return_value=mock_dist),

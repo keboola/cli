@@ -483,7 +483,7 @@ class TestDoctorServiceCheckClaudePlugin:
         result = DoctorService._check_claude_plugin()
 
         assert result["status"] == "warn"
-        assert "/plugin marketplace add padak/keboola_agent_cli" in result["message"]
+        assert "/plugin marketplace add keboola/cli" in result["message"]
         assert "/plugin install kbagent@keboola-agent-cli" in result["message"]
 
     def test_warn_when_plugin_root_exists_but_empty(self, tmp_path: Path, monkeypatch) -> None:

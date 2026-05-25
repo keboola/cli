@@ -202,8 +202,8 @@ AI_CHAT_HELPER_TIMEOUT: float = 300.0
 # --- Version Check ---
 VERSION_CHECK_TIMEOUT: float = 4.0  # seconds for fetching latest version from remote
 MCP_PYPI_URL: str = "https://pypi.org/pypi/keboola-mcp-server/json"
-KBAGENT_GITHUB_REPO: str = "padak/keboola_agent_cli"
-KBAGENT_INSTALL_SOURCE: str = "git+https://github.com/padak/keboola_agent_cli"
+KBAGENT_GITHUB_REPO: str = "keboola/cli"
+KBAGENT_INSTALL_SOURCE: str = "git+https://github.com/keboola/cli"
 
 # --- MCP self-upgrade (since v0.30.1) ---
 # Subprocess timeout for the `keboola_mcp_server --version` probe and the
