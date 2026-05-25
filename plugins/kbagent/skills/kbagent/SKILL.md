@@ -28,6 +28,8 @@ description: >
   data app, data apps, keboola data app, streamlit app, streamlit deployment,
   flask app, fastapi app, node app, python-js, deploy data app,
   data-app create, data-app deploy, data-app password, data-app start,
+  data-app logs, container logs, app logs, tail logs, build logs,
+  app stdout, app stderr, troubleshoot data app, debug data app,
   app proxy, simpleAuth, app auto-suspend, configVersion, redeploy contract,
   Data Science API, /apps endpoint, app password, KBC::Project ciphertext,
   data-app secrets, app secrets, app runtime secrets, secrets-set,
