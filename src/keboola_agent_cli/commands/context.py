@@ -342,8 +342,12 @@ remain branch-aware because modifying a dev branch is the expected intent.
     time. Response includes `legacy_branch_storage: true` and human mode prints a
     warning when this applies. See storage-types-workflow.md.
 
-  kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME --column col:TYPE[(length)] [...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--branch ID]
+  kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME --column col:TYPE[(length)] [...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--branch ID] [--if-not-exists]
     Create a typed table. --column repeatable.
+    - --if-not-exists (since 0.47.0): opt-in idempotency. On a duplicate-display-name failure,
+      probe get-table-detail at the expected id and, if the table really exists, return
+      `action: "skipped", skip_reason: "table already exists"` instead of raising. A different
+      table with the same display name still surfaces the original error. Safe for parallel workers.
     - Base types: STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP. Type defaults to STRING if omitted.
     - Native backend types with length pass through to the Storage API: VARCHAR(40), NUMBER(18,2), CHAR(10), TIMESTAMP_TZ, TIMESTAMP_NTZ, VARIANT, OBJECT, ARRAY, etc.
       The API validates type/length per backend; e.g. INTEGER(10) is rejected with "'10' is not valid length for INTEGER".
@@ -755,21 +759,32 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
     Initialize sync working directory. --git-branching enables git-to-Keboola branch mapping.
 
-  kbagent sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N]
+  kbagent sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
     Download configs as local files. Idempotent, protects local modifications.
     --job-limit controls max recent jobs per config (default 5). For large projects,
     automatically falls back to per-config job fetching to ensure all configs get job history.
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
+    --branch (since 0.47.0): per-invocation dev-branch override. Same semantics as sync push/diff.
 
   kbagent sync status [--directory DIR]
     Show local changes since last pull (SHA256-based).
 
-  kbagent sync diff --project ALIAS [--all-projects] [--directory DIR]
+  kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
     3-way diff: local vs pull-time snapshot vs remote. Detects conflicts.
+    --branch (since 0.47.0): per-invocation dev-branch override. Wins over
+    manifest.branches[0] / 'branch use' active branch / git-branching mapping.
+    Requires exactly one --project.
 
-  kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure]
+  kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
+    Fresh-CREATE behavior (since 0.47.0): if the manifest contains a placeholder entry at
+    (component_id, path), the create path updates it in place (no manifest duplication)
+    and propagates any KBC.configuration.* metadata via set_config_metadata. Re-pushes
+    against the now-real config id are naturally idempotent.
+    --branch (since 0.47.0): per-invocation dev-branch override. Same semantics as sync diff.
+    --no-name-drift-warnings (since 0.47.0): suppress the cosmetic name_drift_warnings
+    array from the result envelope.
 
   kbagent sync branch-link --project ALIAS [--branch-id ID] [--branch-name NAME]
     Link git branch to Keboola dev branch. Auto-creates if needed.
@@ -808,6 +823,19 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
   kbagent semantic-layer show --project P [--model M] [--type T]
     Show a model's entities. --type filter: dataset|metric|relationship|constraint|glossary.
     Without --type prints a per-type count summary.
+
+  kbagent semantic-layer search-context --project P [--pattern G ...] [--type model|dataset|metric|relationship|constraint|glossary|all] [--limit N]
+    (since 0.47.0) Project-wide glob search across semantic-layer entity names.
+    Mirrors the upstream keboola-mcp-server search_semantic_context tool so a
+    downstream caller can verify the model is populated without an MCP dependency.
+    Patterns are case-sensitive fnmatch, repeatable (union). Default pattern is "*".
+    Default --type is "all" (every CHILD type; "model" searches semantic models).
+    Returns {{project, contexts: [{{id, type, name, description, attributes}}], total_count}}.
+
+  kbagent semantic-layer get-context --project P --context-id ID
+    (since 0.47.0) Single-entry fetch by id, irrespective of type. Probes model first,
+    then datasets/metrics/relationships/constraints/glossary in order; raises NOT_FOUND
+    if no type matches (exit 1).
 
   kbagent semantic-layer validate --project P [--model M] [--deep]
     Basic structural checks (duplicates, dangling refs, sum-on-pct,

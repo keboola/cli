@@ -253,6 +253,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Snapshot a semantic-layer model to a self-describing JSON file | `kbagent semantic-layer export --project PROJECT` |
 | Diff two semantic-layer snapshots (project↔project, project↔file, file↔file) | `kbagent semantic-layer diff` |
 | Validate a semantic-layer model | `kbagent semantic-layer validate --project PROJECT` |
+| Search semantic-layer entities across a project by name pattern | `kbagent semantic-layer search-context --project PROJECT` |
+| Fetch a single semantic-layer entity by id, irrespective of its type | `kbagent semantic-layer get-context --project PROJECT --context-id CONTEXT-ID` |
 | List all semantic-layer models in a project | `kbagent semantic-layer model list --project PROJECT` |
 | Create a new semantic-layer model | `kbagent semantic-layer model create --project PROJECT --name NAME` |
 | Delete a semantic-layer model and cascade-delete its children | `kbagent semantic-layer model delete --project PROJECT --model MODEL` |
@@ -279,6 +281,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Snapshot a semantic-layer model to a self-describing JSON file | `kbagent sl export --project PROJECT` |
 | Diff two semantic-layer snapshots (project↔project, project↔file, file↔file) | `kbagent sl diff` |
 | Validate a semantic-layer model | `kbagent sl validate --project PROJECT` |
+| Search semantic-layer entities across a project by name pattern | `kbagent sl search-context --project PROJECT` |
+| Fetch a single semantic-layer entity by id, irrespective of its type | `kbagent sl get-context --project PROJECT --context-id CONTEXT-ID` |
 | List all semantic-layer models in a project | `kbagent sl model list --project PROJECT` |
 | Create a new semantic-layer model | `kbagent sl model create --project PROJECT --name NAME` |
 | Delete a semantic-layer model and cascade-delete its children | `kbagent sl model delete --project PROJECT --model MODEL` |
