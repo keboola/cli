@@ -235,7 +235,7 @@ kbagent             init | context | doctor | version | update | changelog
 Read [CONTRIBUTING.md](CONTRIBUTING.md) first -- it covers the 3-layer architecture, coding conventions, security principles, and the full checklist for adding new commands.
 
 ```bash
-git clone https://github.com/keboola/cli.git && cd keboola_agent_cli
+git clone https://github.com/keboola/cli.git && cd cli
 make install   # uv pip install -e ".[dev]"
 make check     # lint + format + test
 make hooks     # install pre-commit hook
