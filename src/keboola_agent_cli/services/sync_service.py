@@ -1197,7 +1197,6 @@ class SyncService(BaseService):
                         )
                         if result:
                             new_id = str(result.get("id", ""))
-                            # Add to manifest with the API-assigned ID
                             config_dir = project_root / branch_path / config_path_str
                             config_file = config_dir / CONFIG_FILENAME
                             file_hash = self._file_hash(config_file) if config_file.exists() else ""
@@ -1207,18 +1206,16 @@ class SyncService(BaseService):
                                 cfg_hash = config_hash(local_data)
                             else:
                                 cfg_hash = ""
-                            manifest.configurations.append(
-                                ManifestConfiguration(
-                                    branchId=branch_id or 0,
-                                    componentId=component_id,
-                                    id=new_id,
-                                    path=config_path_str,
-                                    metadata={
-                                        "pull_hash": file_hash,
-                                        "pull_config_hash": cfg_hash,
-                                    },
-                                )
+                            entry = self._writeback_create_config_in_manifest(
+                                manifest=manifest,
+                                component_id=component_id,
+                                branch_id=branch_id,
+                                config_path_str=config_path_str,
+                                new_id=new_id,
+                                file_hash=file_hash,
+                                cfg_hash=cfg_hash,
                             )
+                            self._propagate_kbc_metadata(client, entry, branch_id)
                             manifest_dirty = True
                             created += 1
                             pushed_details.append(change)
@@ -1463,12 +1460,12 @@ class SyncService(BaseService):
         row_file = row_dir / CONFIG_FILENAME
         new_file_hash = self._file_hash(row_file) if row_file.exists() else ""
         cfg_hash_value = config_hash(pristine_data)
-        parent.rows.append(
-            ManifestConfigRow(
-                id=new_row_id,
-                path=row_path_str,
-                metadata={"pull_hash": new_file_hash, "pull_config_hash": cfg_hash_value},
-            )
+        self._writeback_create_row_in_manifest(
+            parent=parent,
+            row_path_str=row_path_str,
+            new_row_id=new_row_id,
+            file_hash=new_file_hash,
+            cfg_hash=cfg_hash_value,
         )
 
     def _push_update_row(
@@ -1655,6 +1652,93 @@ class SyncService(BaseService):
         # Write back: update local file with encrypted secrets.
         # Use pristine_data so blocks/code stay only in their code files.
         self._writeback_after_push(pristine_data, config_dir, config_id, configuration)
+
+    def _writeback_create_config_in_manifest(
+        self,
+        *,
+        manifest: Manifest,
+        component_id: str,
+        branch_id: int | None,
+        config_path_str: str,
+        new_id: str,
+        file_hash: str,
+        cfg_hash: str,
+    ) -> ManifestConfiguration:
+        """Record a freshly-created config in the manifest.
+
+        If a placeholder entry already exists at ``(component_id, path)`` --
+        the FIIA / scaffold emit pattern -- update it in place, preserving any
+        user-declared metadata (e.g. ``KBC.configuration.folderName``) and
+        refreshing only the bookkeeping hashes. Otherwise append a new entry.
+        """
+        for entry in manifest.configurations:
+            if entry.component_id == component_id and entry.path == config_path_str:
+                entry.id = new_id
+                entry.branch_id = branch_id or 0
+                entry.metadata["pull_hash"] = file_hash
+                entry.metadata["pull_config_hash"] = cfg_hash
+                return entry
+        new_entry = ManifestConfiguration(
+            branchId=branch_id or 0,
+            componentId=component_id,
+            id=new_id,
+            path=config_path_str,
+            metadata={"pull_hash": file_hash, "pull_config_hash": cfg_hash},
+        )
+        manifest.configurations.append(new_entry)
+        return new_entry
+
+    def _writeback_create_row_in_manifest(
+        self,
+        *,
+        parent: ManifestConfiguration,
+        row_path_str: str,
+        new_row_id: str,
+        file_hash: str,
+        cfg_hash: str,
+    ) -> ManifestConfigRow:
+        """Record a freshly-created row under its parent in the manifest.
+
+        Mirrors :meth:`_writeback_create_config_in_manifest` for rows: update
+        any placeholder row entry in place, otherwise append.
+        """
+        for row in parent.rows:
+            if row.path == row_path_str:
+                row.id = new_row_id
+                row.metadata["pull_hash"] = file_hash
+                row.metadata["pull_config_hash"] = cfg_hash
+                return row
+        new_row = ManifestConfigRow(
+            id=new_row_id,
+            path=row_path_str,
+            metadata={"pull_hash": file_hash, "pull_config_hash": cfg_hash},
+        )
+        parent.rows.append(new_row)
+        return new_row
+
+    def _propagate_kbc_metadata(
+        self,
+        client: Any,
+        entry: ManifestConfiguration,
+        branch_id: int | None,
+    ) -> None:
+        """POST any ``KBC.*`` keys from the manifest entry to the metadata API.
+
+        Bookkeeping keys (``pull_hash``, ``pull_config_hash``, ...) live in the
+        same metadata dict but are filtered by the ``KBC.`` prefix. Called only
+        on CREATE; updates use ``kbagent config set-metadata`` explicitly.
+        """
+        entries = [
+            (key, str(value)) for key, value in entry.metadata.items() if key.startswith("KBC.")
+        ]
+        if not entries:
+            return
+        client.set_config_metadata(
+            component_id=entry.component_id,
+            config_id=entry.id,
+            entries=entries,
+            branch_id=branch_id,
+        )
 
     def _writeback_after_push(
         self,

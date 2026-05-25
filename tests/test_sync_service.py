@@ -2799,3 +2799,328 @@ class TestEnsureWithinBranch:
 
         # Resolve and then re-pass: should still pass
         _ensure_within_branch(branch_dir, config_dir.resolve(), "comp", "id")
+
+
+# ---------------------------------------------------------------------------
+# Fresh-CREATE writeback + KBC.* metadata propagation (v0.47.0 / FIIA migration)
+# ---------------------------------------------------------------------------
+
+
+class TestFreshCreateWriteback:
+    """Cover the fresh-CREATE manifest writeback + KBC.* metadata propagation.
+
+    Closes the gap where a downstream caller (FIIA / scaffold-style emitter)
+    pre-populates manifest entries with placeholder ids and folder metadata
+    before the first ``sync push``. Pre-v0.47.0 every create unconditionally
+    appended a new manifest entry (manifest doubled in size, re-pushes flagged
+    every placeholder as ``added`` again, ``KBC.configuration.folderName``
+    silently dropped on the floor).
+    """
+
+    @staticmethod
+    def _make_svc(tmp_config_dir: Path) -> SyncService:
+        return SyncService(config_store=setup_single_project(tmp_config_dir))
+
+    def test_writeback_config_in_place_updates_placeholder(self, tmp_config_dir: Path) -> None:
+        """A placeholder entry at the same ``(component_id, path)`` is updated
+        in place; the manifest does not grow."""
+        from keboola_agent_cli.sync.manifest import ManifestConfiguration
+
+        svc = self._make_svc(tmp_config_dir)
+        manifest = Manifest.model_construct(
+            project={"id": 1, "apiHost": "connection.keboola.com"},  # type: ignore[arg-type]
+            naming={"config": "{component_type}/{component_id}/{config_name}"},  # type: ignore[arg-type]
+            configurations=[
+                ManifestConfiguration(
+                    branchId=0,
+                    componentId="keboola.snowflake-transformation",
+                    id="PLACEHOLDER-TX1",
+                    path="transformation/keboola.snowflake-transformation/01_stage",
+                    metadata={"KBC.configuration.folderName": "FI Pipeline"},
+                )
+            ],
+        )
+
+        entry = svc._writeback_create_config_in_manifest(
+            manifest=manifest,
+            component_id="keboola.snowflake-transformation",
+            branch_id=12345,
+            config_path_str="transformation/keboola.snowflake-transformation/01_stage",
+            new_id="123456789",
+            file_hash="abc123",
+            cfg_hash="def456",
+        )
+
+        assert len(manifest.configurations) == 1, "must not append a duplicate"
+        assert entry.id == "123456789"
+        assert entry.branch_id == 12345
+        assert entry.metadata["pull_hash"] == "abc123"
+        assert entry.metadata["pull_config_hash"] == "def456"
+        assert entry.metadata["KBC.configuration.folderName"] == "FI Pipeline", (
+            "user-declared KBC.* metadata must survive the writeback"
+        )
+
+    def test_writeback_config_appends_when_no_placeholder(self, tmp_config_dir: Path) -> None:
+        """If no placeholder exists at the path, append (legacy fallback)."""
+        svc = self._make_svc(tmp_config_dir)
+        manifest = Manifest.model_construct(
+            project={"id": 1, "apiHost": "connection.keboola.com"},  # type: ignore[arg-type]
+            naming={"config": "{component_type}/{component_id}/{config_name}"},  # type: ignore[arg-type]
+            configurations=[],
+        )
+
+        entry = svc._writeback_create_config_in_manifest(
+            manifest=manifest,
+            component_id="keboola.ex-http",
+            branch_id=0,
+            config_path_str="extractor/keboola.ex-http/my-new-config",
+            new_id="999",
+            file_hash="h1",
+            cfg_hash="h2",
+        )
+
+        assert len(manifest.configurations) == 1
+        assert manifest.configurations[0] is entry
+        assert entry.id == "999"
+        assert entry.metadata == {"pull_hash": "h1", "pull_config_hash": "h2"}
+
+    def test_propagate_kbc_metadata_calls_set_config_metadata(self, tmp_config_dir: Path) -> None:
+        """KBC.* keys are POSTed via client.set_config_metadata; bookkeeping
+        keys (``pull_hash``, ...) are filtered out."""
+        from keboola_agent_cli.sync.manifest import ManifestConfiguration
+
+        svc = self._make_svc(tmp_config_dir)
+        entry = ManifestConfiguration(
+            branchId=0,
+            componentId="keboola.snowflake-transformation",
+            id="cfg-123",
+            path="x",
+            metadata={
+                "pull_hash": "h1",
+                "pull_config_hash": "h2",
+                "KBC.configuration.folderName": "FI Pipeline",
+                "KBC.configuration.category": "transformation",
+            },
+        )
+        client = MagicMock()
+
+        svc._propagate_kbc_metadata(client, entry, branch_id=99)
+
+        client.set_config_metadata.assert_called_once()
+        call = client.set_config_metadata.call_args
+        assert call.kwargs["component_id"] == "keboola.snowflake-transformation"
+        assert call.kwargs["config_id"] == "cfg-123"
+        assert call.kwargs["branch_id"] == 99
+        entries = dict(call.kwargs["entries"])
+        assert entries == {
+            "KBC.configuration.folderName": "FI Pipeline",
+            "KBC.configuration.category": "transformation",
+        }, "pull_* bookkeeping keys must not be sent to the metadata API"
+
+    def test_propagate_kbc_metadata_noop_when_no_kbc_keys(self, tmp_config_dir: Path) -> None:
+        """No KBC.* keys → no API call (don't waste a round-trip)."""
+        from keboola_agent_cli.sync.manifest import ManifestConfiguration
+
+        svc = self._make_svc(tmp_config_dir)
+        entry = ManifestConfiguration(
+            branchId=0,
+            componentId="x",
+            id="y",
+            path="z",
+            metadata={"pull_hash": "h", "pull_config_hash": "h2"},
+        )
+        client = MagicMock()
+
+        svc._propagate_kbc_metadata(client, entry, branch_id=None)
+
+        client.set_config_metadata.assert_not_called()
+
+    def test_writeback_row_in_place_updates_placeholder(self, tmp_config_dir: Path) -> None:
+        """A placeholder row at the same ``path`` is updated in place; parent's
+        rows list does not grow."""
+        from keboola_agent_cli.sync.manifest import ManifestConfigRow, ManifestConfiguration
+
+        svc = self._make_svc(tmp_config_dir)
+        parent = ManifestConfiguration(
+            branchId=0,
+            componentId="keboola.variables",
+            id="vars-001",
+            path="other/keboola.variables/shared",
+            rows=[
+                ManifestConfigRow(
+                    id="PLACEHOLDER-ROW",
+                    path="rows/default",
+                    metadata={},
+                )
+            ],
+        )
+
+        row = svc._writeback_create_row_in_manifest(
+            parent=parent,
+            row_path_str="rows/default",
+            new_row_id="vals-real-id",
+            file_hash="rh1",
+            cfg_hash="rh2",
+        )
+
+        assert len(parent.rows) == 1, "must not append a duplicate row"
+        assert row.id == "vals-real-id"
+        assert row.metadata == {"pull_hash": "rh1", "pull_config_hash": "rh2"}
+
+    def test_writeback_row_appends_when_no_placeholder(self, tmp_config_dir: Path) -> None:
+        """No placeholder row → append (legacy fallback for untracked rows)."""
+        from keboola_agent_cli.sync.manifest import ManifestConfiguration
+
+        svc = self._make_svc(tmp_config_dir)
+        parent = ManifestConfiguration(
+            branchId=0,
+            componentId="keboola.ex-http",
+            id="cfg-1",
+            path="extractor/keboola.ex-http/my-ext",
+            rows=[],
+        )
+
+        row = svc._writeback_create_row_in_manifest(
+            parent=parent,
+            row_path_str="rows/new",
+            new_row_id="row-001",
+            file_hash="rh1",
+            cfg_hash="rh2",
+        )
+
+        assert len(parent.rows) == 1
+        assert parent.rows[0] is row
+        assert row.id == "row-001"
+
+    def test_push_create_with_placeholder_is_idempotent_and_propagates_folder(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """End-to-end push: placeholder + KBC.configuration.folderName.
+
+        Round-trip:
+          1. Init a project (empty manifest).
+          2. Hand-populate a placeholder ManifestConfiguration with a
+             ``KBC.configuration.folderName`` metadata key, save it, and write
+             a matching ``_config.yml`` file.
+          3. Run sync push — assert: created=1, manifest length stays at 1
+             (placeholder updated in place to real ULID), client.create_config
+             was called, client.set_config_metadata was called with the folder
+             metadata.
+          4. Run sync push a second time — assert: created=0, errors=0
+             (idempotency naturally follows from writeback-in-place).
+        """
+        from keboola_agent_cli.constants import CONFIG_YML_VERSION
+        from keboola_agent_cli.sync.manifest import ManifestConfiguration, save_manifest
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        init_svc.init_sync(alias="prod", project_root=project_root)
+
+        # Hand-author a placeholder manifest entry + local _config.yml at the
+        # corresponding path. This is the FIIA / scaffold emit pattern.
+        manifest = load_manifest(project_root)
+        placeholder_path = "transformation/keboola.snowflake-transformation/01_stage"
+        manifest.configurations.append(
+            ManifestConfiguration(
+                branchId=12345,
+                componentId="keboola.snowflake-transformation",
+                id="PLACEHOLDER-TX1",
+                path=placeholder_path,
+                metadata={"KBC.configuration.folderName": "FI Pipeline"},
+            )
+        )
+        save_manifest(project_root, manifest)
+
+        branch_path = manifest.branches[0].path
+        config_dir = project_root / branch_path / placeholder_path
+        config_dir.mkdir(parents=True)
+        (config_dir / CONFIG_FILENAME).write_text(
+            yaml.dump(
+                {
+                    "version": CONFIG_YML_VERSION,
+                    "name": "01 Stage",
+                    "description": "Staging transformation",
+                    "parameters": {},
+                    "_keboola": {
+                        "component_id": "keboola.snowflake-transformation",
+                        "config_id": "",
+                    },
+                },
+                default_flow_style=False,
+            ),
+            encoding="utf-8",
+        )
+
+        push_client = _make_sync_mock_client(components_response=[])
+        push_client.create_config.return_value = {"id": "999000111"}
+
+        push_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client,
+        )
+
+        # First push: placeholder → real ULID, KBC.* propagated.
+        result = push_svc.push(alias="prod", project_root=project_root)
+        assert result["status"] == "pushed"
+        assert result["created"] == 1
+        assert result["errors"] == []
+        push_client.create_config.assert_called_once()
+        push_client.set_config_metadata.assert_called_once()
+        meta_call = push_client.set_config_metadata.call_args
+        assert meta_call.kwargs["component_id"] == "keboola.snowflake-transformation"
+        assert meta_call.kwargs["config_id"] == "999000111"
+        assert dict(meta_call.kwargs["entries"]) == {
+            "KBC.configuration.folderName": "FI Pipeline",
+        }
+
+        # Manifest must have updated the placeholder in place — NOT appended.
+        post = load_manifest(project_root)
+        matching = [
+            c
+            for c in post.configurations
+            if c.component_id == "keboola.snowflake-transformation" and c.path == placeholder_path
+        ]
+        assert len(matching) == 1, "writeback must update placeholder in place"
+        assert matching[0].id == "999000111"
+        assert matching[0].metadata.get("KBC.configuration.folderName") == "FI Pipeline"
+
+        # Second push against the now-real manifest must be a no-op.
+        # The remote side reports the created config so the diff sees it as
+        # present and unchanged.
+        push_client2 = _make_sync_mock_client(
+            components_response=[
+                {
+                    "id": "keboola.snowflake-transformation",
+                    "type": "transformation",
+                    "configurations": [
+                        {
+                            "id": "999000111",
+                            "name": "01 Stage",
+                            "description": "Staging transformation",
+                            "configuration": {"parameters": {}},
+                            "rows": [],
+                        }
+                    ],
+                }
+            ],
+        )
+        push_svc2 = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: push_client2,
+        )
+        result2 = push_svc2.push(alias="prod", project_root=project_root)
+        # Idempotent re-push: diff sees no changes, so service short-circuits
+        # to status="no_changes" without ever entering the create path.
+        assert result2["status"] in ("no_changes", "pushed")
+        assert result2.get("created", 0) == 0, "re-push must be idempotent"
+        push_client2.create_config.assert_not_called()
