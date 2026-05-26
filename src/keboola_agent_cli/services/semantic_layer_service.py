@@ -13,6 +13,7 @@ can swap in a :class:`unittest.mock.MagicMock`.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import re
@@ -301,8 +302,6 @@ class SemanticLayerService(BaseService):
     @staticmethod
     def _matches_any_pattern(name: str, patterns: list[str]) -> bool:
         """Case-sensitive ``fnmatch`` against any of the supplied patterns."""
-        import fnmatch
-
         return any(fnmatch.fnmatchcase(name, pat) for pat in patterns)
 
     def search_context(

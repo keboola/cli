@@ -91,13 +91,8 @@ a critical failure.
        `edit metric|dataset|constraint|relationship|glossary`,
        `import`, `promote`, `build`, `token --encrypt`
      - destructive: `remove metric|dataset|constraint|relationship|glossary`
-     - alias: `kbagent sl ...` is hidden-equivalent to
-       `kbagent semantic-layer ...`
-     - `semantic-layer build` falls back to a deterministic heuristic
-       (one dataset + one COUNT(*) metric + one glossary entry per
-       table) until an AI Service JSON-generation endpoint exists;
-       this is a BEHAVIOR note, not a version gate -- the heuristic
-       is the only path on 0.41.0,
+     - alias: `kbagent sl ...` = `kbagent semantic-layer ...`
+     - `semantic-layer build` is heuristic-only on 0.41.0+ (one dataset + one COUNT(*) metric + one glossary entry per table; not a version gate),
    `kbagent http get/post/patch/delete <PATH>` (self-call against the
    running serve from a scheduled-agent subprocess; reads
    `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` env vars) needs 0.40.0+,
@@ -115,6 +110,7 @@ a critical failure.
    `kbagent update --beta` = 0.43.3+,
    `data-app logs` = 0.43.8+,
    `kbagent agent <verb>` (CLI parity /agents REST) = 0.44.0+,
+   `semantic-layer search-context|get-context`, `storage create-table --if-not-exists`, `sync push|pull|diff --branch`, `sync push --no-name-drift-warnings`, fresh-CREATE writeback + KBC.* = 0.47.0+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.

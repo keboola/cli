@@ -68,6 +68,15 @@ envelope now always carries `action: "created" | "skipped"` so programmatic
 callers can branch on outcome. Safe for parallel workers (e.g. FIIA's
 8-worker scaffold pattern that previously surfaced ~12 spurious errors per run).
 
+**Caveat — skipped envelope returns REQUESTED schema, not ACTUAL schema** (tracked
+in keboola/cli#349; planned fix in a follow-up). When `action == "skipped"`, the
+`columns` and `primary_key` fields in the envelope reflect what the CALLER asked
+for, not what the existing table actually has. If you want the real shape, call
+`kbagent storage table-detail --table-id <id> --branch <id>` after a skip. This
+matters when a caller hits a pre-existing table with a different shape — until
+keboola/cli#349 lands, the response is a re-echo of the request, not a discovery
+mechanism.
+
 ## `sync push --no-name-drift-warnings` suppresses the cosmetic warnings array (since v0.47.0)
 
 When local directory names diverge from the canonical kbagent naming (e.g.
