@@ -31,6 +31,7 @@ class CreateTable(BaseModel):
     not_null_columns: list[str] | None = None
     defaults: list[str] | None = None
     branch_id: int | None = None
+    if_not_exists: bool = False
 
 
 class DescribeBucket(BaseModel):
@@ -237,6 +238,7 @@ def create_table(
         branch_id=body.branch_id,
         not_null_columns=body.not_null_columns,
         defaults=body.defaults,
+        if_not_exists=body.if_not_exists,
     )
 
 

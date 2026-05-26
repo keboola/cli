@@ -281,6 +281,7 @@ class SyncService(BaseService):
         with_samples: bool = False,
         sample_limit: int = DEFAULT_SAMPLE_LIMIT,
         max_samples: int = DEFAULT_MAX_SAMPLES,
+        branch_override: int | None = None,
     ) -> dict[str, Any]:
         """Download all configurations from Keboola to local filesystem.
 
@@ -295,6 +296,8 @@ class SyncService(BaseService):
             with_samples: Download table data samples (opt-in).
             sample_limit: Max rows per sample (default 100).
             max_samples: Max number of tables to sample (default 50).
+            branch_override: If set, pull from this branch ID rather than
+                the resolved active/manifest branch (CLI ``--branch``).
 
         Returns:
             Dict with pull statistics (configs, rows, files written).
@@ -306,7 +309,9 @@ class SyncService(BaseService):
         manifest = load_manifest(project_root)
 
         # Determine branch to pull from (git-branching aware)
-        branch_id = self._resolve_branch_id(project, manifest, project_root)
+        branch_id = self._resolve_branch_id(
+            project, manifest, project_root, branch_override=branch_override
+        )
 
         # Fetch all components with configs from API (+ storage metadata + jobs)
         client = self._client_factory(project.stack_url, project.token)
@@ -840,11 +845,18 @@ class SyncService(BaseService):
         self,
         alias: str,
         project_root: Path,
+        branch_override: int | None = None,
     ) -> dict[str, Any]:
         """Compare local configs against the remote API state.
 
         Fetches current state from API, reads local _config.yml files,
         and runs the diff engine to produce a detailed changeset.
+
+        Args:
+            alias: Project alias.
+            project_root: Sync working-tree root.
+            branch_override: If set, diff against this branch ID rather
+                than the resolved active/manifest branch.
 
         Returns:
             Dict with 'changes' list and summary counts.
@@ -853,7 +865,9 @@ class SyncService(BaseService):
         project = projects[alias]
         manifest = load_manifest(project_root)
 
-        branch_id = self._resolve_branch_id(project, manifest, project_root)
+        branch_id = self._resolve_branch_id(
+            project, manifest, project_root, branch_override=branch_override
+        )
 
         # Fetch remote state
         client = self._client_factory(project.stack_url, project.token)
@@ -1086,6 +1100,8 @@ class SyncService(BaseService):
         dry_run: bool = False,
         force: bool = False,
         allow_plaintext_fallback: bool = False,
+        branch_override: int | None = None,
+        no_name_drift_warnings: bool = False,
     ) -> dict[str, Any]:
         """Push local changes to Keboola.
 
@@ -1097,11 +1113,20 @@ class SyncService(BaseService):
             project_root: Root directory of the sync working tree.
             dry_run: If True, compute changes but don't execute them.
             force: If True, allow deletions without extra confirmation.
+            allow_plaintext_fallback: If True, allow push when secret
+                encryption fails (DANGEROUS).
+            branch_override: If set, target this dev-branch ID for the push.
+                Wins over ``active_branch_id`` / ``manifest.branches[0]`` /
+                git-branching mapping. Used by the CLI ``--branch`` flag.
+            no_name_drift_warnings: If True, omit the ``name_drift_warnings``
+                array from the result envelope (the underlying detection
+                still runs; only the report is suppressed). Used by the CLI
+                ``--no-name-drift-warnings`` flag.
 
         Returns:
             Dict with push results (created, updated, deleted, errors).
         """
-        diff_result = self.diff(alias, project_root)
+        diff_result = self.diff(alias, project_root, branch_override=branch_override)
         all_changes = diff_result["changes"]
 
         # Only push local-side changes (added, modified, deleted).
@@ -1136,7 +1161,9 @@ class SyncService(BaseService):
         project = projects[alias]
         manifest = load_manifest(project_root)
 
-        branch_id = self._resolve_branch_id(project, manifest, project_root)
+        branch_id = self._resolve_branch_id(
+            project, manifest, project_root, branch_override=branch_override
+        )
 
         # Detect name drift: local dir name doesn't match config name
         name_drift_warnings = self._detect_name_drift(manifest, project_root)
@@ -1197,7 +1224,6 @@ class SyncService(BaseService):
                         )
                         if result:
                             new_id = str(result.get("id", ""))
-                            # Add to manifest with the API-assigned ID
                             config_dir = project_root / branch_path / config_path_str
                             config_file = config_dir / CONFIG_FILENAME
                             file_hash = self._file_hash(config_file) if config_file.exists() else ""
@@ -1207,18 +1233,30 @@ class SyncService(BaseService):
                                 cfg_hash = config_hash(local_data)
                             else:
                                 cfg_hash = ""
-                            manifest.configurations.append(
-                                ManifestConfiguration(
-                                    branchId=branch_id or 0,
-                                    componentId=component_id,
-                                    id=new_id,
-                                    path=config_path_str,
-                                    metadata={
-                                        "pull_hash": file_hash,
-                                        "pull_config_hash": cfg_hash,
-                                    },
-                                )
+                            entry = self._writeback_create_config_in_manifest(
+                                manifest=manifest,
+                                component_id=component_id,
+                                branch_id=branch_id,
+                                config_path_str=config_path_str,
+                                new_id=new_id,
+                                file_hash=file_hash,
+                                cfg_hash=cfg_hash,
                             )
+                            metadata_error = self._propagate_kbc_metadata(client, entry, branch_id)
+                            if metadata_error is not None:
+                                # The config IS on the remote; only the
+                                # follow-up metadata POST failed. Accumulate
+                                # like any other per-change error so the rest
+                                # of the push continues, and surface the
+                                # original cause in the envelope.
+                                errors.append(
+                                    {
+                                        "change_type": "metadata_propagation",
+                                        "component_id": component_id,
+                                        "config_id": new_id,
+                                        "message": metadata_error,
+                                    }
+                                )
                             manifest_dirty = True
                             created += 1
                             pushed_details.append(change)
@@ -1319,7 +1357,7 @@ class SyncService(BaseService):
             "errors": errors,
             "pushed_details": pushed_details,
         }
-        if name_drift_warnings:
+        if name_drift_warnings and not no_name_drift_warnings:
             result_data["name_drift_warnings"] = name_drift_warnings
         return result_data
 
@@ -1463,12 +1501,12 @@ class SyncService(BaseService):
         row_file = row_dir / CONFIG_FILENAME
         new_file_hash = self._file_hash(row_file) if row_file.exists() else ""
         cfg_hash_value = config_hash(pristine_data)
-        parent.rows.append(
-            ManifestConfigRow(
-                id=new_row_id,
-                path=row_path_str,
-                metadata={"pull_hash": new_file_hash, "pull_config_hash": cfg_hash_value},
-            )
+        self._writeback_create_row_in_manifest(
+            parent=parent,
+            row_path_str=row_path_str,
+            new_row_id=new_row_id,
+            file_hash=new_file_hash,
+            cfg_hash=cfg_hash_value,
         )
 
     def _push_update_row(
@@ -1655,6 +1693,123 @@ class SyncService(BaseService):
         # Write back: update local file with encrypted secrets.
         # Use pristine_data so blocks/code stay only in their code files.
         self._writeback_after_push(pristine_data, config_dir, config_id, configuration)
+
+    def _writeback_create_config_in_manifest(
+        self,
+        *,
+        manifest: Manifest,
+        component_id: str,
+        branch_id: int | None,
+        config_path_str: str,
+        new_id: str,
+        file_hash: str,
+        cfg_hash: str,
+    ) -> ManifestConfiguration:
+        """Record a freshly-created config in the manifest.
+
+        If a placeholder entry already exists at
+        ``(branch_id, component_id, path)`` -- the FIIA / scaffold emit
+        pattern -- update it in place, preserving any user-declared metadata
+        (e.g. ``KBC.configuration.folderName``) and refreshing only the
+        bookkeeping hashes. Otherwise append a new entry.
+
+        Matching includes ``branch_id`` because a single manifest can hold
+        entries from multiple branches in git-branching mode; matching on
+        ``(component_id, path)`` alone would risk updating the wrong branch's
+        entry when the same logical path exists under two branches.
+        """
+        target_branch = branch_id or 0
+        for entry in manifest.configurations:
+            if (
+                entry.branch_id == target_branch
+                and entry.component_id == component_id
+                and entry.path == config_path_str
+            ):
+                entry.id = new_id
+                entry.metadata["pull_hash"] = file_hash
+                entry.metadata["pull_config_hash"] = cfg_hash
+                return entry
+        new_entry = ManifestConfiguration(
+            branchId=target_branch,
+            componentId=component_id,
+            id=new_id,
+            path=config_path_str,
+            metadata={"pull_hash": file_hash, "pull_config_hash": cfg_hash},
+        )
+        manifest.configurations.append(new_entry)
+        return new_entry
+
+    def _writeback_create_row_in_manifest(
+        self,
+        *,
+        parent: ManifestConfiguration,
+        row_path_str: str,
+        new_row_id: str,
+        file_hash: str,
+        cfg_hash: str,
+    ) -> ManifestConfigRow:
+        """Record a freshly-created row under its parent in the manifest.
+
+        Mirrors :meth:`_writeback_create_config_in_manifest` for rows: update
+        any placeholder row entry in place, otherwise append.
+        """
+        for row in parent.rows:
+            if row.path == row_path_str:
+                row.id = new_row_id
+                row.metadata["pull_hash"] = file_hash
+                row.metadata["pull_config_hash"] = cfg_hash
+                return row
+        new_row = ManifestConfigRow(
+            id=new_row_id,
+            path=row_path_str,
+            metadata={"pull_hash": file_hash, "pull_config_hash": cfg_hash},
+        )
+        parent.rows.append(new_row)
+        return new_row
+
+    def _propagate_kbc_metadata(
+        self,
+        client: Any,
+        entry: ManifestConfiguration,
+        branch_id: int | None,
+    ) -> str | None:
+        """POST any ``KBC.*`` keys from the manifest entry to the metadata API.
+
+        Bookkeeping keys (``pull_hash``, ``pull_config_hash``, ...) live in the
+        same metadata dict but are filtered by the ``KBC.`` prefix. Called only
+        on CREATE; updates use ``kbagent config set-metadata`` explicitly. The
+        metadata API stores configuration-level annotations only -- this is
+        **not** a secret store; do not place tokens or passwords under
+        ``KBC.*`` keys.
+
+        Returns ``None`` on success (or when there are no KBC.* keys to
+        propagate). Returns the API error message on a non-fatal write
+        failure: the config is already created on the remote and the
+        manifest writeback is complete, so a single failed metadata POST
+        is reported back to the push loop as an accumulated error rather
+        than aborting the rest of the push.
+        """
+        entries = [
+            (key, str(value)) for key, value in entry.metadata.items() if key.startswith("KBC.")
+        ]
+        if not entries:
+            return None
+        try:
+            client.set_config_metadata(
+                component_id=entry.component_id,
+                config_id=entry.id,
+                entries=entries,
+                branch_id=branch_id,
+            )
+        except KeboolaApiError as exc:
+            logger.warning(
+                "Failed to propagate KBC.* metadata for %s/%s: %s",
+                entry.component_id,
+                entry.id,
+                exc,
+            )
+            return exc.message
+        return None
 
     def _writeback_after_push(
         self,
@@ -2120,10 +2275,12 @@ class SyncService(BaseService):
         project: Any,
         manifest: "Manifest",
         project_root: Path,
+        branch_override: int | None = None,
     ) -> int | None:
         """Resolve the Keboola branch ID for sync operations.
 
         Priority:
+        0. ``branch_override`` (CLI ``--branch <id>``) -- wins over everything
         1. Git-branching mode: read branch-mapping.json for current git branch
         2. ``active_branch_id`` from project config (``kbagent branch use``)
         3. First branch in manifest (production fallback)
@@ -2138,6 +2295,12 @@ class SyncService(BaseService):
         """
         from ..sync.branch_mapping import load_branch_mapping
         from ..sync.git_utils import get_current_branch
+
+        # CLI override beats every persisted source so a user can target a
+        # dev branch from a clean git workspace without first running
+        # `branch use` or `branch-link`.
+        if branch_override is not None:
+            return branch_override
 
         if manifest.git_branching.enabled:
             git_branch = get_current_branch(project_root)

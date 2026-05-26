@@ -67,6 +67,59 @@ kbagent sync push --all-projects             # apply
 
 Each project gets its own subdirectory (named by alias). Projects are processed in parallel.
 
+## Per-invocation dev-branch override (since v0.47.0)
+
+`sync push`, `sync pull`, and `sync diff` accept `--branch <id>` to target a
+dev branch for a single invocation. The override beats every other branch
+source: `manifest.branches[0]`, the project's `active_branch_id` (`branch use`),
+and the git-branching `branch-mapping.json`.
+
+```bash
+# Push the current working tree to dev branch 388072 without `branch use`
+# or `sync branch-link` first. Required exactly one --project.
+kbagent sync push --project prod --branch 388072
+
+# Same dev branch on pull (`sync diff` accepts it too).
+kbagent sync pull --project prod --branch 388072
+kbagent sync diff --project prod --branch 388072
+```
+
+Use cases:
+- Spin up a throwaway dev branch via `kbagent branch create`, push a
+  candidate change to it for testing, then `kbagent branch delete` to clean
+  up — all without touching the persisted active-branch state.
+- Scripted / scheduled flows where the branch id comes from an upstream
+  job (e.g. a CI pipeline computes the branch id and passes it via env).
+
+Mutually exclusive with `--all-projects` at the CLI layer (branch id is
+per-project; the validator returns exit 2 + `USAGE_ERROR` if combined).
+The override is per-invocation only — it does not write into the manifest
+or the config store, so a subsequent command without `--branch` falls back
+to the normal priority chain.
+
+## Fresh-CREATE writeback (since v0.47.0)
+
+If you (or a tool like FIIA) seed `.keboola/manifest.json` with placeholder
+entries before the first `sync push`, the writeback updates each placeholder
+**in place** rather than appending a new entry. Pre-v0.47.0 this produced
+manifests of length 2N after one push (placeholders + new entries both
+retained); from v0.47.0 the manifest stays at length N and the placeholder
+entry's id is updated to the API-assigned ULID. Re-pushes against the
+now-real id are naturally idempotent.
+
+If a placeholder entry's `metadata` dict contains `KBC.configuration.*`
+keys (e.g. `KBC.configuration.folderName`), they are propagated to the
+metadata API immediately after the create call. This was the previous
+"set folderName via `config set-folder` after push" workaround for
+fresh-create flows; from v0.47.0 a single push handles it.
+
+`sync push --no-name-drift-warnings` (since v0.47.0) suppresses the
+cosmetic `name_drift_warnings` array on the result envelope. The
+detection still runs; only the report is dropped. Useful for downstream
+tools that already audit drift their own way (e.g. FIIA's
+`var-07-fi-daily-date-refresh` pattern legitimately differs from the
+canonical kbagent naming and the warnings are noise).
+
 ## Adopting an existing kbc Go CLI checkout (since v0.22.0)
 
 If you already have a `.keboola/manifest.json` produced by the official

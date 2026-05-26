@@ -586,6 +586,16 @@ def storage_create_table(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    if_not_exists: bool = typer.Option(
+        False,
+        "--if-not-exists",
+        help=(
+            "Treat a duplicate-display-name failure as a successful no-op "
+            "when the table already exists at the expected id. Safe for "
+            "parallel workers (FIIA scaffold pattern). A different table "
+            "with the same display name still surfaces the original error."
+        ),
+    ),
 ) -> None:
     """Create a new storage table with typed columns.
 
@@ -622,6 +632,7 @@ def storage_create_table(
             not_null=not_null,
             default=default,
             branch=branch,
+            if_not_exists=if_not_exists,
         )
 
     formatter = get_formatter(ctx)
@@ -639,6 +650,7 @@ def storage_create_table(
             branch_id=effective_branch,
             not_null_columns=not_null,
             defaults=default,
+            if_not_exists=if_not_exists,
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
@@ -653,17 +665,25 @@ def storage_create_table(
     if formatter.json_mode:
         formatter.output(result)
     else:
-        formatter.console.print(f"[bold green]Created table:[/bold green] {result['table_id']}")
-        if result.get("auto_created_bucket"):
+        if result.get("action") == "skipped":
             formatter.console.print(
-                f"  [yellow]Note:[/yellow] bucket {result['bucket_id']} was "
-                f"auto-materialized in this branch."
+                f"[bold yellow]Skipped[/bold yellow] (already exists): {result['table_id']}"
             )
-        if result["primary_key"]:
-            formatter.console.print(f"  Primary key: {', '.join(result['primary_key'])}")
-        formatter.console.print(f"  Columns: {', '.join(result['columns'])}")
-        if result.get("legacy_branch_storage"):
-            formatter.console.print(_LEGACY_BRANCH_STORAGE_WARNING)
+            reason = result.get("skip_reason")
+            if reason:
+                formatter.console.print(f"  [dim]{reason}[/dim]")
+        else:
+            formatter.console.print(f"[bold green]Created table:[/bold green] {result['table_id']}")
+            if result.get("auto_created_bucket"):
+                formatter.console.print(
+                    f"  [yellow]Note:[/yellow] bucket {result['bucket_id']} was "
+                    f"auto-materialized in this branch."
+                )
+            if result["primary_key"]:
+                formatter.console.print(f"  Primary key: {', '.join(result['primary_key'])}")
+            formatter.console.print(f"  Columns: {', '.join(result['columns'])}")
+            if result.get("legacy_branch_storage"):
+                formatter.console.print(_LEGACY_BRANCH_STORAGE_WARNING)
 
 
 @storage_app.command("upload-table", rich_help_panel=_TABLES)

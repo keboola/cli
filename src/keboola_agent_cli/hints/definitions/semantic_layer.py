@@ -162,6 +162,84 @@ HintRegistry.register(
 )
 
 
+# ── semantic-layer search-context (since v0.47.0) ─────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="semantic-layer.search-context",
+        description=(
+            "Search semantic-layer entities project-wide by glob pattern "
+            "(mirrors the upstream keboola-mcp-server search_semantic_context)"
+        ),
+        steps=[
+            HintStep(
+                comment=(
+                    "List every entity of the requested type (or every "
+                    "child type if --type=all) and filter by name pattern."
+                ),
+                client=ClientCall(
+                    method="list_items",
+                    args={"item_type": '"semantic-dataset"'},
+                    client_type="metastore",
+                    result_var="datasets",
+                    result_hint="list[dict]",
+                ),
+                service=_make_service(
+                    "search_context",
+                    patterns="{pattern}",
+                    type_filter="{type_filter}",
+                    limit="{limit}",
+                ),
+            ),
+        ],
+        notes=[
+            _PARALLEL_CHILDREN_NOTE,
+            "Pattern matching is case-sensitive fnmatch against attributes.name.",
+            "`--limit` short-circuits both inner and outer loops.",
+        ],
+    )
+)
+
+
+# ── semantic-layer get-context (since v0.47.0) ────────────────────
+
+HintRegistry.register(
+    CommandHint(
+        cli_command="semantic-layer.get-context",
+        description=(
+            "Fetch a single semantic-layer entity by id, irrespective of type "
+            "(mirrors the upstream keboola-mcp-server get_semantic_context)"
+        ),
+        steps=[
+            HintStep(
+                comment=("Try each type until one returns 200. Raise NOT_FOUND if none match."),
+                client=ClientCall(
+                    method="get_item",
+                    args={
+                        "item_type": '"semantic-dataset"',
+                        "item_id": "{context_id}",
+                    },
+                    client_type="metastore",
+                    result_var="entity",
+                    result_hint="dict",
+                ),
+                service=_make_service(
+                    "get_context",
+                    context_id="{context_id}",
+                ),
+            ),
+        ],
+        notes=[
+            (
+                "Iteration order is: semantic-model, then semantic-dataset / "
+                "metric / relationship / constraint / glossary."
+            ),
+            "404 on any one type is non-terminal; only a full miss raises NOT_FOUND.",
+        ],
+    )
+)
+
+
 # ── semantic-layer validate ────────────────────────────────────────
 
 HintRegistry.register(

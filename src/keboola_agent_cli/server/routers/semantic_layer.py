@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
 from ...errors import ErrorCode
@@ -254,6 +254,34 @@ def validate(
     return registry.semantic_layer.validate_model(
         alias=project, model_name_or_uuid=model, deep=deep
     )
+
+
+@router.get("/search-context", summary="Search semantic contexts by name pattern")
+def search_context(
+    project: str,
+    pattern: list[str] = Query(default=["*"]),
+    type: str = "all",
+    limit: int | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Project-wide glob search across semantic-layer entities.
+
+    Mirrors ``kbagent semantic-layer search-context``. See the service-layer
+    docstring for matching semantics and the returned envelope shape.
+    """
+    return registry.semantic_layer.search_context(
+        alias=project, patterns=pattern, type_filter=type, limit=limit
+    )
+
+
+@router.get("/get-context", summary="Fetch one semantic context by id")
+def get_context(
+    project: str,
+    context_id: str,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Single-entry fetch by id; probes every type until found."""
+    return registry.semantic_layer.get_context(alias=project, context_id=context_id)
 
 
 @router.get("/export", summary="Export model snapshot")

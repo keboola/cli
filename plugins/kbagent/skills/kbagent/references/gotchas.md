@@ -11,6 +11,103 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## `sync push` fresh-CREATE writeback now updates placeholders in place (since v0.47.0)
+
+Before v0.47.0, `kbagent sync push` always **appended** new `ManifestConfiguration`
+(and `ManifestConfigRow`) entries to `.keboola/manifest.json` on every CREATE.
+The FIIA / scaffold emit pattern — pre-populating manifest entries with
+placeholder ids before the first push — therefore produced manifests with
+N placeholders + N real entries (= 2N) after one push, and every placeholder
+still looked `added` on re-push (spurious duplicates on remote).
+
+Starting in v0.47.0, the create path looks up an existing entry by
+`(component_id, path)` and **updates it in place** (id, branch_id, pull_hash,
+pull_config_hash refreshed; user-declared `KBC.configuration.*` metadata
+preserved). When no placeholder is found, the legacy append path still fires
+(so commands like `sync init` followed by direct push of newly-pulled remote
+configs are unaffected).
+
+Two follow-on contract notes:
+
+- **Re-push idempotency comes for free.** After the first push the manifest
+  holds the real ULID, so the diff engine matches against remote_configs and
+  reports `status: no_changes, created: 0`. No more "every fresh-create
+  emit doubles the manifest" workaround needed.
+- **`KBC.configuration.*` metadata propagates on CREATE.** If a placeholder
+  entry's `metadata` dict contains keys starting with `KBC.` (e.g.
+  `KBC.configuration.folderName`), they are POSTed to the metadata API
+  via `client.set_config_metadata` immediately after the create call.
+  Bookkeeping keys (`pull_hash`, `pull_config_hash`, ...) are filtered
+  out by the `KBC.` prefix check. `_push_update` does **not** propagate
+  metadata — use `kbagent config set-metadata` (or `config set-folder`)
+  for that.
+
+If a downstream consumer has been working around the duplication by
+post-processing the manifest, drop that workaround. The single-entry
+manifest is the new contract.
+
+## `sync push` / `sync pull` / `sync diff` accept `--branch <id>` for per-invocation dev-branch targeting (since v0.47.0)
+
+The `--branch` override wins over every other branch source: `manifest.branches[0]`,
+`active_branch_id` (set by `kbagent branch use`), and the git-branching
+`branch-mapping.json`. Required exactly one `--project` (branch id is per-project).
+Useful for targeting a freshly-created dev branch without running `branch use` or
+`sync branch-link` first. The override is per-invocation only — it does not persist
+to the manifest or to the config store, so subsequent commands without `--branch`
+fall back to the normal priority chain.
+
+## `storage create-table --if-not-exists` returns `action: skipped` instead of raising on duplicate display name (since v0.47.0)
+
+Opt-in flag (default `False`, so existing callers are unaffected). When set,
+catches the specific `STORAGE_JOB_FAILED` + "already has the same display name"
+error from the Storage API, probes `get_table_detail(target_id)`, and returns
+`{action: "skipped", skip_reason: "table already exists", table_id: ...}` when
+the table really exists at the expected id. A different table that happens to
+share the display name still raises (real conflict to resolve). The response
+envelope now always carries `action: "created" | "skipped"` so programmatic
+callers can branch on outcome. Safe for parallel workers (e.g. FIIA's
+8-worker scaffold pattern that previously surfaced ~12 spurious errors per run).
+
+**Caveat — skipped envelope returns REQUESTED schema, not ACTUAL schema** (tracked
+in keboola/cli#349; planned fix in a follow-up). When `action == "skipped"`, the
+`columns` and `primary_key` fields in the envelope reflect what the CALLER asked
+for, not what the existing table actually has. If you want the real shape, call
+`kbagent storage table-detail --table-id <id> --branch <id>` after a skip. This
+matters when a caller hits a pre-existing table with a different shape — until
+keboola/cli#349 lands, the response is a re-echo of the request, not a discovery
+mechanism.
+
+## `sync push --no-name-drift-warnings` suppresses the cosmetic warnings array (since v0.47.0)
+
+When local directory names diverge from the canonical kbagent naming (e.g.
+FIIA's `var-07-fi-daily-date-refresh` pattern), `sync push` normally returns
+a `name_drift_warnings: [...]` array on the result envelope. The
+`--no-name-drift-warnings` flag drops that field. The underlying detection
+still runs, so a future operator who wants to audit can flip the flag off
+without losing data.
+
+## `semantic-layer search-context` + `get-context` cover the MCP `search_semantic_context` / `get_semantic_context` parity (since v0.47.0)
+
+`kbagent semantic-layer search-context --project P [--pattern G ...] [--type T] [--limit N]`
+is project-wide (not model-scoped). Patterns are **case-sensitive `fnmatch`** against
+`attributes.name`, repeatable (union). Default `--type all` searches every CHILD
+type (datasets, metrics, relationships, constraints, glossary) and does **not**
+include semantic models — pass `--type model` to search those. The response
+envelope is `{project, contexts: [{id, type, name, description, attributes}], total_count}`.
+The `type` field is the CLI-friendly singular (no `semantic-` prefix on the wire form).
+
+`kbagent semantic-layer get-context --project P --context-id ID` probes
+`semantic-model` first then every child type until a 200 lands. A 404 on any
+single probe is non-terminal (keeps trying); only a full miss across all 6
+types raises `NOT_FOUND` (exit 1). **Non-404 errors propagate immediately**
+without continuing the probe — a 500 on the dataset type does not get
+swallowed by the subsequent metric probe.
+
+These two subcommands cover the pre-flight pattern FIIA uses to verify a
+project's semantic model is populated before kicking off a downstream
+pipeline; the previous workaround (a `keboola-mcp-server` MCP server entry
+in `.mcp.json` solely for these two tools) can be dropped.
+
 ## `workspace list` / `workspace detail` now expose loginType + RO + qs_compatible (since v0.42.0, closes #304)
 
 Before v0.42.0 the Storage workspace endpoint already returned

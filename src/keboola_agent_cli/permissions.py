@@ -174,6 +174,8 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.validate": "read",
     "semantic-layer.export": "read",
     "semantic-layer.diff": "read",
+    "semantic-layer.search-context": "read",
+    "semantic-layer.get-context": "read",
     # The `model` sub-app: the parent `semantic-layer` callback fires first
     # with ctx.invoked_subcommand == "model" and synthesizes operation key
     # ``semantic-layer.model``. We expose that key at the LEAST-privileged

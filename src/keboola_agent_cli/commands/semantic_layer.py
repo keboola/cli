@@ -917,3 +917,146 @@ def semantic_layer_validate(
         deep=deep,
     )
     formatter.output(result, _print_validate)
+
+
+# ---------------------------------------------------------------------------
+# semantic-layer search-context / get-context
+#
+# Project-wide read surface that mirrors the upstream
+# ``keboola-mcp-server`` semantic-context tools. Lets downstream callers
+# (FIIA, scheduled agents) drop the MCP dependency for the common
+# "is the model populated?" + "what's at this id?" lookups.
+# ---------------------------------------------------------------------------
+
+
+def _print_search_context(console: Console, data: dict) -> None:
+    project = data.get("project", "")
+    total = data.get("total_count", 0)
+    console.print(
+        f"\n[bold]Semantic contexts[/bold] in [magenta]{project}[/magenta]: "
+        f"{total} match{'es' if total != 1 else ''}"
+    )
+    contexts = data.get("contexts", []) or []
+    if not contexts:
+        console.print("[dim](no matches)[/dim]")
+        return
+    table = Table()
+    table.add_column("Type", style="bold cyan")
+    table.add_column("Name", style="bold")
+    table.add_column("ID")
+    table.add_column("Description")
+    for c in contexts:
+        table.add_row(
+            str(c.get("type", "")),
+            str(c.get("name", "")),
+            str(c.get("id", "")),
+            str(c.get("description", ""))[:60],
+        )
+    console.print(table)
+
+
+def _print_get_context(console: Console, data: dict) -> None:
+    console.print(
+        f"\n[bold]{data.get('type', '?')}[/bold] "
+        f"[cyan]{data.get('name', '')}[/cyan] "
+        f"([dim]{data.get('id', '')}[/dim]) in "
+        f"[magenta]{data.get('project', '')}[/magenta]"
+    )
+    desc = data.get("description", "")
+    if desc:
+        console.print(f"\n{desc}\n")
+    attrs = data.get("attributes") or {}
+    if attrs:
+        console.print("[bold]Attributes:[/bold]")
+        console.print(json.dumps(attrs, indent=2, sort_keys=True, default=str))
+
+
+@semantic_layer_app.command("search-context")
+def semantic_layer_search_context(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    pattern: list[str] = typer.Option(
+        ["*"],
+        "--pattern",
+        help=(
+            "Glob pattern matched against entity name (case-sensitive "
+            "fnmatch). Repeatable; matches the union. Default: '*'."
+        ),
+    ),
+    type_filter: str = typer.Option(
+        "all",
+        "--type",
+        help=(
+            "Restrict to one type: model | dataset | metric | relationship | "
+            "constraint | glossary | all. Default: all (every child type)."
+        ),
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        help="Maximum number of results to return. Default: no cap.",
+    ),
+) -> None:
+    """Search semantic-layer entities across a project by name pattern.
+
+    Project-wide (not model-scoped). Equivalent to the upstream
+    ``keboola-mcp-server`` ``search_semantic_context`` tool. Use this as a
+    pre-flight check ("is the semantic model populated?") before kicking
+    off a downstream pipeline that depends on it.
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "semantic-layer.search-context",
+            project=project,
+            pattern=pattern,
+            type_filter=type_filter,
+            limit=limit,
+        )
+        return
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "semantic_layer_service")
+    result = _handle_service_call(
+        ctx,
+        service.search_context,
+        alias=project,
+        patterns=pattern,
+        type_filter=type_filter,
+        limit=limit,
+    )
+    formatter.output(result, _print_search_context)
+
+
+@semantic_layer_app.command("get-context")
+def semantic_layer_get_context(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    context_id: str = typer.Option(
+        ...,
+        "--context-id",
+        help="UUID of the entity to fetch (model, dataset, metric, ...).",
+    ),
+) -> None:
+    """Fetch a single semantic-layer entity by id, irrespective of its type.
+
+    Probes every type (model + datasets / metrics / relationships /
+    constraints / glossary) until it finds the entity, then returns the
+    full attribute dict. Exits 1 if no type matches.
+    """
+    if should_hint(ctx):
+        emit_hint(
+            ctx,
+            "semantic-layer.get-context",
+            project=project,
+            context_id=context_id,
+        )
+        return
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "semantic_layer_service")
+    result = _handle_service_call(
+        ctx,
+        service.get_context,
+        alias=project,
+        context_id=context_id,
+    )
+    formatter.output(result, _print_get_context)
