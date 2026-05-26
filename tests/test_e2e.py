@@ -9606,6 +9606,7 @@ class TestE2ESemanticLayerLifecycle:
 # ---------------------------------------------------------------------------
 
 
+@skip_without_credentials
 @pytest.mark.e2e
 class TestE2E_0_47_0_NewSurfaces:
     """E2E coverage for v0.47.0 additions.
