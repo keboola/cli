@@ -253,11 +253,8 @@ class SemanticLayerService(BaseService):
             ``{id, name, description, sql_dialect}``).
         """
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             raw = client.list_items("semantic-model")
-        finally:
-            client.close()
 
         models: list[dict[str, Any]] = []
         for item in raw:
@@ -357,12 +354,9 @@ class SemanticLayerService(BaseService):
             )
 
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, model_attrs = self._resolve_model(client, model_name_or_uuid)
             raw_by_type = self._fetch_children_parallel(client, model_uuid)
-        finally:
-            client.close()
 
         result: dict[str, Any] = {
             "project": alias,
@@ -393,12 +387,9 @@ class SemanticLayerService(BaseService):
         check inventory.
         """
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, model_attrs = self._resolve_model(client, model_name_or_uuid)
             raw_by_type = self._fetch_children_parallel(client, model_uuid)
-        finally:
-            client.close()
 
         datasets = _unpack_attrs_with_id(raw_by_type.get("semantic-dataset", []))
         metrics = _unpack_attrs_with_id(raw_by_type.get("semantic-metric", []))
@@ -495,12 +486,9 @@ class SemanticLayerService(BaseService):
             relationships, constraints, glossary, counts}``.
         """
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, model_attrs = self._resolve_model(client, model_name_or_uuid)
             raw_by_type = self._fetch_children_parallel(client, model_uuid)
-        finally:
-            client.close()
 
         snapshot = _build_export_snapshot(
             alias=alias,
@@ -615,14 +603,11 @@ class SemanticLayerService(BaseService):
     ) -> dict[str, Any]:
         """Create a semantic-layer model and return the server-stored item."""
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             data: dict[str, Any] = {"name": name, "sql_dialect": sql_dialect}
             if description:
                 data["description"] = description
             created = client.post_item("semantic-model", name=name, data=data)
-        finally:
-            client.close()
         return {"project": alias, "model": created}
 
     def delete_model(
@@ -639,8 +624,7 @@ class SemanticLayerService(BaseService):
         in the helper to keep this file under the 1500 LOC ceiling.
         """
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, model_attrs = self._resolve_model(client, model_name_or_uuid)
             children = self._fetch_children_parallel(client, model_uuid)
             return _cascade_delete_model_impl(
@@ -650,8 +634,6 @@ class SemanticLayerService(BaseService):
                 model_attrs=model_attrs,
                 children=children,
             )
-        finally:
-            client.close()
 
     # ------------------------------------------------------------------
     # Phase 4 — add subcommands
@@ -678,8 +660,7 @@ class SemanticLayerService(BaseService):
         rather than silently push a broken metric.
         """
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             datasets = client.list_items("semantic-dataset", model_uuid)
             ds_tids = {(d.get("attributes") or {}).get("tableId", "") for d in datasets}
@@ -710,8 +691,6 @@ class SemanticLayerService(BaseService):
             if description:
                 data["description"] = description
             return client.post_item("semantic-metric", name=name, data=data)
-        finally:
-            client.close()
 
     def add_dataset(
         self,
@@ -731,8 +710,7 @@ class SemanticLayerService(BaseService):
         synthesises a ``fields[]`` array with role heuristics.
         """
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             data: dict[str, Any] = {
                 "name": name,
@@ -757,8 +735,6 @@ class SemanticLayerService(BaseService):
                 if fields:
                     data["fields"] = fields
             return client.post_item("semantic-dataset", name=name, data=data)
-        finally:
-            client.close()
 
     def add_relationship(
         self,
@@ -778,8 +754,7 @@ class SemanticLayerService(BaseService):
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             data = {
                 "name": name,
@@ -790,8 +765,6 @@ class SemanticLayerService(BaseService):
                 "modelUUID": model_uuid,
             }
             return client.post_item("semantic-relationship", name=name, data=data)
-        finally:
-            client.close()
 
     def add_constraint(
         self,
@@ -816,8 +789,7 @@ class SemanticLayerService(BaseService):
 
         # METRICS exist in model
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             existing = client.list_items("semantic-metric", model_uuid)
             existing_names = {(m.get("attributes") or {}).get("name", "") for m in existing}
@@ -839,8 +811,6 @@ class SemanticLayerService(BaseService):
                 "modelUUID": model_uuid,
             }
             return client.post_item("semantic-constraint", name=name, data=data)
-        finally:
-            client.close()
 
     def add_glossary(
         self,
@@ -852,15 +822,12 @@ class SemanticLayerService(BaseService):
     ) -> dict[str, Any]:
         """Create a glossary term. Outer envelope ``name`` must equal ``term``."""
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             data: dict[str, Any] = {"term": term, "modelUUID": model_uuid}
             if definition:
                 data["definition"] = definition
             return client.post_item("semantic-glossary", name=term, data=data)
-        finally:
-            client.close()
 
     # ------------------------------------------------------------------
     # Phase 4 — edit (DELETE-then-POST with rollback + rename cascade)
@@ -896,8 +863,7 @@ class SemanticLayerService(BaseService):
         delegates.
         """
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             return _edit_metric_helper(
                 client,
@@ -911,8 +877,6 @@ class SemanticLayerService(BaseService):
                 is_tty=is_tty,
                 confirm_cb=confirm_cb,
             )
-        finally:
-            client.close()
 
     def edit_dataset(
         self,
@@ -926,8 +890,7 @@ class SemanticLayerService(BaseService):
     ) -> dict[str, Any]:
         """Edit a dataset (DELETE+POST). Renames do NOT cascade for datasets."""
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             return _edit_simple_helper(
                 client,
@@ -942,8 +905,6 @@ class SemanticLayerService(BaseService):
                 },
                 not_found_label="Dataset",
             )
-        finally:
-            client.close()
 
     def edit_constraint(
         self,
@@ -968,8 +929,7 @@ class SemanticLayerService(BaseService):
         )
 
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             if new_metrics is not None:
                 existing = client.list_items("semantic-metric", model_uuid)
@@ -995,8 +955,6 @@ class SemanticLayerService(BaseService):
                 },
                 not_found_label="Constraint",
             )
-        finally:
-            client.close()
 
     def edit_relationship(
         self,
@@ -1022,8 +980,7 @@ class SemanticLayerService(BaseService):
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             return _edit_simple_helper(
                 client,
@@ -1040,8 +997,6 @@ class SemanticLayerService(BaseService):
                 },
                 not_found_label="Relationship",
             )
-        finally:
-            client.close()
 
     def edit_glossary(
         self,
@@ -1060,8 +1015,7 @@ class SemanticLayerService(BaseService):
         behind ``--yes``; this method just executes.
         """
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             return _edit_simple_helper(
                 client,
@@ -1072,8 +1026,6 @@ class SemanticLayerService(BaseService):
                 overrides={"term": new_term, "definition": new_definition},
                 not_found_label="Glossary term",
             )
-        finally:
-            client.close()
 
     # ------------------------------------------------------------------
     # Phase 5 — remove (destructive, orphan-warning before delete)
@@ -1105,8 +1057,7 @@ class SemanticLayerService(BaseService):
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             target, _, _ = _find_target_for_remove(
                 client,
@@ -1126,8 +1077,6 @@ class SemanticLayerService(BaseService):
                 "name": name,
                 "orphaned_constraints": orphan_constraints,
             }
-        finally:
-            client.close()
 
     def remove_item(
         self,
@@ -1146,8 +1095,7 @@ class SemanticLayerService(BaseService):
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             target, type_slug, _ = _find_target_for_remove(
                 client,
@@ -1166,8 +1114,6 @@ class SemanticLayerService(BaseService):
                 "removed": {"type": type_slug, "id": target["id"], "name": name},
                 "orphaned_constraints": orphan_constraints,
             }
-        finally:
-            client.close()
 
     # ------------------------------------------------------------------
     # Phase 6 — import (replay a snapshot, optionally overwrite)
@@ -1251,8 +1197,7 @@ class SemanticLayerService(BaseService):
         type_filter = _validate_types_filter(types)
 
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             existing_by_type = self._fetch_children_parallel(client, model_uuid)
 
@@ -1273,8 +1218,6 @@ class SemanticLayerService(BaseService):
                 "overwrite": overwrite,
                 "imported": imported,
             }
-        finally:
-            client.close()
 
     # ------------------------------------------------------------------
     # Phase 6 — promote (cross-project copy)
@@ -1311,9 +1254,10 @@ class SemanticLayerService(BaseService):
 
         type_filter = _validate_types_filter(types)
 
-        src_client = self._new_metastore_client(projects[from_project])
-        tgt_client = self._new_metastore_client(projects[to_project])
-        try:
+        with (
+            self._new_metastore_client(projects[from_project]) as src_client,
+            self._new_metastore_client(projects[to_project]) as tgt_client,
+        ):
             src_uuid, _ = self._resolve_model(src_client, from_model)
             tgt_uuid, _ = self._resolve_model(tgt_client, to_model)
 
@@ -1336,11 +1280,6 @@ class SemanticLayerService(BaseService):
                 "dry_run": dry_run,
                 **per_type_stats,
             }
-        finally:
-            try:
-                src_client.close()
-            finally:
-                tgt_client.close()
 
     # ------------------------------------------------------------------
     # Phase 7 — build (AI-assisted / heuristic greenfield)
@@ -1448,8 +1387,7 @@ class SemanticLayerService(BaseService):
 
         # Push to the metastore in dependency order.
         project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
+        with self._new_metastore_client(project) as client:
             counts, model_uuid, model_item = _push_built_model(
                 client,
                 generated=generated,
@@ -1460,8 +1398,6 @@ class SemanticLayerService(BaseService):
             result["model"] = {"id": model_uuid, "item": model_item}
             result["created"] = counts
             return result
-        finally:
-            client.close()
 
     # ------------------------------------------------------------------
     # Phase 8 — token --encrypt

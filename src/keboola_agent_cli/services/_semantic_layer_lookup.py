@@ -101,9 +101,8 @@ def run_search_context(
         )
     types_to_search = _resolve_search_types(type_filter, child_types, type_alias)
 
-    client = open_client()
     contexts: list[dict[str, Any]] = []
-    try:
+    with open_client() as client:
         for wire_type in types_to_search:
             for item in client.list_items(wire_type):
                 attrs = item.get("attributes") or {}
@@ -123,8 +122,6 @@ def run_search_context(
                     break
             if limit is not None and len(contexts) >= limit:
                 break
-    finally:
-        client.close()
 
     return {"project": alias, "contexts": contexts, "total_count": len(contexts)}
 
@@ -157,8 +154,7 @@ def run_get_context(
         )
 
     lookup_order: tuple[SemanticType, ...] = (_MODEL_TYPE, *child_types)
-    client = open_client()
-    try:
+    with open_client() as client:
         for wire_type in lookup_order:
             try:
                 item = client.get_item(wire_type, context_id)
@@ -175,8 +171,6 @@ def run_get_context(
                 "description": attrs.get("description", ""),
                 "attributes": attrs,
             }
-    finally:
-        client.close()
 
     raise KeboolaApiError(
         message=(

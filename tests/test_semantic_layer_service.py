@@ -78,8 +78,15 @@ def _make_service(
     *,
     metastore_mock: MagicMock | None = None,
 ) -> tuple[SemanticLayerService, MagicMock]:
-    """Wire a SemanticLayerService with a mocked metastore client factory."""
+    """Wire a SemanticLayerService with a mocked metastore client factory.
+
+    The mock supports the context-manager protocol (``__enter__`` returns
+    self, ``__exit__`` is a no-op) so the service-layer `with` blocks see
+    the same MagicMock body that tests configure side-effects on.
+    """
     mock = metastore_mock or MagicMock()
+    mock.__enter__ = MagicMock(return_value=mock)
+    mock.__exit__ = MagicMock(return_value=False)
     service = SemanticLayerService(
         config_store=store,
         metastore_client_factory=lambda url, token: mock,
@@ -256,7 +263,7 @@ class TestListModels:
             "description": "first",
             "sql_dialect": "Snowflake",
         }
-        mock.close.assert_called_once()
+        mock.__exit__.assert_called_once()
 
     def test_empty_project(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -1928,7 +1935,11 @@ class TestPromoteModel:
         store = _make_store_two(tmp_path)
 
         src_mock = MagicMock()
+        src_mock.__enter__ = MagicMock(return_value=src_mock)
+        src_mock.__exit__ = MagicMock(return_value=False)
         tgt_mock = MagicMock()
+        tgt_mock.__enter__ = MagicMock(return_value=tgt_mock)
+        tgt_mock.__exit__ = MagicMock(return_value=False)
         clients = {0: src_mock, 1: tgt_mock}
         call_idx = {"i": 0}
 
@@ -1991,7 +2002,11 @@ class TestPromoteModel:
         store = _make_store_two(tmp_path)
 
         src_mock = MagicMock()
+        src_mock.__enter__ = MagicMock(return_value=src_mock)
+        src_mock.__exit__ = MagicMock(return_value=False)
         tgt_mock = MagicMock()
+        tgt_mock.__enter__ = MagicMock(return_value=tgt_mock)
+        tgt_mock.__exit__ = MagicMock(return_value=False)
         clients = {0: src_mock, 1: tgt_mock}
         call_idx = {"i": 0}
 
@@ -2010,8 +2025,8 @@ class TestPromoteModel:
 
         with pytest.raises(RuntimeError):
             service.promote_model(from_project="source", to_project="target")
-        src_mock.close.assert_called_once()
-        tgt_mock.close.assert_called_once()
+        src_mock.__exit__.assert_called_once()
+        tgt_mock.__exit__.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -2586,7 +2601,7 @@ class TestSearchContext:
         with pytest.raises(KeboolaApiError):
             service.search_context("prod")
 
-        mock.close.assert_called_once()
+        mock.__exit__.assert_called_once()
 
 
 class TestGetContext:
@@ -2664,4 +2679,4 @@ class TestGetContext:
         with pytest.raises(KeboolaApiError):
             service.get_context("prod", "x")
 
-        mock.close.assert_called_once()
+        mock.__exit__.assert_called_once()
