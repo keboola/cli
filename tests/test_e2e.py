@@ -58,6 +58,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from helpers import metastore_scope_available
@@ -9899,3 +9900,220 @@ class TestE2E_0_47_0_NewSurfaces:
         assert body["data"].get("changes") is not None
         summary = body["data"].get("summary", {})
         assert summary.get("remote_only", 0) >= 0
+
+    # ------------------------------------------------------------------
+    # sync push -- fresh-CREATE writeback + KBC.configuration.* propagation
+    # (Area B headline fix; against real Storage API + metadata API)
+    # ------------------------------------------------------------------
+
+    def test_sync_push_fresh_create_writeback_and_kbc_metadata(self) -> None:
+        """Round-trip the FIIA / scaffold emit pattern against a real
+        Keboola project: hand-author a placeholder ManifestConfiguration
+        with ``KBC.configuration.folderName`` declared, run ``sync push``,
+        and assert:
+          1. The push reports ``created=1, errors=0``.
+          2. The manifest entry was updated in place (length stays at 1,
+             not 2; placeholder id is now the assigned ULID; folderName
+             metadata is preserved on the entry).
+          3. The remote configuration's metadata-list returns the
+             KBC.configuration.folderName key with the declared value.
+          4. A second ``sync push`` against the same workspace is a no-op
+             (``status=no_changes, created=0, errors=0``).
+
+        Cleanup: delete the freshly-created remote config + the dev branch
+        in the teardown so re-runs do not accumulate residue.
+        """
+        from keboola_agent_cli.constants import CONFIG_FILENAME, CONFIG_YML_VERSION
+        from keboola_agent_cli.sync.manifest import (
+            ManifestConfiguration,
+            load_manifest,
+            save_manifest,
+        )
+
+        _step("v0470-4", "sync push fresh-CREATE writeback + KBC.* propagation")
+
+        # Throwaway dev branch so we never pollute main.
+        branch_name = f"v0470-fcw-{RUN_ID[:20]}"
+        branch_data = self._run_ok(
+            "branch",
+            "create",
+            "--project",
+            self.alias,
+            "--name",
+            branch_name,
+        )
+        dev_branch_id = int(branch_data["data"]["branch_id"])
+        self._dev_branch_id = dev_branch_id  # teardown will delete
+
+        # Fresh sync workspace.
+        project_dir = self.tmp_path / "v0470-fcw"
+        project_dir.mkdir()
+        _git(project_dir, "init")
+        _git(project_dir, "config", "user.email", "e2e@test.local")
+        _git(project_dir, "config", "user.name", "E2E Test")
+        _git(project_dir, "commit", "--allow-empty", "-m", "init")
+
+        init_result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "sync",
+                "init",
+                "--project",
+                self.alias,
+                "--directory",
+                str(project_dir),
+            ],
+        )
+        assert init_result.exit_code == 0, init_result.output
+
+        # Pull the dev branch so its branch directory + entry land in the
+        # manifest (otherwise the placeholder's target branch is not
+        # tracked and sync push can't resolve a path for it).
+        pull_result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "sync",
+                "pull",
+                "--project",
+                self.alias,
+                "--directory",
+                str(project_dir),
+                "--branch",
+                str(dev_branch_id),
+                "--no-storage",
+                "--no-jobs",
+            ],
+        )
+        assert pull_result.exit_code == 0, pull_result.output
+
+        manifest = load_manifest(project_dir)
+        dev_branch_entry = next((b for b in manifest.branches if b.id == dev_branch_id), None)
+        assert dev_branch_entry is not None, (
+            "sync pull --branch must register the dev branch in the manifest"
+        )
+        dev_branch_path = dev_branch_entry.path
+
+        # Hand-author a placeholder ManifestConfiguration with the
+        # KBC.configuration.folderName key (FIIA / scaffold emit pattern).
+        component_id = "keboola.snowflake-transformation"
+        config_dir_name = f"v0470-fcw-{RUN_ID[:18]}"
+        cfg_rel_path = f"transformation/{component_id}/{config_dir_name}"
+        folder_name = "v0.47.0 E2E Fresh-CREATE"
+        manifest.configurations.append(
+            ManifestConfiguration(
+                branchId=dev_branch_id,
+                componentId=component_id,
+                id="PLACEHOLDER-FCW",
+                path=cfg_rel_path,
+                metadata={"KBC.configuration.folderName": folder_name},
+            )
+        )
+        save_manifest(project_dir, manifest)
+        pre_push_n = len(manifest.configurations)
+
+        # Local _config.yml for the placeholder.
+        local_dir = project_dir / dev_branch_path / cfg_rel_path
+        local_dir.mkdir(parents=True)
+        (local_dir / CONFIG_FILENAME).write_text(
+            yaml.dump(
+                {
+                    "version": CONFIG_YML_VERSION,
+                    "name": "v0.47.0 e2e fresh-create",
+                    "description": "E2E test: fresh-CREATE writeback in place",
+                    "parameters": {},
+                    "_keboola": {"component_id": component_id, "config_id": ""},
+                },
+                default_flow_style=False,
+            ),
+            encoding="utf-8",
+        )
+
+        # First push: should CREATE the config + propagate the folder.
+        push_result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "sync",
+                "push",
+                "--project",
+                self.alias,
+                "--directory",
+                str(project_dir),
+                "--branch",
+                str(dev_branch_id),
+            ],
+        )
+        assert push_result.exit_code == 0, push_result.output
+        body = json.loads(push_result.output)
+        assert body.get("status") == "ok", body
+        data = body["data"]
+        assert data["created"] == 1, data
+        assert data["errors"] == [], data["errors"]
+
+        # Manifest contract: updated in place (length unchanged).
+        post = load_manifest(project_dir)
+        matching = [
+            c
+            for c in post.configurations
+            if c.component_id == component_id
+            and c.path == cfg_rel_path
+            and c.branch_id == dev_branch_id
+        ]
+        assert len(matching) == 1, (
+            "writeback must update placeholder in place, not duplicate; "
+            f"found {len(matching)} matching entries"
+        )
+        assigned_id = matching[0].id
+        assert assigned_id != "PLACEHOLDER-FCW", (
+            "placeholder id must be replaced with the API-assigned ULID"
+        )
+        assert matching[0].metadata.get("KBC.configuration.folderName") == folder_name
+        assert len(post.configurations) == pre_push_n, "manifest must not grow on a single CREATE"
+
+        # Remote metadata: folderName landed via the metadata API.
+        meta_result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "config",
+                "metadata-list",
+                "--project",
+                self.alias,
+                "--component-id",
+                component_id,
+                "--config-id",
+                assigned_id,
+                "--branch",
+                str(dev_branch_id),
+            ],
+        )
+        meta = _json_ok(meta_result)
+        meta_keys = {m.get("key"): m.get("value") for m in meta["data"]["metadata"]}
+        assert meta_keys.get("KBC.configuration.folderName") == folder_name, (
+            f"folderName missing or wrong on remote metadata-list: {meta_keys}"
+        )
+
+        # Second push: idempotent (no_changes; create_config NOT called again).
+        repush = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "sync",
+                "push",
+                "--project",
+                self.alias,
+                "--directory",
+                str(project_dir),
+                "--branch",
+                str(dev_branch_id),
+            ],
+        )
+        assert repush.exit_code == 0, repush.output
+        repush_body = json.loads(repush.output)
+        repush_status = repush_body.get("data", {}).get("status") or repush_body.get("status")
+        assert repush_status in ("no_changes", "pushed"), repush_body
+        assert repush_body["data"].get("created", 0) == 0, (
+            "re-push must be idempotent: created=0 after writeback in place"
+        )
