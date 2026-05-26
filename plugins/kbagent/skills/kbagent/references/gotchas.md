@@ -68,14 +68,17 @@ envelope now always carries `action: "created" | "skipped"` so programmatic
 callers can branch on outcome. Safe for parallel workers (e.g. FIIA's
 8-worker scaffold pattern that previously surfaced ~12 spurious errors per run).
 
-**Caveat — skipped envelope returns REQUESTED schema, not ACTUAL schema** (tracked
-in keboola/cli#349; planned fix in a follow-up). When `action == "skipped"`, the
-`columns` and `primary_key` fields in the envelope reflect what the CALLER asked
-for, not what the existing table actually has. If you want the real shape, call
-`kbagent storage table-detail --table-id <id> --branch <id>` after a skip. This
-matters when a caller hits a pre-existing table with a different shape — until
-keboola/cli#349 lands, the response is a re-echo of the request, not a discovery
-mechanism.
+**Skipped envelope reports the ACTUAL existing schema (since v0.47.1, keboola/cli#349).**
+When `action == "skipped"`, `columns` / `primary_key` / `name` reflect the
+EXISTING table's real schema (read from the `get_table_detail` probe that
+confirms the table exists), not the caller's request. The caller's requested
+values are preserved under `requested_columns` and `requested_primary_key`, and
+`schema_drift: true` flags when the existing table diverges from what was
+requested. So the skipped envelope IS a valid discovery mechanism — a caller can
+trust `columns` / `primary_key` as the real shape and inspect `schema_drift` to
+detect "I hit a pre-existing table with a different shape". (Before v0.47.1 the
+skipped envelope re-echoed the request, so older installs must still call
+`kbagent storage table-detail` after a skip to get the real shape.)
 
 ## `sync push --no-name-drift-warnings` suppresses the cosmetic warnings array (since v0.47.0)
 

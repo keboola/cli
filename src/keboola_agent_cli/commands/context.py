@@ -348,6 +348,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
       probe get-table-detail at the expected id and, if the table really exists, return
       `action: "skipped", skip_reason: "table already exists"` instead of raising. A different
       table with the same display name still surfaces the original error. Safe for parallel workers.
+      Since 0.47.1: the skipped envelope reports the EXISTING table's actual `columns`/`primary_key`/`name`
+      (not the request); requested values are mirrored under `requested_columns`/`requested_primary_key`,
+      and `schema_drift: true` flags when the existing table diverges from what was requested.
     - Base types: STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP. Type defaults to STRING if omitted.
     - Native backend types with length pass through to the Storage API: VARCHAR(40), NUMBER(18,2), CHAR(10), TIMESTAMP_TZ, TIMESTAMP_NTZ, VARIANT, OBJECT, ARRAY, etc.
       The API validates type/length per backend; e.g. INTEGER(10) is rejected with "'10' is not valid length for INTEGER".

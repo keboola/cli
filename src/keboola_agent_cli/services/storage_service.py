@@ -743,7 +743,14 @@ class StorageService(BaseService):
                 must be lowercase per Keboola API validation.
 
         Returns:
-            Dict with created table details and ``auto_created_bucket`` flag.
+            Dict with table details and ``auto_created_bucket`` flag.
+            ``action`` is ``"created"`` on a fresh create. When
+            ``if_not_exists`` is set and the table already existed,
+            ``action`` is ``"skipped"`` and ``columns`` / ``primary_key`` /
+            ``name`` report the EXISTING table's actual schema (not the
+            request); the caller's requested values are mirrored under
+            ``requested_columns`` / ``requested_primary_key``, and
+            ``schema_drift`` is ``True`` when the two diverge.
 
         Raises:
             ValueError: Malformed column spec or ``--default`` assignment,
@@ -806,13 +813,30 @@ class StorageService(BaseService):
                     except KeboolaApiError:
                         existing = None
                     if existing is not None:
+                        # Report the EXISTING table's actual schema, not the
+                        # caller's request. A caller relying on the skipped
+                        # envelope to discover the real shape must not be handed
+                        # a re-echo of its own args (keboola/cli#349). The
+                        # requested values are preserved under `requested_*` so
+                        # the caller can still see the divergence, and
+                        # `schema_drift` flags when the existing table differs.
+                        requested_columns = [c["name"] for c in parsed_columns]
+                        requested_primary_key = primary_key or []
+                        actual_columns = existing.get("columns", [])
+                        actual_primary_key = existing.get("primaryKey", [])
+                        schema_drift = set(actual_columns) != set(requested_columns) or set(
+                            actual_primary_key
+                        ) != set(requested_primary_key)
                         return {
                             "project_alias": alias,
                             "table_id": target_table_id,
-                            "name": name,
+                            "name": existing.get("name", name),
                             "bucket_id": bucket_id,
-                            "primary_key": primary_key or [],
-                            "columns": [c["name"] for c in parsed_columns],
+                            "primary_key": actual_primary_key,
+                            "columns": actual_columns,
+                            "requested_primary_key": requested_primary_key,
+                            "requested_columns": requested_columns,
+                            "schema_drift": schema_drift,
                             "auto_created_bucket": auto_created_bucket,
                             "legacy_branch_storage": _detect_legacy_branch_storage(
                                 client, branch_id

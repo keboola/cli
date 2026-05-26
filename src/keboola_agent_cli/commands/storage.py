@@ -672,6 +672,16 @@ def storage_create_table(
             reason = result.get("skip_reason")
             if reason:
                 formatter.console.print(f"  [dim]{reason}[/dim]")
+            if result.get("schema_drift"):
+                formatter.console.print(
+                    "  [yellow]Warning:[/yellow] the existing table's schema differs "
+                    "from the requested definition. The fields below show the ACTUAL "
+                    "existing schema; your requested schema was not applied."
+                )
+            if result.get("primary_key"):
+                formatter.console.print(f"  Primary key: {', '.join(result['primary_key'])}")
+            if result.get("columns"):
+                formatter.console.print(f"  Columns: {', '.join(result['columns'])}")
         else:
             formatter.console.print(f"[bold green]Created table:[/bold green] {result['table_id']}")
             if result.get("auto_created_bucket"):
