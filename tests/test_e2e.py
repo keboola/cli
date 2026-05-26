@@ -9613,7 +9613,7 @@ class TestE2E_0_47_0_NewSurfaces:
     - ``semantic-layer search-context`` + ``get-context`` -- project-wide read
     - ``sync diff --branch <id>`` -- per-invocation dev-branch override
 
-    All four touch a real Keboola project via the configured E2E token. The
+    All three touch a real Keboola project via the configured E2E token. The
     test creates a throwaway dev branch where needed and deletes it in the
     teardown so residue does not accumulate across re-runs.
     """
