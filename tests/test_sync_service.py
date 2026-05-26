@@ -2822,8 +2822,8 @@ class TestFreshCreateWriteback:
         return SyncService(config_store=setup_single_project(tmp_config_dir))
 
     def test_writeback_config_in_place_updates_placeholder(self, tmp_config_dir: Path) -> None:
-        """A placeholder entry at the same ``(component_id, path)`` is updated
-        in place; the manifest does not grow."""
+        """A placeholder entry at the same (branch_id, component_id, path) is
+        updated in place; the manifest does not grow."""
         from keboola_agent_cli.sync.manifest import ManifestConfiguration
 
         svc = self._make_svc(tmp_config_dir)
@@ -2832,7 +2832,7 @@ class TestFreshCreateWriteback:
             naming={"config": "{component_type}/{component_id}/{config_name}"},  # type: ignore[arg-type]
             configurations=[
                 ManifestConfiguration(
-                    branchId=0,
+                    branchId=12345,
                     componentId="keboola.snowflake-transformation",
                     id="PLACEHOLDER-TX1",
                     path="transformation/keboola.snowflake-transformation/01_stage",
@@ -2859,6 +2859,48 @@ class TestFreshCreateWriteback:
         assert entry.metadata["KBC.configuration.folderName"] == "FI Pipeline", (
             "user-declared KBC.* metadata must survive the writeback"
         )
+
+    def test_writeback_config_does_not_match_across_branches(self, tmp_config_dir: Path) -> None:
+        """A placeholder at the same (component_id, path) but a different
+        branch must NOT be matched. The new entry is appended; the other
+        branch's entry is left untouched."""
+        from keboola_agent_cli.sync.manifest import ManifestConfiguration
+
+        svc = self._make_svc(tmp_config_dir)
+        # Placeholder for branch 12345 (e.g. main); we push to dev branch 99999.
+        manifest = Manifest.model_construct(
+            project={"id": 1, "apiHost": "connection.keboola.com"},  # type: ignore[arg-type]
+            naming={"config": "{component_type}/{component_id}/{config_name}"},  # type: ignore[arg-type]
+            configurations=[
+                ManifestConfiguration(
+                    branchId=12345,
+                    componentId="keboola.snowflake-transformation",
+                    id="main-id-001",
+                    path="transformation/keboola.snowflake-transformation/01_stage",
+                    metadata={"KBC.configuration.folderName": "Main FI"},
+                )
+            ],
+        )
+
+        entry = svc._writeback_create_config_in_manifest(
+            manifest=manifest,
+            component_id="keboola.snowflake-transformation",
+            branch_id=99999,
+            config_path_str="transformation/keboola.snowflake-transformation/01_stage",
+            new_id="dev-id-002",
+            file_hash="h1",
+            cfg_hash="h2",
+        )
+
+        # Two entries: the main-branch one untouched, plus the new dev-branch
+        # one we just appended.
+        assert len(manifest.configurations) == 2
+        main_entry = next(c for c in manifest.configurations if c.branch_id == 12345)
+        assert main_entry.id == "main-id-001"
+        assert main_entry.metadata == {"KBC.configuration.folderName": "Main FI"}
+        # The returned entry is the newly-appended dev-branch one.
+        assert entry.branch_id == 99999
+        assert entry.id == "dev-id-002"
 
     def test_writeback_config_appends_when_no_placeholder(self, tmp_config_dir: Path) -> None:
         """If no placeholder exists at the path, append (legacy fallback)."""
@@ -2931,9 +2973,41 @@ class TestFreshCreateWriteback:
         )
         client = MagicMock()
 
-        svc._propagate_kbc_metadata(client, entry, branch_id=None)
+        result = svc._propagate_kbc_metadata(client, entry, branch_id=None)
 
         client.set_config_metadata.assert_not_called()
+        assert result is None
+
+    def test_propagate_kbc_metadata_returns_error_message_on_api_failure(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """A failed metadata POST returns the error message (caller accumulates
+        into the push errors list) instead of aborting the push mid-loop."""
+        from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+        from keboola_agent_cli.sync.manifest import ManifestConfiguration
+
+        svc = self._make_svc(tmp_config_dir)
+        entry = ManifestConfiguration(
+            branchId=0,
+            componentId="keboola.snowflake-transformation",
+            id="cfg-123",
+            path="x",
+            metadata={"KBC.configuration.folderName": "FI Pipeline"},
+        )
+        client = MagicMock()
+        client.set_config_metadata.side_effect = KeboolaApiError(
+            message="metastore 500",
+            status_code=500,
+            error_code=ErrorCode.API_ERROR,
+        )
+
+        result = svc._propagate_kbc_metadata(client, entry, branch_id=None)
+
+        assert result == "metastore 500", (
+            "non-fatal metadata failure must return the message for the caller "
+            "to accumulate into the push error list"
+        )
+        client.set_config_metadata.assert_called_once()
 
     def test_writeback_row_in_place_updates_placeholder(self, tmp_config_dir: Path) -> None:
         """A placeholder row at the same ``path`` is updated in place; parent's

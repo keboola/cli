@@ -9596,3 +9596,306 @@ class TestE2ESemanticLayerLifecycle:
                     )
             except _ApiError as exc:
                 print(f"  WARN: residue scan failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# v0.47.0 -- fresh-CREATE writeback + new ergonomic flags (E2E coverage per
+# CLAUDE.md convention #16: "Every new CLI command MUST have a corresponding
+# E2E test in tests/test_e2e.py").
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.e2e
+class TestE2E_0_47_0_NewSurfaces:
+    """E2E coverage for v0.47.0 additions.
+
+    - ``storage create-table --if-not-exists`` -- idempotent re-create
+    - ``semantic-layer search-context`` + ``get-context`` -- project-wide read
+    - ``sync diff --branch <id>`` -- per-invocation dev-branch override
+
+    All four touch a real Keboola project via the configured E2E token. The
+    test creates a throwaway dev branch where needed and deletes it in the
+    teardown so residue does not accumulate across re-runs.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path):
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-v0470"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self.tmp_path = tmp_path
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+        self._dev_branch_id: int | None = None
+        self._created_bucket_id: str | None = None
+        try:
+            yield
+        finally:
+            if self._dev_branch_id is not None:
+                try:
+                    self._run(
+                        "branch",
+                        "delete",
+                        "--project",
+                        self.alias,
+                        "--branch",
+                        str(self._dev_branch_id),
+                    )
+                except Exception as exc:
+                    print(f"  WARN: branch delete failed: {exc}")
+            if self._created_bucket_id is not None:
+                try:
+                    self._run(
+                        "storage",
+                        "delete-bucket",
+                        "--project",
+                        self.alias,
+                        "--bucket-id",
+                        self._created_bucket_id,
+                        "--force",
+                        "--yes",
+                    )
+                except Exception as exc:
+                    print(f"  WARN: bucket delete failed: {exc}")
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    # ------------------------------------------------------------------
+    # storage create-table --if-not-exists
+    # ------------------------------------------------------------------
+
+    def test_storage_create_table_if_not_exists_round_trip(self) -> None:
+        """First call: action=created. Second call with --if-not-exists:
+        action=skipped. Third call without the flag: STORAGE_JOB_FAILED."""
+        _step("v0470-1", "storage create-table --if-not-exists")
+        bucket_name = f"v0470_{RUN_ID.replace('-', '_')[:20]}"
+        bucket_data = self._run_ok(
+            "storage",
+            "create-bucket",
+            "--project",
+            self.alias,
+            "--stage",
+            "in",
+            "--name",
+            bucket_name,
+        )
+        bucket_id = bucket_data["data"]["id"]
+        assert bucket_id.startswith("in.c-")
+        self._created_bucket_id = bucket_id
+
+        table_name = f"v0470_tbl_{RUN_ID.replace('-', '_')[:16]}"
+
+        first = self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            table_name,
+            "--column",
+            "id:INTEGER",
+            "--column",
+            "label:STRING",
+            "--primary-key",
+            "id",
+            "--if-not-exists",
+        )
+        assert first["data"]["action"] == "created"
+        assert first["data"]["table_id"] == f"{bucket_id}.{table_name}"
+
+        second = self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            table_name,
+            "--column",
+            "id:INTEGER",
+            "--column",
+            "label:STRING",
+            "--primary-key",
+            "id",
+            "--if-not-exists",
+        )
+        assert second["data"]["action"] == "skipped"
+        assert second["data"]["skip_reason"] == "table already exists"
+        assert second["data"]["table_id"] == f"{bucket_id}.{table_name}"
+
+        third = self._run(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            table_name,
+            "--column",
+            "id:INTEGER",
+            "--primary-key",
+            "id",
+        )
+        assert third.exit_code != 0, (
+            "default behavior must still error on duplicate (no silent skip)"
+        )
+        body = json.loads(third.output)
+        assert body.get("status") == "error"
+        assert body.get("error", {}).get("code") == "STORAGE_JOB_FAILED"
+
+    # ------------------------------------------------------------------
+    # semantic-layer search-context / get-context
+    # ------------------------------------------------------------------
+
+    def test_semantic_layer_search_and_get_context(self) -> None:
+        """search-context with default pattern returns a valid envelope.
+        get-context with an all-zero UUID returns NOT_FOUND."""
+        _step("v0470-2", "semantic-layer search-context + get-context")
+
+        search = self._run_ok(
+            "semantic-layer",
+            "search-context",
+            "--project",
+            self.alias,
+            "--pattern",
+            "*",
+        )
+        data = search["data"]
+        assert "contexts" in data
+        assert "total_count" in data
+        assert isinstance(data["contexts"], list)
+        assert isinstance(data["total_count"], int)
+        assert data["total_count"] == len(data["contexts"])
+        for ctx in data["contexts"]:
+            assert ctx["type"] in {
+                "model",
+                "dataset",
+                "metric",
+                "relationship",
+                "constraint",
+                "glossary",
+            }, f"unexpected type slug: {ctx['type']!r}"
+
+        only_datasets = self._run_ok(
+            "semantic-layer",
+            "search-context",
+            "--project",
+            self.alias,
+            "--type",
+            "dataset",
+        )
+        for ctx in only_datasets["data"]["contexts"]:
+            assert ctx["type"] == "dataset"
+
+        missing = self._run(
+            "semantic-layer",
+            "get-context",
+            "--project",
+            self.alias,
+            "--context-id",
+            "00000000-0000-0000-0000-000000000000",
+        )
+        assert missing.exit_code != 0
+        body = json.loads(missing.output)
+        assert body.get("status") == "error"
+        assert body.get("error", {}).get("code") == "NOT_FOUND"
+
+        if data["contexts"]:
+            first_id = data["contexts"][0]["id"]
+            roundtrip = self._run_ok(
+                "semantic-layer",
+                "get-context",
+                "--project",
+                self.alias,
+                "--context-id",
+                first_id,
+            )
+            assert roundtrip["data"]["id"] == first_id
+            assert roundtrip["data"]["type"] == data["contexts"][0]["type"]
+
+    # ------------------------------------------------------------------
+    # sync diff --branch
+    # ------------------------------------------------------------------
+
+    def test_sync_diff_branch_override(self) -> None:
+        """A dev branch created on the fly is targetable via `sync diff --branch`
+        without first running `branch use` or `sync branch-link`."""
+        _step("v0470-3", "sync diff --branch <id>")
+
+        branch_name = f"v0470-e2e-{RUN_ID[:20]}"
+        branch_data = self._run_ok(
+            "branch",
+            "create",
+            "--project",
+            self.alias,
+            "--name",
+            branch_name,
+        )
+        dev_branch_id = int(branch_data["data"]["branch_id"])
+        self._dev_branch_id = dev_branch_id
+
+        project_dir = self.tmp_path / "v0470-sync"
+        project_dir.mkdir()
+        _git(project_dir, "init")
+        _git(project_dir, "config", "user.email", "e2e@test.local")
+        _git(project_dir, "config", "user.name", "E2E Test")
+        _git(project_dir, "commit", "--allow-empty", "-m", "init")
+
+        init_result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "sync",
+                "init",
+                "--project",
+                self.alias,
+                "--directory",
+                str(project_dir),
+            ],
+        )
+        assert init_result.exit_code == 0, init_result.output
+
+        with_override = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "sync",
+                "diff",
+                "--project",
+                self.alias,
+                "--directory",
+                str(project_dir),
+                "--branch",
+                str(dev_branch_id),
+            ],
+        )
+        body = json.loads(with_override.output)
+        assert body.get("status") == "ok", body
+        assert body["data"].get("changes") is not None
+        summary = body["data"].get("summary", {})
+        assert summary.get("remote_only", 0) >= 0

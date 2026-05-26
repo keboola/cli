@@ -1171,6 +1171,50 @@ class TestCreateTableIfNotExists:
 class TestCreateTableCLI:
     """CLI tests for `kbagent storage create-table`."""
 
+    def test_human_renders_skip_when_action_is_skipped(self, tmp_path: Path) -> None:
+        """When --if-not-exists triggers a skip, human mode prints
+        'Skipped (already exists)' instead of the misleading 'Created table'."""
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.create_table.return_value = {
+                "project_alias": "test",
+                "table_id": "in.c-b.users",
+                "name": "users",
+                "bucket_id": "in.c-b",
+                "primary_key": ["id"],
+                "columns": ["id", "name"],
+                "action": "skipped",
+                "skip_reason": "table already exists",
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "storage",
+                    "create-table",
+                    "--project",
+                    "test",
+                    "--bucket-id",
+                    "in.c-b",
+                    "--name",
+                    "users",
+                    "--column",
+                    "id:INTEGER",
+                    "--if-not-exists",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert "Skipped" in result.output
+        assert "in.c-b.users" in result.output
+        assert "table already exists" in result.output
+        assert "Created table" not in result.output, (
+            "must NOT print the misleading success line on a skipped row"
+        )
+
     def test_create_table_json(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         with (

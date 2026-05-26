@@ -1242,7 +1242,21 @@ class SyncService(BaseService):
                                 file_hash=file_hash,
                                 cfg_hash=cfg_hash,
                             )
-                            self._propagate_kbc_metadata(client, entry, branch_id)
+                            metadata_error = self._propagate_kbc_metadata(client, entry, branch_id)
+                            if metadata_error is not None:
+                                # The config IS on the remote; only the
+                                # follow-up metadata POST failed. Accumulate
+                                # like any other per-change error so the rest
+                                # of the push continues, and surface the
+                                # original cause in the envelope.
+                                errors.append(
+                                    {
+                                        "change_type": "metadata_propagation",
+                                        "component_id": component_id,
+                                        "config_id": new_id,
+                                        "message": metadata_error,
+                                    }
+                                )
                             manifest_dirty = True
                             created += 1
                             pushed_details.append(change)
@@ -1693,20 +1707,30 @@ class SyncService(BaseService):
     ) -> ManifestConfiguration:
         """Record a freshly-created config in the manifest.
 
-        If a placeholder entry already exists at ``(component_id, path)`` --
-        the FIIA / scaffold emit pattern -- update it in place, preserving any
-        user-declared metadata (e.g. ``KBC.configuration.folderName``) and
-        refreshing only the bookkeeping hashes. Otherwise append a new entry.
+        If a placeholder entry already exists at
+        ``(branch_id, component_id, path)`` -- the FIIA / scaffold emit
+        pattern -- update it in place, preserving any user-declared metadata
+        (e.g. ``KBC.configuration.folderName``) and refreshing only the
+        bookkeeping hashes. Otherwise append a new entry.
+
+        Matching includes ``branch_id`` because a single manifest can hold
+        entries from multiple branches in git-branching mode; matching on
+        ``(component_id, path)`` alone would risk updating the wrong branch's
+        entry when the same logical path exists under two branches.
         """
+        target_branch = branch_id or 0
         for entry in manifest.configurations:
-            if entry.component_id == component_id and entry.path == config_path_str:
+            if (
+                entry.branch_id == target_branch
+                and entry.component_id == component_id
+                and entry.path == config_path_str
+            ):
                 entry.id = new_id
-                entry.branch_id = branch_id or 0
                 entry.metadata["pull_hash"] = file_hash
                 entry.metadata["pull_config_hash"] = cfg_hash
                 return entry
         new_entry = ManifestConfiguration(
-            branchId=branch_id or 0,
+            branchId=target_branch,
             componentId=component_id,
             id=new_id,
             path=config_path_str,
@@ -1748,24 +1772,44 @@ class SyncService(BaseService):
         client: Any,
         entry: ManifestConfiguration,
         branch_id: int | None,
-    ) -> None:
+    ) -> str | None:
         """POST any ``KBC.*`` keys from the manifest entry to the metadata API.
 
         Bookkeeping keys (``pull_hash``, ``pull_config_hash``, ...) live in the
         same metadata dict but are filtered by the ``KBC.`` prefix. Called only
-        on CREATE; updates use ``kbagent config set-metadata`` explicitly.
+        on CREATE; updates use ``kbagent config set-metadata`` explicitly. The
+        metadata API stores configuration-level annotations only -- this is
+        **not** a secret store; do not place tokens or passwords under
+        ``KBC.*`` keys.
+
+        Returns ``None`` on success (or when there are no KBC.* keys to
+        propagate). Returns the API error message on a non-fatal write
+        failure: the config is already created on the remote and the
+        manifest writeback is complete, so a single failed metadata POST
+        is reported back to the push loop as an accumulated error rather
+        than aborting the rest of the push.
         """
         entries = [
             (key, str(value)) for key, value in entry.metadata.items() if key.startswith("KBC.")
         ]
         if not entries:
-            return
-        client.set_config_metadata(
-            component_id=entry.component_id,
-            config_id=entry.id,
-            entries=entries,
-            branch_id=branch_id,
-        )
+            return None
+        try:
+            client.set_config_metadata(
+                component_id=entry.component_id,
+                config_id=entry.id,
+                entries=entries,
+                branch_id=branch_id,
+            )
+        except KeboolaApiError as exc:
+            logger.warning(
+                "Failed to propagate KBC.* metadata for %s/%s: %s",
+                entry.component_id,
+                entry.id,
+                exc,
+            )
+            return exc.message
+        return None
 
     def _writeback_after_push(
         self,
