@@ -232,6 +232,7 @@ HintRegistry.register(
                         "branch_id": "{branch}",
                         "not_null_columns": "{not_null}",
                         "defaults": "{default}",
+                        "if_not_exists": "{if_not_exists}",
                     },
                 ),
             ),
@@ -242,6 +243,7 @@ HintRegistry.register(
             "Service mode: --not-null and --default flags add nullable/default to column definitions.",
             "Client mode: build column dicts directly as [{'name': 'pk', 'definition': {'type': 'VARCHAR', 'length': '40', 'nullable': False}}].",
             "In a dev branch, service layer auto-materializes the bucket on 404 (mirrors Keboola Go CLI's EnsureBucketExists). Client mode does not -- call get_bucket_detail + create_bucket first.",
+            "if_not_exists=True (0.47.0+) returns {action: 'skipped'} on a duplicate-display-name failure when the table really exists at the expected id. Safe for parallel workers.",
         ],
     )
 )

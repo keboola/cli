@@ -13,7 +13,6 @@ can swap in a :class:`unittest.mock.MagicMock`.
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import logging
 import re
@@ -53,6 +52,8 @@ from ._semantic_layer_internals import unpack_children_by_plural as _unpack_chil
 from ._semantic_layer_internals import validate_basic as _validate_basic_helper
 from ._semantic_layer_internals import validate_deep as _validate_deep_helper
 from ._semantic_layer_internals import write_snapshot_to_file as _write_snapshot_to_file
+from ._semantic_layer_lookup import run_get_context as _run_get_context_helper
+from ._semantic_layer_lookup import run_search_context as _run_search_context_helper
 from .base import BaseService, ClientFactory
 from .encrypt_service import EncryptService
 from .storage_service import StorageService
@@ -224,10 +225,7 @@ class SemanticLayerService(BaseService):
             metastore_client_factory or default_metastore_client_factory
         )
 
-    # ------------------------------------------------------------------
-    # Helpers (used by every subcommand)
-    # ------------------------------------------------------------------
-
+    # Helpers (used by every subcommand).
     def _resolve_one_project(self, alias: str) -> ProjectConfig:
         """Resolve a single project alias to its ``ProjectConfig`` or raise.
 
@@ -241,20 +239,12 @@ class SemanticLayerService(BaseService):
         return self._metastore_factory(project.stack_url, project.token)
 
     def _resolve_model(
-        self,
-        client: MetastoreClient,
-        model_name_or_uuid: str | None,
+        self, client: MetastoreClient, model_name_or_uuid: str | None
     ) -> tuple[str, dict[str, Any]]:
-        """Resolve a model selector to ``(uuid, attributes_dict)``.
-
-        Body lives in :func:`._semantic_layer_internals.resolve_model_uuid`.
-        """
+        """Resolve a model selector via :func:`._semantic_layer_internals.resolve_model_uuid`."""
         return _resolve_model_uuid(client, model_name_or_uuid)
 
-    # ------------------------------------------------------------------
-    # Phase 3 — Read commands
-    # ------------------------------------------------------------------
-
+    # Phase 3 — Read commands.
     def list_models(self, alias: str) -> dict[str, Any]:
         """List all semantic-layer models for a project.
 
@@ -282,28 +272,6 @@ class SemanticLayerService(BaseService):
             )
         return {"project": alias, "models": models}
 
-    # ------------------------------------------------------------------
-    # Project-wide context search / lookup (v0.47.0, FIIA migration)
-    # ------------------------------------------------------------------
-
-    # Lookup order for ``get_context``: models first so a hit on a small
-    # collection short-circuits the per-type scan. The five child types
-    # follow ``CHILD_TYPES`` order so iteration is deterministic.
-    _ALL_TYPES_FOR_LOOKUP: ClassVar[tuple[SemanticType, ...]] = (
-        "semantic-model",
-        *CHILD_TYPES,
-    )
-
-    @staticmethod
-    def _strip_semantic_prefix(wire_type: str) -> str:
-        """``"semantic-dataset"`` -> ``"dataset"`` for the CLI surface."""
-        return wire_type[len("semantic-") :] if wire_type.startswith("semantic-") else wire_type
-
-    @staticmethod
-    def _matches_any_pattern(name: str, patterns: list[str]) -> bool:
-        """Case-sensitive ``fnmatch`` against any of the supplied patterns."""
-        return any(fnmatch.fnmatchcase(name, pat) for pat in patterns)
-
     def search_context(
         self,
         alias: str,
@@ -311,139 +279,27 @@ class SemanticLayerService(BaseService):
         type_filter: str | None = None,
         limit: int | None = None,
     ) -> dict[str, Any]:
-        """Search semantic-layer entities across a project by glob pattern.
-
-        Project-wide (not model-scoped). Mirrors the upstream
-        ``keboola-mcp-server`` ``search_semantic_context`` tool so downstream
-        callers (FIIA, scheduled agents) can drop the MCP dependency.
-
-        Args:
-            alias: Project alias.
-            patterns: Glob patterns matched against ``attributes.name``
-                (case-sensitive ``fnmatchcase``). Empty / None means
-                ``["*"]`` -- everything.
-            type_filter: ``None`` / ``"all"`` searches every child type
-                (datasets, metrics, relationships, constraints, glossary).
-                A single CLI singular (``"dataset"``, ``"metric"``, ...)
-                narrows the search. ``"model"`` searches semantic models.
-            limit: Stop after collecting this many matches. ``None`` =
-                no cap. The per-type loop short-circuits to honour it.
-
-        Returns:
-            ``{"project": alias, "contexts": [...], "total_count": N}``.
-            Each context is ``{"id", "type", "name", "description",
-            "attributes"}`` where ``type`` is the CLI-friendly singular
-            (``"dataset"``, ``"metric"``, ...) without the ``"semantic-"``
-            wire prefix.
-        """
-        # Normalize + validate inputs at the service boundary so the CLI,
-        # the REST router, and any --hint service caller all share the
-        # same error shape.
-        eff_patterns: list[str] = patterns or ["*"]
-        if any(not p for p in eff_patterns):
-            raise KeboolaApiError(
-                message="--pattern values must be non-empty strings",
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
-        if limit is not None and limit <= 0:
-            raise KeboolaApiError(
-                message="--limit must be a positive integer",
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
-
-        types_to_search: tuple[SemanticType, ...]
-        if type_filter is None or type_filter == "all":
-            types_to_search = CHILD_TYPES
-        elif type_filter == "model":
-            types_to_search = ("semantic-model",)
-        elif type_filter in TYPE_ALIAS:
-            types_to_search = (TYPE_ALIAS[type_filter],)
-        else:
-            allowed = ["all", "model", *sorted(TYPE_ALIAS)]
-            raise KeboolaApiError(
-                message=(f"Invalid --type {type_filter!r}. Must be one of: {', '.join(allowed)}."),
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
-
-        project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        contexts: list[dict[str, Any]] = []
-        try:
-            for wire_type in types_to_search:
-                items = client.list_items(wire_type)
-                for item in items:
-                    attrs = item.get("attributes") or {}
-                    name = str(attrs.get("name", ""))
-                    if not self._matches_any_pattern(name, eff_patterns):
-                        continue
-                    contexts.append(
-                        {
-                            "id": item.get("id", ""),
-                            "type": self._strip_semantic_prefix(wire_type),
-                            "name": name,
-                            "description": attrs.get("description", ""),
-                            "attributes": attrs,
-                        }
-                    )
-                    if limit is not None and len(contexts) >= limit:
-                        break
-                if limit is not None and len(contexts) >= limit:
-                    break
-        finally:
-            client.close()
-
-        return {
-            "project": alias,
-            "contexts": contexts,
-            "total_count": len(contexts),
-        }
-
-    def get_context(self, alias: str, context_id: str) -> dict[str, Any]:
-        """Fetch a single semantic-layer entity by id, irrespective of type.
-
-        Iterates ``semantic-model`` plus every :data:`CHILD_TYPES` entry,
-        stopping on the first 200. Raises ``KeboolaApiError`` with
-        :data:`ErrorCode.NOT_FOUND` if no type matches.
-        """
-        if not context_id:
-            raise KeboolaApiError(
-                message="--context-id is required",
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
-
-        project = self._resolve_one_project(alias)
-        client = self._new_metastore_client(project)
-        try:
-            for wire_type in self._ALL_TYPES_FOR_LOOKUP:
-                try:
-                    item = client.get_item(wire_type, context_id)
-                except KeboolaApiError as exc:
-                    if exc.error_code == ErrorCode.NOT_FOUND:
-                        continue
-                    raise
-                attrs = item.get("attributes") or {}
-                return {
-                    "project": alias,
-                    "id": item.get("id", ""),
-                    "type": self._strip_semantic_prefix(wire_type),
-                    "name": attrs.get("name", ""),
-                    "description": attrs.get("description", ""),
-                    "attributes": attrs,
-                }
-        finally:
-            client.close()
-
-        raise KeboolaApiError(
-            message=(
-                f"Semantic context with id {context_id!r} not found in project "
-                f"{alias!r}. Tried: semantic-model + {', '.join(CHILD_TYPES)}."
-            ),
-            error_code=ErrorCode.NOT_FOUND,
+        """Project-wide glob search; see :func:`_semantic_layer_lookup.run_search_context`."""
+        return _run_search_context_helper(
+            open_client=lambda: self._new_metastore_client(self._resolve_one_project(alias)),
+            alias=alias,
+            child_types=CHILD_TYPES,
+            type_alias=TYPE_ALIAS,
+            patterns=patterns,
+            type_filter=type_filter,
+            limit=limit,
         )
 
-    # ------------------------------------------------------------------
-    # Internal helpers (model-scoped fetches)
-    # ------------------------------------------------------------------
+    def get_context(self, alias: str, context_id: str) -> dict[str, Any]:
+        """Single-id lookup; see :func:`_semantic_layer_lookup.run_get_context`."""
+        return _run_get_context_helper(
+            open_client=lambda: self._new_metastore_client(self._resolve_one_project(alias)),
+            alias=alias,
+            child_types=CHILD_TYPES,
+            context_id=context_id,
+        )
+
+    # Internal helpers (model-scoped fetches).
 
     @staticmethod
     def _fetch_children_parallel(
