@@ -107,6 +107,44 @@ class ManageClient(BaseHttpClient):
         response = self._do_request("GET", f"/manage/organizations/{org_id}/projects")
         return response.json()
 
+    def create_project(
+        self,
+        organization_id: int,
+        name: str,
+        extra_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new project inside an organization.
+
+        Wraps ``POST /manage/organizations/{orgId}/projects``. The Manage API
+        accepts a free-form body (the official ``kbc-manage-api-php-client``
+        passes ``$params`` straight through). ``name`` is surfaced explicitly
+        because it is the one field the UI always requires; every other
+        documented field (project template/type, backend, data retention, ...)
+        is passed through verbatim via ``extra_params`` so this wrapper does not
+        guess the Manage API schema.
+
+        Requires an organization-admin Manage token.
+
+        Args:
+            organization_id: The organization to create the project in.
+            name: Human-readable project name (the one always-required field).
+            extra_params: Additional request-body fields passed through verbatim
+                (e.g. project template/type, backend, data-retention settings).
+
+        Returns:
+            The created project dict (includes the new project ``id``).
+
+        Raises:
+            KeboolaApiError: On API errors.
+        """
+        payload: dict[str, Any] = {"name": name}
+        if extra_params:
+            payload.update(extra_params)
+        response = self._do_request(
+            "POST", f"/manage/organizations/{organization_id}/projects", json=payload
+        )
+        return response.json()
+
     def create_project_token(
         self,
         project_id: int,
