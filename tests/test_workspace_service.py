@@ -143,6 +143,7 @@ class TestCreateWorkspace:
             component_id="keboola.sandboxes",
             config_id="cfg-123",
             backend="snowflake",
+            login_type="snowflake-person-keypair",
         )
         # close() called twice: once in _resolve_branch_id, once in create_workspace
         assert mock_client.close.call_count == 2
@@ -215,11 +216,72 @@ class TestCreateWorkspace:
             component_id="keboola.sandboxes",
             config_id="cfg-456",
             backend="snowflake",
+            login_type="snowflake-person-keypair",
         )
 
 
 class TestAutoDetectBackend:
     """Tests for automatic backend detection when --backend is omitted."""
+
+    def test_create_workspace_snowflake_uses_person_keypair_login_type(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Snowflake sandbox workspaces request the Query-Service-compatible login type."""
+        mock_client = MagicMock()
+        mock_client.verify_token.return_value = SAMPLE_TOKEN_VERIFY
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-1", "name": "ws"}
+        mock_client.create_config_workspace.return_value = SAMPLE_WORKSPACE
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.create_workspace(alias="prod", name="ws")
+
+        assert result["backend"] == "snowflake"
+        mock_client.create_config_workspace.assert_called_once_with(
+            branch_id=123,
+            component_id="keboola.sandboxes",
+            config_id="cfg-1",
+            backend="snowflake",
+            login_type="snowflake-person-keypair",
+        )
+
+    def test_create_workspace_bigquery_keeps_default_login_type(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """BigQuery sandbox workspaces omit loginType so Storage uses its default."""
+        mock_client = MagicMock()
+        mock_client.verify_token.return_value = SAMPLE_TOKEN_VERIFY_BIGQUERY
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-1", "name": "ws"}
+        mock_client.create_config_workspace.return_value = {
+            "id": 42,
+            "connection": {
+                "backend": "bigquery",
+                "schema": "WORKSPACE_42",
+            },
+        }
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.create_workspace(alias="prod", name="ws")
+
+        assert result["backend"] == "bigquery"
+        mock_client.create_config_workspace.assert_called_once_with(
+            branch_id=123,
+            component_id="keboola.sandboxes",
+            config_id="cfg-1",
+            backend="bigquery",
+            login_type=None,
+        )
 
     def test_create_workspace_auto_detects_snowflake(self, tmp_config_dir: Path) -> None:
         """create_workspace auto-detects snowflake backend from project."""
@@ -244,6 +306,7 @@ class TestAutoDetectBackend:
             component_id="keboola.sandboxes",
             config_id="cfg-1",
             backend="snowflake",
+            login_type="snowflake-person-keypair",
         )
 
     def test_create_workspace_auto_detects_bigquery(self, tmp_config_dir: Path) -> None:
@@ -276,6 +339,7 @@ class TestAutoDetectBackend:
             component_id="keboola.sandboxes",
             config_id="cfg-1",
             backend="bigquery",
+            login_type=None,
         )
 
     def test_explicit_backend_skips_auto_detect(self, tmp_config_dir: Path) -> None:
@@ -341,6 +405,7 @@ class TestAutoDetectBackend:
             component_id="keboola.snowflake-transformation",
             config_id="456",
             backend="bigquery",
+            login_type=None,
         )
 
 
@@ -1092,6 +1157,7 @@ class TestCreateFromTransformation:
             component_id="keboola.snowflake-transformation",
             config_id="456",
             backend="snowflake",
+            login_type="snowflake-person-keypair",
         )
         mock_client.load_workspace_tables.assert_called_once()
         # close() called twice: once in _resolve_branch_id, once in create_from_transformation
@@ -1371,6 +1437,21 @@ class TestIssue304WorkspaceListEnrichment:
                 "component": "keboola.snowflake-transformation",
                 "configurationId": "cfg-2",
             },
+            {
+                "id": 3,
+                "name": "person-keypair",
+                "connection": {
+                    "backend": "snowflake",
+                    "host": "h",
+                    "schema": "S3",
+                    "user": "U3",
+                    "loginType": "snowflake-person-keypair",
+                },
+                "readOnlyStorageAccess": True,
+                "created": "2026-05-18T00:00:00Z",
+                "component": "keboola.sandboxes",
+                "configurationId": "cfg-3",
+            },
         ]
         mock_client.list_component_configs.return_value = []
 
@@ -1383,13 +1464,18 @@ class TestIssue304WorkspaceListEnrichment:
         result = svc.list_workspaces(aliases=["prod"])
 
         workspaces = result["workspaces"]
-        assert len(workspaces) == 2
+        assert len(workspaces) == 3
         compat = next(w for w in workspaces if w["id"] == 1)
         legacy = next(w for w in workspaces if w["id"] == 2)
+        person_keypair = next(w for w in workspaces if w["id"] == 3)
 
         assert compat["login_type"] == "snowflake-service-keypair"
         assert compat["read_only"] is True
         assert compat["qs_compatible"] is True
+
+        assert person_keypair["login_type"] == "snowflake-person-keypair"
+        assert person_keypair["read_only"] is True
+        assert person_keypair["qs_compatible"] is True
 
         assert legacy["login_type"] == "default"
         assert legacy["read_only"] is False

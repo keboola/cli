@@ -8,7 +8,7 @@ single-project operations.
 import logging
 from typing import Any
 
-from ..constants import QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES
+from ..constants import QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES, SNOWFLAKE_WORKSPACE_LOGIN_TYPE
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
@@ -26,6 +26,13 @@ def _classify_qs_compatibility(login_type: str) -> bool:
     even though it works on some stacks.
     """
     return login_type in QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES
+
+
+def _workspace_login_type_for_backend(backend: str) -> str | None:
+    """Return the loginType kbagent should request for newly created workspaces."""
+    if backend.lower() == "snowflake":
+        return SNOWFLAKE_WORKSPACE_LOGIN_TYPE
+    return None
 
 
 def find_storage_workspace_for_sandbox_config(
@@ -230,6 +237,7 @@ class WorkspaceService(BaseService):
             component_id="keboola.sandboxes",
             config_id=config_id,
             backend=backend,
+            login_type=_workspace_login_type_for_backend(backend),
         )
 
         connection = ws_data.get("connection", {})
@@ -883,6 +891,7 @@ class WorkspaceService(BaseService):
                 component_id=component_id,
                 config_id=config_id,
                 backend=effective_backend,
+                login_type=_workspace_login_type_for_backend(effective_backend),
             )
 
             workspace_id = ws_data.get("id")
