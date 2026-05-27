@@ -1064,7 +1064,12 @@ class TestCreateTableIfNotExists:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         mock_client.create_table.side_effect = self._duplicate_display_name_error()
-        mock_client.get_table_detail.return_value = {"id": "in.c-b.users", "name": "users"}
+        mock_client.get_table_detail.return_value = {
+            "id": "in.c-b.users",
+            "name": "users",
+            "columns": ["id", "name"],
+            "primaryKey": ["id"],
+        }
         service = _make_service(store, mock_client)
 
         result = service.create_table(
@@ -1072,6 +1077,7 @@ class TestCreateTableIfNotExists:
             bucket_id="in.c-b",
             name="users",
             columns=["id:INTEGER", "name:STRING"],
+            primary_key=["id"],
             if_not_exists=True,
         )
 
@@ -1080,6 +1086,92 @@ class TestCreateTableIfNotExists:
         assert result["table_id"] == "in.c-b.users"
         mock_client.get_table_detail.assert_called_once_with("in.c-b.users", branch_id=None)
         mock_client.close.assert_called_once()
+
+    def test_skip_returns_actual_schema_not_requested(self, tmp_path: Path) -> None:
+        """keboola/cli#349: the skipped envelope must report the EXISTING
+        table's schema, not re-echo the caller's request. Here the existing
+        table has fewer columns and a different PK than what was requested."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.side_effect = self._duplicate_display_name_error()
+        mock_client.get_table_detail.return_value = {
+            "id": "in.c-b.users",
+            "name": "users",
+            "columns": ["id", "name"],
+            "primaryKey": ["id"],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.create_table(
+            alias="test",
+            bucket_id="in.c-b",
+            name="users",
+            columns=["id:INTEGER", "name:STRING", "extra:STRING"],
+            primary_key=["extra"],
+            if_not_exists=True,
+        )
+
+        # Actual existing schema is reported.
+        assert result["columns"] == ["id", "name"]
+        assert result["primary_key"] == ["id"]
+        assert result["name"] == "users"
+        # Caller's request is mirrored, not lost.
+        assert result["requested_columns"] == ["id", "name", "extra"]
+        assert result["requested_primary_key"] == ["extra"]
+        # Divergence is flagged.
+        assert result["schema_drift"] is True
+
+    def test_no_schema_drift_when_existing_matches_request(self, tmp_path: Path) -> None:
+        """When the existing table matches the request, schema_drift is False
+        and columns/primary_key are still sourced from the actual table."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.side_effect = self._duplicate_display_name_error()
+        mock_client.get_table_detail.return_value = {
+            "id": "in.c-b.users",
+            "name": "users",
+            "columns": ["id", "name"],
+            "primaryKey": ["id"],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.create_table(
+            alias="test",
+            bucket_id="in.c-b",
+            name="users",
+            columns=["id:INTEGER", "name:STRING"],
+            primary_key=["id"],
+            if_not_exists=True,
+        )
+
+        assert result["schema_drift"] is False
+        assert result["columns"] == ["id", "name"]
+        assert result["primary_key"] == ["id"]
+
+    def test_drift_is_order_insensitive(self, tmp_path: Path) -> None:
+        """Column/PK reordering between request and existing table is the same
+        set of columns -- not a drift (set comparison, not list equality)."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.side_effect = self._duplicate_display_name_error()
+        mock_client.get_table_detail.return_value = {
+            "id": "in.c-b.users",
+            "name": "users",
+            "columns": ["name", "id"],
+            "primaryKey": ["id"],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.create_table(
+            alias="test",
+            bucket_id="in.c-b",
+            name="users",
+            columns=["id:INTEGER", "name:STRING"],
+            primary_key=["id"],
+            if_not_exists=True,
+        )
+
+        assert result["schema_drift"] is False
 
     def test_reraises_when_flag_unset(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -1214,6 +1306,51 @@ class TestCreateTableCLI:
         assert "Created table" not in result.output, (
             "must NOT print the misleading success line on a skipped row"
         )
+
+    def test_human_warns_and_shows_actual_schema_on_drift(self, tmp_path: Path) -> None:
+        """When the skipped table's schema diverges from the request, human
+        mode warns and prints the ACTUAL existing columns/PK (keboola/cli#349)."""
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.create_table.return_value = {
+                "project_alias": "test",
+                "table_id": "in.c-b.users",
+                "name": "users",
+                "bucket_id": "in.c-b",
+                "primary_key": ["id"],
+                "columns": ["id", "name"],
+                "requested_primary_key": ["extra"],
+                "requested_columns": ["id", "name", "extra"],
+                "schema_drift": True,
+                "action": "skipped",
+                "skip_reason": "table already exists",
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "storage",
+                    "create-table",
+                    "--project",
+                    "test",
+                    "--bucket-id",
+                    "in.c-b",
+                    "--name",
+                    "users",
+                    "--column",
+                    "id:INTEGER",
+                    "--if-not-exists",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert "Skipped" in result.output
+        assert "Warning" in result.output
+        # Actual existing columns are shown, not the requested 'extra'.
+        assert "id, name" in result.output
 
     def test_create_table_json(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

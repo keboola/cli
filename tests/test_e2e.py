@@ -9748,6 +9748,42 @@ class TestE2E_0_47_0_NewSurfaces:
         assert second["data"]["action"] == "skipped"
         assert second["data"]["skip_reason"] == "table already exists"
         assert second["data"]["table_id"] == f"{bucket_id}.{table_name}"
+        # keboola/cli#349: the skipped envelope reports the EXISTING table's
+        # actual schema. The request here matches the existing table, so no drift.
+        assert second["data"]["columns"] == ["id", "label"]
+        assert second["data"]["primary_key"] == ["id"]
+        assert second["data"]["requested_columns"] == ["id", "label"]
+        assert second["data"]["requested_primary_key"] == ["id"]
+        assert second["data"]["schema_drift"] is False
+
+        # keboola/cli#349: a divergent request against the same pre-existing
+        # table still skips, but the envelope reports the ACTUAL columns (not the
+        # requested 'extra' column) and flags the drift.
+        divergent = self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            table_name,
+            "--column",
+            "id:INTEGER",
+            "--column",
+            "label:STRING",
+            "--column",
+            "extra:STRING",
+            "--primary-key",
+            "extra",
+            "--if-not-exists",
+        )
+        assert divergent["data"]["action"] == "skipped"
+        assert divergent["data"]["columns"] == ["id", "label"]
+        assert divergent["data"]["primary_key"] == ["id"]
+        assert "extra" in divergent["data"]["requested_columns"]
+        assert divergent["data"]["requested_primary_key"] == ["extra"]
+        assert divergent["data"]["schema_drift"] is True
 
         third = self._run(
             "storage",
