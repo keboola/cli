@@ -512,9 +512,7 @@ class TestClientHeaders:
 class TestConfigWorkspaces:
     """Tests for config-tied workspace endpoints."""
 
-    def test_create_config_workspace_includes_login_type_when_requested(
-        self, httpx_mock
-    ) -> None:
+    def test_create_config_workspace_includes_login_type_when_requested(self, httpx_mock) -> None:
         """Explicit loginType is included in the Storage API workspace payload."""
         httpx_mock.add_response(
             url=(

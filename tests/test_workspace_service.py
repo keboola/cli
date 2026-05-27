@@ -250,9 +250,7 @@ class TestAutoDetectBackend:
             login_type="snowflake-person-keypair",
         )
 
-    def test_create_workspace_bigquery_keeps_default_login_type(
-        self, tmp_config_dir: Path
-    ) -> None:
+    def test_create_workspace_bigquery_keeps_default_login_type(self, tmp_config_dir: Path) -> None:
         """BigQuery sandbox workspaces omit loginType so Storage uses its default."""
         mock_client = MagicMock()
         mock_client.verify_token.return_value = SAMPLE_TOKEN_VERIFY_BIGQUERY
