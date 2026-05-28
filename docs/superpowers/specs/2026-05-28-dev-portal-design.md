@@ -60,7 +60,7 @@ The gaps:
 |---|----------|-----------|
 | 1 | **Random-code TTY confirm** is the only write path. No `--yes`, no env override. | Direct-production blast radius. Agent cannot generate the random code. Same primitive as `kbagent permissions set`. |
 | 2 | Identities stored as `{username, password, role_hint, vendor, portal_url}` in `AppConfig.dev_portal_identities`, same `config.json`, 0600, same `_warning` header. | Mirrors KB project token storage. One store, one lock, one place to look. |
-| 3 | v1 scope = `list`, `get`, `create`, `patch`, `upload-icon`, `publish`, `deprecate`, plus the `peers` peer-config-lookup helper. | Matches `dp.py` plus full lifecycle plus AI-research need flagged during brainstorming. |
+| 3 | v1 scope = `list`, `get`, `create`, `patch`, `upload-icon`, `publish`, `deprecate`. | Matches `dp.py` plus full lifecycle. `list` + `get` are enough primitives for an agent to compose peer-config research itself — no dedicated helper. |
 | 4 | `--identity <alias>` flag per command + persisted default via `dev-portal identity use ALIAS`. | Mirrors `kbagent project` UX exactly. |
 | 5 | App addressed as `--app VENDOR.APP_ID` (single arg), parsed to `vendor` + `app_id` internally. | Harder to mis-pair than two separate flags. `create` is the exception — no app id yet. |
 | 6 | Uniform safety bar across `create`/`patch`/`upload-icon`/`publish`/`deprecate`. | Permission-engine categories (`write`/`admin`/`destructive`) already give graduated firewall control if persistent policy needs it. |
@@ -184,10 +184,6 @@ class DeveloperPortalService:
     # Portal reads
     def list_apps(self, alias, vendor) -> list[dict]: ...
     def get_app(self, alias, vendor, app_id) -> dict: ...
-    def peers(
-        self, alias, *, type_, query=None, vendors=None,
-        keys=None, limit=20,
-    ) -> list[dict]: ...
 
     # Portal writes — prepare returns a PendingX dataclass with full diff;
     # apply executes only after the command layer has run confirm.
@@ -216,9 +212,12 @@ Validation pre-flight (no portal call):
 - `prepare_upload_icon`: file exists; reads bytes; soft warning if not 128
   ×128 PNG.
 
-`peers` uses the existing `BaseService` worker pool to parallel-fetch
-matching apps. `--keys` filters the output to a subset of properties per
-app so the response stays compact enough for an agent's context.
+Peer-config research (e.g. "show me how MySQL and Postgres extractors
+configure themselves so I can model a new DB connector after them") is
+done by the agent calling `list --vendor V` followed by `get --app
+VENDOR.APP` for the specific ids of interest, then comparing the
+returned JSON in its own context. No dedicated helper — the agent has
+the brains, and `list` + `get` already expose everything it needs.
 
 ### Command layer (`commands/dev_portal.py`)
 
@@ -238,8 +237,6 @@ kbagent dev-portal identity verify [--identity A]
 
 kbagent dev-portal list --vendor V [--identity A]
 kbagent dev-portal get --app VENDOR.APP [--identity A]
-kbagent dev-portal peers --type TYPE [--query REGEX] [--vendor V ...]
-                         [--keys K,K,...] [--limit N] [--identity A]
 
 kbagent dev-portal create --vendor V (--data FILE|@FILE|-)
                           [--identity A] [--dry-run]
@@ -301,7 +298,6 @@ dev-portal.identity-use        write
 dev-portal.identity-verify     read
 dev-portal.list                read
 dev-portal.get                 read
-dev-portal.peers               read
 dev-portal.create              write
 dev-portal.patch               write
 dev-portal.upload-icon         write
@@ -340,7 +336,7 @@ policy can pin individual operations the usual way.
 | File | Coverage |
 |------|----------|
 | `tests/test_dev_portal_client.py` (new) | Mocked HTTP for login (token + MFA-session + bad creds), list/get, create/patch, icon two-hop, publish/deprecate. |
-| `tests/test_dev_portal_service.py` (new) | Identity CRUD; diff correctness; publish pre-flight detection; verify-on-add; peers filtering. |
+| `tests/test_dev_portal_service.py` (new) | Identity CRUD; diff correctness; publish pre-flight detection; verify-on-add. |
 | `tests/test_dev_portal_cli.py` (new) | Identity lifecycle; every write refuses on non-TTY with exit 6; every write succeeds with correct random code; `--dry-run` exits 0 without prompt; `--json` shapes stable. |
 | `tests/test_config_store.py` (extend) | Adding/removing/editing identities; default bookkeeping; rename; default fall-through on removal. |
 | `tests/test_permissions.py` (extend) | New ops in registry; `--deny-writes` blocks them; `dev-portal.deprecate` is destructive. |
@@ -395,12 +391,6 @@ Every PR shipping this work must update:
 - **PNG dimension check.** Adding `Pillow` as a dependency just for 128×128
   validation is heavy. Soft warning via stdlib `struct` reading the PNG
   IHDR chunk is cheaper and dep-free; prefer that. Confirmed at impl time.
-- **`peers --keys` default.** When omitted, full app docs returned. When
-  given, only listed keys returned. Test how large the full payload is for
-  a real "extractor" search — if it's regularly > 100 KB across 20 apps,
-  default to a sensible key whitelist
-  (`configurationSchema,configurationRowSchema,uiOptions,categories,
-  type,shortDescription`).
 - **Identity `vendor` field.** Currently optional, used as a default. Worth
   considering whether an identity that has no `vendor` should refuse to
   run any operation that needs one (vs. erroring later with a clear
