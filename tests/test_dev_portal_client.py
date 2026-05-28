@@ -180,3 +180,66 @@ class TestPortalWrites:
         )
         with DeveloperPortalClient(_identity()) as client:
             assert client.deprecate_app("keboola", "keboola.ex-foo")["status"] == "deprecated"
+
+
+class TestIconUpload:
+    def test_upload_icon_two_hop(self, httpx_mock, monkeypatch):
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            json={"token": "Bearer abc"},
+        )
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/vendors/keboola/apps/keboola.ex-foo/icon",
+            json={"link": "https://s3.example/presigned"},
+        )
+        # The S3 PUT bypasses httpx; we mock urllib.request.urlopen.
+        seen = {}
+
+        class _FakeResp:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+        def fake_urlopen(req):
+            seen["url"] = req.full_url
+            seen["data"] = req.data
+            seen["method"] = req.method
+            return _FakeResp()
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        with DeveloperPortalClient(_identity()) as client:
+            client.upload_icon("keboola", "keboola.ex-foo", b"\x89PNG\r\n\x1a\nrest")
+        assert seen["url"] == "https://s3.example/presigned"
+        assert seen["data"] == b"\x89PNG\r\n\x1a\nrest"
+        assert seen["method"] == "PUT"
+
+    def test_upload_icon_presign_failure(self, httpx_mock, monkeypatch):
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            json={"token": "Bearer abc"},
+        )
+        # Add 3 responses (MAX_RETRIES=3) since 500 is retryable.
+        for _ in range(3):
+            httpx_mock.add_response(
+                method="POST",
+                url="https://apps-api.keboola.com/vendors/keboola/apps/keboola.ex-foo/icon",
+                status_code=500,
+                json={"error": "boom"},
+            )
+        # Suppress retry sleeps.
+        import keboola_agent_cli.http_base as http_base_module
+
+        monkeypatch.setattr(http_base_module.time, "sleep", lambda _: None)
+
+        with DeveloperPortalClient(_identity()) as client:
+            with pytest.raises(KeboolaApiError) as exc:
+                client.upload_icon("keboola", "keboola.ex-foo", b"data")
+            assert exc.value.error_code == ErrorCode.DP_ICON_UPLOAD_FAILED

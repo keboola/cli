@@ -15,6 +15,8 @@ the service and command layers.
 from __future__ import annotations
 
 import logging
+import urllib.error
+import urllib.request
 from typing import Any
 
 import httpx
@@ -187,6 +189,54 @@ class DeveloperPortalClient(BaseHttpClient):
         if resp.status_code not in (200, 202):
             self._raise_dp_error(resp, action="deprecate app", vendor=vendor, app_id=app_id)
         return resp.json() if resp.content else {"status": "deprecated"}
+
+    def upload_icon(self, vendor: str, app_id: str, png_bytes: bytes) -> None:
+        """Two-hop icon upload: ask the portal for a presigned S3 URL, then PUT bytes there.
+
+        The S3 PUT does NOT use this client's httpx instance (no retry, no auth,
+        no User-Agent injection). We use urllib directly so the wire shape stays
+        exactly what S3 expects.
+        """
+        self._ensure_authenticated()
+        try:
+            resp = self._do_request("POST", f"/vendors/{vendor}/apps/{app_id}/icon")
+        except KeboolaApiError as exc:
+            raise KeboolaApiError(
+                message=(f"Developer Portal failed to mint icon-upload URL: {exc.message}"),
+                error_code=ErrorCode.DP_ICON_UPLOAD_FAILED,
+            ) from exc
+        if resp.status_code != 200:
+            raise KeboolaApiError(
+                message=(
+                    f"Developer Portal failed to mint icon-upload URL (HTTP {resp.status_code})"
+                ),
+                error_code=ErrorCode.DP_ICON_UPLOAD_FAILED,
+            )
+        payload = resp.json()
+        link = payload.get("link") if isinstance(payload, dict) else None
+        if not link:
+            raise KeboolaApiError(
+                message="Developer Portal icon-upload response missing 'link'",
+                error_code=ErrorCode.DP_ICON_UPLOAD_FAILED,
+            )
+        req = urllib.request.Request(
+            link,
+            data=png_bytes,
+            headers={"Content-Type": "image/png"},
+            method="PUT",
+        )
+        try:
+            with urllib.request.urlopen(req) as s3_resp:
+                if getattr(s3_resp, "status", 200) >= 300:
+                    raise KeboolaApiError(
+                        message=f"Icon S3 PUT failed (HTTP {s3_resp.status})",
+                        error_code=ErrorCode.DP_ICON_UPLOAD_FAILED,
+                    )
+        except urllib.error.HTTPError as exc:
+            raise KeboolaApiError(
+                message=f"Icon S3 PUT failed (HTTP {exc.code}): {exc.reason}",
+                error_code=ErrorCode.DP_ICON_UPLOAD_FAILED,
+            ) from exc
 
     # ----- Error mapping -----
 
