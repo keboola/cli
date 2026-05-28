@@ -109,6 +109,13 @@ class ErrorCode(StrEnum):
     DATA_APP_INVALID_REPO = "DATA_APP_INVALID_REPO"
     DATA_APP_REPO_VALIDATION_BLOCKING = "DATA_APP_REPO_VALIDATION_BLOCKING"
 
+    # Developer Portal (since 0.48.0)
+    DP_LOGIN_FAILED = "DP_LOGIN_FAILED"
+    DP_MFA_REQUIRED = "DP_MFA_REQUIRED"
+    DP_APP_NOT_FOUND = "DP_APP_NOT_FOUND"
+    DP_PUBLISH_REQUIREMENTS_MISSING = "DP_PUBLISH_REQUIREMENTS_MISSING"
+    DP_ICON_UPLOAD_FAILED = "DP_ICON_UPLOAD_FAILED"
+
 
 def mask_token(token: str) -> str:
     """Mask a Keboola Storage API token for safe display.
@@ -190,6 +197,11 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.CONFIG_ERROR: "configuration",
     ErrorCode.VALIDATION_ERROR: "validation",
     ErrorCode.PERMISSION_DENIED: "authorization",
+    ErrorCode.DP_LOGIN_FAILED: "authentication",
+    ErrorCode.DP_MFA_REQUIRED: "authentication",
+    ErrorCode.DP_APP_NOT_FOUND: "not_found",
+    ErrorCode.DP_PUBLISH_REQUIREMENTS_MISSING: "validation",
+    ErrorCode.DP_ICON_UPLOAD_FAILED: "api",
 }
 
 
