@@ -9,6 +9,7 @@ Provides common patterns used by all CLI commands:
 """
 
 import os
+import secrets
 import sys
 from typing import Any
 
@@ -391,3 +392,46 @@ def _resolve_hint_stack_url(
         pass
 
     return None
+
+
+_CONFIRM_CODE_LENGTH = 4
+
+
+def require_random_code_confirmation(action_description: str) -> None:
+    """Require the user to type a random hex code to confirm a high-risk action.
+
+    Prevents AI agents from programmatically approving production-affecting
+    writes (Developer Portal updates, permission policy changes). The agent
+    cannot predict the code and cannot type it into stdin.
+
+    Behaviour:
+    - No TTY -> raise typer.Exit(EXIT_PERMISSION_DENIED).
+    - TTY + correct code -> return None (caller proceeds).
+    - TTY + wrong code / EOF / interrupt -> raise typer.Exit(EXIT_PERMISSION_DENIED).
+
+    Args:
+        action_description: Short verb phrase shown in the prompt
+            (e.g. "patch keboola.ex-foo", "update permission policy").
+    """
+    is_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+    if not is_tty:
+        sys.stderr.write(
+            f"\nRefusing to {action_description}: this action requires a "
+            "real terminal so a human can type the confirmation code. "
+            "There is no --yes bypass by design.\n"
+        )
+        raise typer.Exit(code=EXIT_PERMISSION_DENIED)
+
+    code = secrets.token_hex(_CONFIRM_CODE_LENGTH)
+    sys.stderr.write(f"\nTo {action_description}, type this code: {code}\n")
+    sys.stderr.write("Confirmation: ")
+    sys.stderr.flush()
+
+    try:
+        user_input = input().strip()
+    except (EOFError, KeyboardInterrupt):
+        raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
+
+    if user_input != code:
+        sys.stderr.write("Confirmation failed. Aborting.\n")
+        raise typer.Exit(code=EXIT_PERMISSION_DENIED)

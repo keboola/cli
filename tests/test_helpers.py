@@ -1,6 +1,7 @@
 """Tests for commands._helpers shared command-layer utilities."""
 
 import pytest
+import typer
 
 from keboola_agent_cli.commands._helpers import map_error_to_exit_code
 from keboola_agent_cli.errors import KeboolaApiError, map_error_code_to_type
@@ -646,3 +647,56 @@ class TestResolveManageToken:
         assert "Run interactively" in err
         # No phantom warning when env was actually empty.
         assert "found in environment but ignored" not in err
+
+
+class TestRequireRandomCodeConfirmation:
+    def test_non_tty_exits_with_permission_denied(self, monkeypatch):
+        # stdin isatty -> False
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        with pytest.raises(typer.Exit) as exc:
+            from keboola_agent_cli.commands._helpers import require_random_code_confirmation
+
+            require_random_code_confirmation("delete the universe")
+        assert exc.value.exit_code == 6  # EXIT_PERMISSION_DENIED
+
+    def test_correct_code_accepted(self, monkeypatch):
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(
+            "keboola_agent_cli.commands._helpers.secrets.token_hex",
+            lambda n: "deadbeef",
+        )
+        monkeypatch.setattr("builtins.input", lambda: "deadbeef")
+        from keboola_agent_cli.commands._helpers import require_random_code_confirmation
+
+        # Returns None on success
+        assert require_random_code_confirmation("patch app") is None
+
+    def test_wrong_code_exits(self, monkeypatch):
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(
+            "keboola_agent_cli.commands._helpers.secrets.token_hex",
+            lambda n: "deadbeef",
+        )
+        monkeypatch.setattr("builtins.input", lambda: "wrongcode")
+        with pytest.raises(typer.Exit) as exc:
+            from keboola_agent_cli.commands._helpers import require_random_code_confirmation
+
+            require_random_code_confirmation("patch app")
+        assert exc.value.exit_code == 6
+
+    def test_eof_exits(self, monkeypatch):
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(
+            "keboola_agent_cli.commands._helpers.secrets.token_hex",
+            lambda n: "deadbeef",
+        )
+
+        def raise_eof():
+            raise EOFError
+
+        monkeypatch.setattr("builtins.input", raise_eof)
+        with pytest.raises(typer.Exit) as exc:
+            from keboola_agent_cli.commands._helpers import require_random_code_confirmation
+
+            require_random_code_confirmation("patch app")
+        assert exc.value.exit_code == 6

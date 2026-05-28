@@ -7,8 +7,6 @@ Security: set and reset require interactive confirmation (type a random code)
 so that an AI agent constrained by the policy cannot bypass it programmatically.
 """
 
-import secrets
-import sys
 from typing import Any
 
 import typer
@@ -20,37 +18,9 @@ from ..constants import EXIT_PERMISSION_DENIED
 from ..errors import ErrorCode
 from ..models import PermissionPolicy
 from ..permissions import PermissionEngine
-from ._helpers import get_formatter, get_service
+from ._helpers import get_formatter, get_service, require_random_code_confirmation
 
 permissions_app = typer.Typer(help="Manage operation permissions (firewall rules)")
-
-# Length of the random confirmation code
-_CONFIRM_CODE_LENGTH = 4
-
-
-def _require_interactive_confirmation(action_description: str) -> bool:
-    """Require the user to type a random code to confirm a destructive permission change.
-
-    This prevents AI agents from programmatically bypassing permission policies.
-    The agent cannot predict the code, and cannot type it into stdin.
-
-    Returns True if confirmed, False if cancelled or non-interactive.
-    """
-    is_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
-    if not is_tty:
-        return False
-
-    code = secrets.token_hex(_CONFIRM_CODE_LENGTH)
-    sys.stderr.write(f"\nTo {action_description}, type this code: {code}\n")
-    sys.stderr.write("Confirmation: ")
-    sys.stderr.flush()
-
-    try:
-        user_input = input().strip()
-    except (EOFError, KeyboardInterrupt):
-        return False
-
-    return user_input == code
 
 
 def _format_operations_table(
@@ -276,12 +246,7 @@ def permissions_set(
         )
         raise typer.Exit(code=2) from None
 
-    if not _require_interactive_confirmation("update permission policy"):
-        formatter.error(
-            message="Confirmation failed. Permission policy not changed.",
-            error_code=ErrorCode.PERMISSION_DENIED,
-        )
-        raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
+    require_random_code_confirmation("update permission policy")
 
     config_store: ConfigStore = get_service(ctx, "config_store")
     config = config_store.load()
@@ -328,12 +293,7 @@ def permissions_reset(
     """
     formatter = get_formatter(ctx)
 
-    if not _require_interactive_confirmation("remove permission policy"):
-        formatter.error(
-            message="Confirmation failed. Permission policy not changed.",
-            error_code=ErrorCode.PERMISSION_DENIED,
-        )
-        raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
+    require_random_code_confirmation("remove permission policy")
 
     config_store: ConfigStore = get_service(ctx, "config_store")
     config = config_store.load()
