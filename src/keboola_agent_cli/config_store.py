@@ -33,7 +33,9 @@ CLAUDE_CONFIG_WARNING = (
     "API with retries, permission checks, and an audit trail. If you "
     "need a command kbagent does not cover, run `kbagent --hint client "
     "<subcommand>` to generate a KeboolaClient-based Python snippet. "
-    "See plugins/kbagent/skills/kbagent/SKILL.md rule 9."
+    "See plugins/kbagent/skills/kbagent/SKILL.md rule 9. "
+    "Developer Portal credentials stored here have the SAME risk profile -- "
+    "never call apps-api.keboola.com directly; use `kbagent dev-portal ...`."
 )
 
 # File-lock constants (fcntl is POSIX-only; on Windows we skip locking).
