@@ -87,3 +87,93 @@ class TestReadCommands:
         assert r.exit_code == 0, r.output
         data = json.loads(r.stdout)
         assert data["data"] == [{"id": "keboola.ex-a"}]
+
+
+class TestWriteCommands:
+    """Every write must require the random-code confirm. No --yes."""
+
+    def _seed_identity(self, config_store):
+        from keboola_agent_cli.models import DeveloperPortalIdentity
+
+        config_store.add_dev_portal_identity(
+            "alpha",
+            DeveloperPortalIdentity(username="u", password="p", vendor="keboola"),
+        )
+
+    def test_patch_non_tty_exits_6(self, tmp_config_dir, config_store):
+        """Without a TTY there is NO bypass — exit 6, no portal call."""
+        self._seed_identity(config_store)
+        with patch(
+            "keboola_agent_cli.services.dev_portal_service.DeveloperPortalService.prepare_patch"
+        ) as prep:
+            from keboola_agent_cli.services.dev_portal_service import FieldDiff, PendingPatch
+
+            prep.return_value = PendingPatch(
+                alias="alpha",
+                vendor="keboola",
+                app_id="keboola.ex-a",
+                payload={"name": "New"},
+                current={"name": "Old"},
+                diff=[FieldDiff(key="name", current="Old", new="New")],
+            )
+            with patch(
+                "keboola_agent_cli.services.dev_portal_service.DeveloperPortalService.apply"
+            ) as apply_:
+                # CliRunner provides a non-TTY stdin.
+                r = runner.invoke(
+                    app,
+                    [
+                        "--config-dir",
+                        str(tmp_config_dir),
+                        "dev-portal",
+                        "patch",
+                        "--app",
+                        "keboola.ex-a",
+                        "--data",
+                        "/tmp/does-not-matter.json",
+                    ],
+                    input="",
+                )
+        assert r.exit_code == 6, r.output
+        apply_.assert_not_called()
+
+    def test_patch_dry_run_no_confirm(self, tmp_config_dir, config_store, tmp_path):
+        """--dry-run prints diff and exits 0 without any confirm prompt."""
+        self._seed_identity(config_store)
+        data_file = tmp_path / "patch.json"
+        data_file.write_text(json.dumps({"name": "New"}))
+        with patch(
+            "keboola_agent_cli.services.dev_portal_service.DeveloperPortalService.prepare_patch"
+        ) as prep:
+            from keboola_agent_cli.services.dev_portal_service import FieldDiff, PendingPatch
+
+            prep.return_value = PendingPatch(
+                alias="alpha",
+                vendor="keboola",
+                app_id="keboola.ex-a",
+                payload={"name": "New"},
+                current={"name": "Old"},
+                diff=[FieldDiff(key="name", current="Old", new="New")],
+            )
+            with patch(
+                "keboola_agent_cli.services.dev_portal_service.DeveloperPortalService.apply"
+            ) as apply_:
+                r = runner.invoke(
+                    app,
+                    [
+                        "--config-dir",
+                        str(tmp_config_dir),
+                        "--json",
+                        "dev-portal",
+                        "patch",
+                        "--app",
+                        "keboola.ex-a",
+                        "--data",
+                        str(data_file),
+                        "--dry-run",
+                    ],
+                )
+        assert r.exit_code == 0, r.output
+        apply_.assert_not_called()
+        # JSON output should advertise the dry-run status
+        assert "dry-run" in r.stdout

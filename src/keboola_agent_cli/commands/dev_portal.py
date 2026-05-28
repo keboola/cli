@@ -242,3 +242,272 @@ def get_app_cmd(
         formatter.error(message=str(exc), error_code=exc.error_code)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output(result)
+
+
+# ----- Write commands -----
+
+import json  # noqa: E402
+import sys as _sys  # noqa: E402
+from dataclasses import asdict  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from ..constants import EXIT_PERMISSION_DENIED  # noqa: E402
+from ._helpers import require_random_code_confirmation  # noqa: E402
+
+
+def _assert_tty(action_description: str) -> None:
+    """Refuse immediately on non-TTY; called before any payload I/O.
+
+    This is the *first* guard in every write command so that CI/CD shells
+    and AI agents are rejected before any file or stdin access happens.
+    The full random-code prompt fires later (after the preview) on TTY.
+    """
+    is_tty = hasattr(_sys.stdin, "isatty") and _sys.stdin.isatty()
+    if not is_tty:
+        _sys.stderr.write(
+            f"\nRefusing to {action_description}: this action requires a "
+            "real terminal so a human can type the confirmation code. "
+            "There is no --yes bypass by design.\n"
+        )
+        raise typer.Exit(code=EXIT_PERMISSION_DENIED)
+
+
+def _load_payload(data: str | None) -> dict:
+    if data is None:
+        raise typer.BadParameter("--data is required")
+    if data == "-":
+        import sys as _sys
+
+        return json.loads(_sys.stdin.read())
+    return json.loads(Path(data).read_text())
+
+
+def _render_pending(formatter, pending) -> None:  # type: ignore[type-arg]
+    """Write a stderr-only preview of the pending write."""
+    from ..services.dev_portal_service import (
+        PendingCreate,
+        PendingDeprecate,
+        PendingIconUpload,
+        PendingPatch,
+        PendingPublish,
+    )
+
+    err = formatter.err_console
+    if isinstance(pending, PendingPatch):
+        err.print(f"[bold]PATCH[/bold] /vendors/{pending.vendor}/apps/{pending.app_id}")
+        for d in pending.diff:
+            err.print(f"  [yellow]{d.key}[/yellow]: {d.current!r} -> {d.new!r}")
+        if not pending.diff:
+            err.print("  [dim]no field-level changes (payload matches current state)[/dim]")
+    elif isinstance(pending, PendingCreate):
+        err.print(f"[bold]POST[/bold] /vendors/{pending.vendor}/apps")
+        err.print_json(json.dumps(pending.payload))
+    elif isinstance(pending, PendingIconUpload):
+        err.print(
+            f"[bold]UPLOAD ICON[/bold] {pending.png_path} -> "
+            f"{pending.vendor}/{pending.app_id} ({len(pending.png_bytes)} bytes)"
+        )
+    elif isinstance(pending, PendingPublish):
+        err.print(
+            f"[bold red]PUBLISH[/bold red] /vendors/{pending.vendor}/apps/"
+            f"{pending.app_id}/publish (requests Keboola review)"
+        )
+    elif isinstance(pending, PendingDeprecate):
+        err.print(
+            f"[bold red]DEPRECATE[/bold red] /vendors/{pending.vendor}/apps/"
+            f"{pending.app_id}/deprecate (hides app, blocks new configs)"
+        )
+
+
+def _pending_as_json(pending) -> dict:  # type: ignore[type-arg]
+    """Serialise a pending write for --json --dry-run output."""
+    raw = asdict(pending)
+    if "png_bytes" in raw:
+        raw["png_bytes"] = f"<{len(raw['png_bytes'])} bytes>"
+    if "png_path" in raw:
+        raw["png_path"] = str(raw["png_path"])
+    return {"status": "dry-run", "pending": raw}
+
+
+@dev_portal_app.command("create")
+def create_cmd(
+    ctx: typer.Context,
+    vendor: str = typer.Option(..., "--vendor"),
+    data: str = typer.Option(..., "--data", help="Path to JSON payload, or '-' for stdin"),
+    identity: str | None = typer.Option(None, "--identity"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    if not dry_run:
+        _assert_tty(f"create app in vendor '{vendor}'")
+    formatter = get_formatter(ctx)
+    svc = get_dev_portal_service(ctx)
+    alias = resolve_identity_alias(ctx, identity)
+    try:
+        pending = svc.prepare_create(alias, vendor, _load_payload(data))
+    except KeboolaApiError as exc:
+        formatter.error(message=str(exc), error_code=exc.error_code)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    _render_pending(formatter, pending)
+    if dry_run:
+        formatter.output(_pending_as_json(pending))
+        return
+    require_random_code_confirmation(f"create app in vendor '{vendor}'")
+    try:
+        result = svc.apply(pending)
+    except KeboolaApiError as exc:
+        formatter.error(message=str(exc), error_code=exc.error_code)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    formatter.output({"status": "ok", "created": result})
+
+
+@dev_portal_app.command("patch")
+def patch_cmd(
+    ctx: typer.Context,
+    app: str = typer.Option(..., "--app"),
+    data: str | None = typer.Option(None, "--data"),
+    property_: str | None = typer.Option(None, "--property"),
+    value: str | None = typer.Option(None, "--value"),
+    value_file: str | None = typer.Option(None, "--value-file"),
+    identity: str | None = typer.Option(None, "--identity"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    if not dry_run:
+        _assert_tty(f"patch {app}")
+    formatter = get_formatter(ctx)
+    svc = get_dev_portal_service(ctx)
+    alias = resolve_identity_alias(ctx, identity)
+    vendor, app_id = _split_app(app)
+
+    if data:
+        payload = _load_payload(data)
+    elif property_:
+        if value_file:
+            raw = Path(value_file).read_text()
+        elif value is not None:
+            raw = value
+        else:
+            raise typer.BadParameter("--property requires --value or --value-file")
+        try:
+            parsed = json.loads(raw) if raw.strip()[:1] in "[{" else raw
+        except json.JSONDecodeError:
+            parsed = raw
+        payload = {property_: parsed}
+    else:
+        raise typer.BadParameter("Provide --data, or --property with --value/--value-file")
+
+    try:
+        pending = svc.prepare_patch(alias, vendor, app_id, payload)
+    except KeboolaApiError as exc:
+        formatter.error(message=str(exc), error_code=exc.error_code)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    _render_pending(formatter, pending)
+    if dry_run:
+        formatter.output(_pending_as_json(pending))
+        return
+    require_random_code_confirmation(f"patch {app}")
+    try:
+        svc.apply(pending)
+    except KeboolaApiError as exc:
+        formatter.error(message=str(exc), error_code=exc.error_code)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    formatter.output(
+        {
+            "status": "ok",
+            "app": app,
+            "patched_keys": [d.key for d in pending.diff],
+        }
+    )
+
+
+@dev_portal_app.command("upload-icon")
+def upload_icon_cmd(
+    ctx: typer.Context,
+    app: str = typer.Option(..., "--app"),
+    file: str = typer.Option(..., "--file"),
+    identity: str | None = typer.Option(None, "--identity"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    if not dry_run:
+        _assert_tty(f"upload icon for {app}")
+    formatter = get_formatter(ctx)
+    svc = get_dev_portal_service(ctx)
+    alias = resolve_identity_alias(ctx, identity)
+    vendor, app_id = _split_app(app)
+    try:
+        pending = svc.prepare_upload_icon(alias, vendor, app_id, file)
+    except KeboolaApiError as exc:
+        formatter.error(message=str(exc), error_code=exc.error_code)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    _render_pending(formatter, pending)
+    if dry_run:
+        formatter.output(_pending_as_json(pending))
+        return
+    require_random_code_confirmation(f"upload icon for {app}")
+    try:
+        result = svc.apply(pending)
+    except KeboolaApiError as exc:
+        formatter.error(message=str(exc), error_code=exc.error_code)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    formatter.output(result)
+
+
+@dev_portal_app.command("publish")
+def publish_cmd(
+    ctx: typer.Context,
+    app: str = typer.Option(..., "--app"),
+    identity: str | None = typer.Option(None, "--identity"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    if not dry_run:
+        _assert_tty(f"publish {app}")
+    formatter = get_formatter(ctx)
+    svc = get_dev_portal_service(ctx)
+    alias = resolve_identity_alias(ctx, identity)
+    vendor, app_id = _split_app(app)
+    try:
+        pending = svc.prepare_publish(alias, vendor, app_id)
+    except KeboolaApiError as exc:
+        formatter.error(message=str(exc), error_code=exc.error_code)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    _render_pending(formatter, pending)
+    if dry_run:
+        formatter.output(_pending_as_json(pending))
+        return
+    require_random_code_confirmation(f"publish {app}")
+    try:
+        result = svc.apply(pending)
+    except KeboolaApiError as exc:
+        formatter.error(message=str(exc), error_code=exc.error_code)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    formatter.output({"status": "ok", "published": result})
+
+
+@dev_portal_app.command("deprecate")
+def deprecate_cmd(
+    ctx: typer.Context,
+    app: str = typer.Option(..., "--app"),
+    identity: str | None = typer.Option(None, "--identity"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    if not dry_run:
+        _assert_tty(f"deprecate {app}")
+    formatter = get_formatter(ctx)
+    svc = get_dev_portal_service(ctx)
+    alias = resolve_identity_alias(ctx, identity)
+    vendor, app_id = _split_app(app)
+    try:
+        pending = svc.prepare_deprecate(alias, vendor, app_id)
+    except KeboolaApiError as exc:
+        formatter.error(message=str(exc), error_code=exc.error_code)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    _render_pending(formatter, pending)
+    if dry_run:
+        formatter.output(_pending_as_json(pending))
+        return
+    require_random_code_confirmation(f"deprecate {app}")
+    try:
+        result = svc.apply(pending)
+    except KeboolaApiError as exc:
+        formatter.error(message=str(exc), error_code=exc.error_code)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    formatter.output({"status": "ok", "deprecated": result})
