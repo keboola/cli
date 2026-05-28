@@ -16,7 +16,7 @@ import platformdirs
 
 from .constants import ENV_CONFIG_DIR, LOCAL_CONFIG_DIR_NAME
 from .errors import ConfigError
-from .models import AppConfig, ProjectConfig
+from .models import AppConfig, DeveloperPortalIdentity, ProjectConfig
 
 logger = logging.getLogger(__name__)
 
@@ -358,4 +358,95 @@ class ConfigStore:
         config.projects[new_alias] = config.projects.pop(old_alias)
         if config.default_project == old_alias:
             config.default_project = new_alias
+        self.save(config)
+
+    def add_dev_portal_identity(self, alias: str, identity: DeveloperPortalIdentity) -> None:
+        """Add a Developer Portal identity to the configuration.
+
+        Sets it as default if no default identity is set.
+
+        Raises:
+            ConfigError: If the alias already exists.
+        """
+        config = self.load()
+        if alias in config.dev_portal_identities:
+            raise ConfigError(
+                f"Developer Portal identity '{alias}' already exists. "
+                "Use 'dev-portal identity edit' to modify it."
+            )
+        config.dev_portal_identities[alias] = identity
+        if not config.default_dev_portal_identity:
+            config.default_dev_portal_identity = alias
+        self.save(config)
+
+    def remove_dev_portal_identity(self, alias: str) -> None:
+        """Remove a Developer Portal identity.
+
+        Falls the default through to the next available identity (or "" if none).
+
+        Raises:
+            ConfigError: If the alias does not exist.
+        """
+        config = self.load()
+        if alias not in config.dev_portal_identities:
+            raise ConfigError(f"Developer Portal identity '{alias}' not found.")
+        del config.dev_portal_identities[alias]
+        if config.default_dev_portal_identity == alias:
+            config.default_dev_portal_identity = next(iter(config.dev_portal_identities), "")
+        self.save(config)
+
+    def get_dev_portal_identity(self, alias: str) -> DeveloperPortalIdentity | None:
+        """Get a Developer Portal identity by alias, or None if not found."""
+        config = self.load()
+        return config.dev_portal_identities.get(alias)
+
+    def edit_dev_portal_identity(self, alias: str, **kwargs: str | None) -> None:
+        """Update fields on an existing Developer Portal identity.
+
+        Only non-None keyword arguments are applied.
+
+        Raises:
+            ConfigError: If the alias does not exist.
+        """
+        config = self.load()
+        if alias not in config.dev_portal_identities:
+            raise ConfigError(f"Developer Portal identity '{alias}' not found.")
+        ident = config.dev_portal_identities[alias]
+        for key, value in kwargs.items():
+            if hasattr(ident, key) and value is not None:
+                setattr(ident, key, value)
+        config.dev_portal_identities[alias] = ident
+        self.save(config)
+
+    def rename_dev_portal_identity(self, old_alias: str, new_alias: str) -> None:
+        """Rename a Developer Portal identity alias.
+
+        If the default was set to the old alias, it follows the rename.
+
+        Raises:
+            ConfigError: If old alias does not exist, or new alias is in use.
+        """
+        config = self.load()
+        if old_alias not in config.dev_portal_identities:
+            raise ConfigError(f"Developer Portal identity '{old_alias}' not found.")
+        if new_alias in config.dev_portal_identities:
+            raise ConfigError(
+                f"Cannot rename '{old_alias}' to '{new_alias}': "
+                f"alias '{new_alias}' is already in use."
+            )
+        config.dev_portal_identities[new_alias] = config.dev_portal_identities.pop(old_alias)
+        if config.default_dev_portal_identity == old_alias:
+            config.default_dev_portal_identity = new_alias
+        self.save(config)
+
+    def set_default_dev_portal_identity(self, alias: str) -> None:
+        """Set the default Developer Portal identity.
+
+        Raises:
+            ConfigError: If the alias does not exist.
+        """
+        config = self.load()
+        if alias not in config.dev_portal_identities:
+            raise ConfigError(f"Developer Portal identity '{alias}' not found.")
+        config.default_dev_portal_identity = alias
         self.save(config)
