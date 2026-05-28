@@ -25,6 +25,26 @@ from .models import DeveloperPortalIdentity
 logger = logging.getLogger(__name__)
 
 
+def _tty_prompt(label: str, *, secret: bool = False) -> str | None:
+    """Prompt via the controlling terminal so a redirected stdin can't break it.
+
+    Returns None when no /dev/tty is available (non-interactive shell, no
+    controlling terminal). Caller must treat None as "cannot prompt".
+    """
+    try:
+        with open("/dev/tty", "w") as out:
+            if secret:
+                import getpass
+
+                return getpass.getpass(label, stream=out)
+            out.write(label)
+            out.flush()
+            with open("/dev/tty") as tin:
+                return tin.readline().rstrip("\n")
+    except OSError:
+        return None
+
+
 class DeveloperPortalClient(BaseHttpClient):
     """HTTP client for the Keboola Developer Portal."""
 
@@ -76,8 +96,36 @@ class DeveloperPortalClient(BaseHttpClient):
         )
 
     def _login_with_mfa(self, username: str, session: str) -> str:
-        # Placeholder — implemented in Task 7.
-        raise KeboolaApiError(
-            message="MFA login not implemented yet",
-            error_code=ErrorCode.DP_MFA_REQUIRED,
-        )
+        code = _tty_prompt("MFA code: ")
+        if not code:
+            raise KeboolaApiError(
+                message=(
+                    "Developer Portal identity requires an MFA code, but no "
+                    "interactive terminal is available. Run from a real "
+                    "terminal, or switch to a service.{vendor}.{id} "
+                    "account (no MFA)."
+                ),
+                error_code=ErrorCode.DP_MFA_REQUIRED,
+            )
+        try:
+            resp = self._client.post(
+                "/auth/login",
+                json={"email": username, "session": session, "code": code.strip()},
+            )
+        except httpx.HTTPError as exc:
+            raise KeboolaApiError(
+                message=f"Developer Portal MFA login transport error: {exc}",
+                error_code=ErrorCode.CONNECTION_ERROR,
+            ) from exc
+        if resp.status_code != 200:
+            raise KeboolaApiError(
+                message=f"Developer Portal MFA login failed (HTTP {resp.status_code})",
+                error_code=ErrorCode.DP_LOGIN_FAILED,
+            )
+        payload = resp.json()
+        if not isinstance(payload, dict) or not payload.get("token"):
+            raise KeboolaApiError(
+                message="Developer Portal MFA login response missing token",
+                error_code=ErrorCode.DP_LOGIN_FAILED,
+            )
+        return payload["token"]

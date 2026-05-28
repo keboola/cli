@@ -39,3 +39,48 @@ class TestLoginTokenPath:
             with pytest.raises(KeboolaApiError) as exc:
                 client._ensure_authenticated()
             assert exc.value.error_code == ErrorCode.DP_LOGIN_FAILED
+
+
+class TestLoginMfaPath:
+    def test_mfa_prompt_completes_login(self, httpx_mock, monkeypatch):
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            json={"session": "sess-1"},
+            status_code=200,
+            match_json={"email": "u@k.com", "password": "p"},
+        )
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            json={"token": "Bearer xyz"},
+            status_code=200,
+            match_json={"email": "u@k.com", "session": "sess-1", "code": "123456"},
+        )
+        # Mock the /dev/tty MFA prompt.
+        monkeypatch.setattr(
+            "keboola_agent_cli.dev_portal_client._tty_prompt",
+            lambda label, secret=False: "123456",
+        )
+        ident = DeveloperPortalIdentity(username="u@k.com", password="p")
+        with DeveloperPortalClient(ident) as client:
+            client._ensure_authenticated()
+            assert client._bearer == "Bearer xyz"
+
+    def test_mfa_no_tty_raises_mfa_required(self, httpx_mock, monkeypatch):
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            json={"session": "sess-1"},
+            status_code=200,
+        )
+        # _tty_prompt returns None when no terminal is available.
+        monkeypatch.setattr(
+            "keboola_agent_cli.dev_portal_client._tty_prompt",
+            lambda label, secret=False: None,
+        )
+        ident = DeveloperPortalIdentity(username="u@k.com", password="p")
+        with DeveloperPortalClient(ident) as client:
+            with pytest.raises(KeboolaApiError) as exc:
+                client._ensure_authenticated()
+            assert exc.value.error_code == ErrorCode.DP_MFA_REQUIRED
