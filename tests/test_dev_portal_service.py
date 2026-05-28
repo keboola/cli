@@ -65,3 +65,75 @@ class TestIdentityCrud:
         service.add_identity("alpha", ident)
         service.remove_identity("alpha")
         assert "alpha" not in config_store.load().dev_portal_identities
+
+
+class TestReadsAndPrepareApply:
+    def _setup(self, service, fake_client):
+        fake_client._ensure_authenticated.return_value = None
+        ident = DeveloperPortalIdentity(username="u", password="p")
+        service.add_identity("alpha", ident)
+
+    def test_list_apps(self, service, fake_client):
+        self._setup(service, fake_client)
+        fake_client.list_apps.return_value = [{"id": "ex-a"}]
+        assert service.list_apps("alpha", "keboola") == [{"id": "ex-a"}]
+        fake_client.list_apps.assert_called_with("keboola")
+
+    def test_get_app(self, service, fake_client):
+        self._setup(service, fake_client)
+        fake_client.get_app.return_value = {"id": "ex-a", "name": "Hello"}
+        assert service.get_app("alpha", "keboola", "keboola.ex-a")["name"] == "Hello"
+
+    def test_prepare_create_requires_id_name_type(self, service, fake_client):
+        self._setup(service, fake_client)
+        with pytest.raises(KeboolaApiError, match="payload must include 'id'"):
+            service.prepare_create("alpha", "keboola", {"name": "F", "type": "extractor"})
+
+    def test_prepare_create_rejects_banned_words_in_name(self, service, fake_client):
+        self._setup(service, fake_client)
+        with pytest.raises(KeboolaApiError, match="must not contain"):
+            service.prepare_create(
+                "alpha",
+                "keboola",
+                {"id": "x", "name": "Foo extractor", "type": "extractor"},
+            )
+
+    def test_prepare_patch_diff(self, service, fake_client):
+        self._setup(service, fake_client)
+        fake_client.get_app.return_value = {
+            "id": "ex-a",
+            "name": "Old",
+            "shortDescription": "same",
+        }
+        pending = service.prepare_patch(
+            "alpha",
+            "keboola",
+            "keboola.ex-a",
+            {"name": "New", "shortDescription": "same"},
+        )
+        keys = {d.key for d in pending.diff}
+        assert keys == {"name"}  # shortDescription unchanged is filtered out
+        assert pending.diff[0].current == "Old"
+        assert pending.diff[0].new == "New"
+
+    def test_apply_patch_calls_client(self, service, fake_client):
+        self._setup(service, fake_client)
+        fake_client.get_app.return_value = {"id": "ex-a", "name": "Old"}
+        fake_client.patch_app.return_value = {"id": "ex-a", "name": "New"}
+        pending = service.prepare_patch("alpha", "keboola", "keboola.ex-a", {"name": "New"})
+        result = service.apply(pending)
+        assert result["name"] == "New"
+        fake_client.patch_app.assert_called_with("keboola", "keboola.ex-a", {"name": "New"})
+
+    def test_prepare_publish_missing_fields(self, service, fake_client):
+        self._setup(service, fake_client)
+        fake_client.get_app.return_value = {
+            "id": "ex-a",
+            "name": "Foo",
+            "type": "extractor",
+            # missing icon, repository, descriptions, license, docs
+        }
+        with pytest.raises(KeboolaApiError) as exc:
+            service.prepare_publish("alpha", "keboola", "keboola.ex-a")
+        assert exc.value.error_code == ErrorCode.DP_PUBLISH_REQUIREMENTS_MISSING
+        assert "icon" in str(exc.value)
