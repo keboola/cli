@@ -6,6 +6,7 @@ single-project operations.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from cryptography.hazmat.primitives import serialization
@@ -17,6 +18,14 @@ from ..models import ProjectConfig
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SnowflakeWorkspaceKeyPair:
+    """PEM key material for Snowflake key-pair workspace authentication."""
+
+    private_pem: str
+    public_pem: str
 
 
 def _classify_qs_compatibility(login_type: str) -> bool:
@@ -38,7 +47,7 @@ def _workspace_login_type_for_backend(backend: str) -> str | None:
     return None
 
 
-def _generate_snowflake_workspace_key_pair() -> tuple[str, str]:
+def _generate_snowflake_workspace_key_pair() -> SnowflakeWorkspaceKeyPair:
     """Generate the unencrypted PEM key pair required by Snowflake workspaces."""
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     private_key_pem = private_key.private_bytes(
@@ -54,14 +63,14 @@ def _generate_snowflake_workspace_key_pair() -> tuple[str, str]:
         )
         .decode("ascii")
     )
-    return private_key_pem, public_key_pem
+    return SnowflakeWorkspaceKeyPair(private_pem=private_key_pem, public_pem=public_key_pem)
 
 
-def _workspace_key_pair_for_backend(backend: str) -> tuple[str | None, str | None]:
+def _workspace_key_pair_for_backend(backend: str) -> SnowflakeWorkspaceKeyPair | None:
     """Return private/public key material for backends that require it."""
     if backend.lower() == "snowflake":
         return _generate_snowflake_workspace_key_pair()
-    return None, None
+    return None
 
 
 def find_storage_workspace_for_sandbox_config(
@@ -263,18 +272,18 @@ class WorkspaceService(BaseService):
         read_only: bool,
     ) -> dict[str, Any]:
         """Create workspace via Storage API (fast, headless)."""
-        private_key, public_key = _workspace_key_pair_for_backend(backend)
+        key_pair = _workspace_key_pair_for_backend(backend)
         ws_data = client.create_config_workspace(
             branch_id=branch_id,
             component_id="keboola.sandboxes",
             config_id=config_id,
             backend=backend,
             login_type=_workspace_login_type_for_backend(backend),
-            public_key=public_key,
+            public_key=key_pair.public_pem if key_pair else None,
         )
 
         connection = ws_data.get("connection", {})
-        credential_label = "private key" if private_key else "password"
+        credential_label = "private key" if key_pair else "password"
         result = {
             "project_alias": alias,
             "workspace_id": ws_data.get("id"),
@@ -292,8 +301,8 @@ class WorkspaceService(BaseService):
             "message": f"Workspace '{name}' created in project '{alias}'. "
             f"Save the {credential_label} -- it cannot be retrieved later!",
         }
-        if private_key is not None:
-            result["private_key"] = private_key
+        if key_pair is not None:
+            result["private_key"] = key_pair.private_pem
         return result
 
     def _create_workspace_via_job(
@@ -305,6 +314,9 @@ class WorkspaceService(BaseService):
         backend: str,
     ) -> dict[str, Any]:
         """Create workspace via Queue job (slower, visible in UI)."""
+        # The Queue job path does not expose a publicKey/loginType input. Keep
+        # returning a reset password here; headless Snowflake creates use the
+        # key-pair path in _create_workspace_direct().
         job = client.create_job(
             component_id="keboola.sandboxes",
             config_id=config_id,
@@ -921,14 +933,14 @@ class WorkspaceService(BaseService):
                 )
 
             # Create config-tied workspace
-            private_key, public_key = _workspace_key_pair_for_backend(effective_backend)
+            key_pair = _workspace_key_pair_for_backend(effective_backend)
             ws_data = client.create_config_workspace(
                 branch_id=branch_id,
                 component_id=component_id,
                 config_id=config_id,
                 backend=effective_backend,
                 login_type=_workspace_login_type_for_backend(effective_backend),
-                public_key=public_key,
+                public_key=key_pair.public_pem if key_pair else None,
             )
 
             workspace_id = ws_data.get("id")
@@ -960,7 +972,7 @@ class WorkspaceService(BaseService):
                     workspace_id, table_defs, branch_id=branch_id, preserve=preserve
                 )
 
-            credential_label = "private key" if private_key else "password"
+            credential_label = "private key" if key_pair else "password"
             result = {
                 "project_alias": alias,
                 "workspace_id": workspace_id,
@@ -980,8 +992,8 @@ class WorkspaceService(BaseService):
                 f"'{config_id}' with {len(source_tables)} table(s) loaded. "
                 f"Save the {credential_label} -- it cannot be retrieved later!",
             }
-            if private_key is not None:
-                result["private_key"] = private_key
+            if key_pair is not None:
+                result["private_key"] = key_pair.private_pem
             return result
         finally:
             client.close()

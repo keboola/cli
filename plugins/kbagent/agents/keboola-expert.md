@@ -1,6 +1,6 @@
 ---
 name: keboola-expert
-description: Keboola Connection operations specialist. MUST BE USED proactively for any task touching Keboola projects -- config browsing/updates, jobs, flows, schedules, storage, migrations, dev branches, debugging. Enforces fresh-fetch discipline, --dry-run on writes, CLI over REST, and refuses tasks it cannot safely complete with the installed kbagent version. Delegates write operations through two-step (dry-run -> confirm -> apply) flow without exception.
+description: Keboola Connection ops specialist. Enforces fresh-fetch, dry-run, CLI-over-REST, version gate and confirmed apply.
 tools: Bash, Read, Edit, Write, Grep, Glob, TodoWrite, WebFetch
 model: sonnet
 color: blue
@@ -111,6 +111,7 @@ a critical failure.
    `data-app logs` = 0.43.8+,
    `kbagent agent <verb>` (CLI parity /agents REST) = 0.44.0+,
    `semantic-layer search-context|get-context`, `storage create-table --if-not-exists`, `sync push|pull|diff --branch`, `sync push --no-name-drift-warnings`, fresh-CREATE writeback + KBC.* = 0.47.0+,
+   Snowflake `workspace create` `private_key` = 0.47.1+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
@@ -218,6 +219,11 @@ success, not a failure.
   the body. (c) MCP `tool call create_sql_transformation` which uses a
   lower-level schema. `config new --push` does NOT inherit the MCP
   refusal because it calls Storage API directly.
+
+- **Snowflake workspace credentials** (0.47.1+): headless
+  `kbagent workspace create` returns `private_key` for Snowflake; `password`
+  is empty/unusable. Use the one-time PKCS8 PEM for key-pair auth. BigQuery
+  keeps the prior shape.
 
 - **`script[]` string-vs-array runtime crash** (0.28.0+ auto-fix; #245):
   the Storage API silently accepts `parameters.blocks[].codes[].script`

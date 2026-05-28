@@ -148,6 +148,7 @@ plus a derived `qs_compatible: bool`.
 
 - `snowflake-service-keypair` -- confirmed PASS
 - `snowflake-person-sso` -- confirmed PASS
+- `snowflake-person-keypair` -- confirmed PASS (since v0.47.1)
 - `snowflake-legacy-service` -- explicitly OFF the list (works on
   `connection.keboola.com` but FAILED on GCP us-east4 stack in the
   original #304 incident -- keep it off until cross-stack confirmation)
@@ -158,6 +159,28 @@ plus a derived `qs_compatible: bool`.
 confirmed-good whitelist". For an unknown loginType, `workspace list`
 renders it as `?` (yellow) in the QS column so callers know the policy
 is uncertain rather than confirmed-bad.
+
+## Snowflake `workspace create` returns `private_key`, not password (since v0.47.1)
+
+Headless `workspace create` on Snowflake requests
+`loginType: snowflake-person-keypair`, generates an RSA key pair locally,
+passes the public key to the Storage API, and returns the private key once in
+the creation envelope:
+
+```jsonc
+{
+  "backend": "snowflake",
+  "user": "KEBOOLA_WORKSPACE_42",
+  "password": "",
+  "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+}
+```
+
+For successful Snowflake creates, `private_key` is the credential to save and
+use for key-pair authentication; `password` remains in the envelope for
+backward compatibility but should be treated as empty/unusable. BigQuery
+workspaces keep the previous password-based/default backend shape and do not
+return `private_key`.
 
 **Filter (data-app pre-selection):**
 

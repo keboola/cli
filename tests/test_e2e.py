@@ -6189,6 +6189,23 @@ class TestE2EIssue304WorkspaceDiscoverability:
     def _run_ok(self, *args: str) -> dict[str, Any]:
         return _json_ok(self._run(*args))
 
+    def test_snowflake_workspace_create_returns_private_key(self) -> None:
+        """Snowflake workspace creation returns the generated private key once."""
+        _step(1, "workspace create returns private_key on Snowflake")
+        result = self._run("workspace", "create", "--project", self.alias)
+        if result.exit_code != 0:
+            pytest.skip(f"workspace create not supported: {result.output}")
+
+        data = _json_ok(result)["data"]
+        ws_id = int(data["workspace_id"])
+        self._created_workspace_ids.append(ws_id)
+
+        if data.get("backend") != "snowflake":
+            pytest.skip("Snowflake private_key assertion requires a Snowflake stack")
+
+        assert "private_key" in data
+        assert data["private_key"].startswith("-----BEGIN PRIVATE KEY-----")
+
     def test_issue_304_discoverability_roundtrip(self) -> None:
         """list/detail expose loginType; sandbox config annotation resolves real workspace ID."""
         _step(1, "workspace create (RO sandbox)")

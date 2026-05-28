@@ -72,8 +72,9 @@ class TestWorkspaceCreate:
             "schema": "WORKSPACE_42",
             "user": "KEBOOLA_WORKSPACE_42",
             "password": "s3cret!Passw0rd",
+            "private_key": "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
             "read_only": True,
-            "message": "Workspace 'my-workspace' (42) created in project 'prod'. Save the password!",
+            "message": "Workspace 'my-workspace' (42) created in project 'prod'. Save the private key!",
         }
 
         with (
@@ -99,6 +100,7 @@ class TestWorkspaceCreate:
         assert output["status"] == "ok"
         assert output["data"]["workspace_id"] == 42
         assert output["data"]["password"] == "s3cret!Passw0rd"
+        assert output["data"]["private_key"].startswith("-----BEGIN PRIVATE KEY-----")
         assert output["data"]["backend"] == "snowflake"
 
     def test_workspace_create_human_outputs_private_key_when_present(self, tmp_path: Path) -> None:
