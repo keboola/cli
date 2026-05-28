@@ -610,6 +610,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
     Create workspace. Backend auto-detected from project (or override with --backend). Default: headless (~1s). --ui: visible in KBC UI (~15s).
+    Since 0.47.1, Snowflake headless creates return private_key and an empty password field; use key-pair auth.
 
   kbagent workspace list [--project NAME] [--orphaned] [--branch ID] [--qs-compatible]
     List workspaces. Read command: ignores active dev branch (production endpoint) with an Info banner;

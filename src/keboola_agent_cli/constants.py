@@ -303,14 +303,17 @@ KILLABLE_JOB_STATUSES: frozenset[str] = frozenset({"created", "waiting", "proces
 # Verified 2026-05-18 against project 901 on connection.keboola.com:
 #   snowflake-service-keypair: PASS
 #   snowflake-person-sso:      PASS
+#   snowflake-person-keypair:  PASS (required for new Snowflake sandboxes)
 #   snowflake-legacy-service:  PASS here, FAIL on GCP us-east4 (issue #304)
 #   default (legacy 2016 ws):  FAIL ('JWT token is invalid')
 #
 # Extend ONLY after empirical confirmation across at least one non-AWS stack.
+SNOWFLAKE_WORKSPACE_LOGIN_TYPE: str = "snowflake-person-keypair"
 QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES: frozenset[str] = frozenset(
     {
         "snowflake-service-keypair",
         "snowflake-person-sso",
+        SNOWFLAKE_WORKSPACE_LOGIN_TYPE,
     }
 )
 

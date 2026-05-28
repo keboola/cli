@@ -72,8 +72,9 @@ class TestWorkspaceCreate:
             "schema": "WORKSPACE_42",
             "user": "KEBOOLA_WORKSPACE_42",
             "password": "s3cret!Passw0rd",
+            "private_key": "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
             "read_only": True,
-            "message": "Workspace 'my-workspace' (42) created in project 'prod'. Save the password!",
+            "message": "Workspace 'my-workspace' (42) created in project 'prod'. Save the private key!",
         }
 
         with (
@@ -99,7 +100,55 @@ class TestWorkspaceCreate:
         assert output["status"] == "ok"
         assert output["data"]["workspace_id"] == 42
         assert output["data"]["password"] == "s3cret!Passw0rd"
+        assert output["data"]["private_key"].startswith("-----BEGIN PRIVATE KEY-----")
         assert output["data"]["backend"] == "snowflake"
+
+    def test_workspace_create_human_outputs_private_key_when_present(self, tmp_path: Path) -> None:
+        """workspace create human output shows the generated private key when returned."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.create_workspace.return_value = {
+            "project_alias": "prod",
+            "workspace_id": 42,
+            "name": "my-workspace",
+            "config_id": "cfg-123",
+            "backend": "snowflake",
+            "host": "account.snowflakecomputing.com",
+            "warehouse": "KEBOOLA_PROD",
+            "database": "KEBOOLA_258",
+            "schema": "WORKSPACE_42",
+            "user": "KEBOOLA_WORKSPACE_42",
+            "private_key": "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
+            "read_only": True,
+            "message": "Workspace 'my-workspace' (42) created in project 'prod'. Save the private key!",
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockWsService.return_value = mock_ws
+
+            result = runner.invoke(
+                app,
+                ["workspace", "create", "--project", "prod"],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "Private key:" in result.output
+        assert "-----BEGIN PRIVATE KEY-----" in result.output
+        assert "Password:" not in result.output
 
     def test_workspace_create_api_error(self, tmp_path: Path) -> None:
         """workspace create with API error returns correct exit code."""

@@ -509,6 +509,72 @@ class TestClientHeaders:
         client.close()
 
 
+class TestConfigWorkspaces:
+    """Tests for config-tied workspace endpoints."""
+
+    def test_create_config_workspace_includes_login_type_when_requested(self, httpx_mock) -> None:
+        """Explicit loginType is included in the Storage API workspace payload."""
+        httpx_mock.add_response(
+            url=(
+                "https://connection.keboola.com/v2/storage/branch/123/components/"
+                "keboola.sandboxes/configs/cfg-1/workspaces"
+            ),
+            json={"id": 42},
+            status_code=201,
+        )
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        )
+        result = client.create_config_workspace(
+            branch_id=123,
+            component_id="keboola.sandboxes",
+            config_id="cfg-1",
+            backend="snowflake",
+            login_type="snowflake-person-keypair",
+            public_key="-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----\n",
+        )
+
+        assert result == {"id": 42}
+        request = httpx_mock.get_request()
+        assert json.loads(request.content) == {
+            "backend": "snowflake",
+            "loginType": "snowflake-person-keypair",
+            "publicKey": "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----\n",
+        }
+        client.close()
+
+    def test_create_config_workspace_omits_login_type_when_default(self, httpx_mock) -> None:
+        """A None login type is omitted so non-Snowflake backends keep Storage defaults."""
+        httpx_mock.add_response(
+            url=(
+                "https://connection.keboola.com/v2/storage/branch/123/components/"
+                "keboola.sandboxes/configs/cfg-1/workspaces"
+            ),
+            json={"id": 42},
+            status_code=201,
+        )
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        )
+        result = client.create_config_workspace(
+            branch_id=123,
+            component_id="keboola.sandboxes",
+            config_id="cfg-1",
+            backend="bigquery",
+            login_type=None,
+            public_key=None,
+        )
+
+        assert result == {"id": 42}
+        request = httpx_mock.get_request()
+        assert json.loads(request.content) == {"backend": "bigquery"}
+        client.close()
+
+
 class TestContextManager:
     """Tests for context manager support."""
 

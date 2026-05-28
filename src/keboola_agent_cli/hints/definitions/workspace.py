@@ -14,7 +14,11 @@ HintRegistry.register(
                 comment="Create workspace (headless mode)",
                 client=ClientCall(
                     method="create_config_workspace",
-                    args={"backend": "{backend}"},
+                    args={
+                        "backend": "{backend}",
+                        "login_type": "login_type",
+                        "public_key": "public_key_pem",
+                    },
                     result_var="workspace",
                     result_hint="dict",
                 ),
@@ -33,6 +37,7 @@ HintRegistry.register(
         ],
         notes=[
             "Service layer handles sandbox config creation + workspace provisioning.",
+            "For Snowflake direct client calls, generate an RSA key pair, pass login_type='snowflake-person-keypair' and public_key=public_key_pem, then save the private key returned by your generator. For BigQuery, pass None for both.",
             "With --ui flag, creates via job run (slower, ~15s) for UI visibility.",
         ],
     )
