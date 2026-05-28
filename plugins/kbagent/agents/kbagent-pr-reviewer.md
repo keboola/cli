@@ -135,14 +135,14 @@ verify the file IS updated in the diff. If not, flag it. Specifically:
 |---|---|---|
 | `src/keboola_agent_cli/commands/context.py` (`AGENT_CONTEXT`) | Does the new command appear under the right `### <Subgroup>` heading? | BLOCKING |
 | `CLAUDE.md` `## All CLI Commands` | Does the new command's signature appear in the top-level command list? | BLOCKING |
-| `plugins/kbagent/agents/keboola-expert.md` §2 Tool Selection Matrix | If new write/destructive command, is there a `\| ... \| First choice \| Fallback \| NEVER \|` row? | BLOCKING for write/destructive, NON-BLOCKING for read |
+| `plugins/kbagent/agents/keboola-expert.md` §2 Tool Selection Matrix | One row **per command GROUP**, not per command. If the PR adds a new write/destructive *group*, is there a `\| ... \| First choice \| Fallback \| NEVER \|` row? A new command inside an existing group needs no new row. The file has a hard 60 KB prompt budget; exhaustive per-command coverage lives in `AGENT_CONTEXT` (loaded dynamically), so a missing matrix row is **never BLOCKING** -- flag it NON-BLOCKING only when the new group has zero rows AND `AGENT_CONTEXT` also omits it. | NON-BLOCKING |
 | `plugins/kbagent/agents/keboola-expert.md` §1 Rule 6 VERSION GATE | If feature is version-gated, are example version refs (`flow update needs 0.22.0+`) still accurate after this PR? | NON-BLOCKING (informational) |
 | `plugins/kbagent/agents/keboola-expert.md` §3 Inline Gotchas | If behavior is non-obvious, is there a bullet describing it? | NON-BLOCKING |
 | `plugins/kbagent/skills/kbagent/references/commands-reference.md` | New command bullet under correct section? | BLOCKING |
 | `plugins/kbagent/skills/kbagent/references/gotchas.md` | New non-obvious behavior tagged `(since vX.Y.Z)`? | BLOCKING for behavior changes (missing version tag means AI agents recommend behavior on older installs) |
 | `plugins/kbagent/skills/kbagent/references/<topic>-workflow.md` | New workflow file for new topic, or extension of existing file for extended workflow? | NON-BLOCKING |
 | `src/keboola_agent_cli/permissions.py` `OPERATION_REGISTRY` | Every new CLI command MUST have a `"<subapp>.<command>": "<read|write|destructive|admin>"` entry. | BLOCKING (missing entry = permission engine silently allows the command under restrictive policy = security gap) |
-| `src/keboola_agent_cli/hints/definitions/*.py` | Every new CLI command MUST have a `CommandHint` with both `ClientCall` and `ServiceCall`. | BLOCKING |
+| ~~`src/keboola_agent_cli/hints/definitions/*.py`~~ | **DEPRECATED -- do NOT check.** `--hint` code generation is superseded by the `kbagent serve` REST API; new commands deliberately omit hint definitions. Never flag a missing `hints/definitions/` entry. | n/a (do not flag) |
 
 For each missed surface, your finding cites BOTH the original file/line in the
 diff that introduced the change AND the file path that should have been
@@ -235,7 +235,7 @@ grep -E '^\+' /tmp/kbagent-pr-<pr_number>.diff | grep -E '(token|TOKEN|api_key|p
 - **BLOCKING**: must fix before merge. Bug, security issue, broken test,
   silent-drift gap from `CONTRIBUTING.md` Plugin synchronization map,
   layer violation, missing version tag on `gotchas.md`, missing
-  `OPERATION_REGISTRY` entry, missing `--hint` definition, broken backward
+  `OPERATION_REGISTRY` entry, broken backward
   compat without deprecation, `make check` non-zero.
 - **NON-BLOCKING**: should fix; not a merge blocker. Test gap on edge
   case, missing one-liner gotcha, suboptimal naming, unverified behavior
