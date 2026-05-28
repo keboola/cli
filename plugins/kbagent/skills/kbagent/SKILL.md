@@ -332,15 +332,20 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Execute an action ad-hoc (no persistence, no scheduling) | `kbagent agent test` |
 | Show the next N firings of a cron expression | `kbagent agent cron-preview --cron CRON` |
 | Polish a plain-English goal into an unattended-agent-ready prompt | `kbagent agent prompt-improve --goal GOAL` |
-| manage portal property / register new component in portal | `kbagent dev-portal …` | see `references/dev-portal-workflow.md` |
-| list apps for a vendor in the Developer Portal | `kbagent dev-portal list --vendor VENDOR` |
-| get the full portal entry for one component | `kbagent dev-portal get --app VENDOR.APP_ID` |
-| create a new component in the Developer Portal | `kbagent dev-portal create --vendor VENDOR --data FILE` |
-| patch a portal property on a component | `kbagent dev-portal patch --app VENDOR.APP_ID --data FILE` |
-| upload an icon for a portal component | `kbagent dev-portal upload-icon --app VENDOR.APP_ID --file FILE` |
-| publish a component in the Developer Portal | `kbagent dev-portal publish --app VENDOR.APP_ID` |
-| deprecate a component in the Developer Portal | `kbagent dev-portal deprecate --app VENDOR.APP_ID` |
-| manage Developer Portal identities (add / list / remove / edit / use / current / verify) | `kbagent dev-portal identity …` |
+| List Developer Portal apps for a vendor | `kbagent dev-portal list --vendor VENDOR` |
+| Show the full Developer Portal entry for one app | `kbagent dev-portal get --app APP` |
+| Create (register) a new app in the Developer Portal. | `kbagent dev-portal create --vendor VENDOR --data DATA` |
+| Patch one or more properties of an existing Developer Portal app. | `kbagent dev-portal patch --app APP` |
+| Upload a 128x128 PNG icon for a Developer Portal app. | `kbagent dev-portal upload-icon --app APP --file FILE` |
+| Publish an app in the Developer Portal (requests Keboola review). | `kbagent dev-portal publish --app APP` |
+| Deprecate an app in the Developer Portal (hides it, blocks new configs). | `kbagent dev-portal deprecate --app APP` |
+| Add a Developer Portal identity (verifies creds before persisting) | `kbagent dev-portal identity add --alias ALIAS --username USERNAME` |
+| List configured Developer Portal identities | `kbagent dev-portal identity list` |
+| Remove a Developer Portal identity | `kbagent dev-portal identity remove --alias ALIAS` |
+| Edit fields on a Developer Portal identity (or rename it) | `kbagent dev-portal identity edit --alias ALIAS` |
+| Set the default Developer Portal identity | `kbagent dev-portal identity use <ALIAS>` |
+| Show the alias of the default Developer Portal identity | `kbagent dev-portal identity current` |
+| Probe a Developer Portal identity by logging in | `kbagent dev-portal identity verify` |
 <!-- END AUTO-GENERATED COMMANDS -->
 
 ### Sync pull notable flags

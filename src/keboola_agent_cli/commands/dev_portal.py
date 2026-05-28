@@ -53,7 +53,9 @@ def _split_app(app: str) -> tuple[str, str]:
 # ----- Identity subcommands -----
 
 
-@identity_app.command("add")
+@identity_app.command(
+    "add", help="Add a Developer Portal identity (verifies creds before persisting)."
+)
 def identity_add(
     ctx: typer.Context,
     alias: str = typer.Option(..., "--alias"),
@@ -99,7 +101,7 @@ def identity_add(
     formatter.output({"status": "ok", "alias": alias, "username": username})
 
 
-@identity_app.command("list")
+@identity_app.command("list", help="List configured Developer Portal identities.")
 def identity_list(ctx: typer.Context) -> None:
     formatter = get_formatter(ctx)
     svc = get_dev_portal_service(ctx)
@@ -119,7 +121,7 @@ def identity_list(ctx: typer.Context) -> None:
     formatter.output(rows)
 
 
-@identity_app.command("remove")
+@identity_app.command("remove", help="Remove a Developer Portal identity.")
 def identity_remove(
     ctx: typer.Context,
     alias: str = typer.Option(..., "--alias"),
@@ -134,7 +136,7 @@ def identity_remove(
     formatter.output({"status": "ok", "removed": alias})
 
 
-@identity_app.command("edit")
+@identity_app.command("edit", help="Edit fields on a Developer Portal identity (or rename it).")
 def identity_edit(
     ctx: typer.Context,
     alias: str = typer.Option(..., "--alias"),
@@ -168,7 +170,7 @@ def identity_edit(
     formatter.output({"status": "ok", "alias": alias})
 
 
-@identity_app.command("use")
+@identity_app.command("use", help="Set the default Developer Portal identity.")
 def identity_use(
     ctx: typer.Context,
     alias: str = typer.Argument(..., help="Identity alias to set as default"),
@@ -183,14 +185,14 @@ def identity_use(
     formatter.output({"status": "ok", "default": alias})
 
 
-@identity_app.command("current")
+@identity_app.command("current", help="Show the alias of the default Developer Portal identity.")
 def identity_current(ctx: typer.Context) -> None:
     formatter = get_formatter(ctx)
     svc = get_dev_portal_service(ctx)
     formatter.output({"default": svc.current_identity()})
 
 
-@identity_app.command("verify")
+@identity_app.command("verify", help="Probe a Developer Portal identity by logging in.")
 def identity_verify(
     ctx: typer.Context,
     identity: str | None = typer.Option(None, "--identity"),
@@ -209,7 +211,7 @@ def identity_verify(
 # ----- Read commands -----
 
 
-@dev_portal_app.command("list")
+@dev_portal_app.command("list", help="List Developer Portal apps for a vendor.")
 def list_apps(
     ctx: typer.Context,
     vendor: str = typer.Option(..., "--vendor"),
@@ -226,7 +228,7 @@ def list_apps(
     formatter.output(apps)
 
 
-@dev_portal_app.command("get")
+@dev_portal_app.command("get", help="Show the full Developer Portal entry for one app.")
 def get_app_cmd(
     ctx: typer.Context,
     app: str = typer.Option(..., "--app", help="VENDOR.APP_ID, e.g. keboola.ex-foo"),
@@ -329,7 +331,10 @@ def _pending_as_json(pending) -> dict:  # type: ignore[type-arg]
     return {"status": "dry-run", "pending": raw}
 
 
-@dev_portal_app.command("create")
+@dev_portal_app.command(
+    "create",
+    help="Create (register) a new app in the Developer Portal. Requires TTY confirm; --dry-run for preview.",
+)
 def create_cmd(
     ctx: typer.Context,
     vendor: str = typer.Option(..., "--vendor"),
@@ -360,7 +365,10 @@ def create_cmd(
     formatter.output({"status": "ok", "created": result})
 
 
-@dev_portal_app.command("patch")
+@dev_portal_app.command(
+    "patch",
+    help="Patch one or more properties of an existing Developer Portal app. Requires TTY confirm; --dry-run for preview.",
+)
 def patch_cmd(
     ctx: typer.Context,
     app: str = typer.Option(..., "--app"),
@@ -419,7 +427,10 @@ def patch_cmd(
     )
 
 
-@dev_portal_app.command("upload-icon")
+@dev_portal_app.command(
+    "upload-icon",
+    help="Upload a 128x128 PNG icon for a Developer Portal app. Requires TTY confirm; --dry-run for preview.",
+)
 def upload_icon_cmd(
     ctx: typer.Context,
     app: str = typer.Option(..., "--app"),
@@ -451,7 +462,10 @@ def upload_icon_cmd(
     formatter.output(result)
 
 
-@dev_portal_app.command("publish")
+@dev_portal_app.command(
+    "publish",
+    help="Publish an app in the Developer Portal (requests Keboola review). Requires TTY confirm; --dry-run for preview.",
+)
 def publish_cmd(
     ctx: typer.Context,
     app: str = typer.Option(..., "--app"),
@@ -482,7 +496,10 @@ def publish_cmd(
     formatter.output({"status": "ok", "published": result})
 
 
-@dev_portal_app.command("deprecate")
+@dev_portal_app.command(
+    "deprecate",
+    help="Deprecate an app in the Developer Portal (hides it, blocks new configs). Requires TTY confirm; --dry-run for preview.",
+)
 def deprecate_cmd(
     ctx: typer.Context,
     app: str = typer.Option(..., "--app"),
