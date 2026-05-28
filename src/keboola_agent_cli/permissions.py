@@ -160,6 +160,17 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.secrets-get": "read",
     "data-app.secrets-remove": "destructive",
     "data-app.validate-repo": "read",
+    # Developer Portal — identity management
+    "dev-portal.identity.add": "write",
+    "dev-portal.identity.list": "read",
+    "dev-portal.identity.remove": "write",
+    "dev-portal.identity.edit": "write",
+    "dev-portal.identity.use": "write",
+    "dev-portal.identity.current": "read",
+    "dev-portal.identity.verify": "read",
+    # Developer Portal — read commands
+    "dev-portal.list": "read",
+    "dev-portal.get": "read",
     # Storage browsing
     "storage.buckets": "read",
     "storage.bucket-detail": "read",

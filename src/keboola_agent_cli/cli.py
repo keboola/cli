@@ -13,6 +13,7 @@ from .commands.component import component_app
 from .commands.config import config_app
 from .commands.context import context_command
 from .commands.data_app import data_app_app
+from .commands.dev_portal import dev_portal_app
 from .commands.doctor import doctor_command
 from .commands.encrypt import encrypt_app
 from .commands.feature import feature_app
@@ -128,6 +129,7 @@ app.add_typer(semantic_layer_app, name="semantic-layer", rich_help_panel=_DEV)
 app.add_typer(semantic_layer_app, name="sl", rich_help_panel=_DEV, hidden=True)
 app.add_typer(http_app, name="http", rich_help_panel=_DEV)
 app.add_typer(agent_app, name="agent", rich_help_panel=_DEV)
+app.add_typer(dev_portal_app, name="dev-portal", rich_help_panel=_DEV)
 
 
 def apply_firewall_flags(
