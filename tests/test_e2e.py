@@ -10549,3 +10549,66 @@ class TestE2E_0_47_0_NewSurfaces:
         assert diff_result.exit_code == 0, diff_result.output
         diff_summary = json.loads(diff_result.output)["data"]["summary"]
         assert diff_summary.get("conflict", 0) == 0, diff_summary
+
+
+class TestDevPortalE2E:
+    """E2E coverage for v0.48.0 -- Developer Portal command group.
+
+    - ``dev-portal identity list`` -- unconditional smoke test (no KB token needed)
+    - ``dev-portal list --vendor keboola`` -- optional real-portal test (needs E2E_DP_USERNAME
+      and E2E_DP_PASSWORD env vars)
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path):
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+    def test_identity_list_smoke(self) -> None:
+        """Unconditional smoke: dev-portal identity list must not crash (no identities configured)."""
+        result = _invoke(self.config_dir, ["--json", "dev-portal", "identity", "list"])
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        # JSON envelope: {"status": "ok", "data": [...]}
+        identities = body.get("data", body)
+        assert isinstance(identities, list), (
+            f"expected list under 'data', got {type(identities).__name__}: {result.output}"
+        )
+
+    @pytest.mark.skipif(
+        not (os.environ.get("E2E_DP_USERNAME") and os.environ.get("E2E_DP_PASSWORD")),
+        reason="Set E2E_DP_USERNAME and E2E_DP_PASSWORD to run real-portal test",
+    )
+    def test_list_apps_against_real_portal(self) -> None:
+        """Optional: add an identity and list apps for vendor 'keboola' if creds supplied."""
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "dev-portal",
+                "identity",
+                "add",
+                "--alias",
+                "e2e",
+                "--username",
+                os.environ["E2E_DP_USERNAME"],
+                "--password",
+                os.environ["E2E_DP_PASSWORD"],
+                "--vendor",
+                "keboola",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "dev-portal",
+                "list",
+                "--vendor",
+                "keboola",
+                "--identity",
+                "e2e",
+            ],
+        )
+        assert result.exit_code == 0, result.output

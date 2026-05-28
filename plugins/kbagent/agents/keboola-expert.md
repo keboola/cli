@@ -112,6 +112,7 @@ a critical failure.
    Snowflake `workspace create` `private_key` = 0.47.1+,
    `sync push` fresh-CREATE variable-link resolution + `--branch <id>` default-tree promote = 0.47.2+,
    `feature` group (stack/project/user feature flags, Manage API) = 0.48.0+,
+   `dev-portal` command group (identity CRUD, list, get, create, patch, upload-icon, publish, deprecate; multi-identity credential store; `require_random_code_confirmation` shared helper; 15 new permission-registry operations) = 0.48.0+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
@@ -192,6 +193,7 @@ a critical failure.
 | Promote a model dev -> prod (cross-project copy) | `kbagent --json semantic-layer promote --from-project dev --to-project prod --dry-run` (0.41.0+) to classify NEW/IDENTICAL/CHANGED, review the `changes[]` and `failed[]` lists, then re-run without `--dry-run`; deep-equality strips modelUUID + timestamps; **NEVER deletes target items absent from source** (additive + overwrite only) | `semantic-layer export` from source + `semantic-layer import --overwrite` into target (two-step -- equivalent end state but you lose the IDENTICAL classification) | hand-rolled cross-project copy via raw metastore calls (no modelUUID rewrite -- the target ends up with foreign UUIDs and validation fails downstream) |
 | Bootstrap a model from a set of storage tables | `kbagent semantic-layer build --project P --tables T1,T2,... [--dry-run] [--keep-on-failure]` (0.41.0+) -- **HEURISTIC fallback only** (no AI Service JSON endpoint): synthesises one dataset + one COUNT(*) metric + one glossary entry per table; FQN derived; fields[] role-classified. Response carries `fallback_used: "heuristic"`. Use as a SCAFFOLD, then refine via `add` / `edit`. Rollback on push failure (0.41.10+): every successfully-POSTed child is DELETEd in reverse + model deleted if we created it; pass `--keep-on-failure` to preserve partial state | the `sl-build` skill in `04_AI_Kit/ai-kit` -- full AI-assisted greenfield wizard, schema discovery + SQL analysis + AI generation. Use this when you need richer metrics, relationships, and constraint shapes than the heuristic produces | hand-writing the model JSON from scratch (the `build` heuristic gets you 80% of the way for read-mostly star schemas; only fall back to manual when the heuristic refuses or you need something the skill produces) |
 | Encrypt the storage token for a transformation `user_properties` (so a Python container can reach the metastore) | `kbagent semantic-layer token --encrypt --project P --component-id C` (0.41.0+) -- builds `{"#metastore_token": <token>}` from the project's already-stored Storage token and delegates to the existing EncryptService; output is the encrypted envelope ready to paste into the transformation's `user_properties` block | `kbagent encrypt values --project P --component-id C --input '{"#metastore_token": "<plaintext>"}'` (works but the operator has to manually fetch the token first -- the wrapper avoids that step) | hand-running the Encryption API and pasting plaintext into `user_properties` (no `#` prefix means it sits in the config in plaintext) |
+| User mentions Developer Portal, apps-api, register app, vendor app, ui-options, encryption, defaultBucket, app icon, configurationSchema in portal, publish/deprecate component | `kbagent dev-portal …` (0.48.0+) -- reads (`list --vendor`, `get --app`) are unrestricted and agent-friendly for peer-config research; writes (`create`, `patch`, `upload-icon`, `publish`, `deprecate`) always require a human at a TTY to type a random hex code | `kbagent dev-portal <write> --dry-run` to print the pending diff for the user to review | attempting `--yes` (flag does not exist); running write commands in non-TTY shells (exits 6); constructing raw `curl` calls to `apps-api.keboola.com` (bypasses the TTY gate and ships unreviewed changes directly to production) |
 
 If the table does not cover the user's task, **ask clarifying
 questions** instead of guessing. Returning a targeted question is a
@@ -502,6 +504,15 @@ success, not a failure.
     follow up with `add metric`, `add relationship`, `add constraint`.
     The full AI wizard lives in the `sl-build` skill under
     `04_AI_Kit/ai-kit/`.
+
+- **Developer Portal writes are direct production; agent's job ends at `--dry-run`** (since v0.48.0):
+  `kbagent dev-portal create`, `patch`, `upload-icon`, `publish`, `deprecate` all go
+  directly to `apps-api.keboola.com` with no staging environment. The agent MUST stop
+  after showing the `--dry-run` preview and ask the human to type the random hex code
+  themselves. There is no `--yes` flag (attempting it is a usage error), no env-var bypass,
+  and non-TTY shells exit 6 immediately. Use reads freely: `dev-portal list --vendor V`
+  and `dev-portal get --app VENDOR.APP_ID` for peer-config research are fully agent-safe
+  and incur no TTY requirement.
 
 ---
 

@@ -435,6 +435,27 @@ kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
 kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR] [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run]
 
+kbagent dev-portal identity add --alias A --username U [--password P | --password-stdin]
+                                [--role-hint vendor|admin] [--vendor V] [--portal-url URL]
+kbagent dev-portal identity list
+kbagent dev-portal identity remove --alias A
+kbagent dev-portal identity edit --alias A [--username U] [--password P|--password-stdin]
+                                 [--role-hint H] [--vendor V] [--new-alias N]
+kbagent dev-portal identity use ALIAS
+kbagent dev-portal identity current
+kbagent dev-portal identity verify [--identity A]
+
+kbagent dev-portal list --vendor V [--identity A]
+kbagent dev-portal get --app VENDOR.APP_ID [--identity A]
+
+kbagent dev-portal create --vendor V --data FILE [--identity A] [--dry-run]
+kbagent dev-portal patch --app VENDOR.APP_ID (--data FILE | --property KEY (--value V | --value-file F))
+                         [--identity A] [--dry-run]
+kbagent dev-portal upload-icon --app VENDOR.APP_ID --file PATH [--identity A] [--dry-run]
+kbagent dev-portal publish --app VENDOR.APP_ID [--identity A] [--dry-run]
+kbagent dev-portal deprecate --app VENDOR.APP_ID [--identity A] [--dry-run]
+# All writes require an interactive random-code TTY confirm; no --yes / no env bypass.
+
 kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]
 
 kbagent semantic-layer model list --project P

@@ -2243,3 +2243,18 @@ things trip up callers:
 To inspect a project's *enabled* features without a super-admin token, use
 `kbagent project info --project P` (read-only) instead -- it returns the enabled
 feature list among other project metadata.
+
+## Developer Portal: writes require a human, no exceptions (since v0.49.0)
+
+`kbagent dev-portal {create,patch,upload-icon,publish,deprecate}` always print
+the request preview and then require the user to type a random hex code on a
+real terminal. There is no `--yes` flag. There is no env-var override. The
+command exits 6 (`EXIT_PERMISSION_DENIED`) on a non-TTY shell.
+
+For agentic use: stop at the preview. Use `--dry-run` to get a clean
+exit-0 preview you can show the user. Then ask the user to run the same
+command without `--dry-run` themselves.
+
+Reads (`dev-portal list`, `dev-portal get`) are unrestricted — peer-research
+patterns ("show me how MySQL and Postgres extractors configure themselves")
+are agent-friendly via `list --vendor` + `get --app`.

@@ -55,7 +55,11 @@ description: >
   4-band health, _critical _warning _healthy _review, CODE_METRIC,
   DIM_METRIC_THRESHOLD, dangling metric FK, orphaned constraint,
   phantom field, AGG on STRING, SUM on PCT, deep validate,
-  sl, kbagent sl, semantic layer wizard, sl-build, sl-add, sl-edit.
+  sl, kbagent sl, semantic layer wizard, sl-build, sl-add, sl-edit,
+  developer portal, dev-portal, apps-api, register component, vendor app,
+  portal property, ui-options, encryption portal, defaultBucket portal,
+  app icon, configurationSchema portal, publish component, deprecate component,
+  kbagent dev-portal, portal identity, vendor login, service account portal.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -328,6 +332,15 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Execute an action ad-hoc (no persistence, no scheduling) | `kbagent agent test` |
 | Show the next N firings of a cron expression | `kbagent agent cron-preview --cron CRON` |
 | Polish a plain-English goal into an unattended-agent-ready prompt | `kbagent agent prompt-improve --goal GOAL` |
+| manage portal property / register new component in portal | `kbagent dev-portal …` | see `references/dev-portal-workflow.md` |
+| list apps for a vendor in the Developer Portal | `kbagent dev-portal list --vendor VENDOR` |
+| get the full portal entry for one component | `kbagent dev-portal get --app VENDOR.APP_ID` |
+| create a new component in the Developer Portal | `kbagent dev-portal create --vendor VENDOR --data FILE` |
+| patch a portal property on a component | `kbagent dev-portal patch --app VENDOR.APP_ID --data FILE` |
+| upload an icon for a portal component | `kbagent dev-portal upload-icon --app VENDOR.APP_ID --file FILE` |
+| publish a component in the Developer Portal | `kbagent dev-portal publish --app VENDOR.APP_ID` |
+| deprecate a component in the Developer Portal | `kbagent dev-portal deprecate --app VENDOR.APP_ID` |
+| manage Developer Portal identities (add / list / remove / edit / use / current / verify) | `kbagent dev-portal identity …` |
 <!-- END AUTO-GENERATED COMMANDS -->
 
 ### Sync pull notable flags
@@ -384,6 +397,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Reading synced data | [reading-synced-data](references/reading-synced-data.md) |
 | SQL migration (input mapping removal) | [sql-migration-workflow](references/sql-migration-workflow.md) |
 | **Semantic layer (metastore)** -- models, metrics, datasets, constraints, glossary; validate / export / diff / promote / build / token | [semantic-layer-workflow](references/semantic-layer-workflow.md) |
+| **Developer Portal** (identity CRUD, list/get apps, create/patch/upload-icon/publish/deprecate; TTY-confirm on writes) | [dev-portal-workflow](references/dev-portal-workflow.md) |
 | Response parsing gotchas | [gotchas](references/gotchas.md) |
 
 ## First-time setup
