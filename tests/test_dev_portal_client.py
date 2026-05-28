@@ -84,3 +84,99 @@ class TestLoginMfaPath:
             with pytest.raises(KeboolaApiError) as exc:
                 client._ensure_authenticated()
             assert exc.value.error_code == ErrorCode.DP_MFA_REQUIRED
+
+
+class TestPortalReads:
+    def test_list_apps(self, httpx_mock):
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            json={"token": "Bearer abc"},
+        )
+        httpx_mock.add_response(
+            method="GET",
+            url="https://apps-api.keboola.com/vendors/keboola/apps?limit=1000",
+            json={"apps": [{"id": "keboola.ex-foo"}]},
+        )
+        with DeveloperPortalClient(_identity()) as client:
+            apps = client.list_apps("keboola")
+            assert apps == [{"id": "keboola.ex-foo"}]
+
+    def test_get_app_404(self, httpx_mock):
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            json={"token": "Bearer abc"},
+        )
+        httpx_mock.add_response(
+            method="GET",
+            url="https://apps-api.keboola.com/vendors/keboola/apps/keboola.missing",
+            status_code=404,
+            json={"error": "not found"},
+        )
+        with DeveloperPortalClient(_identity()) as client:
+            with pytest.raises(KeboolaApiError) as exc:
+                client.get_app("keboola", "keboola.missing")
+            assert exc.value.error_code == ErrorCode.DP_APP_NOT_FOUND
+
+
+class TestPortalWrites:
+    def test_create_app(self, httpx_mock):
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            json={"token": "Bearer abc"},
+        )
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/vendors/keboola/apps",
+            json={"id": "ex-foo", "name": "Foo"},
+        )
+        with DeveloperPortalClient(_identity()) as client:
+            resp = client.create_app(
+                "keboola", {"id": "ex-foo", "name": "Foo", "type": "extractor"}
+            )
+            assert resp["id"] == "ex-foo"
+
+    def test_patch_app(self, httpx_mock):
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            json={"token": "Bearer abc"},
+        )
+        httpx_mock.add_response(
+            method="PATCH",
+            url="https://apps-api.keboola.com/vendors/keboola/apps/keboola.ex-foo",
+            json={"id": "ex-foo", "name": "Foo 2"},
+        )
+        with DeveloperPortalClient(_identity()) as client:
+            resp = client.patch_app("keboola", "keboola.ex-foo", {"name": "Foo 2"})
+            assert resp["name"] == "Foo 2"
+
+    def test_publish_app(self, httpx_mock):
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            json={"token": "Bearer abc"},
+        )
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/vendors/keboola/apps/keboola.ex-foo/publish",
+            json={"status": "submitted"},
+        )
+        with DeveloperPortalClient(_identity()) as client:
+            assert client.publish_app("keboola", "keboola.ex-foo")["status"] == "submitted"
+
+    def test_deprecate_app(self, httpx_mock):
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            json={"token": "Bearer abc"},
+        )
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/vendors/keboola/apps/keboola.ex-foo/deprecate",
+            json={"status": "deprecated"},
+        )
+        with DeveloperPortalClient(_identity()) as client:
+            assert client.deprecate_app("keboola", "keboola.ex-foo")["status"] == "deprecated"

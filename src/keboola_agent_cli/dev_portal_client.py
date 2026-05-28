@@ -15,6 +15,7 @@ the service and command layers.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import httpx
 
@@ -129,3 +130,84 @@ class DeveloperPortalClient(BaseHttpClient):
                 error_code=ErrorCode.DP_LOGIN_FAILED,
             )
         return payload["token"]
+
+    # ----- Reads -----
+
+    def list_apps(self, vendor: str) -> list[dict[str, Any]]:
+        self._ensure_authenticated()
+        resp = self._do_request("GET", f"/vendors/{vendor}/apps?limit=1000")
+        if resp.status_code != 200:
+            self._raise_dp_error(resp, action="list apps", vendor=vendor)
+        payload = resp.json()
+        if isinstance(payload, dict) and "apps" in payload:
+            return list(payload["apps"])
+        if isinstance(payload, list):
+            return payload
+        return []
+
+    def get_app(self, vendor: str, app_id: str) -> dict[str, Any]:
+        self._ensure_authenticated()
+        try:
+            resp = self._do_request("GET", f"/vendors/{vendor}/apps/{app_id}")
+        except KeboolaApiError as exc:
+            if exc.error_code == ErrorCode.NOT_FOUND:
+                raise KeboolaApiError(
+                    message=f"Developer Portal app '{app_id}' not found in vendor '{vendor}'",
+                    error_code=ErrorCode.DP_APP_NOT_FOUND,
+                ) from exc
+            raise
+        return resp.json()
+
+    # ----- Writes -----
+
+    def create_app(self, vendor: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_authenticated()
+        resp = self._do_request("POST", f"/vendors/{vendor}/apps", json=payload)
+        if resp.status_code not in (200, 201):
+            self._raise_dp_error(resp, action="create app", vendor=vendor)
+        return resp.json()
+
+    def patch_app(self, vendor: str, app_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_authenticated()
+        resp = self._do_request("PATCH", f"/vendors/{vendor}/apps/{app_id}", json=payload)
+        if resp.status_code not in (200, 204):
+            self._raise_dp_error(resp, action="patch app", vendor=vendor, app_id=app_id)
+        return resp.json() if resp.content else {}
+
+    def publish_app(self, vendor: str, app_id: str) -> dict[str, Any]:
+        self._ensure_authenticated()
+        resp = self._do_request("POST", f"/vendors/{vendor}/apps/{app_id}/publish")
+        if resp.status_code not in (200, 202):
+            self._raise_dp_error(resp, action="publish app", vendor=vendor, app_id=app_id)
+        return resp.json() if resp.content else {"status": "submitted"}
+
+    def deprecate_app(self, vendor: str, app_id: str) -> dict[str, Any]:
+        self._ensure_authenticated()
+        resp = self._do_request("POST", f"/vendors/{vendor}/apps/{app_id}/deprecate")
+        if resp.status_code not in (200, 202):
+            self._raise_dp_error(resp, action="deprecate app", vendor=vendor, app_id=app_id)
+        return resp.json() if resp.content else {"status": "deprecated"}
+
+    # ----- Error mapping -----
+
+    def _raise_dp_error(
+        self,
+        resp: httpx.Response,
+        *,
+        action: str,
+        vendor: str | None = None,
+        app_id: str | None = None,
+    ) -> None:
+        try:
+            body = resp.json()
+        except ValueError:
+            body = resp.text
+        ctx = f"{action}"
+        if vendor:
+            ctx += f" (vendor={vendor})"
+        if app_id:
+            ctx += f" (app={app_id})"
+        raise KeboolaApiError(
+            message=f"Developer Portal {ctx} failed (HTTP {resp.status_code}): {body}",
+            error_code=ErrorCode.API_ERROR,
+        )
