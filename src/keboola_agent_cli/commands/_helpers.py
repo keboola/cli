@@ -435,3 +435,32 @@ def require_random_code_confirmation(action_description: str) -> None:
     if user_input != code:
         sys.stderr.write("Confirmation failed. Aborting.\n")
         raise typer.Exit(code=EXIT_PERMISSION_DENIED)
+
+
+def resolve_identity_alias(ctx: typer.Context, explicit: str | None) -> str:
+    """Resolve the dev-portal identity alias for this invocation.
+
+    Order: explicit --identity flag > default from config > error.
+    """
+    if explicit:
+        return explicit
+    config_store: ConfigStore = get_service(ctx, "config_store")
+    default = config_store.load().default_dev_portal_identity
+    if not default:
+        raise typer.BadParameter(
+            "No Developer Portal identity selected. Pass --identity <alias>, "
+            "or set a default via `kbagent dev-portal identity use <alias>`."
+        )
+    return default
+
+
+def get_dev_portal_service(ctx: typer.Context):
+    """Build a DeveloperPortalService bound to the current ConfigStore."""
+    from ..dev_portal_client import DeveloperPortalClient
+    from ..services.dev_portal_service import DeveloperPortalService
+
+    config_store: ConfigStore = get_service(ctx, "config_store")
+    return DeveloperPortalService(
+        config_store=config_store,
+        client_factory=lambda identity: DeveloperPortalClient(identity),
+    )

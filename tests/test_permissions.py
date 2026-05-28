@@ -1,5 +1,7 @@
 """Tests for the permission engine (OPERATION_REGISTRY, PermissionEngine, classify_mcp_tool)."""
 
+from typing import ClassVar
+
 import pytest
 
 from keboola_agent_cli.errors import PermissionDeniedError
@@ -370,3 +372,27 @@ class TestPermissionPolicyValidation:
         assert policy.mode == "allow"
         assert policy.allow == []
         assert policy.deny == []
+
+
+class TestDevPortalPermissions:
+    DP_OPS: ClassVar[dict[str, str]] = {
+        "dev-portal.identity-add": "admin",
+        "dev-portal.identity-list": "read",
+        "dev-portal.identity-edit": "admin",
+        "dev-portal.identity-remove": "admin",
+        "dev-portal.identity-use": "write",
+        "dev-portal.identity-verify": "read",
+        "dev-portal.list": "read",
+        "dev-portal.get": "read",
+        "dev-portal.create": "write",
+        "dev-portal.patch": "write",
+        "dev-portal.upload-icon": "write",
+        "dev-portal.publish": "admin",
+        "dev-portal.deprecate": "destructive",
+    }
+
+    def test_registry_contains_all_dev_portal_ops(self):
+        from keboola_agent_cli.permissions import OPERATION_REGISTRY
+
+        for op, expected_cat in self.DP_OPS.items():
+            assert OPERATION_REGISTRY.get(op) == expected_cat, op

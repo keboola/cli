@@ -130,6 +130,20 @@ OPERATION_REGISTRY: dict[str, str] = {
     # Component discovery
     "component.list": "read",
     "component.detail": "read",
+    # Developer Portal (since 0.48.0)
+    "dev-portal.identity-add": "admin",
+    "dev-portal.identity-list": "read",
+    "dev-portal.identity-edit": "admin",
+    "dev-portal.identity-remove": "admin",
+    "dev-portal.identity-use": "write",
+    "dev-portal.identity-verify": "read",
+    "dev-portal.list": "read",
+    "dev-portal.get": "read",
+    "dev-portal.create": "write",
+    "dev-portal.patch": "write",
+    "dev-portal.upload-icon": "write",
+    "dev-portal.publish": "admin",
+    "dev-portal.deprecate": "destructive",
     # Data apps (Data Science API + keboola.data-apps Storage component)
     "data-app.list": "read",
     "data-app.detail": "read",
