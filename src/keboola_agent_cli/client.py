@@ -2532,6 +2532,7 @@ class KeboolaClient(BaseHttpClient):
         config_id: str,
         backend: str = "snowflake",
         login_type: str | None = None,
+        public_key: str | None = None,
     ) -> dict[str, Any]:
         """Create a workspace tied to a specific configuration.
 
@@ -2541,6 +2542,7 @@ class KeboolaClient(BaseHttpClient):
             config_id: Configuration ID.
             backend: Workspace backend.
             login_type: Optional Storage API loginType. Omitted when None.
+            public_key: Optional public key for key-pair workspaces. Omitted when None.
 
         Returns:
             Workspace dict including connection credentials.
@@ -2550,6 +2552,8 @@ class KeboolaClient(BaseHttpClient):
         payload: dict[str, Any] = {"backend": backend}
         if login_type is not None:
             payload["loginType"] = login_type
+        if public_key is not None:
+            payload["publicKey"] = public_key
 
         response = self._request(
             "POST",

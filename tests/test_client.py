@@ -533,6 +533,7 @@ class TestConfigWorkspaces:
             config_id="cfg-1",
             backend="snowflake",
             login_type="snowflake-person-keypair",
+            public_key="-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----\n",
         )
 
         assert result == {"id": 42}
@@ -540,6 +541,7 @@ class TestConfigWorkspaces:
         assert json.loads(request.content) == {
             "backend": "snowflake",
             "loginType": "snowflake-person-keypair",
+            "publicKey": "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----\n",
         }
         client.close()
 
@@ -564,6 +566,7 @@ class TestConfigWorkspaces:
             config_id="cfg-1",
             backend="bigquery",
             login_type=None,
+            public_key=None,
         )
 
         assert result == {"id": 42}

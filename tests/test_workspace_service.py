@@ -6,7 +6,7 @@ multi-project parallel listing.
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import pytest
 
@@ -100,7 +100,7 @@ class TestCreateWorkspace:
     """Tests for WorkspaceService.create_workspace()."""
 
     def test_create_workspace_success(self, tmp_config_dir: Path) -> None:
-        """create_workspace returns workspace details including password."""
+        """create_workspace returns workspace details including Snowflake key-pair credentials."""
         mock_client = MagicMock()
         mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
         mock_client.create_sandbox_config.return_value = {
@@ -130,8 +130,9 @@ class TestCreateWorkspace:
         assert result["schema"] == "WORKSPACE_42"
         assert result["user"] == "KEBOOLA_WORKSPACE_42"
         assert result["password"] == "s3cret!Passw0rd"
+        assert result["private_key"].startswith("-----BEGIN PRIVATE KEY-----")
         assert result["read_only"] is True
-        assert "Save the password" in result["message"]
+        assert "Save the private key" in result["message"]
 
         mock_client.create_sandbox_config.assert_called_once_with(
             name="test-ws",
@@ -144,7 +145,10 @@ class TestCreateWorkspace:
             config_id="cfg-123",
             backend="snowflake",
             login_type="snowflake-person-keypair",
+            public_key=ANY,
         )
+        public_key = mock_client.create_config_workspace.call_args.kwargs["public_key"]
+        assert public_key.startswith("-----BEGIN PUBLIC KEY-----")
         # close() called twice: once in _resolve_branch_id, once in create_workspace
         assert mock_client.close.call_count == 2
 
@@ -217,7 +221,10 @@ class TestCreateWorkspace:
             config_id="cfg-456",
             backend="snowflake",
             login_type="snowflake-person-keypair",
+            public_key=ANY,
         )
+        public_key = mock_client.create_config_workspace.call_args.kwargs["public_key"]
+        assert public_key.startswith("-----BEGIN PUBLIC KEY-----")
 
 
 class TestAutoDetectBackend:
@@ -242,13 +249,14 @@ class TestAutoDetectBackend:
         result = svc.create_workspace(alias="prod", name="ws")
 
         assert result["backend"] == "snowflake"
-        mock_client.create_config_workspace.assert_called_once_with(
-            branch_id=123,
-            component_id="keboola.sandboxes",
-            config_id="cfg-1",
-            backend="snowflake",
-            login_type="snowflake-person-keypair",
-        )
+        assert result["private_key"].startswith("-----BEGIN PRIVATE KEY-----")
+        call_kwargs = mock_client.create_config_workspace.call_args.kwargs
+        assert call_kwargs["branch_id"] == 123
+        assert call_kwargs["component_id"] == "keboola.sandboxes"
+        assert call_kwargs["config_id"] == "cfg-1"
+        assert call_kwargs["backend"] == "snowflake"
+        assert call_kwargs["login_type"] == "snowflake-person-keypair"
+        assert call_kwargs["public_key"].startswith("-----BEGIN PUBLIC KEY-----")
 
     def test_create_workspace_bigquery_keeps_default_login_type(self, tmp_config_dir: Path) -> None:
         """BigQuery sandbox workspaces omit loginType so Storage uses its default."""
@@ -279,6 +287,7 @@ class TestAutoDetectBackend:
             config_id="cfg-1",
             backend="bigquery",
             login_type=None,
+            public_key=None,
         )
 
     def test_create_workspace_auto_detects_snowflake(self, tmp_config_dir: Path) -> None:
@@ -305,7 +314,10 @@ class TestAutoDetectBackend:
             config_id="cfg-1",
             backend="snowflake",
             login_type="snowflake-person-keypair",
+            public_key=ANY,
         )
+        public_key = mock_client.create_config_workspace.call_args.kwargs["public_key"]
+        assert public_key.startswith("-----BEGIN PUBLIC KEY-----")
 
     def test_create_workspace_auto_detects_bigquery(self, tmp_config_dir: Path) -> None:
         """create_workspace auto-detects bigquery backend from project."""
@@ -338,6 +350,7 @@ class TestAutoDetectBackend:
             config_id="cfg-1",
             backend="bigquery",
             login_type=None,
+            public_key=None,
         )
 
     def test_explicit_backend_skips_auto_detect(self, tmp_config_dir: Path) -> None:
@@ -404,6 +417,7 @@ class TestAutoDetectBackend:
             config_id="456",
             backend="bigquery",
             login_type=None,
+            public_key=None,
         )
 
 
@@ -1143,8 +1157,10 @@ class TestCreateFromTransformation:
         assert result["row_id"] is None
         assert result["backend"] == "snowflake"
         assert result["password"] == "ws-secret-pwd"
+        assert result["private_key"].startswith("-----BEGIN PRIVATE KEY-----")
         assert result["tables_loaded"] == ["in.c-main.orders", "in.c-main.products"]
         assert "2 table(s) loaded" in result["message"]
+        assert "Save the private key" in result["message"]
 
         mock_client.get_config_detail.assert_called_once_with(
             "keboola.snowflake-transformation",
@@ -1156,7 +1172,10 @@ class TestCreateFromTransformation:
             config_id="456",
             backend="snowflake",
             login_type="snowflake-person-keypair",
+            public_key=ANY,
         )
+        public_key = mock_client.create_config_workspace.call_args.kwargs["public_key"]
+        assert public_key.startswith("-----BEGIN PUBLIC KEY-----")
         mock_client.load_workspace_tables.assert_called_once()
         # close() called twice: once in _resolve_branch_id, once in create_from_transformation
         assert mock_client.close.call_count == 2

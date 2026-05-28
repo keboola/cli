@@ -91,9 +91,15 @@ def workspace_create(
                 c.print(f"[bold]Host:[/bold] {d['host']}"),
                 c.print(f"[bold]Schema:[/bold] {d['schema']}"),
                 c.print(f"[bold]User:[/bold] {d['user']}"),
-                c.print(f"[bold yellow]Password:[/bold yellow] {d['password']}"),
                 c.print(
-                    "\n[bold yellow]Warning:[/bold yellow] Save the password now -- it cannot be retrieved later!"
+                    f"[bold yellow]Private key:[/bold yellow]\n{d['private_key']}"
+                    if d.get("private_key")
+                    else f"[bold yellow]Password:[/bold yellow] {d['password']}"
+                ),
+                c.print(
+                    "\n[bold yellow]Warning:[/bold yellow] Save the private key now -- it cannot be retrieved later!"
+                    if d.get("private_key")
+                    else "\n[bold yellow]Warning:[/bold yellow] Save the password now -- it cannot be retrieved later!"
                 ),
             ),
         )
@@ -645,10 +651,16 @@ def workspace_from_transformation(
                 c.print(f"[bold]Host:[/bold] {d['host']}"),
                 c.print(f"[bold]Schema:[/bold] {d['schema']}"),
                 c.print(f"[bold]User:[/bold] {d['user']}"),
-                c.print(f"[bold yellow]Password:[/bold yellow] {d['password']}"),
+                c.print(
+                    f"[bold yellow]Private key:[/bold yellow]\n{d['private_key']}"
+                    if d.get("private_key")
+                    else f"[bold yellow]Password:[/bold yellow] {d['password']}"
+                ),
                 c.print(f"[bold]Tables loaded:[/bold] {', '.join(d.get('tables_loaded', []))}"),
                 c.print(
-                    "\n[bold yellow]Warning:[/bold yellow] Save the password now -- it cannot be retrieved later!"
+                    "\n[bold yellow]Warning:[/bold yellow] Save the private key now -- it cannot be retrieved later!"
+                    if d.get("private_key")
+                    else "\n[bold yellow]Warning:[/bold yellow] Save the password now -- it cannot be retrieved later!"
                 ),
             ),
         )
