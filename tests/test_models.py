@@ -508,3 +508,63 @@ class TestProjectConfigBackwardCompat:
         }
         config = ProjectConfig.model_validate(data)
         assert config.active_branch_id == 123
+
+
+class TestDeveloperPortalIdentity:
+    """Tests for DeveloperPortalIdentity model."""
+
+    def test_minimal_construction(self) -> None:
+        """DeveloperPortalIdentity can be created with minimal required fields."""
+        from keboola_agent_cli.models import DeveloperPortalIdentity
+
+        ident = DeveloperPortalIdentity(username="service.keboola.x", password="p")
+        assert ident.username == "service.keboola.x"
+        assert ident.password == "p"
+        assert ident.role_hint == "vendor"
+        assert ident.vendor is None
+        assert ident.portal_url == "https://apps-api.keboola.com"
+
+    def test_rejects_non_https_portal_url(self) -> None:
+        """DeveloperPortalIdentity rejects non-https portal_url."""
+        from keboola_agent_cli.models import DeveloperPortalIdentity
+
+        with pytest.raises(ValidationError, match="https"):
+            DeveloperPortalIdentity(
+                username="u",
+                password="p",
+                portal_url="http://apps-api.keboola.com",
+            )
+
+    def test_accepts_staging_https_portal_url(self) -> None:
+        """DeveloperPortalIdentity accepts https staging URL."""
+        from keboola_agent_cli.models import DeveloperPortalIdentity
+
+        ident = DeveloperPortalIdentity(
+            username="u",
+            password="p",
+            portal_url="https://apps-api.staging.keboola.dev",
+        )
+        assert ident.portal_url == "https://apps-api.staging.keboola.dev"
+
+
+class TestAppConfigDevPortalFields:
+    """Tests for AppConfig dev_portal_identities and default_dev_portal_identity fields."""
+
+    def test_defaults_empty(self) -> None:
+        """AppConfig dev_portal_identities and default_dev_portal_identity default to empty."""
+        cfg = AppConfig()
+        assert cfg.dev_portal_identities == {}
+        assert cfg.default_dev_portal_identity == ""
+
+    def test_round_trip(self) -> None:
+        """AppConfig with dev portal identities round-trips through JSON."""
+        from keboola_agent_cli.models import DeveloperPortalIdentity
+
+        ident = DeveloperPortalIdentity(username="u", password="p", vendor="keboola")
+        cfg = AppConfig(
+            dev_portal_identities={"vendor-keboola": ident},
+            default_dev_portal_identity="vendor-keboola",
+        )
+        round_trip = AppConfig.model_validate(cfg.model_dump(mode="json"))
+        assert round_trip.dev_portal_identities["vendor-keboola"].vendor == "keboola"
+        assert round_trip.default_dev_portal_identity == "vendor-keboola"
