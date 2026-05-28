@@ -131,12 +131,11 @@ OPERATION_REGISTRY: dict[str, str] = {
     "component.list": "read",
     "component.detail": "read",
     # Developer Portal (since 0.48.0)
-    "dev-portal.identity-add": "admin",
-    "dev-portal.identity-list": "read",
-    "dev-portal.identity-edit": "admin",
-    "dev-portal.identity-remove": "admin",
-    "dev-portal.identity-use": "write",
-    "dev-portal.identity-verify": "read",
+    # Developer Portal — top-level commands on `dev-portal` (the identity
+    # sub-app's leaves are listed separately below under dev-portal.identity.*).
+    # Categories follow data-app.secrets-* precedent: credential add/edit are
+    # `write`, not `admin` (admin is reserved for org-level operations).
+    "dev-portal.identity": "read",  # parent-callback descent (allow into sub-app)
     "dev-portal.list": "read",
     "dev-portal.get": "read",
     "dev-portal.create": "write",
@@ -160,7 +159,8 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.secrets-get": "read",
     "data-app.secrets-remove": "destructive",
     "data-app.validate-repo": "read",
-    # Developer Portal — identity management
+    # Developer Portal — identity sub-app leaves (composed by the
+    # identity_app callback as "dev-portal.identity.<subcommand>")
     "dev-portal.identity.add": "write",
     "dev-portal.identity.list": "read",
     "dev-portal.identity.remove": "write",
@@ -168,9 +168,6 @@ OPERATION_REGISTRY: dict[str, str] = {
     "dev-portal.identity.use": "write",
     "dev-portal.identity.current": "read",
     "dev-portal.identity.verify": "read",
-    # Developer Portal — read commands
-    "dev-portal.list": "read",
-    "dev-portal.get": "read",
     # Storage browsing
     "storage.buckets": "read",
     "storage.bucket-detail": "read",

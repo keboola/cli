@@ -12,6 +12,7 @@ import typer
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import DeveloperPortalIdentity
 from ._helpers import (
+    check_cli_permission,
     get_dev_portal_service,
     get_formatter,
     map_error_to_exit_code,
@@ -25,6 +26,18 @@ dev_portal_app = typer.Typer(
 
 identity_app = typer.Typer(help="Manage Developer Portal identities (login credentials).")
 dev_portal_app.add_typer(identity_app, name="identity")
+
+
+@dev_portal_app.callback()
+def _dev_portal_callback(ctx: typer.Context) -> None:
+    """Permission gate for `kbagent dev-portal …`."""
+    check_cli_permission(ctx, "dev-portal")
+
+
+@identity_app.callback()
+def _identity_callback(ctx: typer.Context) -> None:
+    """Permission gate for `kbagent dev-portal identity …`."""
+    check_cli_permission(ctx, "dev-portal.identity")
 
 
 def _split_app(app: str) -> tuple[str, str]:

@@ -375,13 +375,27 @@ class TestPermissionPolicyValidation:
 
 
 class TestDevPortalPermissions:
+    """Keys reflect actual Typer paths: `dev-portal.<command>` for the top-level
+    sub-app, `dev-portal.identity.<command>` for the identity sub-Typer. Both
+    sub-apps carry callbacks that compose those keys via check_cli_permission.
+
+    Categories follow the data-app.secrets-* precedent: credential add/edit are
+    `write` (not `admin`); admin is reserved for org-level ops. Publish is
+    `admin` (requests Keboola review), deprecate is `destructive` (hides app).
+    """
+
     DP_OPS: ClassVar[dict[str, str]] = {
-        "dev-portal.identity-add": "admin",
-        "dev-portal.identity-list": "read",
-        "dev-portal.identity-edit": "admin",
-        "dev-portal.identity-remove": "admin",
-        "dev-portal.identity-use": "write",
-        "dev-portal.identity-verify": "read",
+        # parent descent
+        "dev-portal.identity": "read",
+        # identity sub-app leaves
+        "dev-portal.identity.add": "write",
+        "dev-portal.identity.list": "read",
+        "dev-portal.identity.edit": "write",
+        "dev-portal.identity.remove": "write",
+        "dev-portal.identity.use": "write",
+        "dev-portal.identity.current": "read",
+        "dev-portal.identity.verify": "read",
+        # top-level dev-portal commands
         "dev-portal.list": "read",
         "dev-portal.get": "read",
         "dev-portal.create": "write",
