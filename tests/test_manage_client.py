@@ -592,3 +592,225 @@ class TestUpdateProjectMemberRole:
         assert request.method == "PATCH"
         assert _json.loads(request.read()) == {"role": "guest"}
         assert result["role"] == "guest"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Feature flags (super-admin manage token required)
+# ──────────────────────────────────────────────────────────────────────
+
+
+_FEATURES_RESPONSE = [
+    {
+        "id": 1,
+        "name": "queuev2",
+        "title": "Queue v2",
+        "description": "New job queue",
+        "type": "project",
+        "canBeManagedViaApi": True,
+    },
+    {
+        "id": 2,
+        "name": "data-apps",
+        "title": "Data Apps",
+        "type": "admin",
+    },
+]
+
+
+class TestListFeatures:
+    def test_returns_catalogue_list(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/features",
+            method="GET",
+            json=_FEATURES_RESPONSE,
+            status_code=200,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            result = client.list_features()
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert result[0]["name"] == "queuev2"
+        # Unknown/extra keys round-trip untouched.
+        assert result[0]["canBeManagedViaApi"] is True
+
+    def test_403_without_super_admin(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/features",
+            method="GET",
+            json={"error": "Super admin required"},
+            status_code=403,
+        )
+        with (
+            ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.list_features()
+        assert exc_info.value.error_code == "ACCESS_DENIED"
+        assert exc_info.value.status_code == 403
+
+
+class TestAddProjectFeature:
+    def test_success_returns_body(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/features",
+            method="POST",
+            json={"feature": "queuev2", "added": True},
+            status_code=201,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            result = client.add_project_feature(5725, "queuev2")
+        assert result["feature"] == "queuev2"
+
+    def test_payload_is_feature_object(self, httpx_mock) -> None:
+        import json as _json
+
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/features",
+            method="POST",
+            json={},
+            status_code=200,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            client.add_project_feature(5725, "queuev2")
+        request = httpx_mock.get_request()
+        assert request.method == "POST"
+        assert _json.loads(request.read()) == {"feature": "queuev2"}
+
+    def test_404_unknown_project(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/999/features",
+            method="POST",
+            json={"error": "Project not found"},
+            status_code=404,
+        )
+        with (
+            ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.add_project_feature(999, "queuev2")
+        assert exc_info.value.error_code == "NOT_FOUND"
+
+
+class TestRemoveProjectFeature:
+    def test_returns_none_on_204(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/features/queuev2",
+            method="DELETE",
+            status_code=204,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            assert client.remove_project_feature(5725, "queuev2") is None
+
+    def test_url_encodes_feature_name(self, httpx_mock) -> None:
+        """A feature name with reserved characters is fully percent-encoded
+        (quote(..., safe='')), so '/' and ' ' become %2F and %20."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/projects/5725/features/vendor%2Ffeat%20flag",
+            method="DELETE",
+            status_code=204,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            assert client.remove_project_feature(5725, "vendor/feat flag") is None
+        assert "vendor%2Ffeat%20flag" in str(httpx_mock.get_request().url)
+
+
+class TestGetUser:
+    def test_success(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/users/jane@example.com",
+            method="GET",
+            json={
+                "id": 42,
+                "email": "jane@example.com",
+                "features": ["queuev2", "data-apps"],
+            },
+            status_code=200,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            result = client.get_user("jane@example.com")
+        assert result["id"] == 42
+        assert result["email"] == "jane@example.com"
+        assert result["features"] == ["queuev2", "data-apps"]
+
+    def test_url_keeps_at_and_dot_but_encodes_plus(self, httpx_mock) -> None:
+        """Email is quote(email, safe='@'): '@' and '.' stay literal, but
+        sub-address '+' is percent-encoded to %2B."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/users/jane%2Btag@example.com",
+            method="GET",
+            json={"id": 7, "email": "jane+tag@example.com", "features": []},
+            status_code=200,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            result = client.get_user("jane+tag@example.com")
+        url = str(httpx_mock.get_request().url)
+        assert "jane%2Btag@example.com" in url
+        assert result["id"] == 7
+
+    def test_404_unknown_user(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/users/nobody@example.com",
+            method="GET",
+            json={"error": "User not found"},
+            status_code=404,
+        )
+        with (
+            ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.get_user("nobody@example.com")
+        assert exc_info.value.error_code == "NOT_FOUND"
+
+
+class TestAddUserFeature:
+    def test_success_returns_body(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/users/jane@example.com/features",
+            method="POST",
+            json={"feature": "queuev2", "added": True},
+            status_code=201,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            result = client.add_user_feature("jane@example.com", "queuev2")
+        assert result["feature"] == "queuev2"
+
+    def test_payload_and_encoded_url(self, httpx_mock) -> None:
+        import json as _json
+
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/users/jane%2Btag@example.com/features",
+            method="POST",
+            json={},
+            status_code=200,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            client.add_user_feature("jane+tag@example.com", "queuev2")
+        request = httpx_mock.get_request()
+        assert request.method == "POST"
+        assert _json.loads(request.read()) == {"feature": "queuev2"}
+        assert "jane%2Btag@example.com" in str(request.url)
+
+
+class TestRemoveUserFeature:
+    def test_returns_none_on_204(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/users/jane@example.com/features/queuev2",
+            method="DELETE",
+            status_code=204,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            assert client.remove_user_feature("jane@example.com", "queuev2") is None
+
+    def test_encodes_both_email_and_feature(self, httpx_mock) -> None:
+        """Email keeps '@'/'.' (safe='@') while the feature is fully encoded
+        (safe='')."""
+        httpx_mock.add_response(
+            url=(f"{STACK_URL}/manage/users/jane%2Btag@example.com/features/vendor%2Fflag"),
+            method="DELETE",
+            status_code=204,
+        )
+        with ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN) as client:
+            assert client.remove_user_feature("jane+tag@example.com", "vendor/flag") is None
+        url = str(httpx_mock.get_request().url)
+        assert "jane%2Btag@example.com" in url
+        assert "vendor%2Fflag" in url

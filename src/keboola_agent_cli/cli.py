@@ -15,6 +15,7 @@ from .commands.context import context_command
 from .commands.data_app import data_app_app
 from .commands.doctor import doctor_command
 from .commands.encrypt import encrypt_app
+from .commands.feature import feature_app
 from .commands.flow import flow_app
 from .commands.http_client import http_app
 from .commands.init import init_command
@@ -49,6 +50,7 @@ from .services.data_app_service import DataAppService
 from .services.deep_lineage_service import DeepLineageService
 from .services.doctor_service import DoctorService
 from .services.encrypt_service import EncryptService
+from .services.feature_service import FeatureService
 from .services.flow_service import FlowService
 from .services.http_forwarder_service import HttpForwarderService
 from .services.job_service import JobService
@@ -91,6 +93,7 @@ app.add_typer(permissions_app, name="permissions", rich_help_panel=_SETUP)
 _PROJ = "Project Management"
 app.add_typer(project_app, name="project", rich_help_panel=_PROJ)
 app.add_typer(org_app, name="org", rich_help_panel=_PROJ)
+app.add_typer(feature_app, name="feature", rich_help_panel=_PROJ)
 
 # -- Browse & Inspect --
 _BROWSE = "Browse & Inspect"
@@ -338,6 +341,7 @@ def main(
     deep_lineage_service = DeepLineageService(config_store=config_store)
     org_service = OrgService(config_store=config_store)
     member_service = MemberService(config_store=config_store)
+    feature_service = FeatureService(config_store=config_store)
     mcp_service = McpService(config_store=config_store)
     branch_service = BranchService(config_store=config_store)
     sharing_service = SharingService(config_store=config_store)
@@ -398,6 +402,7 @@ def main(
     ctx.obj["deep_lineage_service"] = deep_lineage_service
     ctx.obj["org_service"] = org_service
     ctx.obj["member_service"] = member_service
+    ctx.obj["feature_service"] = feature_service
     ctx.obj["mcp_service"] = mcp_service
     ctx.obj["branch_service"] = branch_service
     ctx.obj["sharing_service"] = sharing_service

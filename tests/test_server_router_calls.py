@@ -332,3 +332,147 @@ def test_config_variables_set_no_dry_run_kwarg(tmp_path: Path) -> None:
         f"Router must not pass dry_run= to set_variables, but got kwargs={kwargs}"
     )
     assert kwargs.get("variables") == {"KEY": "val"}
+
+
+# ---------------------------------------------------------------------------
+# feature.py  -- all 7 endpoints require X-Manage-Token and pass it through.
+# ---------------------------------------------------------------------------
+
+
+def test_feature_list_passes_manage_token(tmp_path: Path) -> None:
+    """GET /feature/{p}/list must forward manage_token to list_stack_features."""
+    feature_svc = MagicMock()
+    feature_svc.list_stack_features.return_value = {"features": []}
+    registry = _mock_registry(feature=feature_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+    app.dependency_overrides[get_manage_token] = lambda: "mgmt-tok"
+
+    with TestClient(app) as client:
+        res = client.get(f"/feature/{PROJECT}/list", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    kwargs = feature_svc.list_stack_features.call_args.kwargs
+    assert kwargs == {"manage_token": "mgmt-tok", "alias": PROJECT}
+
+
+def test_feature_project_show_passes_manage_token(tmp_path: Path) -> None:
+    feature_svc = MagicMock()
+    feature_svc.list_project_features.return_value = {"features": []}
+    registry = _mock_registry(feature=feature_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+    app.dependency_overrides[get_manage_token] = lambda: "mgmt-tok"
+
+    with TestClient(app) as client:
+        res = client.get(f"/feature/{PROJECT}/project-show", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert feature_svc.list_project_features.call_args.kwargs == {
+        "manage_token": "mgmt-tok",
+        "alias": PROJECT,
+    }
+
+
+def test_feature_project_add_passes_body_and_token(tmp_path: Path) -> None:
+    feature_svc = MagicMock()
+    feature_svc.add_project_feature.return_value = {"status": "added"}
+    registry = _mock_registry(feature=feature_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+    app.dependency_overrides[get_manage_token] = lambda: "mgmt-tok"
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/feature/{PROJECT}/project-add",
+            headers=AUTH,
+            json={"feature": "data-streams", "dry_run": True},
+        )
+
+    assert res.status_code == 200, res.text
+    assert feature_svc.add_project_feature.call_args.kwargs == {
+        "manage_token": "mgmt-tok",
+        "alias": PROJECT,
+        "feature": "data-streams",
+        "dry_run": True,
+    }
+
+
+def test_feature_project_remove_passes_body_and_token(tmp_path: Path) -> None:
+    feature_svc = MagicMock()
+    feature_svc.remove_project_feature.return_value = {"status": "removed"}
+    registry = _mock_registry(feature=feature_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+    app.dependency_overrides[get_manage_token] = lambda: "mgmt-tok"
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/feature/{PROJECT}/project-remove",
+            headers=AUTH,
+            json={"feature": "data-streams"},
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = feature_svc.remove_project_feature.call_args.kwargs
+    assert kwargs["manage_token"] == "mgmt-tok"
+    assert kwargs["feature"] == "data-streams"
+    assert kwargs["dry_run"] is False
+
+
+def test_feature_user_show_passes_email_and_token(tmp_path: Path) -> None:
+    feature_svc = MagicMock()
+    feature_svc.list_user_features.return_value = {"features": []}
+    registry = _mock_registry(feature=feature_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+    app.dependency_overrides[get_manage_token] = lambda: "mgmt-tok"
+
+    with TestClient(app) as client:
+        res = client.get(
+            f"/feature/{PROJECT}/user-show",
+            headers=AUTH,
+            params={"email": "user@example.com"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert feature_svc.list_user_features.call_args.kwargs == {
+        "manage_token": "mgmt-tok",
+        "alias": PROJECT,
+        "email": "user@example.com",
+    }
+
+
+def test_feature_user_add_passes_body_and_token(tmp_path: Path) -> None:
+    feature_svc = MagicMock()
+    feature_svc.add_user_feature.return_value = {"status": "added"}
+    registry = _mock_registry(feature=feature_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+    app.dependency_overrides[get_manage_token] = lambda: "mgmt-tok"
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/feature/{PROJECT}/user-add",
+            headers=AUTH,
+            json={"email": "user@example.com", "feature": "early-adopter-preview"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert feature_svc.add_user_feature.call_args.kwargs == {
+        "manage_token": "mgmt-tok",
+        "alias": PROJECT,
+        "email": "user@example.com",
+        "feature": "early-adopter-preview",
+        "dry_run": False,
+    }
+
+
+def test_feature_list_missing_manage_token_returns_401(tmp_path: Path) -> None:
+    """No X-Manage-Token header -> 401 and the service is never called."""
+    feature_svc = MagicMock()
+    registry = _mock_registry(feature=feature_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(f"/feature/{PROJECT}/list", headers=AUTH)
+
+    assert res.status_code == 401, res.text
+    body = res.json()
+    msg = body.get("detail") or body.get("error", {}).get("message", "")
+    assert "X-Manage-Token" in msg, f"Expected X-Manage-Token mention, got: {body}"
+    feature_svc.list_stack_features.assert_not_called()

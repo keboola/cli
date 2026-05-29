@@ -382,6 +382,15 @@ kbagent sharing edges [--project NAME]
 kbagent org setup --org-id ID --url URL [--dry-run] [--yes] [--token-description PREFIX] [--refresh]
 kbagent org setup --project-ids 1,2,3 --url URL [--dry-run] [--yes] [--token-description PREFIX] [--refresh]
 
+# feature: requires a super-admin Manage API token (inline hidden prompt; never persisted; --allow-env-manage-token for CI). --project resolves the stack URL (+ project_id for project ops) from config.
+kbagent feature list --project ALIAS
+kbagent feature project-show --project ALIAS
+kbagent feature project-add --project ALIAS --feature NAME [--dry-run] [--yes]
+kbagent feature project-remove --project ALIAS --feature NAME [--dry-run] [--yes]
+kbagent feature user-show --project ALIAS --email EMAIL
+kbagent feature user-add --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
+kbagent feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
+
 kbagent tool list [--project NAME] [--branch ID]
 kbagent tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]
 

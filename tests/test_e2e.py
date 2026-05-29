@@ -7341,6 +7341,20 @@ skip_without_invite_credentials = pytest.mark.skipif(
     ),
 )
 
+# Feature-flag E2E gate. Requires a SUPER-ADMIN manage token (the same kind
+# `org setup` uses). Opt-in via `make test-e2e-feature` -- default-skipped in
+# `make test-e2e` because the regular Storage API credentials cannot list or
+# read feature flags.
+skip_without_feature_credentials = pytest.mark.skipif(
+    not (
+        os.environ.get(ENV_MANAGE_TOKEN) and os.environ.get(ENV_URL) and os.environ.get(ENV_TOKEN)
+    ),
+    reason=(
+        f"Requires {ENV_MANAGE_TOKEN} (super-admin), {ENV_URL}, and {ENV_TOKEN}. "
+        "Run via `make test-e2e-feature`."
+    ),
+)
+
 
 @pytest.mark.e2e
 class TestE2EDataAppLifecycle:
@@ -8387,6 +8401,71 @@ def test_project_invite_e2e(tmp_path: Path) -> None:
     assert invite_email.casefold() not in final_emails, (
         f"{invite_email} still pending after cancel: {final_emails}"
     )
+
+
+@skip_without_feature_credentials
+@pytest.mark.e2e
+def test_feature_flags_read_e2e(tmp_path: Path) -> None:
+    """Read-only feature-flag check against a real stack (since v0.48.0).
+
+    Verifies the wiring end-to-end with a super-admin manage token:
+    1. the stack catalogue (`feature list`) returns a non-empty feature set;
+    2. a project's assigned features (`feature project-show`) are readable.
+
+    Deliberately read-only -- it never enables or disables a flag, so it is
+    safe to run against a live project. The manage token is supplied via env
+    + the top-level --allow-env-manage-token opt-in (default-deny otherwise).
+    """
+    stack_url = (
+        os.environ[ENV_URL]
+        if os.environ[ENV_URL].startswith("https://")
+        else f"https://{os.environ[ENV_URL]}"
+    )
+    config_dir = tmp_path / "kbagent-config"
+    config_dir.mkdir()
+    alias = "e2e-feature-target"
+
+    env = {
+        **os.environ,
+        "KBC_MANAGE_API_TOKEN": os.environ[ENV_MANAGE_TOKEN],
+    }
+
+    def _run(*args: str) -> Any:
+        return runner.invoke(
+            app,
+            ["--config-dir", str(config_dir), "--allow-env-manage-token", "--json", *args],
+            env=env,
+        )
+
+    # Register the project via a real Storage API token so project_id is
+    # populated from the token-verify response (feature project-show needs it).
+    add = _run(
+        "project",
+        "add",
+        "--project",
+        alias,
+        "--url",
+        stack_url,
+        "--token",
+        os.environ[ENV_TOKEN],
+    )
+    assert add.exit_code == 0, add.output
+
+    # 1. Stack catalogue -- the super-admin token must see the full feature set.
+    catalogue = _run("feature", "list", "--project", alias)
+    assert catalogue.exit_code == 0, catalogue.output
+    cat_data = json.loads(catalogue.output)["data"]
+    assert isinstance(cat_data["features"], list)
+    assert len(cat_data["features"]) > 0, "stack catalogue unexpectedly empty"
+    # Every catalogue entry carries a stable 'name' identifier.
+    assert all("name" in feat for feat in cat_data["features"]), cat_data["features"][:3]
+
+    # 2. Project-assigned features -- readable, possibly empty, always a list.
+    show = _run("feature", "project-show", "--project", alias)
+    assert show.exit_code == 0, show.output
+    show_data = json.loads(show.output)["data"]
+    assert isinstance(show_data["features"], list)
+    assert show_data["project_id"] is not None
 
 
 # ---------------------------------------------------------------------------

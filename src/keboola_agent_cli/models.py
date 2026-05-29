@@ -207,6 +207,29 @@ class ProjectMember(BaseModel):
     model_config = {"populate_by_name": True, "extra": "allow"}
 
 
+class Feature(BaseModel):
+    """A Keboola feature flag, from GET /manage/features or a project/user object.
+
+    The Manage API has no published schema for features and the field set
+    varies by stack version. Only ``name`` is treated as stable -- it is the
+    identifier passed to the add/remove endpoints. Every field defaults to a
+    safe empty value and extras pass through unmodified so ``--json`` output
+    keeps whatever the stack returned (``id``, ``projectFeature``,
+    ``adminFeature``, ``canBeManagedViaApi``, ...).
+
+    Features embedded in a project/user ``features`` array may be returned as
+    bare strings rather than objects; the service layer normalises those to
+    ``{"name": <string>}`` before validation.
+    """
+
+    name: str = Field(default="", description="Feature code -- the value used to add/remove it")
+    title: str = Field(default="", description="Human-readable name shown in the UI")
+    description: str = Field(default="")
+    type: str = Field(default="", description="Feature category (project | admin | global | ...)")
+
+    model_config = {"populate_by_name": True, "extra": "allow"}
+
+
 class InvitationUser(BaseModel):
     """Invited user inside an Invitation object."""
 
