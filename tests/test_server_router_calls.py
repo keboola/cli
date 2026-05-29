@@ -476,3 +476,79 @@ def test_feature_list_missing_manage_token_returns_401(tmp_path: Path) -> None:
     msg = body.get("detail") or body.get("error", {}).get("message", "")
     assert "X-Manage-Token" in msg, f"Expected X-Manage-Token mention, got: {body}"
     feature_svc.list_stack_features.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# dev_portal.py  GET /dev-portal/apps  and  GET /dev-portal/apps/{app}
+# Service: dev_portal.list_apps(alias, vendor) / get_app(alias, vendor, app_id)
+# ---------------------------------------------------------------------------
+
+
+def test_dev_portal_list_apps_passes_alias_and_vendor(tmp_path: Path) -> None:
+    """GET /dev-portal/apps must call list_apps with the resolved alias + vendor."""
+    dp_svc = MagicMock()
+    dp_svc.list_apps.return_value = [{"id": "keboola.ex-a"}]
+    registry = _mock_registry(dev_portal=dp_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/dev-portal/apps?vendor=keboola&identity=alpha", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    dp_svc.list_apps.assert_called_once_with("alpha", "keboola")
+
+
+def test_dev_portal_get_app_splits_vendor_from_app_id(tmp_path: Path) -> None:
+    """GET /dev-portal/apps/{app} must split VENDOR.APP_ID and pass both."""
+    dp_svc = MagicMock()
+    dp_svc.get_app.return_value = {"id": "keboola.ex-a", "name": "Hello"}
+    registry = _mock_registry(dev_portal=dp_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/dev-portal/apps/keboola.ex-a?identity=alpha", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    dp_svc.get_app.assert_called_once_with("alpha", "keboola", "keboola.ex-a")
+
+
+def test_dev_portal_get_app_rejects_app_without_vendor(tmp_path: Path) -> None:
+    """An app id missing the VENDOR. prefix is a 400, not a service call."""
+    dp_svc = MagicMock()
+    registry = _mock_registry(dev_portal=dp_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/dev-portal/apps/no-dot?identity=alpha", headers=AUTH)
+
+    assert res.status_code == 400, res.text
+    dp_svc.get_app.assert_not_called()
+
+
+def test_dev_portal_list_falls_back_to_default_identity(tmp_path: Path) -> None:
+    """Without ?identity=, the router resolves the configured default identity."""
+    dp_svc = MagicMock()
+    dp_svc.current_identity.return_value = "default-alias"
+    dp_svc.list_apps.return_value = []
+    registry = _mock_registry(dev_portal=dp_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/dev-portal/apps?vendor=keboola", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    dp_svc.list_apps.assert_called_once_with("default-alias", "keboola")
+
+
+def test_dev_portal_list_no_identity_no_default_is_400(tmp_path: Path) -> None:
+    """No explicit identity and no default configured -> 400, no service call."""
+    dp_svc = MagicMock()
+    dp_svc.current_identity.return_value = ""
+    registry = _mock_registry(dev_portal=dp_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/dev-portal/apps?vendor=keboola", headers=AUTH)
+
+    assert res.status_code == 400, res.text
+    dp_svc.list_apps.assert_not_called()
