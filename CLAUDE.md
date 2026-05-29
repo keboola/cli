@@ -376,7 +376,7 @@ kbagent storage unload-table --project NAME --table-id ID [--columns COL ...] [-
 kbagent stream list --project NAME [--branch ID]
 kbagent stream create-source --project NAME --name NAME [--type otlp|http] [--branch ID] [--if-not-exists] [--no-sinks] [--reveal]
 kbagent stream detail [SOURCE_ID | --name NAME] --project NAME [--branch ID] [--reveal]
-kbagent stream delete SOURCE_ID --project NAME [--branch ID] [--dry-run] [--yes] [--force]
+kbagent stream delete SOURCE_ID --project NAME [--branch ID] [--dry-run] [--yes|--force]
 
 kbagent lineage build --directory PATH --output PATH [--ai] [--refresh]
 kbagent lineage show --load PATH [--upstream NODE] [--downstream NODE] [--column COL] [--columns] [--project ALIAS] [--depth N] [--format text|mermaid|html|er]
