@@ -10367,7 +10367,9 @@ class TestE2E_0_47_0_NewSurfaces:
             if c.component_id == vars_component and c.path == vars_path
         )
         tx_ulid = next(
-            c.id for c in post.configurations if c.component_id == tx_component and c.path == tx_path
+            c.id
+            for c in post.configurations
+            if c.component_id == tx_component and c.path == tx_path
         )
         assert vars_ulid != vars_ph, "variables config placeholder must become a ULID"
         assert tx_ulid != f"PH-TX-{suffix}", "transformation placeholder must become a ULID"

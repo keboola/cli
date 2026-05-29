@@ -1957,6 +1957,7 @@ class SyncService(BaseService):
                 result.errors.append(
                     {
                         "change_type": "variable_link",
+                        "error_code": ErrorCode.VARIABLE_LINK_UNRESOLVED,
                         "component_id": created.component_id,
                         "config_id": created.config_id,
                         "message": str(exc),
@@ -2003,6 +2004,7 @@ class SyncService(BaseService):
         errors.append(
             {
                 "change_type": "variable_link",
+                "error_code": ErrorCode.VARIABLE_LINK_UNRESOLVED,
                 "component_id": created.component_id,
                 "config_id": created.config_id,
                 "message": (
@@ -2053,6 +2055,7 @@ class SyncService(BaseService):
             errors.append(
                 {
                     "change_type": "variable_link",
+                    "error_code": ErrorCode.VARIABLE_LINK_UNRESOLVED,
                     "component_id": created.component_id,
                     "config_id": created.config_id,
                     "message": (
