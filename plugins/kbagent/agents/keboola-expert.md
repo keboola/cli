@@ -96,15 +96,13 @@ a critical failure.
    `kbagent http get/post/patch/delete <PATH>` (self-call against the
    running serve from a scheduled-agent subprocess; reads
    `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` env vars) needs 0.40.0+,
-   `kbagent serve --ui` (mounts the React SPA at `/`, single-process
-   browser dashboard with auto-injected token) needs 0.40.0+,
-   AI-agent run timeline persistence (cost / token / per-tool summary
-   on every persisted `AgentRun` plus `GET /agents/{id}/runs/{run_id}/events`
-   for replay) needs 0.40.0+,
-   `POST /ai/chat/stream` (generic Local AI co-pilot chat backed by the
-   user's local claude / codex / gemini CLI; backs the dashboard
-   Local AI tile that replaces Kai for non-master-token projects)
-   needs 0.41.9+,
+   `kbagent serve --ui` (mounts the React SPA, single-process
+   dashboard, auto-injected token) needs 0.40.0+,
+   AI-agent run timeline persistence (cost/token/per-tool summary on each
+   `AgentRun` + `GET /agents/{id}/runs/{run_id}/events` replay) needs 0.40.0+,
+   `POST /ai/chat/stream` (Local AI co-pilot chat backed by the user's
+   local claude / codex / gemini CLI; backs the dashboard Local AI tile
+   that replaces Kai for non-master-token projects) needs 0.41.9+,
    data-app CLI sandbox annotation = 0.42.0+ (#304),
    HTTP `?include_sandbox_annotation=true` = 0.43.1+ #312,
    `kbagent update --beta` = 0.43.3+,
@@ -112,6 +110,7 @@ a critical failure.
    `kbagent agent <verb>` (CLI parity /agents REST) = 0.44.0+,
    `semantic-layer search-context|get-context`, `storage create-table --if-not-exists`, `sync push|pull|diff --branch`, `sync push --no-name-drift-warnings`, fresh-CREATE writeback + KBC.* = 0.47.0+,
    Snowflake `workspace create` `private_key` = 0.47.1+,
+   `sync push` fresh-CREATE variable-link resolution + `--branch <id>` default-tree promote = 0.47.2+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.

@@ -10171,3 +10171,302 @@ class TestE2E_0_47_0_NewSurfaces:
         assert repush_body["data"].get("created", 0) == 0, (
             "re-push must be idempotent: created=0 after writeback in place"
         )
+
+    def test_sync_push_fresh_create_variable_binding_runtime(self) -> None:
+        """Fresh-CREATE variable binding end-to-end (KFR-03/04/05), v0.47.2.
+
+        Hand-author the FIIA tree on a throwaway dev branch -- a
+        ``keboola.variables`` config + its default-values row + a Snowflake
+        transformation whose ``_configuration_extra`` cross-references both by
+        placeholder id. One ``sync push`` must:
+
+          1. report ``created=3, errors=0``;
+          2. POST the row ``values`` (non-empty remote ``configuration.values``);
+          3. rebind the transformation's ``variables_id`` /
+             ``variables_values_id`` to real ULIDs (not placeholder dirnames);
+          4. produce a **runnable** transformation: ``job run --wait`` reaches
+             ``status: success`` (the real acceptance gate -- a broken variable
+             link fails at runtime with "Variable configuration ... not found");
+          5. be idempotent on re-push (``created=0``) with ``sync diff``
+             reporting ``conflict=0``.
+
+        Cleanup: the dev branch (and its configs) is deleted in teardown.
+        """
+        from keboola_agent_cli.constants import CONFIG_FILENAME, CONFIG_YML_VERSION
+        from keboola_agent_cli.sync.manifest import (
+            ManifestConfigRow,
+            ManifestConfiguration,
+            load_manifest,
+            save_manifest,
+        )
+
+        _step("v0472-1", "sync push fresh-CREATE variable binding + job run")
+
+        branch_name = f"v0472-vb-{RUN_ID[:20]}"
+        branch_data = self._run_ok(
+            "branch", "create", "--project", self.alias, "--name", branch_name
+        )
+        dev_branch_id = int(branch_data["data"]["branch_id"])
+        self._dev_branch_id = dev_branch_id
+
+        project_dir = self.tmp_path / "v0472-vb"
+        project_dir.mkdir()
+        _git(project_dir, "init")
+        _git(project_dir, "config", "user.email", "e2e@test.local")
+        _git(project_dir, "config", "user.name", "E2E Test")
+        _git(project_dir, "commit", "--allow-empty", "-m", "init")
+
+        init_result = _invoke(
+            self.config_dir,
+            ["--json", "sync", "init", "--project", self.alias, "--directory", str(project_dir)],
+        )
+        assert init_result.exit_code == 0, init_result.output
+
+        pull_result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "sync",
+                "pull",
+                "--project",
+                self.alias,
+                "--directory",
+                str(project_dir),
+                "--branch",
+                str(dev_branch_id),
+                "--no-storage",
+                "--no-jobs",
+            ],
+        )
+        assert pull_result.exit_code == 0, pull_result.output
+
+        manifest = load_manifest(project_dir)
+        dev_branch_entry = next((b for b in manifest.branches if b.id == dev_branch_id), None)
+        assert dev_branch_entry is not None
+        dev_branch_path = dev_branch_entry.path
+
+        # Placeholder ids cross-referenced by the transformation.
+        suffix = RUN_ID[:14]
+        vars_ph = f"PH-VARS-{suffix}"
+        vals_ph = f"PH-VALS-{suffix}"
+        tx_component = "keboola.snowflake-transformation"
+        vars_component = "keboola.variables"
+        vars_path = f"variable/{vars_component}/vb_{suffix}"
+        tx_path = f"transformation/{tx_component}/vb_{suffix}"
+
+        vars_entry = ManifestConfiguration(
+            branchId=dev_branch_id,
+            componentId=vars_component,
+            id=vars_ph,
+            path=vars_path,
+        )
+        vars_entry.rows.append(ManifestConfigRow(id=vals_ph, path="rows/default", metadata={}))
+        manifest.configurations.append(vars_entry)
+        manifest.configurations.append(
+            ManifestConfiguration(
+                branchId=dev_branch_id,
+                componentId=tx_component,
+                id=f"PH-TX-{suffix}",
+                path=tx_path,
+            )
+        )
+        save_manifest(project_dir, manifest)
+
+        # Local files: variables config + default-values row + transformation.
+        vars_dir = project_dir / dev_branch_path / vars_path
+        vars_dir.mkdir(parents=True)
+        (vars_dir / CONFIG_FILENAME).write_text(
+            yaml.dump(
+                {
+                    "version": CONFIG_YML_VERSION,
+                    "name": f"vb vars {suffix}",
+                    "description": "",
+                    "_keboola": {"component_id": vars_component, "config_id": ""},
+                },
+                default_flow_style=False,
+            ),
+            encoding="utf-8",
+        )
+        row_dir = vars_dir / "rows" / "default"
+        row_dir.mkdir(parents=True)
+        (row_dir / CONFIG_FILENAME).write_text(
+            yaml.dump(
+                {
+                    "version": CONFIG_YML_VERSION,
+                    "name": "default",
+                    "description": "",
+                    # keboola.variables row values accept only name + value
+                    # (the API rejects a "type" key on values.N).
+                    "values": [{"name": "greeting", "value": "hello"}],
+                },
+                default_flow_style=False,
+            ),
+            encoding="utf-8",
+        )
+        tx_dir = project_dir / dev_branch_path / tx_path
+        tx_dir.mkdir(parents=True)
+        (tx_dir / CONFIG_FILENAME).write_text(
+            yaml.dump(
+                {
+                    "version": CONFIG_YML_VERSION,
+                    "name": f"vb tx {suffix}",
+                    "description": "",
+                    # No input/output mapping: the SQL just selects the variable
+                    # so the job succeeds iff the variable link resolves.
+                    "parameters": {
+                        "blocks": [
+                            {
+                                "name": "Block",
+                                "codes": [
+                                    {
+                                        "name": "Greet",
+                                        "script": ["SELECT '{{ greeting }}' AS msg;"],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "_configuration_extra": {
+                        "variables_id": vars_ph,
+                        "variables_values_id": vals_ph,
+                    },
+                    "_keboola": {"component_id": tx_component, "config_id": ""},
+                },
+                default_flow_style=False,
+            ),
+            encoding="utf-8",
+        )
+
+        # One push creates all three and rebinds the variable link.
+        push_result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "sync",
+                "push",
+                "--project",
+                self.alias,
+                "--directory",
+                str(project_dir),
+                "--branch",
+                str(dev_branch_id),
+            ],
+        )
+        assert push_result.exit_code == 0, push_result.output
+        push_data = json.loads(push_result.output)["data"]
+        assert push_data["created"] == 3, push_data
+        assert push_data["errors"] == [], push_data["errors"]
+
+        # Select OUR entries by path: a dev branch inherits production's
+        # configs, so the manifest holds many pre-existing entries of the same
+        # component after the pull -- matching on component_id alone is wrong.
+        post = load_manifest(project_dir)
+        vars_ulid = next(
+            c.id
+            for c in post.configurations
+            if c.component_id == vars_component and c.path == vars_path
+        )
+        tx_ulid = next(
+            c.id
+            for c in post.configurations
+            if c.component_id == tx_component and c.path == tx_path
+        )
+        assert vars_ulid != vars_ph, "variables config placeholder must become a ULID"
+        assert tx_ulid != f"PH-TX-{suffix}", "transformation placeholder must become a ULID"
+
+        # Remote transformation: variables_id / variables_values_id are ULIDs.
+        tx_detail = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            tx_component,
+            "--config-id",
+            tx_ulid,
+            "--branch",
+            str(dev_branch_id),
+        )
+        tx_cfg = tx_detail["data"]["configuration"]
+        assert tx_cfg.get("variables_id") == vars_ulid, tx_cfg
+        assert tx_cfg.get("variables_values_id"), tx_cfg
+        assert tx_cfg["variables_values_id"] != vals_ph, "values_id must be a real ULID"
+        vals_ulid = tx_cfg["variables_values_id"]
+
+        # Remote values row: configuration.values is non-empty (KFR-04).
+        vars_detail = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            vars_component,
+            "--config-id",
+            vars_ulid,
+            "--branch",
+            str(dev_branch_id),
+        )
+        rows = vars_detail["data"].get("rows", [])
+        bound_row = next((r for r in rows if str(r.get("id")) == str(vals_ulid)), None)
+        assert bound_row is not None, f"values row {vals_ulid} missing on remote: {rows}"
+        assert bound_row["configuration"].get("values"), "row values must be non-empty"
+
+        # THE REAL GATE: the transformation runs to success (variable resolves).
+        run_data = self._run_ok(
+            "job",
+            "run",
+            "--project",
+            self.alias,
+            "--component-id",
+            tx_component,
+            "--config-id",
+            tx_ulid,
+            "--branch",
+            str(dev_branch_id),
+            "--wait",
+            "--timeout",
+            "300",
+        )
+        job = run_data["data"]
+        assert job["status"] == "success", (
+            f"job run failed ({job['status']}): "
+            f"{job.get('result', {}).get('message', 'no message')}"
+        )
+
+        # Re-push is idempotent and diff reports no conflict.
+        repush = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "sync",
+                "push",
+                "--project",
+                self.alias,
+                "--directory",
+                str(project_dir),
+                "--branch",
+                str(dev_branch_id),
+            ],
+        )
+        assert repush.exit_code == 0, repush.output
+        repush_data = json.loads(repush.output)["data"]
+        assert repush_data.get("created", 0) == 0, repush_data
+        assert repush_data.get("errors", []) == [], repush_data
+
+        diff_result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "sync",
+                "diff",
+                "--project",
+                self.alias,
+                "--directory",
+                str(project_dir),
+                "--branch",
+                str(dev_branch_id),
+            ],
+        )
+        assert diff_result.exit_code == 0, diff_result.output
+        diff_summary = json.loads(diff_result.output)["data"]["summary"]
+        assert diff_summary.get("conflict", 0) == 0, diff_summary

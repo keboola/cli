@@ -786,7 +786,16 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     (component_id, path), the create path updates it in place (no manifest duplication)
     and propagates any KBC.configuration.* metadata via set_config_metadata. Re-pushes
     against the now-real config id are naturally idempotent.
+    Fresh-CREATE variable binding (since 0.47.2): when a keboola.variables config + its
+    values row are created alongside a transformation in the same push, the transformation's
+    variables_id / variables_values_id are rebound to the assigned ULIDs (not placeholder
+    dirnames), the row's values are hoisted even when the scaffold row file has no _keboola
+    block, and the row's placeholder parent is remapped before POST. job run then succeeds
+    without a post-push config variables-set step.
     --branch (since 0.47.0): per-invocation dev-branch override. Same semantics as sync diff.
+    When no <branch_name>/ subtree exists on disk (since 0.47.2), the local default tree
+    (main/) is read as the source and promoted to the target branch; API writes still target
+    the branch id.
     --no-name-drift-warnings (since 0.47.0): suppress the cosmetic name_drift_warnings
     array from the result envelope.
 

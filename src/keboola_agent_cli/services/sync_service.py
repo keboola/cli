@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,79 @@ from ._encryption import apply_encrypted_to_local, encrypt_secrets_in_config
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
+
+# Sibling component that backs a transformation's variable links. A
+# transformation references it via ``configuration.variables_id`` (the config)
+# and ``configuration.variables_values_id`` (a row id).
+VARIABLES_COMPONENT_ID = "keboola.variables"
+
+
+@dataclass
+class WritebackResult:
+    """Outcome of recording a freshly-created config in the manifest.
+
+    ``previous_id`` is the manifest entry's id **before** the placeholder ->
+    ULID overwrite (empty string when a brand-new entry was appended). The
+    create pass uses it to key ``created_id_map`` so row parents and
+    transformation variable links can be remapped placeholder -> ULID.
+    """
+
+    entry: ManifestConfiguration
+    previous_id: str
+
+
+@dataclass
+class CreatedConfig:
+    """A config created during a single ``push`` create pass.
+
+    Carries just enough to drive the Phase-C variable-link backfill: the
+    component id, the API-assigned ULID, and the on-disk directory holding
+    the (post-writeback) ``_config.yml``.
+    """
+
+    component_id: str
+    config_id: str
+    config_dir: Path
+
+
+@dataclass
+class VariableBindingResult:
+    """Outcome of the Phase-C variable-link backfill.
+
+    ``configs_rewritten`` counts transformations whose remote configuration +
+    local ``_configuration_extra`` were rebound to ULIDs (drives the
+    manifest-dirty flag). ``errors`` accumulates unresolved links so the push
+    envelope surfaces them instead of leaving a broken link silently.
+    """
+
+    errors: list[dict[str, str]] = field(default_factory=list)
+    configs_rewritten: int = 0
+
+
+@dataclass
+class LocalConfigHashes:
+    """Hashes describing a config dir's on-disk state after a push.
+
+    ``file_hash`` is the ``_config.yml`` content hash, ``cfg_hash`` the
+    normalized config hash (see :func:`config_hash`), and ``extra_hashes``
+    maps each extracted code/companion file to its hash. Stored on the
+    manifest entry so the next ``sync diff`` recognises local == remote.
+    """
+
+    file_hash: str
+    cfg_hash: str
+    extra_hashes: dict[str, str] = field(default_factory=dict)
+
+
+# Companion files extracted alongside a config's ``_config.yml`` whose hashes
+# are tracked so ``sync diff`` notices edits to code/description files.
+_EXTRA_HASH_FILENAMES: tuple[str, ...] = (
+    "_description.md",
+    "transform.sql",
+    "transform.py",
+    "code.py",
+    "pyproject.toml",
+)
 
 
 def _ensure_within_branch(
@@ -951,7 +1025,7 @@ class SyncService(BaseService):
 
         # Also add untracked local configs (new files)
         for added_cfg in self._find_untracked_configs(project_root, manifest, branch_id):
-            branch_path = self._find_branch_path(manifest, branch_id)
+            branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
             config_dir = project_root / branch_path / added_cfg["path"]
             local_data = self._read_config_file(config_dir)
             if local_data is None:
@@ -1117,7 +1191,11 @@ class SyncService(BaseService):
                 encryption fails (DANGEROUS).
             branch_override: If set, target this dev-branch ID for the push.
                 Wins over ``active_branch_id`` / ``manifest.branches[0]`` /
-                git-branching mapping. Used by the CLI ``--branch`` flag.
+                git-branching mapping. Used by the CLI ``--branch`` flag. When
+                no ``<branch_name>/`` subtree exists on disk for the target,
+                the default tree (``main/``) is read as the source and promoted
+                to the target branch (KFR-07); API writes still target the
+                branch id.
             no_name_drift_warnings: If True, omit the ``name_drift_warnings``
                 array from the result envelope (the underlying detection
                 still runs; only the report is suppressed). Used by the CLI
@@ -1178,40 +1256,30 @@ class SyncService(BaseService):
 
         with client:
             self._ensure_branch_registered(manifest, branch_id, client)
-            branch_path = self._find_branch_path(manifest, branch_id)
+            branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
 
-            for change in changes:
+            # Process configs before rows, and rebind variable links last.
+            # A freshly-created parent config must carry its API-assigned ULID
+            # before its rows POST (KFR-05), and a transformation's
+            # variables_id / variables_values_id can only be resolved once both
+            # the variables config and its values row exist (KFR-03). Partition
+            # explicitly rather than relying on incidental diff ordering.
+            config_changes = [c for c in changes if not bool(c.get("is_row"))]
+            row_changes = [c for c in changes if bool(c.get("is_row"))]
+
+            # (component_id, placeholder_id) -> API-assigned ULID, captured
+            # before the manifest writeback overwrites the placeholder in place.
+            created_id_map: dict[tuple[str, str], str] = {}
+            created_configs: list[CreatedConfig] = []
+
+            # ---- Phase A: config creates / updates / deletes -------------
+            for change in config_changes:
                 change_type = change["change_type"]
                 component_id = change["component_id"]
                 config_id = change["config_id"]
                 config_path_str = change.get("path", "")
-                is_row = bool(change.get("is_row"))
-                parent_config_id = change.get("parent_config_id", "")
 
                 try:
-                    if is_row:
-                        self._push_row_change(
-                            client,
-                            change_type=change_type,
-                            component_id=component_id,
-                            parent_config_id=parent_config_id,
-                            row_id=config_id,
-                            row_path_str=config_path_str,
-                            project_root=project_root,
-                            manifest=manifest,
-                            branch_id=branch_id,
-                            allow_plaintext_fallback=allow_plaintext_fallback,
-                        )
-                        manifest_dirty = True
-                        if change_type == "added":
-                            created += 1
-                        elif change_type == "modified":
-                            updated += 1
-                        elif change_type == "deleted":
-                            deleted += 1
-                        pushed_details.append(change)
-                        continue
-
                     if change_type == "added":
                         result = self._push_create(
                             client,
@@ -1225,24 +1293,30 @@ class SyncService(BaseService):
                         if result:
                             new_id = str(result.get("id", ""))
                             config_dir = project_root / branch_path / config_path_str
-                            config_file = config_dir / CONFIG_FILENAME
-                            file_hash = self._file_hash(config_file) if config_file.exists() else ""
-                            local_data = self._read_config_file(config_dir)
-                            if local_data is not None:
-                                merge_code_files(component_id, local_data, config_dir)
-                                cfg_hash = config_hash(local_data)
-                            else:
-                                cfg_hash = ""
-                            entry = self._writeback_create_config_in_manifest(
+                            hashes = self._compute_config_hashes(config_dir, component_id)
+                            writeback = self._writeback_create_config_in_manifest(
                                 manifest=manifest,
                                 component_id=component_id,
                                 branch_id=branch_id,
                                 config_path_str=config_path_str,
                                 new_id=new_id,
-                                file_hash=file_hash,
-                                cfg_hash=cfg_hash,
+                                file_hash=hashes.file_hash,
+                                cfg_hash=hashes.cfg_hash,
                             )
-                            metadata_error = self._propagate_kbc_metadata(client, entry, branch_id)
+                            # Record placeholder -> ULID so child rows and
+                            # transformation variable links can be remapped.
+                            if writeback.previous_id:
+                                created_id_map[(component_id, writeback.previous_id)] = new_id
+                            created_configs.append(
+                                CreatedConfig(
+                                    component_id=component_id,
+                                    config_id=new_id,
+                                    config_dir=config_dir,
+                                )
+                            )
+                            metadata_error = self._propagate_kbc_metadata(
+                                client, writeback.entry, branch_id
+                            )
                             if metadata_error is not None:
                                 # The config IS on the remote; only the
                                 # follow-up metadata POST failed. Accumulate
@@ -1272,34 +1346,16 @@ class SyncService(BaseService):
                             branch_id,
                             allow_plaintext_fallback=allow_plaintext_fallback,
                         )
-                        # Update both hashes so pull knows local == remote
+                        # Update hashes so pull knows local == remote
                         config_dir = project_root / branch_path / config_path_str
                         config_file = config_dir / CONFIG_FILENAME
                         if config_file.exists():
-                            new_file_hash = self._file_hash(config_file)
-                            local_data = self._read_config_file(config_dir)
-                            if local_data is not None:
-                                merge_code_files(component_id, local_data, config_dir)
-                                new_cfg_hash = config_hash(local_data)
-                            else:
-                                new_cfg_hash = ""
-                            # Refresh extra hashes for extracted code files
-                            new_extra: dict[str, str] = {}
-                            for fname in [
-                                "_description.md",
-                                "transform.sql",
-                                "transform.py",
-                                "code.py",
-                                "pyproject.toml",
-                            ]:
-                                fpath = config_dir / fname
-                                if fpath.exists():
-                                    new_extra[fname] = self._file_hash(fpath)
+                            hashes = self._compute_config_hashes(config_dir, component_id)
                             for cfg in manifest.configurations:
                                 if cfg.component_id == component_id and cfg.id == config_id:
-                                    cfg.metadata["pull_hash"] = new_file_hash
-                                    cfg.metadata["pull_config_hash"] = new_cfg_hash
-                                    cfg.metadata["pull_extra_hashes"] = new_extra
+                                    cfg.metadata["pull_hash"] = hashes.file_hash
+                                    cfg.metadata["pull_config_hash"] = hashes.cfg_hash
+                                    cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
                                     break
                             manifest_dirty = True
                         updated += 1
@@ -1327,23 +1383,80 @@ class SyncService(BaseService):
                     # elsewhere or a caller believing the push "mostly succeeded".
                     # Surface to the CLI (exit non-zero) rather than burying in
                     # result["errors"].
-                    if isinstance(exc, KeboolaApiError) and exc.error_code == "ENCRYPTION_FAILED":
+                    if (
+                        isinstance(exc, KeboolaApiError)
+                        and exc.error_code == ErrorCode.ENCRYPTION_FAILED
+                    ):
                         raise
-                    logger.warning(
-                        "Failed to push %s %s/%s: %s",
-                        change_type,
-                        component_id,
-                        config_id,
-                        exc,
+                    self._record_push_error(errors, change_type, component_id, config_id, exc)
+
+            # ---- Phase B: row creates / updates / deletes ----------------
+            # row placeholder id -> ULID; ULID parent -> rows created under it.
+            created_row_id_map: dict[str, str] = {}
+            created_rows_by_parent: dict[str, list[str]] = {}
+            for change in row_changes:
+                change_type = change["change_type"]
+                component_id = change["component_id"]
+                config_id = change["config_id"]
+                config_path_str = change.get("path", "")
+                parent_config_id = change.get("parent_config_id", "")
+                # Remap the diff-time parent placeholder to the ULID assigned in
+                # Phase A so the manifest lookup and create_config_row both hit
+                # the real config (KFR-05). UPDATE/DELETE parents already carry
+                # a ULID and pass through unchanged.
+                effective_parent_id = created_id_map.get(
+                    (component_id, parent_config_id), parent_config_id
+                )
+
+                try:
+                    new_row_id = self._push_row_change(
+                        client,
+                        change_type=change_type,
+                        component_id=component_id,
+                        parent_config_id=effective_parent_id,
+                        row_id=config_id,
+                        row_path_str=config_path_str,
+                        project_root=project_root,
+                        manifest=manifest,
+                        branch_id=branch_id,
+                        allow_plaintext_fallback=allow_plaintext_fallback,
                     )
-                    errors.append(
-                        {
-                            "change_type": change_type,
-                            "component_id": component_id,
-                            "config_id": config_id,
-                            "message": str(exc),
-                        }
-                    )
+                    manifest_dirty = True
+                    if change_type == "added":
+                        created += 1
+                        if new_row_id:
+                            if config_id:
+                                created_row_id_map[config_id] = new_row_id
+                            created_rows_by_parent.setdefault(effective_parent_id, []).append(
+                                new_row_id
+                            )
+                    elif change_type == "modified":
+                        updated += 1
+                    elif change_type == "deleted":
+                        deleted += 1
+                    pushed_details.append(change)
+
+                except Exception as exc:
+                    if (
+                        isinstance(exc, KeboolaApiError)
+                        and exc.error_code == ErrorCode.ENCRYPTION_FAILED
+                    ):
+                        raise
+                    self._record_push_error(errors, change_type, component_id, config_id, exc)
+
+            # ---- Phase C: variable-link backfill (KFR-03) ----------------
+            binding = self._resolve_variable_bindings(
+                client,
+                created_configs=created_configs,
+                created_id_map=created_id_map,
+                created_row_id_map=created_row_id_map,
+                created_rows_by_parent=created_rows_by_parent,
+                manifest=manifest,
+                branch_id=branch_id,
+            )
+            errors.extend(binding.errors)
+            if binding.configs_rewritten:
+                manifest_dirty = True
 
         # Save manifest with updated hashes / new IDs / removed entries
         if manifest_dirty:
@@ -1366,6 +1479,59 @@ class SyncService(BaseService):
     # :func:`encrypt_secrets_in_config` directly.
     _encrypt_secrets_in_config = staticmethod(encrypt_secrets_in_config)
 
+    def _compute_config_hashes(self, config_dir: Path, component_id: str) -> LocalConfigHashes:
+        """Recompute the manifest bookkeeping hashes from a config dir on disk.
+
+        Reads the (post-writeback) ``_config.yml``, merges code files for the
+        normalized config hash, and hashes each tracked companion file. Used
+        after create / update / variable-link backfill so ``sync diff`` sees
+        local == remote on the next run.
+        """
+        config_file = config_dir / CONFIG_FILENAME
+        file_hash = self._file_hash(config_file) if config_file.exists() else ""
+        local_data = self._read_config_file(config_dir)
+        if local_data is not None:
+            merge_code_files(component_id, local_data, config_dir)
+            cfg_hash = config_hash(local_data)
+        else:
+            cfg_hash = ""
+        extra_hashes: dict[str, str] = {}
+        for fname in _EXTRA_HASH_FILENAMES:
+            fpath = config_dir / fname
+            if fpath.exists():
+                extra_hashes[fname] = self._file_hash(fpath)
+        return LocalConfigHashes(file_hash=file_hash, cfg_hash=cfg_hash, extra_hashes=extra_hashes)
+
+    def _record_push_error(
+        self,
+        errors: list[dict[str, str]],
+        change_type: str,
+        component_id: str,
+        config_id: str,
+        exc: Exception,
+    ) -> None:
+        """Log a non-fatal per-change push failure and accumulate it.
+
+        Callers must re-raise fail-closed encryption errors
+        (:data:`ErrorCode.ENCRYPTION_FAILED`) *before* delegating here so a
+        partial push never silently drops a secret-bearing change.
+        """
+        logger.warning(
+            "Failed to push %s %s/%s: %s",
+            change_type,
+            component_id,
+            config_id,
+            exc,
+        )
+        errors.append(
+            {
+                "change_type": change_type,
+                "component_id": component_id,
+                "config_id": config_id,
+                "message": str(exc),
+            }
+        )
+
     def _push_row_change(
         self,
         client: Any,
@@ -1379,13 +1545,21 @@ class SyncService(BaseService):
         manifest: Manifest,
         branch_id: int | None,
         allow_plaintext_fallback: bool = False,
-    ) -> None:
+    ) -> str | None:
         """Dispatch a single row-level change (added/modified/deleted) to the API.
 
         ``#``-prefixed secrets in the row's configuration are encrypted via
         :func:`encrypt_secrets_in_config` before POST/PUT (same fail-closed
         semantics as parent configs). Mutates ``manifest`` in place; the
         caller is responsible for persisting it.
+
+        ``parent_config_id`` must already be the *effective* parent id: on a
+        fresh CREATE the caller remaps the diff-time placeholder to the
+        API-assigned ULID before dispatch, so both the manifest parent lookup
+        and ``create_config_row(config_id=...)`` hit the real config (KFR-05).
+
+        Returns the API-assigned row id on ``added`` (so the caller can map
+        placeholder -> ULID for variable-link backfill), else ``None``.
         """
         parent = next(
             (
@@ -1416,16 +1590,15 @@ class SyncService(BaseService):
                 parent=parent,
                 branch_id=branch_id,
             )
-            return
+            return None
 
         # added / modified both read a local row file and encrypt-then-push.
         assert parent is not None  # guarded above for non-deleted change_types
-        row_dir = (
-            project_root / self._find_branch_path(manifest, branch_id) / parent.path / row_path_str
-        )
+        source_branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
+        row_dir = project_root / source_branch_path / parent.path / row_path_str
 
         if change_type == "added":
-            self._push_create_row(
+            return self._push_create_row(
                 client,
                 component_id=component_id,
                 parent_config_id=parent_config_id,
@@ -1436,7 +1609,6 @@ class SyncService(BaseService):
                 project_id=project_id,
                 allow_plaintext_fallback=allow_plaintext_fallback,
             )
-            return
 
         if change_type == "modified":
             self._push_update_row(
@@ -1450,7 +1622,7 @@ class SyncService(BaseService):
                 project_id=project_id,
                 allow_plaintext_fallback=allow_plaintext_fallback,
             )
-            return
+            return None
 
         raise ValueError(f"Unsupported row change_type: {change_type}")
 
@@ -1466,14 +1638,17 @@ class SyncService(BaseService):
         branch_id: int | None,
         project_id: int | None,
         allow_plaintext_fallback: bool,
-    ) -> None:
-        """POST a new row; record API-assigned id + hashes in the parent's row list."""
+    ) -> str:
+        """POST a new row; record API-assigned id + hashes in the parent's row list.
+
+        Returns the API-assigned row id.
+        """
         local_data = self._read_config_file(row_dir)
         if local_data is None:
             raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
 
         pristine_data = copy.deepcopy(local_data)
-        name, description, configuration = local_row_to_api(local_data)
+        name, description, configuration = local_row_to_api(local_data, component_id)
         configuration = encrypt_secrets_in_config(
             client,
             project_id,
@@ -1508,6 +1683,7 @@ class SyncService(BaseService):
             file_hash=new_file_hash,
             cfg_hash=cfg_hash_value,
         )
+        return new_row_id
 
     def _push_update_row(
         self,
@@ -1528,7 +1704,7 @@ class SyncService(BaseService):
             raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
 
         pristine_data = copy.deepcopy(local_data)
-        name, description, configuration = local_row_to_api(local_data)
+        name, description, configuration = local_row_to_api(local_data, component_id)
         configuration = encrypt_secrets_in_config(
             client,
             project_id,
@@ -1593,7 +1769,7 @@ class SyncService(BaseService):
         allow_plaintext_fallback: bool = False,
     ) -> dict[str, Any] | None:
         """Create a new config from a local _config.yml file."""
-        branch_path = self._find_branch_path(manifest, branch_id)
+        branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
         config_dir = project_root / branch_path / config_path_str
         local_data = self._read_config_file(config_dir)
         if local_data is None:
@@ -1653,7 +1829,7 @@ class SyncService(BaseService):
         allow_plaintext_fallback: bool = False,
     ) -> None:
         """Update an existing config from a local _config.yml file."""
-        branch_path = self._find_branch_path(manifest, branch_id)
+        branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
         config_dir = project_root / branch_path / config_path_str
         local_data = self._read_config_file(config_dir)
         if local_data is None:
@@ -1694,6 +1870,268 @@ class SyncService(BaseService):
         # Use pristine_data so blocks/code stay only in their code files.
         self._writeback_after_push(pristine_data, config_dir, config_id, configuration)
 
+    def _resolve_variable_bindings(
+        self,
+        client: Any,
+        *,
+        created_configs: list[CreatedConfig],
+        created_id_map: dict[tuple[str, str], str],
+        created_row_id_map: dict[str, str],
+        created_rows_by_parent: dict[str, list[str]],
+        manifest: Manifest,
+        branch_id: int | None,
+    ) -> VariableBindingResult:
+        """Rebind transformation -> variables links from placeholders to ULIDs.
+
+        On a fresh CREATE the transformation config is POSTed with its
+        ``_configuration_extra.variables_id`` / ``variables_values_id`` still
+        set to the externally-authored placeholder strings (``config_format``
+        merges ``_configuration_extra`` into the API body verbatim). This pass,
+        run after the variables config and its values row have been created,
+        resolves each placeholder to the ULID assigned during this push, PUTs
+        the corrected configuration body, then rewrites the local file and
+        refreshes the manifest hashes so a re-push is clean (KFR-03).
+
+        Resolution is a no-op when no ``keboola.variables`` config was created
+        this push (the already-bound / UPDATE path). When the exact placeholder
+        key misses but exactly one ``keboola.variables`` config was created this
+        push, it binds to that one with a warning; zero or ambiguous (>1)
+        matches accumulate an error rather than writing a broken link.
+        """
+        result = VariableBindingResult()
+
+        created_variables_ulids = [
+            ulid
+            for (component_id, _placeholder), ulid in created_id_map.items()
+            if component_id == VARIABLES_COMPONENT_ID
+        ]
+
+        for created in created_configs:
+            if created.component_id == VARIABLES_COMPONENT_ID:
+                continue  # the variables config itself never carries a link
+            local_data = self._read_config_file(created.config_dir)
+            if local_data is None:
+                continue
+            extra = local_data.get("_configuration_extra")
+            if not isinstance(extra, dict):
+                continue
+            vars_placeholder = extra.get("variables_id")
+            if not vars_placeholder or not isinstance(vars_placeholder, str):
+                continue
+            raw_vals = extra.get("variables_values_id")
+            vals_placeholder = raw_vals if isinstance(raw_vals, str) else ""
+
+            parent_ulid = self._resolve_variables_parent(
+                created=created,
+                vars_placeholder=vars_placeholder,
+                created_id_map=created_id_map,
+                created_variables_ulids=created_variables_ulids,
+                errors=result.errors,
+            )
+            if parent_ulid is None:
+                continue
+
+            row_ulid = self._resolve_variables_row(
+                created=created,
+                parent_ulid=parent_ulid,
+                vals_placeholder=vals_placeholder,
+                created_row_id_map=created_row_id_map,
+                created_rows_by_parent=created_rows_by_parent,
+                errors=result.errors,
+            )
+            # A missing-but-required values row already recorded an error.
+            if vals_placeholder and row_ulid is None:
+                continue
+
+            try:
+                self._apply_variable_binding(
+                    client,
+                    created=created,
+                    local_data=local_data,
+                    parent_ulid=parent_ulid,
+                    row_ulid=row_ulid,
+                    manifest=manifest,
+                    branch_id=branch_id,
+                )
+            except KeboolaApiError as exc:
+                result.errors.append(
+                    {
+                        "change_type": "variable_link",
+                        "error_code": ErrorCode.VARIABLE_LINK_UNRESOLVED,
+                        "component_id": created.component_id,
+                        "config_id": created.config_id,
+                        "message": str(exc),
+                    }
+                )
+                continue
+            result.configs_rewritten += 1
+
+        return result
+
+    def _resolve_variables_parent(
+        self,
+        *,
+        created: CreatedConfig,
+        vars_placeholder: str,
+        created_id_map: dict[tuple[str, str], str],
+        created_variables_ulids: list[str],
+        errors: list[dict[str, str]],
+    ) -> str | None:
+        """Resolve a transformation's ``variables_id`` placeholder to a ULID.
+
+        Returns the ULID, or ``None`` when there is nothing to backfill
+        (already-bound path) or the link is ambiguous (an error is appended).
+        """
+        parent_ulid = created_id_map.get((VARIABLES_COMPONENT_ID, vars_placeholder))
+        if parent_ulid is not None:
+            return parent_ulid
+        if not created_variables_ulids:
+            # No variables config created this push: the link is either already
+            # a ULID (UPDATE path) or points outside this push. Leave it.
+            return None
+        if len(created_variables_ulids) == 1:
+            parent_ulid = created_variables_ulids[0]
+            logger.warning(
+                "Transformation %s/%s variables_id placeholder %r did not match any "
+                "created variables config; binding to the single keboola.variables "
+                "config created this push (%s).",
+                created.component_id,
+                created.config_id,
+                vars_placeholder,
+                parent_ulid,
+            )
+            return parent_ulid
+        errors.append(
+            {
+                "change_type": "variable_link",
+                "error_code": ErrorCode.VARIABLE_LINK_UNRESOLVED,
+                "component_id": created.component_id,
+                "config_id": created.config_id,
+                "message": (
+                    f"Cannot resolve variables_id placeholder {vars_placeholder!r}: "
+                    f"{len(created_variables_ulids)} keboola.variables configs were "
+                    "created this push and none matched by placeholder. Refusing to "
+                    "write an ambiguous variables link."
+                ),
+            }
+        )
+        return None
+
+    def _resolve_variables_row(
+        self,
+        *,
+        created: CreatedConfig,
+        parent_ulid: str,
+        vals_placeholder: str,
+        created_row_id_map: dict[str, str],
+        created_rows_by_parent: dict[str, list[str]],
+        errors: list[dict[str, str]],
+    ) -> str | None:
+        """Resolve a transformation's ``variables_values_id`` placeholder.
+
+        Returns the row ULID, or ``None`` when no values row was created (the
+        link is then left unset) or the choice is ambiguous (an error is
+        appended only when ``vals_placeholder`` was actually requested).
+        """
+        if vals_placeholder:
+            mapped = created_row_id_map.get(vals_placeholder)
+            if mapped is not None:
+                return mapped
+        siblings = created_rows_by_parent.get(parent_ulid, [])
+        if len(siblings) == 1:
+            row_ulid = siblings[0]
+            if vals_placeholder:
+                logger.warning(
+                    "Transformation %s/%s variables_values_id placeholder %r did not "
+                    "match a created row; binding to the single row created under "
+                    "variables config %s.",
+                    created.component_id,
+                    created.config_id,
+                    vals_placeholder,
+                    parent_ulid,
+                )
+            return row_ulid
+        if vals_placeholder:
+            errors.append(
+                {
+                    "change_type": "variable_link",
+                    "error_code": ErrorCode.VARIABLE_LINK_UNRESOLVED,
+                    "component_id": created.component_id,
+                    "config_id": created.config_id,
+                    "message": (
+                        f"Cannot resolve variables_values_id placeholder "
+                        f"{vals_placeholder!r}: {len(siblings)} rows were created under "
+                        f"variables config {parent_ulid}. Refusing to write an "
+                        "ambiguous values link."
+                    ),
+                }
+            )
+        return None
+
+    def _apply_variable_binding(
+        self,
+        client: Any,
+        *,
+        created: CreatedConfig,
+        local_data: dict[str, Any],
+        parent_ulid: str,
+        row_ulid: str | None,
+        manifest: Manifest,
+        branch_id: int | None,
+    ) -> None:
+        """PUT the resolved variables link, rewrite local, refresh manifest hashes.
+
+        ``local_data`` is the pristine on-disk ``_config.yml`` dict; a deep
+        copy is code-merged to build the full PUT body so blocks/code stay only
+        in their companion files. Uses :meth:`KeboolaClient.update_config`
+        (PUT) directly -- **not** ``set_variables``, which would create a
+        *second* variables config.
+        """
+        merged = copy.deepcopy(local_data)
+        merge_code_files(created.component_id, merged, created.config_dir)
+        _name, _description, configuration = local_config_to_api(merged)
+        configuration["variables_id"] = parent_ulid
+        if row_ulid:
+            configuration["variables_values_id"] = row_ulid
+
+        client.update_config(
+            component_id=created.component_id,
+            config_id=created.config_id,
+            configuration=configuration,
+            change_description="Resolve variables link via kbagent sync push",
+            branch_id=branch_id,
+        )
+        logger.info(
+            "Resolved variables link for %s/%s -> variables_id=%s variables_values_id=%s",
+            created.component_id,
+            created.config_id,
+            parent_ulid,
+            row_ulid,
+        )
+
+        # Rewrite the local _configuration_extra to the ULIDs (pristine data:
+        # no merged blocks leak into _config.yml).
+        extra = local_data.setdefault("_configuration_extra", {})
+        extra["variables_id"] = parent_ulid
+        if row_ulid:
+            extra["variables_values_id"] = row_ulid
+        self._write_config_file(created.config_dir, local_data)
+
+        # config_hash includes _configuration_extra, so refresh the stored
+        # hashes from the post-rewrite disk state or sync diff sees a conflict.
+        hashes = self._compute_config_hashes(created.config_dir, created.component_id)
+        target_branch = branch_id or 0
+        for cfg in manifest.configurations:
+            if (
+                cfg.branch_id == target_branch
+                and cfg.component_id == created.component_id
+                and cfg.id == created.config_id
+            ):
+                cfg.metadata["pull_hash"] = hashes.file_hash
+                cfg.metadata["pull_config_hash"] = hashes.cfg_hash
+                cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
+                break
+
     def _writeback_create_config_in_manifest(
         self,
         *,
@@ -1704,7 +2142,7 @@ class SyncService(BaseService):
         new_id: str,
         file_hash: str,
         cfg_hash: str,
-    ) -> ManifestConfiguration:
+    ) -> WritebackResult:
         """Record a freshly-created config in the manifest.
 
         If a placeholder entry already exists at
@@ -1717,6 +2155,11 @@ class SyncService(BaseService):
         entries from multiple branches in git-branching mode; matching on
         ``(component_id, path)`` alone would risk updating the wrong branch's
         entry when the same logical path exists under two branches.
+
+        Returns a :class:`WritebackResult` carrying the entry and its
+        pre-overwrite ``previous_id`` so the create pass can remap any child
+        row parents / transformation variable links from the placeholder id
+        to the freshly-assigned ULID.
         """
         target_branch = branch_id or 0
         for entry in manifest.configurations:
@@ -1725,10 +2168,11 @@ class SyncService(BaseService):
                 and entry.component_id == component_id
                 and entry.path == config_path_str
             ):
+                previous_id = entry.id
                 entry.id = new_id
                 entry.metadata["pull_hash"] = file_hash
                 entry.metadata["pull_config_hash"] = cfg_hash
-                return entry
+                return WritebackResult(entry=entry, previous_id=previous_id)
         new_entry = ManifestConfiguration(
             branchId=target_branch,
             componentId=component_id,
@@ -1737,7 +2181,7 @@ class SyncService(BaseService):
             metadata={"pull_hash": file_hash, "pull_config_hash": cfg_hash},
         )
         manifest.configurations.append(new_entry)
-        return new_entry
+        return WritebackResult(entry=new_entry, previous_id="")
 
     def _writeback_create_row_in_manifest(
         self,
@@ -2822,6 +3266,54 @@ class SyncService(BaseService):
             branch_id,
         )
         return manifest.branches[0].path if manifest.branches else "main"
+
+    def _branch_path_has_configs(self, branch_dir: Path) -> bool:
+        """Return True if *branch_dir* exists and holds at least one config.
+
+        A config is any ``_config.yml`` below the branch root other than the
+        optional branch-level ``_config.yml`` itself. Used to decide whether a
+        target-branch subtree is materialized on disk.
+        """
+        if not branch_dir.is_dir():
+            return False
+        for config_file in branch_dir.rglob(CONFIG_FILENAME):
+            if config_file.parent != branch_dir:
+                return True
+        return False
+
+    def _resolve_source_branch_path(
+        self,
+        manifest: Manifest,
+        project_root: Path,
+        target_branch_id: int | None,
+    ) -> str:
+        """Resolve the on-disk branch subtree to read local configs from.
+
+        Source (where files live) and target (where the API writes) are
+        decoupled. When the target branch has its own materialized
+        ``<branch_name>/`` subtree on disk, that subtree is the source
+        (unchanged multi-branch-directory behaviour). Otherwise the default
+        branch tree (``manifest.branches[0]``, i.e. ``main/``) is the source --
+        the "promote the default tree to a target dev branch" path used by
+        ``sync push --branch <id>`` when no per-branch subtree exists
+        (KFR-07 option-B).
+
+        API calls still target ``target_branch_id``; only the *read* path is
+        affected.
+        """
+        target_path = self._find_branch_path(manifest, target_branch_id)
+        if self._branch_path_has_configs(project_root / target_path):
+            return target_path
+        default_path = manifest.branches[0].path if manifest.branches else target_path
+        if default_path != target_path:
+            logger.info(
+                "No config files under target branch path '%s'; promoting default "
+                "tree '%s' to branch %s",
+                target_path,
+                default_path,
+                target_branch_id,
+            )
+        return default_path
 
     def _find_untracked_configs(
         self,

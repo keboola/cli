@@ -97,6 +97,22 @@ The override is per-invocation only — it does not write into the manifest
 or the config store, so a subsequent command without `--branch` falls back
 to the normal priority chain.
 
+**Promote the default tree to a target branch (since v0.47.2).** When the
+target branch has no materialized `<branch_name>/` subtree on disk, `sync push
+--branch <id>` reads the **default tree** (`main/`) as the source and promotes
+it to the target branch, instead of failing with `Config file not found`.
+Source (read) and target (API write) are decoupled; API calls still target the
+branch id. So the common "I only have `main/` locally, push it to a fresh dev
+branch" flow now works with a single command:
+
+```bash
+# main/ on disk, no feature-x/ subtree -> main/ is promoted to branch 388072
+kbagent sync push --project prod --branch 388072
+```
+
+When a per-branch subtree *does* exist (multi-branch-directory users), the
+target subtree is used as before — behaviour is unchanged.
+
 ## Fresh-CREATE writeback (since v0.47.0)
 
 If you (or a tool like FIIA) seed `.keboola/manifest.json` with placeholder
@@ -112,6 +128,27 @@ keys (e.g. `KBC.configuration.folderName`), they are propagated to the
 metadata API immediately after the create call. This was the previous
 "set folderName via `config set-folder` after push" workaround for
 fresh-create flows; from v0.47.0 a single push handles it.
+
+**Variable links are resolved on fresh CREATE (since v0.47.2).** When the
+placeholder tree includes a `keboola.variables` config + default-values row and
+a transformation that cross-references them, one `sync push` now produces a
+*runnable* transformation:
+
+- the row's top-level `values: [...]` reach the API body even when the scaffold
+  row file has no `_keboola` block (KFR-04);
+- a row whose parent `keboola.variables` config is created in the same push is
+  POSTed against the assigned ULID, not the placeholder (KFR-05, previously
+  `PARENT_CONFIG_NOT_TRACKED`);
+- the transformation's `configuration.variables_id` / `variables_values_id` are
+  rebound from placeholders to the assigned ULIDs via a post-create
+  `update_config` PUT (KFR-03, previously `job run` failed with `Variable
+  configuration "<placeholder>" not found`).
+
+This removes the need for a post-push `config variables-set` step. If a
+placeholder can't be matched and the binding is ambiguous (zero or >1
+`keboola.variables` configs created this push), the link is left untouched and a
+`variable_link` entry appears in the push `errors` array — never a silently
+broken link. A clean re-push reports `no_changes`.
 
 `sync push --no-name-drift-warnings` (since v0.47.0) suppresses the
 cosmetic `name_drift_warnings` array on the result envelope. The

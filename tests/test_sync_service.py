@@ -2841,7 +2841,7 @@ class TestFreshCreateWriteback:
             ],
         )
 
-        entry = svc._writeback_create_config_in_manifest(
+        writeback = svc._writeback_create_config_in_manifest(
             manifest=manifest,
             component_id="keboola.snowflake-transformation",
             branch_id=12345,
@@ -2851,6 +2851,10 @@ class TestFreshCreateWriteback:
             cfg_hash="def456",
         )
 
+        entry = writeback.entry
+        assert writeback.previous_id == "PLACEHOLDER-TX1", (
+            "previous_id must capture the pre-overwrite placeholder for remapping"
+        )
         assert len(manifest.configurations) == 1, "must not append a duplicate"
         assert entry.id == "123456789"
         assert entry.branch_id == 12345
@@ -2882,7 +2886,7 @@ class TestFreshCreateWriteback:
             ],
         )
 
-        entry = svc._writeback_create_config_in_manifest(
+        writeback = svc._writeback_create_config_in_manifest(
             manifest=manifest,
             component_id="keboola.snowflake-transformation",
             branch_id=99999,
@@ -2892,6 +2896,9 @@ class TestFreshCreateWriteback:
             cfg_hash="h2",
         )
 
+        entry = writeback.entry
+        # A brand-new entry was appended: no placeholder to remap.
+        assert writeback.previous_id == ""
         # Two entries: the main-branch one untouched, plus the new dev-branch
         # one we just appended.
         assert len(manifest.configurations) == 2
@@ -2911,7 +2918,7 @@ class TestFreshCreateWriteback:
             configurations=[],
         )
 
-        entry = svc._writeback_create_config_in_manifest(
+        writeback = svc._writeback_create_config_in_manifest(
             manifest=manifest,
             component_id="keboola.ex-http",
             branch_id=0,
@@ -2921,6 +2928,8 @@ class TestFreshCreateWriteback:
             cfg_hash="h2",
         )
 
+        entry = writeback.entry
+        assert writeback.previous_id == ""
         assert len(manifest.configurations) == 1
         assert manifest.configurations[0] is entry
         assert entry.id == "999"
@@ -3198,6 +3207,384 @@ class TestFreshCreateWriteback:
         assert result2["status"] in ("no_changes", "pushed")
         assert result2.get("created", 0) == 0, "re-push must be idempotent"
         push_client2.create_config.assert_not_called()
+
+
+class TestFreshCreateVariableBinding:
+    """Fresh-CREATE variable-link resolution (KFR-03 / KFR-04 / KFR-05).
+
+    A FIIA / scaffold tree emits a ``keboola.variables`` config + its default
+    values row + a transformation that cross-references both by placeholder id.
+    One ``sync push`` must create all three, remap the row's parent placeholder
+    to the assigned ULID, hoist the row ``values``, and rebind the
+    transformation's ``variables_id`` / ``variables_values_id`` to ULIDs.
+    """
+
+    TX_COMPONENT = "keboola.snowflake-transformation"
+    VARS_COMPONENT = "keboola.variables"
+
+    @staticmethod
+    def _init(tmp_config_dir: Path, project_root: Path) -> ConfigStore:
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        ).init_sync(alias="prod", project_root=project_root)
+        return store
+
+    def _author_tree(
+        self,
+        project_root: Path,
+        *,
+        tx_vars_placeholder: str = "PH-VARS",
+        tx_vals_placeholder: str = "PH-VALS",
+        vars_manifest_id: str = "PH-VARS",
+        vals_manifest_id: str = "PH-VALS",
+        with_values_row: bool = True,
+    ) -> None:
+        """Write the placeholder manifest entries + local files on disk."""
+        from keboola_agent_cli.constants import CONFIG_YML_VERSION
+        from keboola_agent_cli.sync.manifest import (
+            ManifestConfigRow,
+            ManifestConfiguration,
+            save_manifest,
+        )
+
+        manifest = load_manifest(project_root)
+        branch_path = manifest.branches[0].path
+
+        vars_path = "variable/keboola.variables/my_vars"
+        tx_path = "transformation/keboola.snowflake-transformation/01_stage"
+
+        vars_entry = ManifestConfiguration(
+            branchId=12345,
+            componentId=self.VARS_COMPONENT,
+            id=vars_manifest_id,
+            path=vars_path,
+        )
+        if with_values_row:
+            vars_entry.rows.append(
+                ManifestConfigRow(id=vals_manifest_id, path="rows/default", metadata={})
+            )
+        manifest.configurations.append(vars_entry)
+        manifest.configurations.append(
+            ManifestConfiguration(
+                branchId=12345,
+                componentId=self.TX_COMPONENT,
+                id="PH-TX",
+                path=tx_path,
+            )
+        )
+        save_manifest(project_root, manifest)
+
+        vars_dir = project_root / branch_path / vars_path
+        vars_dir.mkdir(parents=True)
+        (vars_dir / CONFIG_FILENAME).write_text(
+            yaml.dump(
+                {
+                    "version": CONFIG_YML_VERSION,
+                    "name": "My Vars",
+                    "description": "",
+                    "_keboola": {"component_id": self.VARS_COMPONENT, "config_id": ""},
+                },
+                default_flow_style=False,
+            ),
+            encoding="utf-8",
+        )
+
+        if with_values_row:
+            row_dir = vars_dir / "rows" / "default"
+            row_dir.mkdir(parents=True)
+            (row_dir / CONFIG_FILENAME).write_text(
+                yaml.dump(
+                    {
+                        "version": CONFIG_YML_VERSION,
+                        "name": "default",
+                        "description": "",
+                        # Top-level hoisted values (KFR-04): no _keboola block so
+                        # only the explicit component_id can drive the hoist.
+                        "values": [{"name": "year", "value": "2016", "type": "string"}],
+                    },
+                    default_flow_style=False,
+                ),
+                encoding="utf-8",
+            )
+
+        tx_dir = project_root / branch_path / tx_path
+        tx_dir.mkdir(parents=True)
+        (tx_dir / CONFIG_FILENAME).write_text(
+            yaml.dump(
+                {
+                    "version": CONFIG_YML_VERSION,
+                    "name": "01 Stage",
+                    "description": "",
+                    "parameters": {},
+                    "_configuration_extra": {
+                        "variables_id": tx_vars_placeholder,
+                        "variables_values_id": tx_vals_placeholder,
+                    },
+                    "_keboola": {"component_id": self.TX_COMPONENT, "config_id": ""},
+                },
+                default_flow_style=False,
+            ),
+            encoding="utf-8",
+        )
+
+    def _make_create_client(self) -> MagicMock:
+        client = _make_sync_mock_client(components_response=[])
+        client.verify_token.return_value = SAMPLE_VERIFY_TOKEN
+
+        def fake_create_config(**kwargs: Any) -> dict[str, str]:
+            cid = kwargs["component_id"]
+            return {"id": "VARS-9" if cid == self.VARS_COMPONENT else "TX-9"}
+
+        client.create_config.side_effect = fake_create_config
+        client.create_config_row.return_value = {"id": "VALS-9"}
+        client.update_config.return_value = {"id": "TX-9"}
+        return client
+
+    def _remote_after_create(self) -> list[dict[str, Any]]:
+        """Remote state mirroring the post-push tree (for idempotency)."""
+        return [
+            {
+                "id": self.VARS_COMPONENT,
+                "type": "other",
+                "configurations": [
+                    {
+                        "id": "VARS-9",
+                        "name": "My Vars",
+                        "description": "",
+                        "configuration": {},
+                        "rows": [
+                            {
+                                "id": "VALS-9",
+                                "name": "default",
+                                "description": "",
+                                "configuration": {
+                                    "values": [{"name": "year", "value": "2016", "type": "string"}]
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "id": self.TX_COMPONENT,
+                "type": "transformation",
+                "configurations": [
+                    {
+                        "id": "TX-9",
+                        "name": "01 Stage",
+                        "description": "",
+                        "configuration": {
+                            "parameters": {},
+                            "variables_id": "VARS-9",
+                            "variables_values_id": "VALS-9",
+                        },
+                        "rows": [],
+                    }
+                ],
+            },
+        ]
+
+    def test_push_resolves_bindings_end_to_end(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """One push: 3 creates, row parent remapped, values hoisted, links rebound."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init(tmp_config_dir, project_root)
+        self._author_tree(project_root)
+
+        client = self._make_create_client()
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        result = svc.push(alias="prod", project_root=project_root)
+
+        assert result["status"] == "pushed"
+        assert result["created"] == 3, result
+        assert result["errors"] == [], result["errors"]
+
+        # KFR-05: row POSTed against the freshly-assigned parent ULID, not the
+        # placeholder. KFR-04: the hoisted values reached the API body.
+        client.create_config_row.assert_called_once()
+        row_kwargs = client.create_config_row.call_args.kwargs
+        assert row_kwargs["config_id"] == "VARS-9", "row parent must be remapped to ULID"
+        assert row_kwargs["configuration"].get("values"), "row values must be hoisted"
+
+        # KFR-03: a single update_config PUT rebinds BOTH ids to ULIDs.
+        client.update_config.assert_called_once()
+        upd = client.update_config.call_args.kwargs
+        assert upd["component_id"] == self.TX_COMPONENT
+        assert upd["config_id"] == "TX-9"
+        assert upd["configuration"]["variables_id"] == "VARS-9"
+        assert upd["configuration"]["variables_values_id"] == "VALS-9"
+        assert "Resolve variables link" in upd["change_description"]
+        # MUST NOT call set_variables (would create a 2nd variables config).
+        client.set_variables.assert_not_called()
+
+        # Local file rewritten to ULIDs.
+        manifest = load_manifest(project_root)
+        tx_entry = next(c for c in manifest.configurations if c.component_id == self.TX_COMPONENT)
+        assert tx_entry.id == "TX-9"
+        branch_path = manifest.branches[0].path
+        tx_local = yaml.safe_load(
+            (project_root / branch_path / tx_entry.path / CONFIG_FILENAME).read_text("utf-8")
+        )
+        assert tx_local["_configuration_extra"]["variables_id"] == "VARS-9"
+        assert tx_local["_configuration_extra"]["variables_values_id"] == "VALS-9"
+
+        # Manifest hashes refreshed from the post-rewrite (ULID) state so a
+        # re-push is clean: pull_config_hash must equal config_hash(local).
+        from keboola_agent_cli.sync.diff_engine import config_hash
+
+        assert tx_entry.metadata["pull_config_hash"] == config_hash(tx_local)
+
+    def test_push_resolves_bindings_idempotent_repush(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """A second push over the mutated tree is a no-op (created==0, errors==0)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init(tmp_config_dir, project_root)
+        self._author_tree(project_root)
+
+        svc = SyncService(
+            config_store=store, client_factory=lambda url, token: self._make_create_client()
+        )
+        svc.push(alias="prod", project_root=project_root)
+
+        repush_client = _make_sync_mock_client(components_response=self._remote_after_create())
+        repush_svc = SyncService(
+            config_store=store, client_factory=lambda url, token: repush_client
+        )
+        result2 = repush_svc.push(alias="prod", project_root=project_root)
+
+        assert result2.get("created", 0) == 0, result2
+        assert result2.get("errors", []) == [], result2
+        repush_client.create_config.assert_not_called()
+        repush_client.create_config_row.assert_not_called()
+        repush_client.update_config.assert_not_called()
+
+    def test_fallback_single_variables_config_binds_with_warning(
+        self, tmp_config_dir: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Placeholder mismatch + exactly one created variables config → bind + warn."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init(tmp_config_dir, project_root)
+        # Transformation references a placeholder that does NOT match the
+        # variables manifest entry's placeholder id.
+        self._author_tree(
+            project_root,
+            tx_vars_placeholder="WRONG-VARS",
+            tx_vals_placeholder="WRONG-VALS",
+        )
+
+        client = self._make_create_client()
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        with caplog.at_level("WARNING"):
+            result = svc.push(alias="prod", project_root=project_root)
+
+        assert result["created"] == 3
+        assert result["errors"] == []
+        client.update_config.assert_called_once()
+        upd = client.update_config.call_args.kwargs
+        assert upd["configuration"]["variables_id"] == "VARS-9"
+        assert upd["configuration"]["variables_values_id"] == "VALS-9"
+        assert any("did not match" in r.message for r in caplog.records)
+
+    def test_ambiguous_variables_configs_error_no_broken_link(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """>1 created variables configs + no placeholder match → error, no PUT."""
+        from keboola_agent_cli.constants import CONFIG_YML_VERSION
+        from keboola_agent_cli.sync.manifest import ManifestConfiguration, save_manifest
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init(tmp_config_dir, project_root)
+        # Two variables configs, transformation points at a non-matching id.
+        self._author_tree(
+            project_root,
+            tx_vars_placeholder="WRONG-VARS",
+            tx_vals_placeholder="WRONG-VALS",
+        )
+        manifest = load_manifest(project_root)
+        branch_path = manifest.branches[0].path
+        second_vars_path = "variable/keboola.variables/other_vars"
+        manifest.configurations.append(
+            ManifestConfiguration(
+                branchId=12345,
+                componentId=self.VARS_COMPONENT,
+                id="PH-VARS-2",
+                path=second_vars_path,
+            )
+        )
+        save_manifest(project_root, manifest)
+        other_dir = project_root / branch_path / second_vars_path
+        other_dir.mkdir(parents=True)
+        (other_dir / CONFIG_FILENAME).write_text(
+            yaml.dump(
+                {
+                    "version": CONFIG_YML_VERSION,
+                    "name": "Other Vars",
+                    "description": "",
+                    "_keboola": {"component_id": self.VARS_COMPONENT, "config_id": ""},
+                },
+                default_flow_style=False,
+            ),
+            encoding="utf-8",
+        )
+
+        client = self._make_create_client()
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        result = svc.push(alias="prod", project_root=project_root)
+
+        # No variables link PUT happened (the create-pass update_config for the
+        # backfill is the only update_config we guard against).
+        client.update_config.assert_not_called()
+        assert any(e.get("change_type") == "variable_link" for e in result["errors"]), result[
+            "errors"
+        ]
+
+    def test_resolve_source_branch_path_promotes_default_tree(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """KFR-07: missing target-branch subtree → read from the default tree."""
+        from keboola_agent_cli.constants import CONFIG_YML_VERSION
+        from keboola_agent_cli.sync.manifest import ManifestBranch, save_manifest
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init(tmp_config_dir, project_root)
+        svc = SyncService(config_store=store, client_factory=lambda url, token: MagicMock())
+
+        manifest = load_manifest(project_root)
+        default_path = manifest.branches[0].path
+        # Register a dev branch WITHOUT a materialized subtree on disk.
+        manifest.branches.append(ManifestBranch(id=99999, path="feature-x"))
+        save_manifest(project_root, manifest)
+
+        # Default tree has at least one config on disk.
+        cfg_dir = project_root / default_path / "extractor/keboola.ex-http/c"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / CONFIG_FILENAME).write_text(
+            yaml.dump({"version": CONFIG_YML_VERSION, "name": "c"}, default_flow_style=False),
+            encoding="utf-8",
+        )
+
+        # No feature-x/ subtree → falls back to the default tree.
+        assert svc._resolve_source_branch_path(manifest, project_root, 99999) == default_path
+
+        # Materialize the dev-branch subtree with a config → it becomes source.
+        dev_cfg_dir = project_root / "feature-x" / "extractor/keboola.ex-http/c"
+        dev_cfg_dir.mkdir(parents=True)
+        (dev_cfg_dir / CONFIG_FILENAME).write_text(
+            yaml.dump({"version": CONFIG_YML_VERSION, "name": "c"}, default_flow_style=False),
+            encoding="utf-8",
+        )
+        assert svc._resolve_source_branch_path(manifest, project_root, 99999) == "feature-x"
 
 
 # ---------------------------------------------------------------------------
