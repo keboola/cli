@@ -13,8 +13,16 @@ import os
 from pathlib import Path
 
 import platformdirs
+from pydantic import ValidationError
 
-from .constants import ENV_CONFIG_DIR, LOCAL_CONFIG_DIR_NAME
+from .constants import (
+    ENV_CONFIG_DIR,
+    ENV_KBC_STORAGE_API_URL,
+    ENV_KBC_TOKEN,
+    ENV_PROJECT_ALIAS,
+    ENV_PROJECT_FROM_ENV,
+    LOCAL_CONFIG_DIR_NAME,
+)
 from .errors import ConfigError
 from .models import AppConfig, DeveloperPortalIdentity, ProjectConfig
 
@@ -142,7 +150,7 @@ class ConfigStore:
         logger.debug("Loading config from %s", self._config_path)
         if not self._config_path.exists():
             logger.debug("Config file does not exist, returning empty config")
-            return AppConfig()
+            return self._inject_env_project(AppConfig())
 
         fd: int | None = None
         try:
@@ -176,9 +184,121 @@ class ConfigStore:
             )
 
         try:
-            return AppConfig.model_validate(data)
+            config = AppConfig.model_validate(data)
         except Exception as exc:
             raise ConfigError(f"Config file has invalid structure: {exc}") from exc
+
+        return self._inject_env_project(config)
+
+    def _inject_env_project(self, config: AppConfig) -> AppConfig:
+        """Synthesize an in-memory project from env vars when opted in (issue #359).
+
+        When ``KBAGENT_PROJECT_FROM_ENV`` is truthy, read ``KBC_TOKEN`` and
+        ``KBC_STORAGE_API_URL`` and inject a project under the reserved alias
+        ``__env__`` so a headless daemon / container / CI can run kbagent with
+        no ``project add`` and no config.json on disk. Both CLI and ``serve``
+        funnel through ``load()``, so this single chokepoint covers both.
+
+        The injected project is marked ``ephemeral=True``; ``save()`` strips it
+        so the env token is never persisted. Opt-in is explicit (the flag), not
+        the mere presence of ``KBC_TOKEN``, to avoid a phantom project on a dev
+        machine that exported the token only for ``project add``.
+
+        A real project already registered under ``__env__`` is left untouched.
+
+        Raises:
+            ConfigError: If the flag is set but the credential env vars are
+                missing (fail fast rather than silently skip).
+        """
+        flag = os.environ.get(ENV_PROJECT_FROM_ENV, "").strip().lower()
+        if flag not in ("1", "true", "yes", "on"):
+            return config
+
+        if ENV_PROJECT_ALIAS in config.projects:
+            return config
+
+        token = os.environ.get(ENV_KBC_TOKEN)
+        url = os.environ.get(ENV_KBC_STORAGE_API_URL)
+        if not token or not url:
+            missing = [
+                name
+                for name, value in ((ENV_KBC_TOKEN, token), (ENV_KBC_STORAGE_API_URL, url))
+                if not value
+            ]
+            raise ConfigError(
+                f"{ENV_PROJECT_FROM_ENV} is set but {' and '.join(missing)} "
+                f"{'is' if len(missing) == 1 else 'are'} missing. Set both "
+                f"{ENV_KBC_TOKEN} and {ENV_KBC_STORAGE_API_URL}, or unset "
+                f"{ENV_PROJECT_FROM_ENV}."
+            )
+
+        # Keboola Storage tokens are `{projectId}-{tokenId}-{secret}`, so we can
+        # recover the project_id offline from the prefix. The real project_name
+        # needs an API call (verify_token) -- load() must stay offline, so it is
+        # left blank here; `project status` / `project info` show the verified
+        # name when a command actually talks to the API.
+        prefix = token.split("-", 1)[0]
+        project_id = int(prefix) if prefix.isdigit() else None
+        try:
+            config.projects[ENV_PROJECT_ALIAS] = ProjectConfig(
+                stack_url=url,
+                token=token,
+                project_id=project_id,
+                ephemeral=True,
+            )
+        except ValidationError as exc:
+            # Convert pydantic's raw error into a clean fail-fast message --
+            # this runs inside load(), which callers only guard for ConfigError.
+            reason = "; ".join(e.get("msg", "") for e in exc.errors()) or str(exc)
+            raise ConfigError(
+                f"{ENV_KBC_STORAGE_API_URL}={url!r} is not a usable stack URL: {reason}"
+            ) from exc
+        if not config.default_project:
+            config.default_project = ENV_PROJECT_ALIAS
+        logger.debug("Injected ephemeral '%s' project from environment", ENV_PROJECT_ALIAS)
+        return config
+
+    @staticmethod
+    def _strip_ephemeral_projects(config: AppConfig) -> AppConfig:
+        """Return a copy of ``config`` with ephemeral (env-synthesized) projects removed.
+
+        Defends against persisting an env token to disk: mutation methods do
+        ``load() -> mutate -> save()``, and ``load()`` may have injected the
+        ``__env__`` project. The original object is left intact because callers
+        keep using it after ``save()`` returns. If ``default_project`` pointed
+        at a stripped ephemeral alias, it is blanked (the next ``load()``
+        re-injects and re-defaults it).
+        """
+        ephemeral_aliases = {alias for alias, p in config.projects.items() if p.ephemeral}
+        if not ephemeral_aliases:
+            return config
+        clean = config.model_copy(deep=True)
+        for alias in ephemeral_aliases:
+            clean.projects.pop(alias, None)
+        if clean.default_project in ephemeral_aliases:
+            clean.default_project = next(iter(clean.projects), "")
+        return clean
+
+    @staticmethod
+    def _reject_ephemeral_mutation(config: AppConfig, alias: str, operation: str) -> None:
+        """Block mutations targeting an env-synthesized project (issue #359).
+
+        A `__env__` project injected from `KBAGENT_PROJECT_FROM_ENV` exists only
+        in memory and is stripped on save, so `remove`/`edit`/`rename`/branch
+        ops would otherwise report success and then silently vanish on the next
+        `load()`. Reject them with a clear, actionable message instead. A real
+        persisted project that happens to use the alias (``ephemeral=False``) is
+        unaffected.
+        """
+        project = config.projects.get(alias)
+        if project is not None and project.ephemeral:
+            raise ConfigError(
+                f"Project '{alias}' is synthesized from environment variables "
+                f"({ENV_PROJECT_FROM_ENV}) and cannot be {operation} -- it lives "
+                f"only in memory. To change it, update {ENV_KBC_TOKEN} / "
+                f"{ENV_KBC_STORAGE_API_URL}; to manage a persisted project, unset "
+                f"{ENV_PROJECT_FROM_ENV} and use 'project add'."
+            )
 
     def save(self, config: AppConfig) -> None:
         """Save configuration to disk with secure file permissions (0600).
@@ -195,6 +315,10 @@ class ConfigStore:
         try:
             self._config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             self._ensure_gitignore()
+            # Never persist env-synthesized projects (issue #359): strip any
+            # ephemeral entry so the KBC_TOKEN from the environment stays in
+            # memory only. Operate on a copy -- callers reuse the AppConfig.
+            config = self._strip_ephemeral_projects(config)
             # Prepend the agent-facing warning as the first field so any LLM
             # that reads config.json sees it BEFORE any token value.
             payload = {
@@ -284,6 +408,7 @@ class ConfigStore:
         config = self.load()
         if alias not in config.projects:
             raise ConfigError(f"Project '{alias}' not found.")
+        self._reject_ephemeral_mutation(config, alias, "removed")
         del config.projects[alias]
         if config.default_project == alias:
             config.default_project = next(iter(config.projects), "")
@@ -307,6 +432,7 @@ class ConfigStore:
         config = self.load()
         if alias not in config.projects:
             raise ConfigError(f"Project '{alias}' not found.")
+        self._reject_ephemeral_mutation(config, alias, "modified")
         config.projects[alias].active_branch_id = branch_id
         self.save(config)
 
@@ -325,6 +451,7 @@ class ConfigStore:
         config = self.load()
         if alias not in config.projects:
             raise ConfigError(f"Project '{alias}' not found.")
+        self._reject_ephemeral_mutation(config, alias, "edited")
         project = config.projects[alias]
         for key, value in kwargs.items():
             if hasattr(project, key) and value is not None:
@@ -352,6 +479,7 @@ class ConfigStore:
         config = self.load()
         if old_alias not in config.projects:
             raise ConfigError(f"Project '{old_alias}' not found.")
+        self._reject_ephemeral_mutation(config, old_alias, "renamed")
         if new_alias in config.projects:
             raise ConfigError(
                 f"Cannot rename '{old_alias}' to '{new_alias}': "

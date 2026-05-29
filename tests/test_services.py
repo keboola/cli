@@ -47,6 +47,28 @@ class TestAddProject:
         mock_client.verify_token.assert_called_once()
         mock_client.close.assert_called_once()
 
+    def test_add_project_normalizes_bare_host_url(self, tmp_config_dir: Path) -> None:
+        """add_project passes a bare host through normalize_stack_url before storing."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        captured: dict[str, str] = {}
+
+        def factory(url: str, token: str):
+            captured["url"] = url
+            return make_mock_client(project_name="Production", project_id=9999)
+
+        service = ProjectService(config_store=store, client_factory=factory)
+
+        result = service.add_project(
+            alias="prod",
+            stack_url="connection.keboola.com/admin/projects/9999/dashboard",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        )
+
+        # Verification client and the stored/returned URL all use the clean base.
+        assert captured["url"] == "https://connection.keboola.com"
+        assert result["stack_url"] == "https://connection.keboola.com"
+        assert store.get_project("prod").stack_url == "https://connection.keboola.com"
+
     def test_add_project_invalid_token(self, tmp_config_dir: Path) -> None:
         """add_project raises KeboolaApiError when token verification fails."""
         store = ConfigStore(config_dir=tmp_config_dir)
@@ -471,6 +493,29 @@ class TestGetStatus:
         assert refreshed is not None
         assert refreshed.org_id == 438
         assert refreshed.org_name == "Keboola Demo"
+
+    def test_status_no_backfill_for_ephemeral_env_project(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Headless __env__ status must not trigger a config.json write (issue #359).
+
+        The env project's org info can never be persisted (save strips it), so
+        backfilling it would create a spurious config.json on disk and repeat on
+        every `project status`. get_status() must leave the dir file-free.
+        """
+        monkeypatch.setenv("KBAGENT_PROJECT_FROM_ENV", "1")
+        monkeypatch.setenv("KBC_TOKEN", "901-99999-fakeHeadlessTokenDoNotUseXXXXX")
+        monkeypatch.setenv("KBC_STORAGE_API_URL", "https://connection.keboola.com")
+        store = ConfigStore(config_dir=tmp_config_dir)
+        mock_client = make_mock_client(org_id=438, org_name="Keboola Demo")
+        service = ProjectService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        service.get_status()
+
+        assert not (tmp_config_dir / "config.json").exists()
 
     def test_status_no_backfill_when_org_info_already_set(self, tmp_config_dir: Path) -> None:
         """Projects with org info already populated must not be re-written."""

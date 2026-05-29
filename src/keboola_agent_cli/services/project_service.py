@@ -14,7 +14,7 @@ from typing import Any
 
 from ..constants import ENV_KBAGENT_PROJECT
 from ..errors import ConfigError, KeboolaApiError, mask_token
-from ..models import ProjectConfig
+from ..models import ProjectConfig, normalize_stack_url
 from .base import BaseService
 
 # Filesystem-safe slug constraint for ``--new-alias``. Aliases land on disk
@@ -51,6 +51,10 @@ class ProjectService(BaseService):
             KeboolaApiError: If token verification fails.
             ConfigError: If the alias already exists.
         """
+        # Accept a bare host or a full project deep-link, not just a clean base
+        # URL -- normalize before we build the verification client so the token
+        # check hits the right host (and the stored value is the clean base).
+        stack_url = normalize_stack_url(stack_url)
         client = self._client_factory(stack_url, token)
         try:
             token_info = client.verify_token()
@@ -152,6 +156,11 @@ class ProjectService(BaseService):
                 "No changes specified. Provide --url, --token, and/or "
                 "--new-alias (matching the current alias is a no-op)."
             )
+
+        # Normalize a bare host / full project deep-link to the clean base URL
+        # up front so the dry-run preview and the real edit agree on the value.
+        if stack_url is not None:
+            stack_url = normalize_stack_url(stack_url)
 
         # ----- dry-run path: validate everything, mutate nothing ----------
         if dry_run:
@@ -625,6 +634,13 @@ class ProjectService(BaseService):
                 continue  # verify_token didn't return org info -- nothing to backfill
             current = self._config_store.get_project(alias)
             if current is None:
+                continue
+            if current.ephemeral:
+                # Env-synthesized __env__ (issue #359): its org info can never
+                # be persisted (save() strips it), so backfilling is futile and
+                # would trigger a spurious config.json write on disk -- breaking
+                # the "no config.json in headless mode" guarantee and repeating
+                # on every `project status`. Skip it.
                 continue
             if current.org_id is not None and current.org_name:
                 continue  # already populated; skip

@@ -1233,6 +1233,13 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
      KBC_MASTER_TOKEN_*       Per-project master token (e.g. KBC_MASTER_TOKEN_PROD)
      KBAGENT_CONFIG_DIR       Override config directory
      KBAGENT_PROJECT          Override the pinned default project for this shell/session (beats pin, loses to --project)
+     KBAGENT_PROJECT_FROM_ENV Set to "1" (or true/yes/on) to synthesize an in-memory project under the
+                              reserved alias __env__ from KBC_TOKEN + KBC_STORAGE_API_URL (since 0.50.0).
+                              Headless / token-only mode: no `project add`, no config.json on disk. Use
+                              `--project __env__` (or rely on it as the sole/default project). The token
+                              lives in memory only -- it is NEVER persisted, even if a write op runs.
+                              Works for both the CLI and `kbagent serve`. Fails fast if the flag is set
+                              but KBC_TOKEN / KBC_STORAGE_API_URL are missing.
      KBAGENT_MAX_PARALLEL_WORKERS  Max concurrent threads for multi-project ops (default 10, max 100)
      KBAGENT_AUTO_UPDATE      Set to "false" to disable automatic update on startup
      KBAGENT_UPDATED_FROM     Set to an older version to trigger "What's new" display on next run

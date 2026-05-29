@@ -1,8 +1,47 @@
 """Pydantic models shared across all layers of the application."""
 
 from typing import Any
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator
+
+
+def normalize_stack_url(value: str) -> str:
+    """Normalize a user-supplied Keboola stack URL to its scheme+host base.
+
+    Accepts, in order of forgiveness:
+      - a bare host                ``connection.keboola.com``
+      - a full base URL            ``https://connection.keboola.com``
+      - a full base URL + slash    ``https://connection.keboola.com/``
+      - a full project deep-link   ``https://connection.keboola.com/admin/projects/10105/dashboard``
+
+    and reduces every form to ``https://<host>`` (path/query/fragment dropped).
+    A missing scheme defaults to ``https://``. Any *explicit* non-https scheme
+    (``http://``, ``file://``, ``ftp://``, ...) is rejected -- this is an
+    SSRF / protocol-abuse guard, so we never silently upgrade a typed-out
+    ``http://`` to https.
+
+    Raises:
+        ValueError: empty input, an explicit non-https scheme, or no host.
+    """
+    raw = value.strip()
+    if not raw:
+        raise ValueError("Stack URL must not be empty.")
+    # No scheme typed -> assume https so urlparse sees a netloc, not a path.
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    parsed = urlparse(raw)
+    if parsed.scheme != "https":
+        raise ValueError(
+            f"Stack URL must use https:// scheme, got: {parsed.scheme or '(none)'}://. "
+            "Plain HTTP, file://, and other protocols are not allowed."
+        )
+    if not parsed.netloc:
+        raise ValueError(
+            f"Stack URL has no host: {value!r}. Expected e.g. "
+            "'connection.keboola.com' or 'https://connection.keboola.com'."
+        )
+    return f"https://{parsed.netloc}"
 
 
 class ProjectConfig(BaseModel):
@@ -28,17 +67,27 @@ class ProjectConfig(BaseModel):
         default=None,
         description="Organization name (populated via `org setup` or when verify_token returns it)",
     )
+    ephemeral: bool = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "True for an in-memory project synthesized from KBC_TOKEN + "
+            "KBC_STORAGE_API_URL (headless mode, issue #359). Excluded from "
+            "serialization and stripped by ConfigStore.save() so the env "
+            "token is never written to disk."
+        ),
+    )
 
     @field_validator("stack_url")
     @classmethod
     def validate_stack_url_scheme(cls, v: str) -> str:
-        """Enforce HTTPS scheme on stack URL to prevent SSRF and protocol abuse."""
-        if not v.startswith("https://"):
-            raise ValueError(
-                f"Stack URL must use https:// scheme, got: {v!r}. "
-                "Plain HTTP, file://, and other protocols are not allowed."
-            )
-        return v
+        """Normalize the stack URL to ``https://<host>`` (see ``normalize_stack_url``).
+
+        Accepts a bare host, a full base URL, or a full project deep-link and
+        reduces it to the scheme+host base; rejects explicit non-https schemes
+        (SSRF / protocol-abuse guard).
+        """
+        return normalize_stack_url(v)
 
 
 class DeveloperPortalIdentity(BaseModel):

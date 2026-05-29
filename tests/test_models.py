@@ -275,13 +275,50 @@ class TestStackUrlValidation:
                 token="901-token",
             )
 
-    def test_project_add_rejects_no_scheme(self) -> None:
-        """URL without scheme is rejected with a ValidationError."""
-        with pytest.raises(ValidationError, match="https://"):
-            ProjectConfig(
-                stack_url="connection.keboola.com",
-                token="901-token",
-            )
+    def test_bare_host_is_normalized_to_https(self) -> None:
+        """A bare host (no scheme) gets https:// prepended instead of rejected."""
+        config = ProjectConfig(
+            stack_url="connection.keboola.com",
+            token="901-token",
+        )
+        assert config.stack_url == "https://connection.keboola.com"
+
+    def test_full_project_link_reduced_to_base(self) -> None:
+        """A full project deep-link is reduced to scheme+host."""
+        config = ProjectConfig(
+            stack_url="https://connection.keboola.com/admin/projects/10105/dashboard",
+            token="901-token",
+        )
+        assert config.stack_url == "https://connection.keboola.com"
+
+    def test_trailing_slash_stripped(self) -> None:
+        """A trailing slash is dropped from the normalized base URL."""
+        config = ProjectConfig(
+            stack_url="https://connection.keboola.com/",
+            token="901-token",
+        )
+        assert config.stack_url == "https://connection.keboola.com"
+
+    def test_bare_host_with_path_reduced_to_base(self) -> None:
+        """A bare host + path (no scheme) normalizes to https://<host>."""
+        config = ProjectConfig(
+            stack_url="connection.north-europe.azure.keboola.com/admin/projects/7",
+            token="901-token",
+        )
+        assert config.stack_url == "https://connection.north-europe.azure.keboola.com"
+
+    def test_surrounding_whitespace_trimmed(self) -> None:
+        """Leading/trailing whitespace (paste artifact) is trimmed."""
+        config = ProjectConfig(
+            stack_url="  https://connection.keboola.com  ",
+            token="901-token",
+        )
+        assert config.stack_url == "https://connection.keboola.com"
+
+    def test_empty_url_rejected(self) -> None:
+        """An empty / whitespace-only URL is rejected."""
+        with pytest.raises(ValidationError, match="empty"):
+            ProjectConfig(stack_url="   ", token="901-token")
 
     def test_project_add_accepts_https_url(self) -> None:
         """https:// URL is accepted without error."""

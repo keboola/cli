@@ -149,6 +149,17 @@ LOCAL_CONFIG_DIR_NAME: str = ".kbagent"
 # Overrides the persisted `default_project` pin for a single invocation/session.
 ENV_KBAGENT_PROJECT: str = "KBAGENT_PROJECT"
 
+# --- Headless / env-only project (issue #359) ---
+# Opt-in flag that makes ConfigStore synthesize an in-memory project from
+# KBC_TOKEN + KBC_STORAGE_API_URL, so a daemon / container / CI can run kbagent
+# (CLI or `serve`) with no `kbagent project add` and no config.json on disk.
+# Explicit opt-in (not mere presence of KBC_TOKEN) avoids a phantom project
+# surprising a dev who exported KBC_TOKEN only for `kbagent project add`.
+ENV_PROJECT_FROM_ENV: str = "KBAGENT_PROJECT_FROM_ENV"
+# Reserved alias for the synthesized project. Double-underscore marks it as a
+# synthetic, never-persisted entry that cannot collide with a user alias.
+ENV_PROJECT_ALIAS: str = "__env__"
+
 # --- Environment Variable Names ---
 ENV_MAX_PARALLEL_WORKERS: str = "KBAGENT_MAX_PARALLEL_WORKERS"
 ENV_KBC_TOKEN: str = "KBC_TOKEN"
