@@ -207,7 +207,7 @@ Requires the project to be added with its **master ('owner') Storage API token**
 ## Encryption
 - `encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]` -- encrypt #-prefixed secrets via Keboola Encryption API (one-way, no decrypt). Scope: ComponentSecure (project + component). Use for MCP tool call workflows.
 
-## Developer Portal (since v0.48.0)
+## Developer Portal (since v0.49.0)
 
 Talks to `apps-api.keboola.com`. **Reads are unrestricted; writes always require a human to type a random hex code on a real TTY (no `--yes`, no env bypass, exit 6 on non-TTY).** Use `--dry-run` for the agent-safe preview path.
 

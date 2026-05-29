@@ -1084,7 +1084,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
   kbagent kai history [--project NAME] [--limit N]
     List recent Kai chat sessions. Default limit: 10.
 
-### Developer Portal (since v0.48.0)
+### Developer Portal (since v0.49.0)
 
   The `dev-portal` command group talks to `apps-api.keboola.com` (the Keboola
   Developer Portal) and lets component developers register and update components
