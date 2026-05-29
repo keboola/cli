@@ -2258,3 +2258,38 @@ command without `--dry-run` themselves.
 Reads (`dev-portal list`, `dev-portal get`) are unrestricted — peer-research
 patterns ("show me how MySQL and Postgres extractors configure themselves")
 are agent-friendly via `list --vendor` + `get --app`.
+
+## Headless / token-only invocation: the `__env__` project (since v0.50.0)
+
+A daemon, container, or CI job that has only a token in its environment can run
+kbagent with **no `kbagent project add` and no `config.json` on disk**. Set all
+three:
+
+```bash
+export KBAGENT_PROJECT_FROM_ENV=1
+export KBC_TOKEN=<storage-api-token>
+export KBC_STORAGE_API_URL=https://connection.<region>.keboola.com
+kbagent --json storage file-upload --project __env__ --file screenshot.png
+```
+
+kbagent synthesizes an in-memory project under the reserved alias `__env__`.
+Pass it as `--project __env__` (or rely on it being the sole/default project for
+commands that fall back to the default).
+
+Gotchas:
+- **Opt-in is the flag, not the token.** `KBC_TOKEN` alone does nothing here —
+  it stays a `project add` fallback. Only `KBAGENT_PROJECT_FROM_ENV` (truthy:
+  `1`/`true`/`yes`/`on`) triggers injection. This avoids a phantom project on a
+  dev machine that exported `KBC_TOKEN` for an unrelated `project add`.
+- **Token is never persisted.** `__env__` is `ephemeral`; even if a write op
+  triggers a `config.json` write, the env token is stripped first. There is no
+  way to leak it to disk through normal operation.
+- **Fail-fast.** Flag set but `KBC_TOKEN` or `KBC_STORAGE_API_URL` missing →
+  exit 5 (`config error`) with a clear message, not a silent skip.
+- **Same chokepoint for `serve`.** `kbagent serve` started with the same three
+  env vars exposes `__env__` too — POST endpoints take `project=__env__`. Both
+  CLI and serve resolve through `ConfigStore.load()`, so one env setup covers
+  both consumption styles.
+- The alias is literally `__env__` (double underscore both sides) — chosen so it
+  cannot collide with a real user alias. A real project already registered under
+  `__env__` wins; no injection happens.

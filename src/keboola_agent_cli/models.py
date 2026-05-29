@@ -28,6 +28,16 @@ class ProjectConfig(BaseModel):
         default=None,
         description="Organization name (populated via `org setup` or when verify_token returns it)",
     )
+    ephemeral: bool = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "True for an in-memory project synthesized from KBC_TOKEN + "
+            "KBC_STORAGE_API_URL (headless mode, issue #359). Excluded from "
+            "serialization and stripped by ConfigStore.save() so the env "
+            "token is never written to disk."
+        ),
+    )
 
     @field_validator("stack_url")
     @classmethod

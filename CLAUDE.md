@@ -294,6 +294,7 @@ plugins/kbagent/
 
 ```
 # Global options: --json, --verbose, --no-color, --config-dir, --hint client|service (deprecated, use kbagent serve REST API), --deny-writes, --deny-destructive, --allow-env-manage-token
+# Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
 
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list

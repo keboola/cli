@@ -10612,3 +10612,60 @@ class TestDevPortalE2E:
             ],
         )
         assert result.exit_code == 0, result.output
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestHeadlessEnvProject:
+    """Headless / token-only invocation against the real API (issue #359).
+
+    Verifies that KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL
+    let kbagent run with an EMPTY config dir (no `project add`, no config.json),
+    and that the env token is never written to disk.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.config_dir = tmp_path / "empty-config"
+        self.config_dir.mkdir()
+
+    def _headless_env(self) -> dict[str, str]:
+        return {
+            "KBAGENT_PROJECT_FROM_ENV": "1",
+            "KBC_TOKEN": self.token,
+            "KBC_STORAGE_API_URL": self.url,
+        }
+
+    def test_headless_lists_env_project(self) -> None:
+        _step("HEADLESS-1", "project list resolves __env__ from env, no config.json")
+        with patch.dict(os.environ, self._headless_env()):
+            result = _invoke(self.config_dir, ["--json", "project", "list"])
+        data = _json_ok(result)
+        aliases = {p["alias"] for p in data["data"]}
+        assert "__env__" in aliases, data
+        # No config.json was written -- token stays in memory only.
+        assert not (self.config_dir / "config.json").exists()
+
+    def test_headless_storage_call_hits_api(self) -> None:
+        _step("HEADLESS-2", "storage buckets --project __env__ reaches the real API")
+        with patch.dict(os.environ, self._headless_env()):
+            result = _invoke(
+                self.config_dir,
+                ["--json", "storage", "buckets", "--project", "__env__"],
+            )
+        # status=ok proves the env token authenticated a real API call.
+        _json_ok(result)
+        assert not (self.config_dir / "config.json").exists()
+
+    def test_headless_requires_opt_in_flag(self) -> None:
+        _step("HEADLESS-3", "KBC_TOKEN without the opt-in flag => no phantom project")
+        env = {"KBC_TOKEN": self.token, "KBC_STORAGE_API_URL": self.url}
+        with patch.dict(os.environ, env):
+            # Ensure the flag is absent for this assertion.
+            os.environ.pop("KBAGENT_PROJECT_FROM_ENV", None)
+            result = _invoke(self.config_dir, ["--json", "project", "list"])
+        data = _json_ok(result)
+        assert data["data"] == [], data

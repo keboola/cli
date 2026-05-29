@@ -795,3 +795,116 @@ class TestDevPortalIdentityCrud:
         config_store.set_default_dev_portal_identity("beta")
         cfg = config_store.load()
         assert cfg.default_dev_portal_identity == "beta"
+
+
+class TestEnvProjectInjection:
+    """Headless env-only project injection (issue #359).
+
+    KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL make load()
+    synthesize an in-memory '__env__' project; save() never persists it.
+    """
+
+    TOKEN = "901-99999-fakeHeadlessTokenDoNotUseXXXXX"
+    URL = "https://connection.keboola.com"
+
+    def _opt_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("KBAGENT_PROJECT_FROM_ENV", "1")
+        monkeypatch.setenv("KBC_TOKEN", self.TOKEN)
+        monkeypatch.setenv("KBC_STORAGE_API_URL", self.URL)
+
+    def test_not_injected_without_opt_in(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """KBC_TOKEN alone (no flag) must NOT create a phantom project."""
+        monkeypatch.delenv("KBAGENT_PROJECT_FROM_ENV", raising=False)
+        monkeypatch.setenv("KBC_TOKEN", self.TOKEN)
+        monkeypatch.setenv("KBC_STORAGE_API_URL", self.URL)
+        config = ConfigStore(config_dir=tmp_config_dir).load()
+        assert config.projects == {}
+
+    def test_injected_into_empty_config(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With opt-in and no config file, '__env__' is injected and defaulted."""
+        self._opt_in(monkeypatch)
+        config = ConfigStore(config_dir=tmp_config_dir).load()
+        assert "__env__" in config.projects
+        env_proj = config.projects["__env__"]
+        assert env_proj.token == self.TOKEN
+        assert env_proj.stack_url == self.URL
+        assert env_proj.ephemeral is True
+        assert config.default_project == "__env__"
+
+    def test_opt_in_truthy_variants(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Accept common truthy spellings of the opt-in flag."""
+        monkeypatch.setenv("KBC_TOKEN", self.TOKEN)
+        monkeypatch.setenv("KBC_STORAGE_API_URL", self.URL)
+        for value in ("true", "YES", "On", "1"):
+            monkeypatch.setenv("KBAGENT_PROJECT_FROM_ENV", value)
+            config = ConfigStore(config_dir=tmp_config_dir).load()
+            assert "__env__" in config.projects, value
+
+    def test_missing_creds_fail_fast(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Flag set but creds missing must raise, not silently skip."""
+        monkeypatch.setenv("KBAGENT_PROJECT_FROM_ENV", "1")
+        monkeypatch.delenv("KBC_TOKEN", raising=False)
+        monkeypatch.setenv("KBC_STORAGE_API_URL", self.URL)
+        with pytest.raises(ConfigError, match="KBC_TOKEN"):
+            ConfigStore(config_dir=tmp_config_dir).load()
+
+    def test_does_not_override_real_alias(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A real project already named '__env__' is left untouched."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.save(
+            AppConfig(
+                default_project="__env__",
+                projects={
+                    "__env__": ProjectConfig(
+                        stack_url="https://other.keboola.com",
+                        token="901-11111-realPersistedTokenXXXXXXXXXXXX",
+                    )
+                },
+            )
+        )
+        self._opt_in(monkeypatch)
+        config = store.load()
+        assert config.projects["__env__"].token == "901-11111-realPersistedTokenXXXXXXXXXXXX"
+        assert config.projects["__env__"].ephemeral is False
+
+    def test_ephemeral_never_persisted(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """save() after a load() that injected '__env__' must not write the token."""
+        self._opt_in(monkeypatch)
+        store = ConfigStore(config_dir=tmp_config_dir)
+        config = store.load()  # injects __env__
+        config.projects["real"] = ProjectConfig(
+            stack_url=self.URL, token="901-22222-realTokenForRealProjectXXXXX"
+        )
+        store.save(config)
+
+        raw = (tmp_config_dir / "config.json").read_text()
+        assert "__env__" not in raw
+        assert self.TOKEN not in raw
+        assert "real" in raw
+        # In-memory object passed by the caller is left intact.
+        assert "__env__" in config.projects
+
+    def test_default_blanked_when_ephemeral_stripped(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If default_project pointed at the stripped '__env__', it is reset on disk."""
+        self._opt_in(monkeypatch)
+        store = ConfigStore(config_dir=tmp_config_dir)
+        config = store.load()  # default_project == "__env__"
+        assert config.default_project == "__env__"
+        store.save(config)
+
+        on_disk = json.loads((tmp_config_dir / "config.json").read_text())
+        assert on_disk["default_project"] == ""
