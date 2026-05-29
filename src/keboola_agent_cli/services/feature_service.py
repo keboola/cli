@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from ..config_store import ConfigStore
@@ -30,6 +31,14 @@ from ..models import Feature
 logger = logging.getLogger(__name__)
 
 ManageClientFactory = Callable[[str, str], ManageClient]
+
+
+@dataclass(frozen=True)
+class _ResolvedAlias:
+    """A project alias resolved to the two handles project ops need."""
+
+    stack_url: str
+    project_id: int
 
 
 def default_manage_client_factory(stack_url: str, manage_token: str) -> ManageClient:
@@ -94,13 +103,13 @@ class FeatureService:
 
     def list_project_features(self, *, manage_token: str, alias: str) -> dict[str, Any]:
         """List features assigned to the project registered under ``alias``."""
-        stack_url, project_id = self._resolve_alias(alias)
-        manage_client = self._manage_client_factory(stack_url, manage_token)
+        resolved = self._resolve_alias(alias)
+        manage_client = self._manage_client_factory(resolved.stack_url, manage_token)
         try:
-            project = manage_client.get_project(project_id)
+            project = manage_client.get_project(resolved.project_id)
             return {
                 "alias": alias,
-                "project_id": project_id,
+                "project_id": resolved.project_id,
                 "project_name": project.get("name", ""),
                 "features": _normalise_features(project.get("features")),
             }
@@ -111,22 +120,22 @@ class FeatureService:
         self, *, manage_token: str, alias: str, feature: str, dry_run: bool = False
     ) -> dict[str, Any]:
         """Enable ``feature`` on the project registered under ``alias``."""
-        stack_url, project_id = self._resolve_alias(alias)
+        resolved = self._resolve_alias(alias)
         if dry_run:
             return {
                 "status": "dry_run",
                 "action": "add",
                 "alias": alias,
-                "project_id": project_id,
+                "project_id": resolved.project_id,
                 "feature": feature,
             }
-        manage_client = self._manage_client_factory(stack_url, manage_token)
+        manage_client = self._manage_client_factory(resolved.stack_url, manage_token)
         try:
-            manage_client.add_project_feature(project_id, feature)
+            manage_client.add_project_feature(resolved.project_id, feature)
             return {
                 "status": "added",
                 "alias": alias,
-                "project_id": project_id,
+                "project_id": resolved.project_id,
                 "feature": feature,
             }
         finally:
@@ -136,22 +145,22 @@ class FeatureService:
         self, *, manage_token: str, alias: str, feature: str, dry_run: bool = False
     ) -> dict[str, Any]:
         """Disable ``feature`` on the project registered under ``alias``."""
-        stack_url, project_id = self._resolve_alias(alias)
+        resolved = self._resolve_alias(alias)
         if dry_run:
             return {
                 "status": "dry_run",
                 "action": "remove",
                 "alias": alias,
-                "project_id": project_id,
+                "project_id": resolved.project_id,
                 "feature": feature,
             }
-        manage_client = self._manage_client_factory(stack_url, manage_token)
+        manage_client = self._manage_client_factory(resolved.stack_url, manage_token)
         try:
-            manage_client.remove_project_feature(project_id, feature)
+            manage_client.remove_project_feature(resolved.project_id, feature)
             return {
                 "status": "removed",
                 "alias": alias,
-                "project_id": project_id,
+                "project_id": resolved.project_id,
                 "feature": feature,
             }
         finally:
@@ -230,8 +239,8 @@ class FeatureService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _resolve_alias(self, alias: str) -> tuple[str, int]:
-        """Resolve ``alias`` to ``(stack_url, project_id)`` for project ops."""
+    def _resolve_alias(self, alias: str) -> _ResolvedAlias:
+        """Resolve ``alias`` to its stack URL + numeric project_id for project ops."""
         project = self._config_store.get_project(alias)
         if project is None:
             raise ConfigError(
@@ -242,7 +251,7 @@ class FeatureService:
                 f"Project alias '{alias}' has no numeric project_id; "
                 "re-add it via `kbagent project add` to populate it."
             )
-        return project.stack_url, project.project_id
+        return _ResolvedAlias(stack_url=project.stack_url, project_id=project.project_id)
 
     def _resolve_stack_url(self, alias: str) -> str:
         """Resolve ``alias`` to its stack URL for stack/user ops.

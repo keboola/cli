@@ -269,7 +269,9 @@ class ManageClient(BaseHttpClient):
         response = self._do_request(
             "POST", f"/manage/projects/{project_id}/features", json={"feature": feature}
         )
-        return response.json()
+        # Most stacks return 201 with a JSON body, but some return 204 No
+        # Content; guard against JSONDecodeError on an empty body.
+        return response.json() if response.content else {}
 
     def remove_project_feature(self, project_id: int, feature: str) -> None:
         """Disable a feature on a project. Returns 204 No Content on success."""
@@ -311,7 +313,8 @@ class ManageClient(BaseHttpClient):
             f"/manage/users/{quote(email, safe='@')}/features",
             json={"feature": feature},
         )
-        return response.json()
+        # See add_project_feature: tolerate a 204 No Content body.
+        return response.json() if response.content else {}
 
     def remove_user_feature(self, email: str, feature: str) -> None:
         """Disable a feature on a user. Returns 204 No Content on success."""

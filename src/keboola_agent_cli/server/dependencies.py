@@ -21,6 +21,7 @@ from ..services.data_app_service import DataAppService
 from ..services.deep_lineage_service import DeepLineageService
 from ..services.doctor_service import DoctorService
 from ..services.encrypt_service import EncryptService
+from ..services.feature_service import FeatureService
 from ..services.flow_service import FlowService
 from ..services.job_service import JobService
 from ..services.kai_service import KaiService
@@ -77,6 +78,7 @@ class ServiceRegistry:
     search: SearchService = field(init=False)
     org: OrgService = field(init=False)
     member: MemberService = field(init=False)
+    feature: FeatureService = field(init=False)
     sync: SyncService = field(init=False)
     variables: VariablesService = field(init=False)
     doctor: DoctorService = field(init=False)
@@ -108,6 +110,7 @@ class ServiceRegistry:
         self.search = SearchService(config_store=cs)
         self.org = OrgService(config_store=cs)
         self.member = MemberService(config_store=cs)
+        self.feature = FeatureService(config_store=cs)
         self.sync = SyncService(config_store=cs)
         self.variables = VariablesService(config_store=cs)
         self.doctor = DoctorService(config_store=cs, mcp_service=self.mcp)

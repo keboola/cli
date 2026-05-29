@@ -37,11 +37,11 @@ def _feature_permission_check(ctx: typer.Context) -> None:
 def _handle_errors(formatter: Any, exc: Exception) -> NoReturn:
     """Map a ConfigError / KeboolaApiError to a structured error + Exit."""
     if isinstance(exc, ConfigError):
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        formatter.error(error_code=ErrorCode.CONFIG_ERROR, message=exc.message)
         raise typer.Exit(code=5) from None
     if isinstance(exc, KeboolaApiError):
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        formatter.error(error_code=exc.error_code, message=exc.message, retryable=exc.retryable)
         raise typer.Exit(code=exit_code) from None
     raise exc
 

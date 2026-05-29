@@ -39,6 +39,7 @@ from .routers import (
     configs,
     data_apps,
     encrypt,
+    feature,
     flows,
     health,
     jobs,
@@ -97,6 +98,17 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "the `X-Manage-Token` header on every request -- the manage "
             "token is never persisted in config. "
             "Mirrors `kbagent org setup|refresh`."
+        ),
+    },
+    {
+        "name": "feature",
+        "description": (
+            "**Project Management.** "
+            "List the stack feature-flag catalogue and enable/disable "
+            "features on projects and users (Manage API). Requires the "
+            "`X-Manage-Token` header (super-admin) on every request -- the "
+            "manage token is never persisted in config. "
+            "Mirrors `kbagent feature list|project-*|user-*`."
         ),
     },
     # ---- Configurations ----
@@ -544,6 +556,7 @@ def create_app(
     app.include_router(health.router)
     app.include_router(projects.router)
     app.include_router(members.router)
+    app.include_router(feature.router)
     app.include_router(configs.router)
     app.include_router(components.router)
     app.include_router(storage.router)
