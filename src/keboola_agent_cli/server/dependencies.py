@@ -38,6 +38,7 @@ from ..services.search_service import SearchService
 from ..services.semantic_layer_service import SemanticLayerService
 from ..services.sharing_service import SharingService
 from ..services.storage_service import StorageService
+from ..services.stream_service import StreamService
 from ..services.sync_service import SyncService
 from ..services.variables_service import VariablesService
 from ..services.version_service import VersionService
@@ -63,6 +64,7 @@ class ServiceRegistry:
     config: ConfigService = field(init=False)
     component: ComponentService = field(init=False)
     storage: StorageService = field(init=False)
+    stream: StreamService = field(init=False)
     job: JobService = field(init=False)
     branch: BranchService = field(init=False)
     workspace: WorkspaceService = field(init=False)
@@ -93,6 +95,7 @@ class ServiceRegistry:
         self.config = ConfigService(config_store=cs)
         self.component = ComponentService(config_store=cs)
         self.storage = StorageService(config_store=cs)
+        self.stream = StreamService(config_store=cs)
         self.job = JobService(config_store=cs)
         self.branch = BranchService(config_store=cs)
         self.workspace = WorkspaceService(config_store=cs)

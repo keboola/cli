@@ -255,6 +255,39 @@ VERSION_CACHE_FILENAME: str = "version_cache.json"
 # --- AI Service ---
 AI_SERVICE_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 
+# --- Data Streams (Stream API) ---
+# The Stream control-plane API lives on a separate host derived from the
+# Storage URL by replacing 'connection.' with 'stream.' (same scheme as
+# 'ai.'/'queue.'), authenticated with the Storage API token (X-StorageApi-Token).
+# The OTLP *ingestion* endpoint (stream-in.<region>/otlp/...) is NOT derived --
+# it is returned by the API in the source's `otlp.url` field.
+STREAM_API_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+# Branch ref used by the Stream API path /v1/branches/<branch>/...; "default"
+# targets the project's default (production) branch.
+STREAM_DEFAULT_BRANCH: str = "default"
+# Source/delete operations return an async Task; poll GET /v1/tasks/<id> until
+# `isFinished`. Interval between polls and the overall ceiling.
+STREAM_TASK_POLL_INTERVAL: float = 1.0  # seconds between task polls
+STREAM_TASK_TIMEOUT: float = 60.0  # max seconds to wait for a Stream task
+# OTLP/HTTP per-signal sub-paths appended to the source's base endpoint, and the
+# wire protocol every OTLP source speaks. Surfaced by `kbagent stream detail`.
+OTLP_SIGNAL_PATHS: tuple[str, ...] = ("v1/logs", "v1/traces", "v1/metrics")
+OTLP_PROTOCOL: str = "http/protobuf"
+# Signals (and their destination table names) auto-provisioned for an OTLP source.
+# Creating a source via the raw Stream API does NOT create sinks, so kbagent
+# provisions one table sink per signal (matching the Keboola UI) so data actually
+# lands. Bucket = OTLP_BUCKET_PREFIX + sourceId; table = the signal name.
+OTLP_SINK_SIGNALS: tuple[str, ...] = ("logs", "metrics", "traces")
+OTLP_BUCKET_PREFIX: str = "in.c-otlp-"
+# Universal, signal-agnostic sink mapping: an auto id, the ingest datetime, and a
+# `body` column that captures the full flattened OTLP record as JSON. Users can
+# refine per-signal column mappings in the Keboola UI afterwards.
+OTLP_SINK_COLUMNS: tuple[dict[str, str], ...] = (
+    {"type": "uuid", "name": "id"},
+    {"type": "datetime", "name": "datetime"},
+    {"type": "body", "name": "body"},
+)
+
 # --- Project Feature Flags ---
 # `storage-branches` enables the modern dev-branch storage isolation:
 # transformation runner / output-mapping consult bucket metadata

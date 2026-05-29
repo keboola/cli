@@ -451,6 +451,27 @@ remain branch-aware because modifying a dev branch is the expected intent.
     is a directory that will hold one .parquet file per slice plus _manifest.json.
     Default parquet directory: ./{{project}}/{{table_id}}.parquet/ (mirrors Keboola addressing).
 
+### Data Streams (OpenTelemetry / OTLP)
+
+  kbagent stream list --project NAME [--branch ID]
+    List Data Streams sources (id, name, type, secret-free base endpoint).
+  kbagent stream create-source --project NAME --name NAME [--type otlp|http] [--branch ID] [--if-not-exists] [--no-sinks] [--reveal]
+    Create an OTLP (default) or HTTP source; polls the async task and returns the endpoint.
+    For OTLP, auto-provisions the logs/metrics/traces sinks (bucket in.c-otlp-<source>) so data
+    lands in Storage (idempotent; --no-sinks for a bare source).
+    --if-not-exists returns an existing same-named source as status=skipped.
+  kbagent stream detail [SOURCE_ID | --name NAME] --project NAME [--branch ID] [--reveal]
+    Show base + per-signal endpoints (/v1/logs|/v1/traces|/v1/metrics), protocol http/protobuf,
+    and destination bucket/tables (from sinks). The secret embedded in the OTLP URL is MASKED
+    by default; pass --reveal to print it (e.g. to wire OTEL_EXPORTER_OTLP_ENDPOINT).
+  kbagent stream delete SOURCE_ID --project NAME [--branch ID] [--dry-run] [--yes|--force]
+    Delete a source (destructive; async task polled to completion).
+  Notes: uses the per-project Storage token (no manage token). Control plane = stream.<region>
+  derived from connection.<region>. The OTLP ingest host is stream-in.<region>, returned in
+  source.otlp.url -- never derived. The raw Stream API does not auto-create sinks, so kbagent
+  provisions the 3 OTLP sinks itself on create-source --type otlp (--no-sinks to opt out). Send
+  OTLP/HTTP to <endpoint>/v1/logs|/v1/traces|/v1/metrics; data lands in in.c-otlp-<source>.* tables.
+
 ### Sharing (Cross-Project)
 
   kbagent sharing list [--project NAME]

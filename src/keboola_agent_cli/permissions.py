@@ -40,6 +40,12 @@ OPERATION_REGISTRY: dict[str, str] = {
     "feature.user-show": "read",
     "feature.user-add": "admin",
     "feature.user-remove": "destructive",
+    # Data Streams (OTLP). Listing/inspecting sources is read-only; creating a
+    # source provisions ingest infrastructure (write); deleting one is destructive.
+    "stream.list": "read",
+    "stream.detail": "read",
+    "stream.create-source": "write",
+    "stream.delete": "destructive",
     # Config browsing & management
     "config.list": "read",
     "config.detail": "read",

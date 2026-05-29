@@ -368,6 +368,16 @@ kbagent storage file-tag --project NAME --file-id ID [--add TAG ...] [--remove T
 kbagent storage load-file --project NAME --file-id ID --table-id ID [--incremental] [--delimiter D] [--enclosure E] [--branch ID]
 kbagent storage unload-table --project NAME --table-id ID [--columns COL ...] [--limit N] [--tag TAG ...] [--download] [--output FILE|DIR] [--file-type csv|parquet] [--branch ID]
 
+# stream: Data Streams (OpenTelemetry/OTLP). Storage token from config (no manage token).
+# Control plane = stream.<region> (derived from connection.<region>); the OTLP ingest URL
+# (stream-in.<region>/otlp/<projectId>/<sourceName>/<secret>) is returned in source.otlp.url
+# with the secret in the path -- MASKED by default, --reveal to print it. create-source --type otlp
+# auto-provisions the logs/metrics/traces sinks (bucket in.c-otlp-<source>) so data lands; --no-sinks opts out.
+kbagent stream list --project NAME [--branch ID]
+kbagent stream create-source --project NAME --name NAME [--type otlp|http] [--branch ID] [--if-not-exists] [--no-sinks] [--reveal]
+kbagent stream detail [SOURCE_ID | --name NAME] --project NAME [--branch ID] [--reveal]
+kbagent stream delete SOURCE_ID --project NAME [--branch ID] [--dry-run] [--yes] [--force]
+
 kbagent lineage build --directory PATH --output PATH [--ai] [--refresh]
 kbagent lineage show --load PATH [--upstream NODE] [--downstream NODE] [--column COL] [--columns] [--project ALIAS] [--depth N] [--format text|mermaid|html|er]
 kbagent lineage info --load PATH

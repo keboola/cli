@@ -33,6 +33,7 @@ from .commands.semantic_layer import semantic_layer_app
 from .commands.serve import serve_command
 from .commands.sharing import sharing_app
 from .commands.storage import storage_app
+from .commands.stream import stream_app
 from .commands.sync import sync_app
 from .commands.tool import tool_app
 from .commands.version import update_command, version_command
@@ -67,6 +68,7 @@ from .services.search_service import SearchService
 from .services.semantic_layer_service import SemanticLayerService
 from .services.sharing_service import SharingService
 from .services.storage_service import StorageService
+from .services.stream_service import StreamService
 from .services.sync_service import SyncService
 from .services.variables_service import VariablesService
 from .services.version_service import VersionService
@@ -109,6 +111,7 @@ app.command(
 app.add_typer(data_app_app, name="data-app", rich_help_panel=_BROWSE)
 app.add_typer(job_app, name="job", rich_help_panel=_BROWSE)
 app.add_typer(storage_app, name="storage", rich_help_panel=_BROWSE)
+app.add_typer(stream_app, name="stream", rich_help_panel=_BROWSE)
 app.add_typer(sharing_app, name="sharing", rich_help_panel=_BROWSE)
 app.add_typer(lineage_app, name="lineage", rich_help_panel=_BROWSE)
 app.add_typer(kai_app, name="kai", rich_help_panel=_BROWSE)
@@ -349,6 +352,7 @@ def main(
     sharing_service = SharingService(config_store=config_store)
     search_service = SearchService(config_store=config_store)
     storage_service = StorageService(config_store=config_store)
+    stream_service = StreamService(config_store=config_store)
     sync_service = SyncService(config_store=config_store)
     variables_service = VariablesService(config_store=config_store)
     encrypt_service = EncryptService(config_store=config_store)
@@ -410,6 +414,7 @@ def main(
     ctx.obj["sharing_service"] = sharing_service
     ctx.obj["search_service"] = search_service
     ctx.obj["storage_service"] = storage_service
+    ctx.obj["stream_service"] = stream_service
     ctx.obj["sync_service"] = sync_service
     ctx.obj["variables_service"] = variables_service
     ctx.obj["encrypt_service"] = encrypt_service

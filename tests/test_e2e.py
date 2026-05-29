@@ -8468,6 +8468,89 @@ def test_feature_flags_read_e2e(tmp_path: Path) -> None:
     assert show_data["project_id"] is not None
 
 
+@skip_without_credentials
+@pytest.mark.e2e
+def test_stream_otlp_e2e(tmp_path: Path) -> None:
+    """Full Data Streams OTLP round-trip against a real project (since v0.50.0).
+
+    Creates a temporary OTLP source, reads its assembled detail (masked by
+    default + revealed on demand), then deletes it and confirms it is gone.
+    Self-cleaning: the source it creates is removed before the test returns.
+    """
+    stack_url = (
+        os.environ[ENV_URL]
+        if os.environ[ENV_URL].startswith("https://")
+        else f"https://{os.environ[ENV_URL]}"
+    )
+    config_dir = tmp_path / "kbagent-config"
+    config_dir.mkdir()
+    alias = "e2e-stream-target"
+    source_name = "kbagent-e2e-stream"
+
+    def _run(*args: str) -> Any:
+        return runner.invoke(
+            app, ["--config-dir", str(config_dir), "--json", *args], env={**os.environ}
+        )
+
+    add = _run(
+        "project", "add", "--project", alias, "--url", stack_url, "--token", os.environ[ENV_TOKEN]
+    )
+    assert add.exit_code == 0, add.output
+
+    try:
+        # 1. List is readable (possibly empty) and well-formed.
+        listed = _run("stream", "list", "--project", alias)
+        assert listed.exit_code == 0, listed.output
+        assert isinstance(json.loads(listed.output)["data"]["sources"], list)
+
+        # 2. Create an OTLP source (idempotent on reruns).
+        created = _run(
+            "stream",
+            "create-source",
+            "--project",
+            alias,
+            "--name",
+            source_name,
+            "--type",
+            "otlp",
+            "--if-not-exists",
+        )
+        assert created.exit_code == 0, created.output
+        cdata = json.loads(created.output)["data"]
+        assert cdata["status"] in ("created", "skipped")
+        assert cdata["type"] == "otlp"
+        source_id = cdata["source_id"]
+        # The three OTLP sinks are auto-provisioned, so the destination tables
+        # (logs/metrics/traces) are present immediately after create.
+        assert set(cdata["destination"]["tables"]) == {"logs", "metrics", "traces"}
+
+        # 3. Detail masks the secret by default.
+        masked = _run("stream", "detail", source_id, "--project", alias)
+        assert masked.exit_code == 0, masked.output
+        mdata = json.loads(masked.output)["data"]
+        assert mdata["secret_revealed"] is False
+        assert "/***" in mdata["endpoint"]
+        assert mdata["protocol"] == "http/protobuf"
+        assert set(mdata["signal_endpoints"]) == {"logs", "traces", "metrics"}
+        assert set(mdata["destination"]["tables"]) == {"logs", "metrics", "traces"}
+
+        # 4. --reveal exposes the real endpoint (no mask marker).
+        revealed = _run("stream", "detail", source_id, "--project", alias, "--reveal")
+        assert revealed.exit_code == 0, revealed.output
+        rdata = json.loads(revealed.output)["data"]
+        assert rdata["secret_revealed"] is True
+        assert "/***" not in rdata["endpoint"]
+    finally:
+        # 5. Clean up -- delete the source and confirm it is gone.
+        deleted = _run("stream", "delete", source_name, "--project", alias, "--yes")
+        assert deleted.exit_code == 0, deleted.output
+        assert json.loads(deleted.output)["data"]["status"] == "deleted"
+
+    final = _run("stream", "list", "--project", alias)
+    remaining = {s["source_id"] for s in json.loads(final.output)["data"]["sources"]}
+    assert source_name not in remaining
+
+
 # ---------------------------------------------------------------------------
 # MCP-parity commands (since v0.30.0)
 # ---------------------------------------------------------------------------
