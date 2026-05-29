@@ -90,7 +90,13 @@ def normalize_for_comparison(obj: Any) -> Any:
     - Sort dict keys for consistent hashing.
     - Strip ``_keboola`` metadata block (internal, not part of config content).
     - Strip ``version`` key (local format marker).
-    - Strip ``_configuration_extra`` key (internal round-trip aid).
+
+    Note: ``_configuration_extra`` is **not** stripped -- it carries real
+    config payload (e.g. ``keboola.flow`` phases/tasks, and a transformation's
+    ``variables_id`` / ``variables_values_id`` links). It is part of
+    :data:`config_hash`, so any code that mutates it (e.g. the fresh-CREATE
+    variable-link backfill in ``sync push``) must refresh the stored
+    ``pull_config_hash`` afterwards or ``sync diff`` will report a conflict.
 
     Returns a deep copy -- the original object is never mutated.
     """

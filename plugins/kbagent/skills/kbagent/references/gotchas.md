@@ -46,6 +46,39 @@ If a downstream consumer has been working around the duplication by
 post-processing the manifest, drop that workaround. The single-entry
 manifest is the new contract.
 
+## `sync push` fresh-CREATE now resolves variable links, hoists row `values`, and `--branch` promotes the default tree (since v0.47.2)
+
+A transformation scaffolded alongside its sibling `keboola.variables` config +
+default-values row is now **runnable after a single `sync push`** — no post-push
+`config variables-set` workaround needed. Three things changed in the create pass:
+
+- **Row `values` are no longer dropped.** A `keboola.variables` values row whose
+  scaffold `_config.yml` has top-level `values: [...]` but no `_keboola` block
+  now hoists `values` into the API body (the push callers pass the known
+  `component_id` into `local_row_to_api`). Pre-0.47.2 the row was created with an
+  empty `configuration.values`.
+- **Rows whose parent config was created in the same push now succeed.** Push runs
+  in ordered phases (configs first, then rows); a row's `parent_config_id` is
+  remapped from the diff-time placeholder to the freshly-assigned ULID before
+  `create_config_row`. Pre-0.47.2 this raised `PARENT_CONFIG_NOT_TRACKED`.
+- **`variables_id` / `variables_values_id` are rebound to ULIDs.** After the
+  variables config + its values row are created, a backfill pass PUTs the
+  transformation's corrected `configuration.variables_id` / `variables_values_id`
+  (via `update_config`, NOT `set_variables` — that would create a *second*
+  variables config), rewrites the local `_configuration_extra`, and refreshes the
+  manifest hashes so a re-push is clean. Pre-0.47.2 the remote kept placeholder
+  strings and `job run` failed with `Variable configuration "<placeholder>" not
+  found`. When the placeholder can't be matched exactly but exactly one
+  `keboola.variables` config was created this push, it binds to that one with a
+  warning; zero or ambiguous (>1) matches surface a `variable_link` entry in the
+  push `errors` array rather than writing a broken link.
+
+`sync push --branch <id>` now **promotes the local default tree** (`main/`) to the
+target dev branch when no `<branch_name>/` subtree exists on disk, instead of
+erroring with `Config file not found`. Source (where files are read) and target
+(where the API writes) are decoupled; API calls still target the branch id. When a
+per-branch subtree *does* exist, behaviour is unchanged.
+
 ## `sync push` / `sync pull` / `sync diff` accept `--branch <id>` for per-invocation dev-branch targeting (since v0.47.0)
 
 The `--branch` override wins over every other branch source: `manifest.branches[0]`,

@@ -257,6 +257,7 @@ def api_row_to_local(row_data: dict[str, Any], component_id: str) -> dict[str, A
 
 def local_row_to_api(
     row_yml: dict[str, Any],
+    component_id: str | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     """Convert a local row ``_config.yml`` back to API format.
 
@@ -265,15 +266,25 @@ def local_row_to_api(
     body. For all other components this behaves identically to
     :func:`local_config_to_api`.
 
+    Args:
+        row_yml: The local row ``_config.yml`` dict.
+        component_id: The component id the row belongs to. When provided
+            (the caller almost always knows it), it drives the hoist check
+            directly. When ``None`` (back-compat), the id is read from the
+            file's ``_keboola.component_id``. The explicit form is required
+            for fresh-CREATE rows whose scaffold ``_config.yml`` does not yet
+            carry a ``_keboola`` block, so that ``keboola.variables`` rows
+            still hoist their ``values`` array into the API body (KFR-04).
+
     Returns:
         A tuple of ``(name, description, configuration_dict)``.
     """
     keboola_meta: dict[str, Any] = row_yml.get("_keboola") or {}
-    component_id: str = keboola_meta.get("component_id", "")
+    resolved_component_id: str = component_id or keboola_meta.get("component_id", "")
 
     name, description, configuration = local_config_to_api(row_yml)
 
-    if component_id in ROW_HOIST_COMPONENTS:
+    if resolved_component_id in ROW_HOIST_COMPONENTS:
         for key, value in row_yml.items():
             if key in _ROW_LOCAL_RESERVED_KEYS:
                 continue

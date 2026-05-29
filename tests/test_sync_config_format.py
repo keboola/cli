@@ -397,3 +397,71 @@ class TestVariablesRowRoundTrip:
         assert "_configuration_extra" in local
         assert local["_configuration_extra"] == {"foo": {"bar": 1}}
         assert "foo" not in local
+
+
+class TestLocalRowToApiComponentIdParam:
+    """KFR-04: ``local_row_to_api`` accepts an explicit ``component_id``.
+
+    A fresh-CREATE scaffold row may not carry a ``_keboola`` block yet, so the
+    hoist decision must be driveable by the caller's known component id. When
+    ``component_id`` is omitted the legacy behaviour (read from the file) holds.
+    """
+
+    def test_explicit_component_id_hoists_values_without_keboola_block(self) -> None:
+        """``component_id="keboola.variables"`` hoists ``values`` even when the
+        row file has no ``_keboola`` metadata (the KFR-04 fresh-CREATE case)."""
+        local = {
+            "version": 2,
+            "name": "Main",
+            "description": "default values",
+            "values": [{"name": "year_start", "value": "2016", "type": "string"}],
+        }
+
+        name, _description, configuration = local_row_to_api(local, "keboola.variables")
+
+        assert name == "Main"
+        assert configuration == {
+            "values": [{"name": "year_start", "value": "2016", "type": "string"}]
+        }
+
+    def test_no_component_id_falls_back_to_keboola_block(self) -> None:
+        """``component_id=None`` reads the id from ``_keboola`` (back-compat)."""
+        local = {
+            "version": 2,
+            "name": "Main",
+            "description": "",
+            "values": [{"name": "region", "value": "eu", "type": "string"}],
+            "_keboola": {"component_id": "keboola.variables", "row_id": "row-1"},
+        }
+
+        _, _, configuration = local_row_to_api(local)
+
+        assert configuration == {"values": [{"name": "region", "value": "eu", "type": "string"}]}
+
+    def test_no_component_id_and_no_keboola_block_does_not_hoist(self) -> None:
+        """Without an id from either source, the row is not treated as a hoist
+        component: ``values`` stays out of the API body (legacy behaviour)."""
+        local = {
+            "version": 2,
+            "name": "Main",
+            "description": "",
+            "values": [{"name": "region", "value": "eu", "type": "string"}],
+        }
+
+        _, _, configuration = local_row_to_api(local)
+
+        assert configuration == {}
+
+    def test_explicit_component_id_overrides_stale_keboola_block(self) -> None:
+        """The explicit arg wins over a (possibly stale) ``_keboola`` block."""
+        local = {
+            "version": 2,
+            "name": "Main",
+            "description": "",
+            "values": [{"name": "region", "value": "eu", "type": "string"}],
+            "_keboola": {"component_id": "keboola.ex-db-snowflake", "row_id": "r"},
+        }
+
+        _, _, configuration = local_row_to_api(local, "keboola.variables")
+
+        assert configuration == {"values": [{"name": "region", "value": "eu", "type": "string"}]}

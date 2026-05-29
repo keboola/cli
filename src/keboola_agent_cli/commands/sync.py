@@ -825,7 +825,9 @@ def sync_push(
         "--branch",
         help=(
             "Dev branch ID. Overrides the manifest / 'branch use' active "
-            "branch for this single invocation. Requires exactly one --project."
+            "branch for this single invocation. Requires exactly one --project. "
+            "When no '<branch_name>/' subtree exists on disk, the default tree "
+            "(main/) is promoted to this branch."
         ),
     ),
     no_name_drift_warnings: bool = typer.Option(
