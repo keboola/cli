@@ -45,6 +45,10 @@ description: >
   enable feature, disable feature, set feature flag, add feature, remove feature,
   early-adopter-preview, direct-access, pay-as-you-go, /manage/features,
   super admin token, super-admin feature, stack feature catalogue,
+  data stream, data streams, keboola data streams, stream source, OTLP,
+  OpenTelemetry, otel, OTLP endpoint, OTEL_EXPORTER_OTLP_ENDPOINT, telemetry ingest,
+  logs metrics traces, stream create-source, stream detail, stream list,
+  stream delete, otlp source, http source, stream-in, ingest endpoint,
   semantic-layer, semantic layer, semantic-layer model, metastore,
   semantic-metric, semantic-dataset, semantic-relationship,
   semantic-constraint, semantic-glossary, add metric, edit metric,
@@ -203,6 +207,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Delete one or more Storage Files | `kbagent storage file-delete --project PROJECT --file-id FILE-ID` |
 | Load a Storage File into a table | `kbagent storage load-file --project PROJECT --file-id FILE-ID --table-id TABLE-ID` |
 | Export a table to a Storage File | `kbagent storage unload-table --project PROJECT --table-id TABLE-ID` |
+| List Data Streams sources in a project | `kbagent stream list --project PROJECT` |
+| Create an OTLP (or HTTP) source and return its endpoint | `kbagent stream create-source --project PROJECT --name NAME` |
+| Show a source's endpoints, protocol, and destination tables | `kbagent stream detail [SOURCE-ID] --project PROJECT` |
+| Delete a Data Streams source (destructive) | `kbagent stream delete <SOURCE-ID> --project PROJECT` |
 | List shared buckets available for linking | `kbagent sharing list` |
 | Enable sharing on a bucket | `kbagent sharing share --project PROJECT --bucket-id BUCKET-ID --type SHARING-TYPE` |
 | Disable sharing on a bucket | `kbagent sharing unshare --project PROJECT --bucket-id BUCKET-ID` |
@@ -390,6 +398,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Agent Tasks via REST** (`kbagent http <verb> /agents...` from inside scheduled subprocesses; SSE streaming) | [agent-tasks-rest-workflow](references/agent-tasks-rest-workflow.md) |
 | **Data apps** (create / deploy / start / stop / password / delete; the §9 redeploy contract) | [data-app-workflow](references/data-app-workflow.md) |
 | Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
+| **Data Streams (OTLP / OpenTelemetry)** (create/inspect OTLP source, masked secret-in-URL, OTEL_EXPORTER_OTLP_ENDPOINT) | [stream-workflow](references/stream-workflow.md) |
 | **Storage column types** (native types, NOT NULL, DEFAULT, branch materialize) | [storage-types-workflow](references/storage-types-workflow.md) |
 | **Typify a typeless table** (profile -> CTAS -> swap-tables -> validate -> handoff) | [typify-table-workflow](references/typify-table-workflow.md) |
 | Bucket sharing & linking | [sharing-workflow](references/sharing-workflow.md) |

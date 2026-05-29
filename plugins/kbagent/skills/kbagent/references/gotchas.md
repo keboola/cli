@@ -2304,3 +2304,30 @@ Gotchas:
   normalization applies to `project add --url` / `project edit --url`. Explicit
   `http://` / `file://` is still rejected; a bad URL fails fast with a clean
   config error (exit 5), not a traceback.
+
+## `stream`: two hosts, secret-in-URL, no auto-sinks (since v0.50.0)
+
+Data Streams has **two hosts**. The *control plane* is `stream.<region>` (derived
+from `connection.<region>`, same scheme as `ai.`/`queue.`) and is what the CLI
+calls, authenticated with the ordinary per-project **Storage** token — there is
+no manage token and no extra prompt. The OTLP *ingestion* endpoint lives on a
+**different** host, `stream-in.<region>/otlp/<projectId>/<sourceName>/<secret>`,
+and is **returned by the API** in `source.otlp.url` — kbagent never derives it.
+
+The ingest secret is **in the URL path**. `stream detail` / `create-source` mask
+it by default in every surface (the `endpoint`, all three per-signal endpoints,
+and the raw `source` object echoed in `--json`). Pass `--reveal` to print the
+real secret — e.g. to wire `OTEL_EXPORTER_OTLP_ENDPOINT` for a daemon:
+`kbagent --json stream detail SRC --project P --reveal`.
+
+Creating an OTLP source **via the raw Stream API** creates only the bare source
+— no sinks, no tables. So `kbagent stream create-source --type otlp` (matching
+the Keboola UI) **auto-provisions the three sinks** logs/metrics/traces into
+bucket `in.c-otlp-<sourceId>`, mapping each record to `id` (uuid) + `datetime`
+(ingest time) + `body` (the full flattened OTLP record as JSON), so data lands
+out of the box. Provisioning is **idempotent** (only missing signals are added)
+and `--no-sinks` opts out for a bare source. The destination tables themselves
+materialize lazily on first import (the bucket/table appear in Storage seconds
+after the first record arrives, not at create time). `create-source` / `delete`
+/ sink creation are **async**: the API returns a Task that kbagent polls to
+completion before returning.

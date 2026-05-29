@@ -55,6 +55,7 @@ from .routers import (
     semantic_layer,
     sharing,
     storage,
+    stream,
     workspaces,
 )
 
@@ -570,6 +571,7 @@ def create_app(
     app.include_router(configs.router)
     app.include_router(components.router)
     app.include_router(storage.router)
+    app.include_router(stream.router)
     app.include_router(jobs.router)
     app.include_router(branches.router)
     app.include_router(workspaces.router)
