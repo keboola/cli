@@ -202,3 +202,69 @@ class TestSingleLoginAcrossPrepareApply:
         assert len(_CountingClient.instances) == 2
         assert _CountingClient.instances[0].login_count == 1
         assert _CountingClient.instances[1].login_count == 0
+
+
+class _ExpiringClient:
+    """Fake client where a seeded (stale) bearer is rejected by the portal."""
+
+    instances: ClassVar[list[_ExpiringClient]] = []
+
+    def __init__(self, identity):
+        self._bearer = None
+        self.login_count = 0
+        _ExpiringClient.instances.append(self)
+
+    @property
+    def bearer(self):
+        return self._bearer
+
+    def seed_bearer(self, bearer):
+        self._bearer = bearer
+
+    def _ensure_authenticated(self):
+        if self._bearer is None:
+            self.login_count += 1
+            self._bearer = "fresh"
+
+    def list_apps(self, vendor):
+        if self._bearer == "stale":
+            raise KeboolaApiError(
+                message="Invalid or expired token",
+                status_code=401,
+                error_code=ErrorCode.INVALID_TOKEN,
+            )
+        self._ensure_authenticated()
+        return [{"id": "ex-a"}]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TestStaleBearerEviction:
+    """Regression: a stale cached bearer must not permanently lock out serve."""
+
+    def test_auth_error_evicts_cached_bearer_then_recovers(self, config_store):
+        _ExpiringClient.instances = []
+        config_store.add_dev_portal_identity(
+            "alpha", DeveloperPortalIdentity(username="u", password="p")
+        )
+
+        def factory(identity):
+            return _ExpiringClient(identity)
+
+        svc = DeveloperPortalService(config_store=config_store, client_factory=factory)
+        # Simulate a bearer cached by an earlier request that has since expired.
+        svc._bearers["alpha"] = "stale"
+
+        # First call replays the stale bearer -> portal 401 -> propagates AND evicts.
+        with pytest.raises(KeboolaApiError) as exc:
+            svc.list_apps("alpha", "keboola")
+        assert exc.value.error_code == ErrorCode.INVALID_TOKEN
+        assert "alpha" not in svc._bearers, "stale bearer must be evicted on 401"
+
+        # Next call re-authenticates cleanly (no dead token to seed).
+        assert svc.list_apps("alpha", "keboola") == [{"id": "ex-a"}]
+        assert svc._bearers["alpha"] == "fresh"

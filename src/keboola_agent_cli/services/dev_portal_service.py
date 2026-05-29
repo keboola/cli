@@ -151,6 +151,13 @@ class DeveloperPortalService:
         bearer obtained earlier. This is what stops `patch`/`publish` -- which
         open a client in `prepare_*` to read current state and again in
         `apply()` to write -- from logging in (and MFA-prompting) twice.
+
+        A cached bearer can go stale: portal tokens have a finite TTL, and in
+        `kbagent serve` this service lives in a long-lived singleton registry,
+        so a bearer can outlive its validity across requests. On an auth
+        failure the cached bearer is evicted, so the NEXT call re-authenticates
+        instead of replaying a dead token forever (which would lock out serve
+        until a restart).
         """
         ident = self._resolve_identity(alias)
         client = self._client_factory(ident)
@@ -158,7 +165,12 @@ class DeveloperPortalService:
         if cached is not None:
             client.seed_bearer(cached)
         with client:
-            yield client
+            try:
+                yield client
+            except KeboolaApiError as exc:
+                if exc.error_code in (ErrorCode.INVALID_TOKEN, ErrorCode.DP_LOGIN_FAILED):
+                    self._bearers.pop(alias, None)
+                raise
             new_bearer = client.bearer
             if new_bearer is not None:
                 self._bearers[alias] = new_bearer
