@@ -130,6 +130,19 @@ OPERATION_REGISTRY: dict[str, str] = {
     # Component discovery
     "component.list": "read",
     "component.detail": "read",
+    # Developer Portal (since 0.48.0)
+    # Developer Portal — top-level commands on `dev-portal` (the identity
+    # sub-app's leaves are listed separately below under dev-portal.identity.*).
+    # Categories follow data-app.secrets-* precedent: credential add/edit are
+    # `write`, not `admin` (admin is reserved for org-level operations).
+    "dev-portal.identity": "read",  # parent-callback descent (allow into sub-app)
+    "dev-portal.list": "read",
+    "dev-portal.get": "read",
+    "dev-portal.create": "write",
+    "dev-portal.patch": "write",
+    "dev-portal.upload-icon": "write",
+    "dev-portal.publish": "admin",
+    "dev-portal.deprecate": "destructive",
     # Data apps (Data Science API + keboola.data-apps Storage component)
     "data-app.list": "read",
     "data-app.detail": "read",
@@ -146,6 +159,15 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.secrets-get": "read",
     "data-app.secrets-remove": "destructive",
     "data-app.validate-repo": "read",
+    # Developer Portal — identity sub-app leaves (composed by the
+    # identity_app callback as "dev-portal.identity.<subcommand>")
+    "dev-portal.identity.add": "write",
+    "dev-portal.identity.list": "read",
+    "dev-portal.identity.remove": "write",
+    "dev-portal.identity.edit": "write",
+    "dev-portal.identity.use": "write",
+    "dev-portal.identity.current": "read",
+    "dev-portal.identity.verify": "read",
     # Storage browsing
     "storage.buckets": "read",
     "storage.bucket-detail": "read",

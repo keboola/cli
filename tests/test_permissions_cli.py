@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import typer
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -203,8 +204,8 @@ class TestPermissionsSet:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch(
-                "keboola_agent_cli.commands.permissions._require_interactive_confirmation",
-                return_value=True,
+                "keboola_agent_cli.commands.permissions.require_random_code_confirmation",
+                return_value=None,
             ),
         ):
             MockStore.return_value = store
@@ -238,8 +239,8 @@ class TestPermissionsSet:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch(
-                "keboola_agent_cli.commands.permissions._require_interactive_confirmation",
-                return_value=True,
+                "keboola_agent_cli.commands.permissions.require_random_code_confirmation",
+                return_value=None,
             ),
         ):
             MockStore.return_value = store
@@ -268,8 +269,8 @@ class TestPermissionsSet:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch(
-                "keboola_agent_cli.commands.permissions._require_interactive_confirmation",
-                return_value=False,
+                "keboola_agent_cli.commands.permissions.require_random_code_confirmation",
+                side_effect=typer.Exit(code=EXIT_PERMISSION_DENIED),
             ),
         ):
             MockStore.return_value = store
@@ -293,8 +294,8 @@ class TestPermissionsReset:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch(
-                "keboola_agent_cli.commands.permissions._require_interactive_confirmation",
-                return_value=True,
+                "keboola_agent_cli.commands.permissions.require_random_code_confirmation",
+                return_value=None,
             ),
         ):
             MockStore.return_value = store
@@ -310,8 +311,8 @@ class TestPermissionsReset:
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch(
-                "keboola_agent_cli.commands.permissions._require_interactive_confirmation",
-                return_value=False,
+                "keboola_agent_cli.commands.permissions.require_random_code_confirmation",
+                side_effect=typer.Exit(code=EXIT_PERMISSION_DENIED),
             ),
         ):
             MockStore.return_value = store

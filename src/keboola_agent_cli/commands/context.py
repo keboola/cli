@@ -1084,6 +1084,48 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
   kbagent kai history [--project NAME] [--limit N]
     List recent Kai chat sessions. Default limit: 10.
 
+### Developer Portal (since v0.49.0)
+
+  The `dev-portal` command group talks to `apps-api.keboola.com` (the Keboola
+  Developer Portal) and lets component developers register and update components
+  without leaving the terminal.
+
+  **Safety contract**: reads are unrestricted. Writes (`create`, `patch`,
+  `upload-icon`, `publish`, `deprecate`) always print the full pending request
+  and then require the user to type a random hex code on a real TTY. There is
+  no `--yes` flag and no env-var bypass; non-TTY shells exit 6. Use `--dry-run`
+  to get a clean exit-0 preview (the agent-safe path).
+
+  **Identity management** -- portal logins are stored per-alias in `config.json`:
+
+    kbagent dev-portal identity add --alias vendor-keboola \\
+      --username service.keboola.xxxxx --password ... --vendor keboola
+    kbagent dev-portal identity use vendor-keboola
+
+  **Read commands** (unrestricted; good for peer-config research):
+
+    kbagent --json dev-portal list --vendor keboola
+      List all apps for a vendor. Use for peer research: compare how existing
+      extractors configure uiOptions, encryption, defaultBucket, etc.
+
+    kbagent --json dev-portal get --app keboola.ex-db-mysql
+      Full portal entry for one component. Pull two peers and compare.
+
+  **Write commands** (require random-code TTY confirm; use --dry-run first):
+
+    kbagent dev-portal create --vendor V --data FILE [--dry-run]
+    kbagent dev-portal patch --app VENDOR.APP_ID (--data FILE | --property KEY ...) [--dry-run]
+    kbagent dev-portal upload-icon --app VENDOR.APP_ID --file PATH [--dry-run]
+    kbagent dev-portal publish --app VENDOR.APP_ID [--dry-run]
+    kbagent dev-portal deprecate --app VENDOR.APP_ID [--dry-run]
+
+  **Identity lifecycle**:
+
+    kbagent dev-portal identity add / list / remove / edit / use / current / verify
+
+  **Identity selection**: pass `--identity <alias>` on any command, or set the
+  default with `dev-portal identity use <alias>`.
+
 ### Utility Commands
 
   kbagent init [--from-global]

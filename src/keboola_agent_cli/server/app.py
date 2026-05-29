@@ -38,6 +38,7 @@ from .routers import (
     components,
     configs,
     data_apps,
+    dev_portal,
     encrypt,
     feature,
     flows,
@@ -201,6 +202,15 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "Streamlit / R / Python data apps -- create, deploy, "
             "start/stop, manage secrets. "
             "Mirrors `kbagent data-app *`."
+        ),
+    },
+    {
+        "name": "dev-portal",
+        "description": (
+            "**Read-only.** "
+            "Developer Portal app discovery -- list a vendor's apps, get one "
+            "app's full entry. Mirrors `kbagent dev-portal list|get`. Writes "
+            "and identity management are CLI-only (TTY-confirmed)."
         ),
     },
     {
@@ -568,6 +578,7 @@ def create_app(
     app.include_router(lineage.router)
     app.include_router(sharing.router)
     app.include_router(data_apps.router)
+    app.include_router(dev_portal.router)
     app.include_router(mcp.router)
     app.include_router(kai.router)
     app.include_router(ai_chat.router)
@@ -733,6 +744,7 @@ def _allow_static_through_auth(app: FastAPI) -> None:
             "/lineage",
             "/sharing",
             "/data-apps",
+            "/dev-portal",
             "/mcp",
             "/kai",
             "/ai",

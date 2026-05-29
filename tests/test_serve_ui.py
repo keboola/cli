@@ -100,6 +100,17 @@ class TestApiAlias:
         assert aliased.status_code == 200
         assert bare.json() == aliased.json()
 
+    def test_dev_portal_read_requires_auth_in_ui_mode(self, tmp_path: Path, ui_dist: Path) -> None:
+        # Regression for the auth-bypass gap: a GET to an API route that is
+        # NOT in `_is_ui_public`'s allow-list would be mistaken for an SPA
+        # route and served without bearer validation. `/dev-portal/*` must
+        # be treated as API (401 without auth), not as a public SPA path.
+        client = _make_client(tmp_path, ui_dist=ui_dist, token="t")
+        resp = client.get("/dev-portal/apps?vendor=keboola")
+        assert resp.status_code == 401, (
+            f"GET /dev-portal/apps must require auth, got {resp.status_code}: {resp.text}"
+        )
+
     def test_api_alias_disabled_without_ui(self, tmp_path: Path) -> None:
         # Without --ui, /api/* should NOT be rewritten -- it 404s like any
         # unknown path. Critical contract: API-only deployments (BFF

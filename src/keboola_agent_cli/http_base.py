@@ -10,7 +10,7 @@ import logging
 import os
 import platform
 import time
-from typing import Any
+from typing import Any, Self
 from urllib.parse import urlparse, urlunparse
 
 import httpx
@@ -110,7 +110,7 @@ class BaseHttpClient:
         """Close the underlying HTTP client."""
         self._client.close()
 
-    def __enter__(self) -> "BaseHttpClient":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: Any) -> None:

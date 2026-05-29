@@ -1,5 +1,7 @@
 """Tests for the permission engine (OPERATION_REGISTRY, PermissionEngine, classify_mcp_tool)."""
 
+from typing import ClassVar
+
 import pytest
 
 from keboola_agent_cli.errors import PermissionDeniedError
@@ -370,3 +372,41 @@ class TestPermissionPolicyValidation:
         assert policy.mode == "allow"
         assert policy.allow == []
         assert policy.deny == []
+
+
+class TestDevPortalPermissions:
+    """Keys reflect actual Typer paths: `dev-portal.<command>` for the top-level
+    sub-app, `dev-portal.identity.<command>` for the identity sub-Typer. Both
+    sub-apps carry callbacks that compose those keys via check_cli_permission.
+
+    Categories follow the data-app.secrets-* precedent: credential add/edit are
+    `write` (not `admin`); admin is reserved for org-level ops. Publish is
+    `admin` (requests Keboola review), deprecate is `destructive` (hides app).
+    """
+
+    DP_OPS: ClassVar[dict[str, str]] = {
+        # parent descent
+        "dev-portal.identity": "read",
+        # identity sub-app leaves
+        "dev-portal.identity.add": "write",
+        "dev-portal.identity.list": "read",
+        "dev-portal.identity.edit": "write",
+        "dev-portal.identity.remove": "write",
+        "dev-portal.identity.use": "write",
+        "dev-portal.identity.current": "read",
+        "dev-portal.identity.verify": "read",
+        # top-level dev-portal commands
+        "dev-portal.list": "read",
+        "dev-portal.get": "read",
+        "dev-portal.create": "write",
+        "dev-portal.patch": "write",
+        "dev-portal.upload-icon": "write",
+        "dev-portal.publish": "admin",
+        "dev-portal.deprecate": "destructive",
+    }
+
+    def test_registry_contains_all_dev_portal_ops(self):
+        from keboola_agent_cli.permissions import OPERATION_REGISTRY
+
+        for op, expected_cat in self.DP_OPS.items():
+            assert OPERATION_REGISTRY.get(op) == expected_cat, op

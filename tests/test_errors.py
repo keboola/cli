@@ -157,3 +157,12 @@ class TestErrorCode:
         )
         assert err.error_code == "QUEUE_JOB_FAILED"
         assert err.error_code == ErrorCode.QUEUE_JOB_FAILED
+
+
+def test_dev_portal_error_codes_present() -> None:
+    """Developer Portal error codes are defined in the ErrorCode enum."""
+    assert ErrorCode.DP_LOGIN_FAILED == "DP_LOGIN_FAILED"
+    assert ErrorCode.DP_MFA_REQUIRED == "DP_MFA_REQUIRED"
+    assert ErrorCode.DP_APP_NOT_FOUND == "DP_APP_NOT_FOUND"
+    assert ErrorCode.DP_PUBLISH_REQUIREMENTS_MISSING == "DP_PUBLISH_REQUIREMENTS_MISSING"
+    assert ErrorCode.DP_ICON_UPLOAD_FAILED == "DP_ICON_UPLOAD_FAILED"

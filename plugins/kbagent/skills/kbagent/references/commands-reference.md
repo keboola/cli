@@ -207,6 +207,30 @@ Requires the project to be added with its **master ('owner') Storage API token**
 ## Encryption
 - `encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]` -- encrypt #-prefixed secrets via Keboola Encryption API (one-way, no decrypt). Scope: ComponentSecure (project + component). Use for MCP tool call workflows.
 
+## Developer Portal (since v0.49.0)
+
+Talks to `apps-api.keboola.com`. **Reads are unrestricted; writes always require a human to type a random hex code on a real TTY (no `--yes`, no env bypass, exit 6 on non-TTY).** Use `--dry-run` for the agent-safe preview path.
+
+### Identity management
+- `dev-portal identity add --alias A --username U [--password P | --password-stdin] [--role-hint vendor|admin] [--vendor V] [--portal-url URL]` -- store a portal login credential per-alias in `config.json` (0600 perms).
+- `dev-portal identity list` -- list stored portal identities (no passwords shown).
+- `dev-portal identity remove --alias A` -- delete an identity alias.
+- `dev-portal identity edit --alias A [--username U] [--password P|--password-stdin] [--role-hint H] [--vendor V] [--new-alias N]` -- update fields of an identity.
+- `dev-portal identity use ALIAS` -- set the default identity for subsequent commands.
+- `dev-portal identity current` -- show the active default identity alias.
+- `dev-portal identity verify [--identity A]` -- test credentials against the portal (login + logout).
+
+### Read commands (unrestricted; agent-friendly)
+- `dev-portal list --vendor V [--identity A]` -- list all apps registered under a vendor. Useful for peer-config research.
+- `dev-portal get --app VENDOR.APP_ID [--identity A]` -- fetch the full portal entry for one component (uiOptions, encryption, defaultBucket, configurationSchema, icon, etc.).
+
+### Write commands (require TTY random-code confirm; use `--dry-run` first)
+- `dev-portal create --vendor V --data FILE [--identity A] [--dry-run]` -- register a new component from a JSON payload file.
+- `dev-portal patch --app VENDOR.APP_ID (--data FILE | --property KEY (--value V | --value-file F)) [--identity A] [--dry-run]` -- update portal properties. `--data` is a full-replace of the provided keys; `--property` targets a single key.
+- `dev-portal upload-icon --app VENDOR.APP_ID --file PATH [--identity A] [--dry-run]` -- upload a PNG/SVG icon.
+- `dev-portal publish --app VENDOR.APP_ID [--identity A] [--dry-run]` -- publish the component (makes it visible in the UI).
+- `dev-portal deprecate --app VENDOR.APP_ID [--identity A] [--dry-run]` -- mark the component as deprecated.
+
 ## Semantic Layer (Metastore) (since v0.41.0)
  
 -Reads `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` env vars. The scheduler auto-injects these (plus `KBAGENT_CONFIG_DIR`) into every AI-agent / `cli_command` subprocess. Outside a serve subprocess context the command refuses to run with exit code 2. **Inside a scheduled-agent task, prefer `kbagent http get /openapi.json` then a typed call over forking another `kbagent` CLI -- the HTTP path always sees the operator's live config (not the global `~/.config/keboola-agent-cli/` one).**

@@ -41,6 +41,46 @@ class ProjectConfig(BaseModel):
         return v
 
 
+class DeveloperPortalIdentity(BaseModel):
+    """One Developer Portal identity (service account or admin email).
+
+    DP login is email + password (with MFA on personal accounts), producing
+    a short-lived bearer that lives only in process memory. The username +
+    password are persisted in config.json under the same 0600 protection as
+    KB Storage tokens; the bearer is never written to disk.
+    """
+
+    username: str = Field(description="Email or service-account id used as the login subject")
+    password: str = Field(description="DP password — same protection as KB tokens")
+    role_hint: str = Field(
+        default="vendor",
+        description=(
+            "Free-text label shown in `dev-portal identity list` "
+            "(e.g. 'vendor', 'admin'). Not validated against the portal."
+        ),
+    )
+    vendor: str | None = Field(
+        default=None,
+        description=(
+            "Optional default vendor for this identity (e.g. 'keboola'). "
+            "Used as a default for commands that take --vendor; never "
+            "overrides an explicit flag."
+        ),
+    )
+    portal_url: str = Field(
+        default="https://apps-api.keboola.com",
+        description="DP base URL. Override for staging/test portals.",
+    )
+
+    @field_validator("portal_url")
+    @classmethod
+    def validate_portal_url(cls, v: str) -> str:
+        """Enforce HTTPS scheme on portal URL to prevent SSRF and protocol abuse."""
+        if not v.startswith("https://"):
+            raise ValueError(f"Portal URL must use https:// scheme, got: {v!r}")
+        return v
+
+
 class PermissionPolicy(BaseModel):
     """Firewall-style permission policy for CLI and MCP operations.
 
@@ -94,6 +134,14 @@ class AppConfig(BaseModel):
     projects: dict[str, ProjectConfig] = Field(
         default_factory=dict,
         description="Map of alias -> ProjectConfig",
+    )
+    dev_portal_identities: dict[str, DeveloperPortalIdentity] = Field(
+        default_factory=dict,
+        description="Map of alias -> DeveloperPortalIdentity",
+    )
+    default_dev_portal_identity: str = Field(
+        default="",
+        description="Alias of the default identity for `kbagent dev-portal` commands",
     )
 
 

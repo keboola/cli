@@ -10,7 +10,7 @@ import pytest
 
 from keboola_agent_cli.config_store import CURRENT_CONFIG_VERSION, ConfigStore
 from keboola_agent_cli.errors import ConfigError
-from keboola_agent_cli.models import AppConfig, ProjectConfig
+from keboola_agent_cli.models import AppConfig, DeveloperPortalIdentity, ProjectConfig
 
 
 class TestLoadEmptyConfig:
@@ -723,3 +723,75 @@ class TestSetProjectBranch:
 
         with pytest.raises(ConfigError, match="not found"):
             store.set_project_branch("nonexistent", 456)
+
+
+class TestDevPortalIdentityCrud:
+    def test_add_first_identity_becomes_default(self, config_store):
+        ident = DeveloperPortalIdentity(username="u", password="p")
+        config_store.add_dev_portal_identity("alpha", ident)
+        cfg = config_store.load()
+        assert cfg.dev_portal_identities["alpha"].username == "u"
+        assert cfg.default_dev_portal_identity == "alpha"
+
+    def test_add_duplicate_alias_raises(self, config_store):
+        ident = DeveloperPortalIdentity(username="u", password="p")
+        config_store.add_dev_portal_identity("alpha", ident)
+        with pytest.raises(ConfigError, match="already exists"):
+            config_store.add_dev_portal_identity("alpha", ident)
+
+    def test_remove_identity(self, config_store):
+        ident = DeveloperPortalIdentity(username="u", password="p")
+        config_store.add_dev_portal_identity("alpha", ident)
+        config_store.add_dev_portal_identity("beta", ident)
+        config_store.remove_dev_portal_identity("alpha")
+        cfg = config_store.load()
+        assert "alpha" not in cfg.dev_portal_identities
+        assert cfg.default_dev_portal_identity == "beta"
+
+    def test_remove_unknown_raises(self, config_store):
+        with pytest.raises(ConfigError, match="not found"):
+            config_store.remove_dev_portal_identity("missing")
+
+    def test_remove_last_clears_default(self, config_store):
+        ident = DeveloperPortalIdentity(username="u", password="p")
+        config_store.add_dev_portal_identity("alpha", ident)
+        config_store.remove_dev_portal_identity("alpha")
+        cfg = config_store.load()
+        assert cfg.default_dev_portal_identity == ""
+
+    def test_edit_identity(self, config_store):
+        ident = DeveloperPortalIdentity(username="u", password="p")
+        config_store.add_dev_portal_identity("alpha", ident)
+        config_store.edit_dev_portal_identity("alpha", vendor="keboola", password="p2")
+        cfg = config_store.load()
+        assert cfg.dev_portal_identities["alpha"].vendor == "keboola"
+        assert cfg.dev_portal_identities["alpha"].password == "p2"
+        assert cfg.dev_portal_identities["alpha"].username == "u"
+
+    def test_rename_identity(self, config_store):
+        ident = DeveloperPortalIdentity(username="u", password="p")
+        config_store.add_dev_portal_identity("alpha", ident)
+        config_store.rename_dev_portal_identity("alpha", "alpha-prod")
+        cfg = config_store.load()
+        assert "alpha" not in cfg.dev_portal_identities
+        assert "alpha-prod" in cfg.dev_portal_identities
+        assert cfg.default_dev_portal_identity == "alpha-prod"
+
+    def test_rename_collision_raises(self, config_store):
+        ident = DeveloperPortalIdentity(username="u", password="p")
+        config_store.add_dev_portal_identity("alpha", ident)
+        config_store.add_dev_portal_identity("beta", ident)
+        with pytest.raises(ConfigError, match="already in use"):
+            config_store.rename_dev_portal_identity("alpha", "beta")
+
+    def test_set_default_unknown_raises(self, config_store):
+        with pytest.raises(ConfigError, match="not found"):
+            config_store.set_default_dev_portal_identity("ghost")
+
+    def test_set_default(self, config_store):
+        ident = DeveloperPortalIdentity(username="u", password="p")
+        config_store.add_dev_portal_identity("alpha", ident)
+        config_store.add_dev_portal_identity("beta", ident)
+        config_store.set_default_dev_portal_identity("beta")
+        cfg = config_store.load()
+        assert cfg.default_dev_portal_identity == "beta"
