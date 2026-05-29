@@ -312,7 +312,7 @@ it per request.
 Sections below are grouped roughly the same way `kbagent --help` groups
 its command tree:
 
-- **Project Management** -- projects, members, org
+- **Project Management** -- projects, members, org, feature flags
 - **Configurations** -- configs, components, encrypt
 - **Data** -- storage, search, sharing
 - **Execution** -- jobs, flows, schedules, data-apps, workspaces
@@ -740,6 +740,7 @@ def _allow_static_through_auth(app: FastAPI) -> None:
             "/search",
             "/semantic-layer",
             "/org",
+            "/feature",
             "/agents",
             "/members",
             "/health",
