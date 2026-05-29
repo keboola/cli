@@ -232,11 +232,18 @@ class ConfigStore:
                 f"{ENV_PROJECT_FROM_ENV}."
             )
 
+        # Keboola Storage tokens are `{projectId}-{tokenId}-{secret}`, so we can
+        # recover the project_id offline from the prefix. The real project_name
+        # needs an API call (verify_token) -- load() must stay offline, so it is
+        # left blank here; `project status` / `project info` show the verified
+        # name when a command actually talks to the API.
+        prefix = token.split("-", 1)[0]
+        project_id = int(prefix) if prefix.isdigit() else None
         try:
             config.projects[ENV_PROJECT_ALIAS] = ProjectConfig(
                 stack_url=url,
                 token=token,
-                project_name="env (headless)",
+                project_id=project_id,
                 ephemeral=True,
             )
         except ValidationError as exc:

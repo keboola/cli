@@ -2293,6 +2293,11 @@ Gotchas:
 - The alias is literally `__env__` (double underscore both sides) — chosen so it
   cannot collide with a real user alias. A real project already registered under
   `__env__` wins; no injection happens.
+- **`__env__` shows `project_id` but a blank name in `project list`.** `load()`
+  is offline, so the injection recovers `project_id` from the token prefix
+  (`{projectId}-{tokenId}-{secret}`) but cannot fetch the real project name.
+  Run `kbagent project status --project __env__` (or `project info`) to verify
+  the token against the API and see the real name.
 - **`KBC_STORAGE_API_URL` is forgiving (since v0.50.0).** A bare host
   (`connection.keboola.com`), a trailing slash, or a full project deep-link
   (`.../admin/projects/123/dashboard`) all normalize to `https://<host>`. Same

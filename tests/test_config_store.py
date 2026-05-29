@@ -833,7 +833,21 @@ class TestEnvProjectInjection:
         assert env_proj.token == self.TOKEN
         assert env_proj.stack_url == self.URL
         assert env_proj.ephemeral is True
+        # project_id is recovered offline from the token prefix (901-99999-...).
+        assert env_proj.project_id == 901
+        # project_name needs an API call -> left blank by the offline injection.
+        assert env_proj.project_name == ""
         assert config.default_project == "__env__"
+
+    def test_non_numeric_token_prefix_yields_no_project_id(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A token whose prefix isn't numeric leaves project_id unset, no crash."""
+        monkeypatch.setenv("KBAGENT_PROJECT_FROM_ENV", "1")
+        monkeypatch.setenv("KBC_TOKEN", "abc-def-notNumericPrefixXXXXXXXXXXXX")
+        monkeypatch.setenv("KBC_STORAGE_API_URL", self.URL)
+        config = ConfigStore(config_dir=tmp_config_dir).load()
+        assert config.projects["__env__"].project_id is None
 
     def test_opt_in_truthy_variants(
         self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
