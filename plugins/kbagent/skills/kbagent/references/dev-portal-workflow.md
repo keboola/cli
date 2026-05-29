@@ -30,6 +30,13 @@ accounts prompt for the MFA code on /dev/tty at login time.
 - There is no `--yes`. There is no env-var bypass. By design.
 - `--dry-run` prints the same preview and exits 0 without prompting. This
   is the agent-safe path.
+- Caveat: `patch --dry-run` and `publish --dry-run` still **log in and GET
+  the current app** (to compute the diff / run the publish pre-flight), so
+  they need portal connectivity. On a personal (MFA) identity they will
+  prompt for an MFA code on `/dev/tty` and fail with `DP_MFA_REQUIRED` in a
+  non-interactive shell. For a fully non-interactive preview, use a
+  `service.{vendor}.{id}` identity (no MFA). `create`/`upload-icon`/
+  `deprecate` dry-runs are purely local (no portal call).
 
 ## The loop
 

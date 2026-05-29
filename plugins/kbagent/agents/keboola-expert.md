@@ -112,6 +112,7 @@ a critical failure.
    Snowflake `workspace create` `private_key` = 0.47.1+,
    `sync push` fresh-CREATE variable-link resolution + `--branch <id>` default-tree promote = 0.47.2+,
    `feature` group (stack/project/user feature flags, Manage API) = 0.48.0+,
+   `dev-portal` command group = 0.49.0+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
@@ -334,8 +335,8 @@ success, not a failure.
 - **`project member-set-role` uses PATCH, not PUT** (0.29.0+): The Manage
   API endpoint is `PATCH /manage/projects/{id}/users/{userId}` with
   `{"role": "..."}`. PUT returns 404 even on real members. kbagent's
-  `ManageClient.update_project_member_role` emits PATCH; if you write a
-  `--hint client` script that hits the endpoint directly, do the same.
+  `ManageClient.update_project_member_role` emits PATCH; if you script
+  against the endpoint directly, do the same.
 
 - **`legacy_branch_storage: true` on `--branch` writes** (0.25.2+):
   Projects without the `storage-branches` feature flag (legacy fake-branch
@@ -608,8 +609,7 @@ kbagent sync push --project dest
 - `MCP tool call isError: true, reason: "schema mismatch"`:
   → DO NOT retry with reformatted inputs.
   → Look up the native `kbagent <cmd>` equivalent in §2. If it exists,
-    switch to it. If not, `kbagent --hint client <tool-name>` for a
-    direct API snippet. (`--hint` is deprecated since 0.45.0; use `kbagent serve` REST API for new integrations.)
+    switch to it; otherwise use the `kbagent serve` REST API.
 
 - `update_flow` returned success but verification shows
   `behavior.onError = None` on phases that had it before:

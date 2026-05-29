@@ -7,10 +7,16 @@ bypass and no env-var override.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 import typer
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import DeveloperPortalIdentity
+
+if TYPE_CHECKING:
+    from ..output import OutputFormatter
+    from ..services.dev_portal_service import PendingWrite
 from ._helpers import (
     check_cli_permission,
     get_dev_portal_service,
@@ -284,7 +290,7 @@ def _load_payload(data: str | None) -> dict:
     return json.loads(Path(data).read_text())
 
 
-def _render_pending(formatter, pending) -> None:  # type: ignore[type-arg]
+def _render_pending(formatter: OutputFormatter, pending: PendingWrite) -> None:
     """Write a stderr-only preview of the pending write."""
     from ..services.dev_portal_service import (
         PendingCreate,
@@ -321,7 +327,7 @@ def _render_pending(formatter, pending) -> None:  # type: ignore[type-arg]
         )
 
 
-def _pending_as_json(pending) -> dict:  # type: ignore[type-arg]
+def _pending_as_json(pending: PendingWrite) -> dict[str, Any]:
     """Serialise a pending write for --json --dry-run output."""
     raw = asdict(pending)
     if "png_bytes" in raw:
@@ -377,7 +383,16 @@ def patch_cmd(
     value: str | None = typer.Option(None, "--value"),
     value_file: str | None = typer.Option(None, "--value-file"),
     identity: str | None = typer.Option(None, "--identity"),
-    dry_run: bool = typer.Option(False, "--dry-run"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help=(
+            "Preview the diff without writing. NOTE: still logs in and GETs the "
+            "current app to compute the diff, so it needs portal connectivity; "
+            "on a personal (MFA) identity it will prompt for an MFA code. Use a "
+            "service.{vendor}.{id} identity for a fully non-interactive preview."
+        ),
+    ),
 ) -> None:
     if not dry_run:
         _assert_tty(f"patch {app}")
@@ -470,7 +485,16 @@ def publish_cmd(
     ctx: typer.Context,
     app: str = typer.Option(..., "--app"),
     identity: str | None = typer.Option(None, "--identity"),
-    dry_run: bool = typer.Option(False, "--dry-run"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help=(
+            "Preview without writing. NOTE: still logs in and GETs the app to "
+            "run the publish pre-flight check, so it needs portal connectivity; "
+            "a personal (MFA) identity will prompt for an MFA code. Use a "
+            "service.{vendor}.{id} identity for a non-interactive preview."
+        ),
+    ),
 ) -> None:
     if not dry_run:
         _assert_tty(f"publish {app}")
