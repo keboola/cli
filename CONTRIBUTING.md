@@ -328,11 +328,7 @@ When adding a new command (e.g., `kbagent storage create-foo`), you must update 
 - [ ] **Client method** in `client.py` (or `manage_client.py`) -- HTTP layer
 - [ ] **Service method** in `services/` -- business logic, validation, orchestration
 - [ ] **Command function** in `commands/` -- Typer options, formatter, error handling
-- [ ] **`--hint` support** -- every command must support `--hint client` and `--hint service` code generation:
-  - [ ] **Hint definition** in `hints/definitions/` -- register a `CommandHint` with `ClientCall` + `ServiceCall` (see existing files for pattern)
-  - [ ] **Hint short-circuit** in the command function -- add `if should_hint(ctx): emit_hint(...)` **before** the service call
-  - [ ] **Verify** both modes produce valid Python: `kbagent --hint client <command> ...` and `kbagent --hint service <command> ...`
-  - [ ] **Exception -- infrastructure-level commands.** `--hint` only makes sense for commands that wrap a Keboola API client (Storage / Queue / Manage / AI Service / MCP). Commands that exist purely to manage kbagent itself, or to forward HTTP to another kbagent instance, are **deliberately excluded**: `doctor`, `context`, `init`, `serve`, `version`, `update`, `changelog`, `permissions`, and `http` (the four self-call verbs `http get/post/patch/delete` pass straight through `HttpForwarderService` to a running `kbagent serve` -- there is no Keboola client to mimic, and an `httpx.Client` recipe is already the canonical generic form). If you are adding a *new* command in this infrastructure category, skip the hint definition and note the exception in the PR description so reviewers don't file a BLOCKING finding against this rule.
+- [ ] ~~**`--hint` support**~~ -- **DEPRECATED, do not add.** `--hint client` / `--hint service` code generation is superseded by the `kbagent serve` REST API. Do **not** add a new `hints/definitions/` entry or a `should_hint(ctx)` short-circuit for new commands, and do not teach `--hint` in new docs -- point readers at `kbagent serve` instead. Existing hint definitions are kept for backward compatibility but are no longer extended. Reviewers must **not** flag a missing hint definition.
 - [ ] **Permission registration** in `permissions.py` (`OPERATION_REGISTRY` dict)
 - [ ] **Service wiring** in `cli.py` if adding a new service class
 - [ ] **HTTP API endpoint** in `src/keboola_agent_cli/server/routers/<group>.py` -- `kbagent serve` exposes the CLI as a REST API so external applications (Web UI, scheduled AI agents, Slack bots, Streamlit dashboards, CI pipelines) can call the platform without forking CLI subprocesses. The current convention is **1:1**: every command in a group has a matching endpoint in that group's router (e.g. `commands/flow.py` has 8 commands, `server/routers/flows.py` has 8 routes). If you add a new command, add the corresponding route. **Skip allowed** only for genuinely terminal-only commands (interactive prompts, Rich-rendered output that has no useful JSON shape, `doctor`/`init`/`update`-style infrastructure that manages kbagent itself rather than Keboola). Document any skip in the PR description with a one-line reason so reviewers don't flag it.
@@ -366,7 +362,7 @@ before the PR is mergeable.
 
 - [ ] **`plugins/kbagent/agents/keboola-expert.md`** -- the subagent system prompt. **Highest silent-drift risk in the repo.** Update at minimum:
   - [ ] **§1 Rule 6 VERSION GATE** examples (e.g. `flow update needs 0.22.0+`) when adding a command that introduces or relaxes a minimum-version requirement, or when an example version reference is now stale enough to mislead.
-  - [ ] **§2 Tool Selection Matrix** when adding any new write or destructive command -- give it a row with `First choice / Fallback / NEVER`. A missing row means the subagent will fall back to MCP `tool call` or refuse the task.
+  - [ ] **§2 Tool Selection Matrix** -- one row **per command GROUP**, not per command. When you add a new write/destructive *group* (e.g. `dev-portal`), give it a single row with `First choice / Fallback / NEVER`. Adding a command to an *existing* group needs no new row. Exhaustive per-command detail belongs in `AGENT_CONTEXT` (`kbagent context`), which is loaded dynamically on demand -- `keboola-expert.md` is a static system prompt loaded into every subagent run and carries a hard 60 KB budget, so it must stay a high-signal decision matrix, not a command catalogue. If a one-row addition would push the file over budget, trim stale content first; do **not** raise the cap. *Severity note:* authors are expected to add the group row, but `/kbagent:review` flags a missing row only **NON-BLOCKING** -- `AGENT_CONTEXT` (a BLOCKING surface above) is the authoritative command catalogue, so a missing matrix row degrades subagent ergonomics without making a command undiscoverable. Don't deprioritize it just because it's non-blocking.
   - [ ] **§3 Inline Gotchas** when behavior changed in a way the agent will get wrong by default (e.g. dev-branch auto-materialization, native column-type whitelisting).
 - [ ] **`plugins/kbagent/skills/kbagent/SKILL.md`** non-table portions -- update the `description:` trigger keywords when introducing a new topic area (so description-matching auto-triggers the skill); add a workflow row to the bottom table if you created a new `references/<topic>-workflow.md`.
 - [ ] **`plugins/kbagent/skills/kbagent/references/commands-reference.md`** -- add the new command bullet under the appropriate section. Hand-maintained, NOT auto-generated. (Yes, this partly duplicates the auto-generated SKILL.md table -- the reference carries denser per-command notes, the table is the at-a-glance picker.)
@@ -412,7 +408,7 @@ release checklist below.
 | `CLAUDE.md` (`## All CLI Commands`) | Adding/removing/renaming commands | NO |
 | `plugins/kbagent/.claude-plugin/plugin.json` | Every release (auto-synced) | YES (`make version-check`; pre-commit auto-stages) |
 | `plugins/kbagent/.claude-plugin/CLAUDE.md` | Changing delegation strategy / when-to-delegate rules | NO |
-| `plugins/kbagent/agents/keboola-expert.md` | New write/destructive command (matrix); new minimum-version requirement (Rule 6 VERSION GATE); behavior change (gotchas) | NO -- **highest silent-drift risk** |
+| `plugins/kbagent/agents/keboola-expert.md` | New write/destructive command **group** (one matrix row per group, not per command -- file has a hard 60 KB prompt budget); new minimum-version requirement (Rule 6 VERSION GATE); behavior change (gotchas) | NO -- **highest silent-drift risk** |
 | `plugins/kbagent/commands/keboola.md` | `/keboola` slash-command UX change (rare) | NO |
 | `plugins/kbagent/skills/kbagent/SKILL.md` -- table | Auto-generated by `make skill-gen` | YES (`make skill-check`; pre-commit auto-stages) |
 | `plugins/kbagent/skills/kbagent/SKILL.md` -- description / rules / workflow links | New topic area in `description` triggers; new workflow file added to bottom table | NO |
@@ -499,8 +495,7 @@ courtesy that:
 
 - catches the silent-drift gaps (`OPERATION_REGISTRY`, `gotchas.md`
   version tags, `keboola-expert.md` matrix, `commands/context.py`
-  `AGENT_CONTEXT`, `commands-reference.md`, `--hint` definitions) that
-  CI does not check;
+  `AGENT_CONTEXT`, `commands-reference.md`) that CI does not check;
 - demonstrates to the human reviewer that you have walked the
   [Plugin synchronization map](#plugin-synchronization-map);
 - saves a review round-trip when the reviewer would otherwise catch the
@@ -543,7 +538,7 @@ manual safety net for the silent-drift risks summarized in the
 4. **Run `make skill-gen`** -- regenerates the decision table in `SKILL.md`. Idempotent if no commands changed since the previous release.
 5. **Manually review `plugins/kbagent/agents/keboola-expert.md`**:
    - **§1 Rule 6 VERSION GATE examples** -- if any feature this release shipped (or any feature shipped in a previous release that you missed) was previously missing-and-now-present, document it with the right minimum version. Remove stale "since X.Y.Z" mentions that no longer matter to live users.
-   - **§2 Tool Selection Matrix** -- did you add new write/destructive commands since last release? Are they present with `First choice / Fallback / NEVER`? A missing row means the subagent will silently fall back to MCP `tool call` or refuse the task.
+   - **§2 Tool Selection Matrix** -- did you add a new write/destructive command *group* since last release? Is it present with one `First choice / Fallback / NEVER` row (per group, not per command)? Mind the hard 60 KB prompt budget: trim stale content rather than raising the cap. New commands inside an existing group need no new row.
    - **§3 Inline Gotchas** -- new behavior the agent would get wrong by default? Add it.
 6. **Manually review `plugins/kbagent/skills/kbagent/references/gotchas.md`** -- every behavior introduced or changed this release that an AI agent would not infer from `--help` should have its own `(since vX.Y.Z)` entry. The version tag is non-optional.
 7. **Manually review `CLAUDE.md` `## All CLI Commands`** -- diff against `kbagent --help` output (and against `kbagent context`). Hand-maintained; CI does not catch drift here.
