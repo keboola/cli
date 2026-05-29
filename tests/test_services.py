@@ -494,6 +494,29 @@ class TestGetStatus:
         assert refreshed.org_id == 438
         assert refreshed.org_name == "Keboola Demo"
 
+    def test_status_no_backfill_for_ephemeral_env_project(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Headless __env__ status must not trigger a config.json write (issue #359).
+
+        The env project's org info can never be persisted (save strips it), so
+        backfilling it would create a spurious config.json on disk and repeat on
+        every `project status`. get_status() must leave the dir file-free.
+        """
+        monkeypatch.setenv("KBAGENT_PROJECT_FROM_ENV", "1")
+        monkeypatch.setenv("KBC_TOKEN", "901-99999-fakeHeadlessTokenDoNotUseXXXXX")
+        monkeypatch.setenv("KBC_STORAGE_API_URL", "https://connection.keboola.com")
+        store = ConfigStore(config_dir=tmp_config_dir)
+        mock_client = make_mock_client(org_id=438, org_name="Keboola Demo")
+        service = ProjectService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        service.get_status()
+
+        assert not (tmp_config_dir / "config.json").exists()
+
     def test_status_no_backfill_when_org_info_already_set(self, tmp_config_dir: Path) -> None:
         """Projects with org info already populated must not be re-written."""
         store = ConfigStore(config_dir=tmp_config_dir)

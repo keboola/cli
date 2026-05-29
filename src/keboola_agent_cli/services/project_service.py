@@ -635,6 +635,13 @@ class ProjectService(BaseService):
             current = self._config_store.get_project(alias)
             if current is None:
                 continue
+            if current.ephemeral:
+                # Env-synthesized __env__ (issue #359): its org info can never
+                # be persisted (save() strips it), so backfilling is futile and
+                # would trigger a spurious config.json write on disk -- breaking
+                # the "no config.json in headless mode" guarantee and repeating
+                # on every `project status`. Skip it.
+                continue
             if current.org_id is not None and current.org_name:
                 continue  # already populated; skip
             updates[alias] = (new_id, new_name)
