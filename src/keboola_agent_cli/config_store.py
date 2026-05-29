@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 
 import platformdirs
+from pydantic import ValidationError
 
 from .constants import (
     ENV_CONFIG_DIR,
@@ -231,12 +232,20 @@ class ConfigStore:
                 f"{ENV_PROJECT_FROM_ENV}."
             )
 
-        config.projects[ENV_PROJECT_ALIAS] = ProjectConfig(
-            stack_url=url,
-            token=token,
-            project_name="env (headless)",
-            ephemeral=True,
-        )
+        try:
+            config.projects[ENV_PROJECT_ALIAS] = ProjectConfig(
+                stack_url=url,
+                token=token,
+                project_name="env (headless)",
+                ephemeral=True,
+            )
+        except ValidationError as exc:
+            # Convert pydantic's raw error into a clean fail-fast message --
+            # this runs inside load(), which callers only guard for ConfigError.
+            reason = "; ".join(e.get("msg", "") for e in exc.errors()) or str(exc)
+            raise ConfigError(
+                f"{ENV_KBC_STORAGE_API_URL}={url!r} is not a usable stack URL: {reason}"
+            ) from exc
         if not config.default_project:
             config.default_project = ENV_PROJECT_ALIAS
         logger.debug("Injected ephemeral '%s' project from environment", ENV_PROJECT_ALIAS)

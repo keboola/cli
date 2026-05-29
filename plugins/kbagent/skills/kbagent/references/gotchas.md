@@ -2293,3 +2293,9 @@ Gotchas:
 - The alias is literally `__env__` (double underscore both sides) — chosen so it
   cannot collide with a real user alias. A real project already registered under
   `__env__` wins; no injection happens.
+- **`KBC_STORAGE_API_URL` is forgiving (since v0.50.0).** A bare host
+  (`connection.keboola.com`), a trailing slash, or a full project deep-link
+  (`.../admin/projects/123/dashboard`) all normalize to `https://<host>`. Same
+  normalization applies to `project add --url` / `project edit --url`. Explicit
+  `http://` / `file://` is still rejected; a bad URL fails fast with a clean
+  config error (exit 5), not a traceback.

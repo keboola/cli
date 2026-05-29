@@ -856,6 +856,26 @@ class TestEnvProjectInjection:
         with pytest.raises(ConfigError, match="KBC_TOKEN"):
             ConfigStore(config_dir=tmp_config_dir).load()
 
+    def test_bare_host_url_normalized(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare host in KBC_STORAGE_API_URL is normalized to https://, not rejected."""
+        monkeypatch.setenv("KBAGENT_PROJECT_FROM_ENV", "1")
+        monkeypatch.setenv("KBC_TOKEN", self.TOKEN)
+        monkeypatch.setenv("KBC_STORAGE_API_URL", "connection.keboola.com")
+        config = ConfigStore(config_dir=tmp_config_dir).load()
+        assert config.projects["__env__"].stack_url == "https://connection.keboola.com"
+
+    def test_invalid_url_fails_clean(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An http:// env URL raises a clean ConfigError, not a raw ValidationError."""
+        monkeypatch.setenv("KBAGENT_PROJECT_FROM_ENV", "1")
+        monkeypatch.setenv("KBC_TOKEN", self.TOKEN)
+        monkeypatch.setenv("KBC_STORAGE_API_URL", "http://connection.keboola.com")
+        with pytest.raises(ConfigError, match="not a usable stack URL"):
+            ConfigStore(config_dir=tmp_config_dir).load()
+
     def test_does_not_override_real_alias(
         self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
