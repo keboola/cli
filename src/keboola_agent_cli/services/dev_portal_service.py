@@ -8,7 +8,8 @@ and the verify-on-add login probe.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -89,6 +90,10 @@ class DeveloperPortalService:
     ) -> None:
         self._store = config_store
         self._client_factory = client_factory
+        # One bearer per alias, reused across a prepare/apply pair within a
+        # single command invocation. In-memory only; the service instance is
+        # rebuilt per CLI call, so nothing leaks across invocations.
+        self._bearers: dict[str, str] = {}
 
     # ----- Identity management -----
 
@@ -137,16 +142,35 @@ class DeveloperPortalService:
             )
         return ident
 
+    @contextmanager
+    def _authed_client(self, alias: str) -> Iterator[DeveloperPortalClient]:
+        """Yield a portal client that reuses an existing login for this alias.
+
+        The first call for an alias logs in (prompting MFA once on a personal
+        account); any later call within the same command invocation reuses the
+        bearer obtained earlier. This is what stops `patch`/`publish` -- which
+        open a client in `prepare_*` to read current state and again in
+        `apply()` to write -- from logging in (and MFA-prompting) twice.
+        """
+        ident = self._resolve_identity(alias)
+        client = self._client_factory(ident)
+        cached = self._bearers.get(alias)
+        if cached is not None:
+            client.seed_bearer(cached)
+        with client:
+            yield client
+            new_bearer = client.bearer
+            if new_bearer is not None:
+                self._bearers[alias] = new_bearer
+
     # ----- Reads -----
 
     def list_apps(self, alias: str, vendor: str) -> list[dict[str, Any]]:
-        ident = self._resolve_identity(alias)
-        with self._client_factory(ident) as client:
+        with self._authed_client(alias) as client:
             return client.list_apps(vendor)
 
     def get_app(self, alias: str, vendor: str, app_id: str) -> dict[str, Any]:
-        ident = self._resolve_identity(alias)
-        with self._client_factory(ident) as client:
+        with self._authed_client(alias) as client:
             return client.get_app(vendor, app_id)
 
     # ----- Prepare (no portal write yet) -----
@@ -178,8 +202,7 @@ class DeveloperPortalService:
         app_id: str,
         payload: dict[str, Any],
     ) -> PendingPatch:
-        ident = self._resolve_identity(alias)
-        with self._client_factory(ident) as client:
+        with self._authed_client(alias) as client:
             current = client.get_app(vendor, app_id)
         diff = [
             FieldDiff(key=k, current=current.get(k), new=v)
@@ -230,8 +253,7 @@ class DeveloperPortalService:
         )
 
     def prepare_publish(self, alias: str, vendor: str, app_id: str) -> PendingPublish:
-        ident = self._resolve_identity(alias)
-        with self._client_factory(ident) as client:
+        with self._authed_client(alias) as client:
             current = client.get_app(vendor, app_id)
         missing = [f for f in _REQUIRED_PUBLISH_FIELDS if not current.get(f)]
         if missing:
@@ -251,8 +273,7 @@ class DeveloperPortalService:
     # ----- Apply (calls the portal write) -----
 
     def apply(self, pending: PendingWrite) -> dict[str, Any]:
-        ident = self._resolve_identity(pending.alias)
-        with self._client_factory(ident) as client:
+        with self._authed_client(pending.alias) as client:
             if isinstance(pending, PendingCreate):
                 return client.create_app(pending.vendor, pending.payload)
             if isinstance(pending, PendingPatch):

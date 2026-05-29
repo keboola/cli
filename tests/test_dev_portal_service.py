@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -137,3 +138,67 @@ class TestReadsAndPrepareApply:
             service.prepare_publish("alpha", "keboola", "keboola.ex-a")
         assert exc.value.error_code == ErrorCode.DP_PUBLISH_REQUIREMENTS_MISSING
         assert "icon" in str(exc.value)
+
+
+class _CountingClient:
+    """Fake portal client that counts how many times it actually logs in.
+
+    Mirrors the real client's contract: methods call `_ensure_authenticated`,
+    which only logs in when no bearer is present. `seed_bearer` injects a
+    bearer obtained by an earlier client for the same identity.
+    """
+
+    instances: ClassVar[list[_CountingClient]] = []
+
+    def __init__(self, identity):
+        self._bearer = None
+        self.login_count = 0
+        _CountingClient.instances.append(self)
+
+    @property
+    def bearer(self):
+        return self._bearer
+
+    def seed_bearer(self, bearer):
+        self._bearer = bearer
+
+    def _ensure_authenticated(self):
+        if self._bearer is None:
+            self.login_count += 1
+            self._bearer = "tok-123"
+
+    def get_app(self, vendor, app_id):
+        self._ensure_authenticated()
+        return {"id": "ex-a", "name": "Old"}
+
+    def patch_app(self, vendor, app_id, payload):
+        self._ensure_authenticated()
+        return {"id": "ex-a", **payload}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TestSingleLoginAcrossPrepareApply:
+    """Regression: patch must authenticate once, not twice (no double MFA prompt)."""
+
+    def test_patch_reuses_bearer_no_second_login(self, config_store):
+        _CountingClient.instances = []
+        ident = DeveloperPortalIdentity(username="u", password="p")
+        config_store.add_dev_portal_identity("alpha", ident)
+
+        def factory(identity):
+            return _CountingClient(identity)
+
+        svc = DeveloperPortalService(config_store=config_store, client_factory=factory)
+        pending = svc.prepare_patch("alpha", "keboola", "keboola.ex-a", {"name": "New"})
+        svc.apply(pending)
+
+        # A fresh client is built for prepare and again for apply (matches the
+        # real prepare/apply split), but only the first one logs in.
+        assert len(_CountingClient.instances) == 2
+        assert _CountingClient.instances[0].login_count == 1
+        assert _CountingClient.instances[1].login_count == 0

@@ -61,6 +61,26 @@ class DeveloperPortalClient(BaseHttpClient):
         self._identity = identity
         self._bearer: str | None = None
 
+    @property
+    def bearer(self) -> str | None:
+        """The active bearer token, or None if not yet authenticated.
+
+        In-memory only; never written to disk. Exposed so the service can
+        reuse one login across a prepare/apply pair (see seed_bearer) instead
+        of re-authenticating — which, on a personal MFA account, would prompt
+        for a second MFA code on a single write.
+        """
+        return self._bearer
+
+    def seed_bearer(self, bearer: str) -> None:
+        """Reuse a bearer obtained by an earlier client for the same identity.
+
+        Lets the service carry one authenticated session across the
+        prepare -> (random-code confirm) -> apply flow without a second login.
+        """
+        self._bearer = bearer
+        self._client.headers["Authorization"] = bearer
+
     def _ensure_authenticated(self) -> None:
         """Log in if not already authenticated. Idempotent on the instance."""
         if self._bearer is not None:
