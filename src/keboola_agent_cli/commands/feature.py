@@ -50,19 +50,45 @@ def _format_feature_catalogue(console: Console, data: dict[str, Any]) -> None:
     """Render the stack feature catalogue as a Rich table."""
     features = data.get("features") or []
     title = f"Features on {data.get('stack_url', '')} ({len(features)} total)"
+    console.print(_feature_table(title, features))
+
+
+# Optional feature columns, in display order: (data key, header, Rich style).
+_OPTIONAL_FEATURE_COLUMNS: tuple[tuple[str, str, str | None], ...] = (
+    ("title", "Title", None),
+    ("type", "Type", "dim"),
+    ("description", "Description", "dim"),
+)
+
+
+def _present_optional_columns(
+    features: list[dict[str, Any]],
+) -> list[tuple[str, str, str | None]]:
+    """Return the optional columns at least one feature actually populates.
+
+    Project/user feature arrays come back from the Manage API as bare strings
+    (normalised to name-only), so Title/Type/Description would be uniformly
+    empty -- we drop those columns rather than render dead space. The stack
+    catalogue, which carries metadata, keeps whichever columns it populates.
+    """
+    return [
+        col
+        for col in _OPTIONAL_FEATURE_COLUMNS
+        if any(str(feat.get(col[0], "")).strip() for feat in features)
+    ]
+
+
+def _feature_table(title: str, features: list[dict[str, Any]]) -> Table:
+    """Build a Rich table for a feature list, omitting empty optional columns."""
     table = Table(title=title)
     table.add_column("Name", style="bold cyan")
-    table.add_column("Title")
-    table.add_column("Type", style="dim")
-    table.add_column("Description", style="dim")
+    columns = _present_optional_columns(features)
+    for _key, header, style in columns:
+        table.add_column(header, style=style)
     for feat in features:
-        table.add_row(
-            feat.get("name", ""),
-            feat.get("title", ""),
-            feat.get("type", ""),
-            feat.get("description", ""),
-        )
-    console.print(table)
+        row = [feat.get("name", ""), *(str(feat.get(key, "")) for key, _, _ in columns)]
+        table.add_row(*row)
+    return table
 
 
 def _format_assigned_features(console: Console, data: dict[str, Any]) -> None:
@@ -76,13 +102,7 @@ def _format_assigned_features(console: Console, data: dict[str, Any]) -> None:
     if not features:
         console.print(f"No features assigned to {owner}.")
         return
-    table = Table(title=f"Features assigned to {owner} ({len(features)} total)")
-    table.add_column("Name", style="bold cyan")
-    table.add_column("Title")
-    table.add_column("Description", style="dim")
-    for feat in features:
-        table.add_row(feat.get("name", ""), feat.get("title", ""), feat.get("description", ""))
-    console.print(table)
+    console.print(_feature_table(f"Features assigned to {owner} ({len(features)} total)", features))
 
 
 def _format_write_result(console: Console, data: dict[str, Any]) -> None:

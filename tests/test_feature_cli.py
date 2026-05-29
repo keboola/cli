@@ -166,6 +166,49 @@ class TestFeatureProjectShow:
 
         assert result.exit_code == 0, result.output
 
+    def test_human_mode_omits_empty_optional_columns(self, tmp_path: Path) -> None:
+        """Bare-string project features (name-only) drop the Title/Description columns."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        _seed_store(config_dir)
+        svc = MagicMock()
+        svc.list_project_features.return_value = {
+            "alias": ALIAS,
+            "project_id": PROJECT_ID,
+            # Mirrors the normalised bare-string shape: name set, rest empty.
+            "features": [
+                {"name": "queuev2", "title": "", "description": "", "type": ""},
+                {"name": "storage-types", "title": "", "description": "", "type": ""},
+            ],
+        }
+
+        result = _invoke(config_dir, svc, ["feature", "project-show", "--project", ALIAS])
+
+        assert result.exit_code == 0, result.output
+        assert "queuev2" in result.output
+        # No optional column header should be rendered when every value is empty.
+        assert "Title" not in result.output
+        assert "Description" not in result.output
+
+    def test_human_mode_keeps_populated_optional_columns(self, tmp_path: Path) -> None:
+        """When a feature carries a title, the Title column is shown."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        _seed_store(config_dir)
+        svc = MagicMock()
+        svc.list_project_features.return_value = {
+            "alias": ALIAS,
+            "project_id": PROJECT_ID,
+            "features": [{"name": "queuev2", "title": "Queue v2", "description": "", "type": ""}],
+        }
+
+        result = _invoke(config_dir, svc, ["feature", "project-show", "--project", ALIAS])
+
+        assert result.exit_code == 0, result.output
+        assert "Title" in result.output
+        # Description is still empty across the board, so its column stays hidden.
+        assert "Description" not in result.output
+
 
 class TestFeatureProjectAdd:
     def test_dry_run_skips_confirmation(self, tmp_path: Path) -> None:
