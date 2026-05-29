@@ -744,6 +744,7 @@ def _allow_static_through_auth(app: FastAPI) -> None:
             "/lineage",
             "/sharing",
             "/data-apps",
+            "/dev-portal",
             "/mcp",
             "/kai",
             "/ai",
