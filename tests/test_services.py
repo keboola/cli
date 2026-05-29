@@ -47,6 +47,28 @@ class TestAddProject:
         mock_client.verify_token.assert_called_once()
         mock_client.close.assert_called_once()
 
+    def test_add_project_normalizes_bare_host_url(self, tmp_config_dir: Path) -> None:
+        """add_project passes a bare host through normalize_stack_url before storing."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        captured: dict[str, str] = {}
+
+        def factory(url: str, token: str):
+            captured["url"] = url
+            return make_mock_client(project_name="Production", project_id=9999)
+
+        service = ProjectService(config_store=store, client_factory=factory)
+
+        result = service.add_project(
+            alias="prod",
+            stack_url="connection.keboola.com/admin/projects/9999/dashboard",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        )
+
+        # Verification client and the stored/returned URL all use the clean base.
+        assert captured["url"] == "https://connection.keboola.com"
+        assert result["stack_url"] == "https://connection.keboola.com"
+        assert store.get_project("prod").stack_url == "https://connection.keboola.com"
+
     def test_add_project_invalid_token(self, tmp_config_dir: Path) -> None:
         """add_project raises KeboolaApiError when token verification fails."""
         store = ConfigStore(config_dir=tmp_config_dir)

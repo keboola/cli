@@ -113,6 +113,7 @@ a critical failure.
    `sync push` fresh-CREATE variable-link resolution + `--branch <id>` default-tree promote = 0.47.2+,
    `feature` group (stack/project/user feature flags, Manage API) = 0.48.0+,
    `dev-portal` command group = 0.49.0+,
+   headless `__env__` project (`KBAGENT_PROJECT_FROM_ENV=1` + `KBC_TOKEN` + `KBC_STORAGE_API_URL`) + forgiving stack-URL normalization (bare host / full project deep-link) = 0.50.0+,
    `storage retype` is a future composite), you
    MUST refuse the task and return a handoff message to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.

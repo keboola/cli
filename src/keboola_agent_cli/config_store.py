@@ -279,6 +279,27 @@ class ConfigStore:
             clean.default_project = next(iter(clean.projects), "")
         return clean
 
+    @staticmethod
+    def _reject_ephemeral_mutation(config: AppConfig, alias: str, operation: str) -> None:
+        """Block mutations targeting an env-synthesized project (issue #359).
+
+        A `__env__` project injected from `KBAGENT_PROJECT_FROM_ENV` exists only
+        in memory and is stripped on save, so `remove`/`edit`/`rename`/branch
+        ops would otherwise report success and then silently vanish on the next
+        `load()`. Reject them with a clear, actionable message instead. A real
+        persisted project that happens to use the alias (``ephemeral=False``) is
+        unaffected.
+        """
+        project = config.projects.get(alias)
+        if project is not None and project.ephemeral:
+            raise ConfigError(
+                f"Project '{alias}' is synthesized from environment variables "
+                f"({ENV_PROJECT_FROM_ENV}) and cannot be {operation} -- it lives "
+                f"only in memory. To change it, update {ENV_KBC_TOKEN} / "
+                f"{ENV_KBC_STORAGE_API_URL}; to manage a persisted project, unset "
+                f"{ENV_PROJECT_FROM_ENV} and use 'project add'."
+            )
+
     def save(self, config: AppConfig) -> None:
         """Save configuration to disk with secure file permissions (0600).
 
@@ -387,6 +408,7 @@ class ConfigStore:
         config = self.load()
         if alias not in config.projects:
             raise ConfigError(f"Project '{alias}' not found.")
+        self._reject_ephemeral_mutation(config, alias, "removed")
         del config.projects[alias]
         if config.default_project == alias:
             config.default_project = next(iter(config.projects), "")
@@ -410,6 +432,7 @@ class ConfigStore:
         config = self.load()
         if alias not in config.projects:
             raise ConfigError(f"Project '{alias}' not found.")
+        self._reject_ephemeral_mutation(config, alias, "modified")
         config.projects[alias].active_branch_id = branch_id
         self.save(config)
 
@@ -428,6 +451,7 @@ class ConfigStore:
         config = self.load()
         if alias not in config.projects:
             raise ConfigError(f"Project '{alias}' not found.")
+        self._reject_ephemeral_mutation(config, alias, "edited")
         project = config.projects[alias]
         for key, value in kwargs.items():
             if hasattr(project, key) and value is not None:
@@ -455,6 +479,7 @@ class ConfigStore:
         config = self.load()
         if old_alias not in config.projects:
             raise ConfigError(f"Project '{old_alias}' not found.")
+        self._reject_ephemeral_mutation(config, old_alias, "renamed")
         if new_alias in config.projects:
             raise ConfigError(
                 f"Cannot rename '{old_alias}' to '{new_alias}': "

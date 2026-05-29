@@ -930,6 +930,40 @@ class TestEnvProjectInjection:
         # In-memory object passed by the caller is left intact.
         assert "__env__" in config.projects
 
+    def test_mutating_env_project_is_rejected(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """remove/edit/rename/set-branch on __env__ fail clearly, not silently."""
+        self._opt_in(monkeypatch)
+        store = ConfigStore(config_dir=tmp_config_dir)
+        with pytest.raises(ConfigError, match="synthesized from environment"):
+            store.remove_project("__env__")
+        with pytest.raises(ConfigError, match="synthesized from environment"):
+            store.edit_project("__env__", token="901-77777-otherXXXXXXXXXXXXXXXXXX")
+        with pytest.raises(ConfigError, match="synthesized from environment"):
+            store.rename_project("__env__", "renamed")
+        with pytest.raises(ConfigError, match="synthesized from environment"):
+            store.set_project_branch("__env__", 123)
+
+    def test_real_persisted_env_alias_still_mutable(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A real (non-ephemeral) project under the __env__ alias stays editable."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.save(
+            AppConfig(
+                projects={
+                    "__env__": ProjectConfig(
+                        stack_url="https://real.keboola.com",
+                        token="901-11111-realPersistedTokenXXXXXXXXXXXX",
+                    )
+                },
+            )
+        )
+        # No opt-in -> the persisted entry is the only one; editing must work.
+        store.edit_project("__env__", project_name="Renamed")
+        assert store.get_project("__env__").project_name == "Renamed"
+
     def test_default_blanked_when_ephemeral_stripped(
         self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
