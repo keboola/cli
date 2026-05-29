@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from keboola_agent_cli.models import (
     AppConfig,
     ErrorResponse,
+    Feature,
     ProjectConfig,
     SuccessResponse,
     TokenVerifyResponse,
@@ -419,6 +420,67 @@ class TestMaxParallelWorkersValidation:
         """max_parallel_workers < 0 raises ValidationError."""
         with pytest.raises(ValidationError, match="greater than or equal to 1"):
             AppConfig(max_parallel_workers=-5)
+
+
+class TestFeature:
+    """Tests for the Feature model (Keboola feature flag)."""
+
+    def test_full_object_with_extras_passes_through(self) -> None:
+        """A feature dict with known fields plus unknown extras validates and
+        keeps the extras (model_config extra='allow')."""
+        feature = Feature.model_validate(
+            {
+                "name": "queuev2",
+                "title": "Queue v2",
+                "description": "New job queue",
+                "type": "project",
+                "canBeManagedViaApi": True,
+                "id": 1,
+            }
+        )
+        assert feature.name == "queuev2"
+        assert feature.title == "Queue v2"
+        assert feature.description == "New job queue"
+        assert feature.type == "project"
+        dumped = feature.model_dump()
+        # Extra keys survive serialization untouched.
+        assert dumped["canBeManagedViaApi"] is True
+        assert dumped["id"] == 1
+
+    def test_defaults_when_empty_dict(self) -> None:
+        """An empty dict yields safe empty-string defaults for every field."""
+        feature = Feature.model_validate({})
+        assert feature.name == ""
+        assert feature.title == ""
+        assert feature.description == ""
+        assert feature.type == ""
+
+    def test_minimal_name_only(self) -> None:
+        """The common normalized shape {'name': <string>} validates and the
+        other fields fall back to their defaults."""
+        feature = Feature.model_validate({"name": "data-apps"})
+        assert feature.name == "data-apps"
+        assert feature.title == ""
+        assert feature.type == ""
+
+    def test_model_dump_includes_declared_and_extra_fields(self) -> None:
+        """model_dump emits the declared fields plus any extras."""
+        feature = Feature.model_validate({"name": "x", "title": "X", "adminFeature": False})
+        dumped = feature.model_dump()
+        assert dumped["name"] == "x"
+        assert dumped["title"] == "X"
+        assert dumped["description"] == ""
+        assert dumped["type"] == ""
+        assert dumped["adminFeature"] is False
+
+    def test_json_round_trip_preserves_extras(self) -> None:
+        """Feature survives a JSON round-trip including extra keys."""
+        original = Feature.model_validate(
+            {"name": "queuev2", "title": "Queue v2", "projectFeature": True}
+        )
+        restored = Feature.model_validate_json(original.model_dump_json())
+        assert restored.name == "queuev2"
+        assert restored.model_dump()["projectFeature"] is True
 
 
 class TestProjectConfigBackwardCompat:

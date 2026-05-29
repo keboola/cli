@@ -8,6 +8,7 @@ Inherits shared retry/error logic from BaseHttpClient.
 """
 
 from typing import Any
+from urllib.parse import quote
 
 from .constants import DEFAULT_TIMEOUT
 from .http_base import BaseHttpClient
@@ -226,3 +227,95 @@ class ManageClient(BaseHttpClient):
             json={"role": role},
         )
         return response.json()
+
+    # ------------------------------------------------------------------
+    # Feature flags (super-admin manage token required).
+    #
+    # The stack-wide catalogue lives at GET /manage/features. Features
+    # assigned to a single project/user are NOT a dedicated endpoint --
+    # they are read from the ``features`` array on the project/user object.
+    # Endpoint + payload shapes mirror the curl recipes verified by the
+    # platform team: the POST body is ``{"feature": "<name>"}`` and the
+    # DELETE targets ``.../features/{name}``.
+    # ------------------------------------------------------------------
+
+    def list_features(self) -> list[dict[str, Any]]:
+        """List all features defined on the stack (the catalogue).
+
+        Returns:
+            List of feature dicts. Field set is not contractually fixed;
+            callers should treat unknown keys as opaque. ``name`` is the
+            stable identifier used by the add/remove endpoints.
+
+        Raises:
+            KeboolaApiError: On API errors (e.g. 403 without super admin).
+        """
+        response = self._do_request("GET", "/manage/features")
+        return response.json()
+
+    def add_project_feature(self, project_id: int, feature: str) -> dict[str, Any]:
+        """Enable a feature on a project.
+
+        Args:
+            project_id: The numeric project ID.
+            feature: The feature name (as listed by :meth:`list_features`).
+
+        Returns:
+            The API response body (project or feature payload, stack-dependent).
+
+        Raises:
+            KeboolaApiError: On API errors.
+        """
+        response = self._do_request(
+            "POST", f"/manage/projects/{project_id}/features", json={"feature": feature}
+        )
+        return response.json()
+
+    def remove_project_feature(self, project_id: int, feature: str) -> None:
+        """Disable a feature on a project. Returns 204 No Content on success."""
+        self._do_request(
+            "DELETE",
+            f"/manage/projects/{project_id}/features/{quote(feature, safe='')}",
+        )
+
+    def get_user(self, email: str) -> dict[str, Any]:
+        """Get a user by email, including the ``features`` array.
+
+        Args:
+            email: The user's email address (the public-facing key).
+
+        Returns:
+            User dict with at least ``id``, ``email`` and ``features``.
+
+        Raises:
+            KeboolaApiError: On API errors (e.g. 404 if the user is unknown).
+        """
+        response = self._do_request("GET", f"/manage/users/{quote(email, safe='@')}")
+        return response.json()
+
+    def add_user_feature(self, email: str, feature: str) -> dict[str, Any]:
+        """Enable a feature on a user.
+
+        Args:
+            email: The user's email address.
+            feature: The feature name (as listed by :meth:`list_features`).
+
+        Returns:
+            The API response body (user or feature payload, stack-dependent).
+
+        Raises:
+            KeboolaApiError: On API errors.
+        """
+        response = self._do_request(
+            "POST",
+            f"/manage/users/{quote(email, safe='@')}/features",
+            json={"feature": feature},
+        )
+        return response.json()
+
+    def remove_user_feature(self, email: str, feature: str) -> None:
+        """Disable a feature on a user. Returns 204 No Content on success."""
+        self._do_request(
+            "DELETE",
+            f"/manage/users/{quote(email, safe='@')}/features/{quote(feature, safe='')}",
+        )

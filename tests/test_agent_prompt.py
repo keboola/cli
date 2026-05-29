@@ -24,8 +24,11 @@ PLUGIN_CLAUDE_MD = PLUGIN_DIR / ".claude-plugin" / "CLAUDE.md"
 PLUGIN_JSON = PLUGIN_DIR / ".claude-plugin" / "plugin.json"
 
 # ~20k tokens ≈ 80 kB in typical English markdown (~4 chars/token).
-# We target under 60 kB to leave headroom.
-PROMPT_BYTE_BUDGET = 60_000
+# We target well under that to leave headroom. Bumped 60 kB -> 62 kB in
+# v0.48.0 to fit the `feature` command-group matrix row; if this keeps
+# creeping up, split keboola-expert into per-domain specialists rather
+# than raising the ceiling again.
+PROMPT_BYTE_BUDGET = 62_000
 
 
 @pytest.fixture(scope="module")

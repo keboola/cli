@@ -2202,3 +2202,44 @@ commands that never had `--hint` support.
 AI agents should prefer the REST surface over `--hint` for new integrations. Do
 not add new examples or workflows that teach `--hint`; point readers to
 `kbagent serve` instead.
+
+## `feature` command group: super-admin token, no per-project endpoint, opaque schema (since v0.48.0)
+
+The `feature` group manages Keboola feature flags via the **Manage API**. Five
+things trip up callers:
+
+1. **Super-admin manage token required.** `feature list` (the stack catalogue)
+   and every project/user mutation need a super-admin Manage API token -- the
+   same kind `org setup` uses, NOT the per-project Storage token. It follows the
+   default-deny policy: interactive hidden prompt by default; pass top-level
+   `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI. Do NOT pass the
+   token as a CLI flag. A non-super-admin token returns 403 (exit 3).
+
+2. **`--project` is just a handle to the stack URL.** For `feature list` and the
+   `user-*` commands the alias only resolves the stack URL -- the catalogue and
+   user features are stack-wide, not project-scoped. For `project-*` commands it
+   additionally resolves the numeric `project_id` from config. The alias must be
+   registered (`kbagent project list`); `project-*` also requires it to carry a
+   `project_id`.
+
+3. **No dedicated "project features list" endpoint.** `feature project-show`
+   reads the `features` array off `GET /manage/projects/{id}`; `feature
+   user-show` reads it off `GET /manage/users/{email}`. There is no
+   `/projects/{id}/features` GET. Only the add (`POST .../features`, body
+   `{"feature": NAME}`) and remove (`DELETE .../features/{name}`) verbs are
+   per-resource.
+
+4. **Request body is `{"feature": NAME}`, not `{"name": NAME}`.** The add
+   endpoints take the feature code under the key `feature`. (Some third-party
+   notes claim `name` -- that is wrong for this API.)
+
+5. **Feature schema is opaque + shape-variable.** The Manage API publishes no
+   feature schema, and a `features` array may come back as a list of objects OR
+   a list of bare strings depending on stack/endpoint. kbagent normalises both
+   to `{name, title, description, type, ...}` (bare strings become
+   `{"name": s}`) and passes unknown keys through unmodified. Treat `name` as
+   the only stable field; do not depend on `title`/`type` being populated.
+
+To inspect a project's *enabled* features without a super-admin token, use
+`kbagent project info --project P` (read-only) instead -- it returns the enabled
+feature list among other project metadata.

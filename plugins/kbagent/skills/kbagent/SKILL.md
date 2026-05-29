@@ -41,6 +41,10 @@ description: >
   list members, remove member, change role, project role,
   bulk invite, invite from CSV, project access, member management,
   manage token prompt, --allow-env-manage-token, KBC_MANAGE_API_TOKEN,
+  feature flag, feature flags, list features, project features, user features,
+  enable feature, disable feature, set feature flag, add feature, remove feature,
+  early-adopter-preview, direct-access, pay-as-you-go, /manage/features,
+  super admin token, super-admin feature, stack feature catalogue,
   semantic-layer, semantic layer, semantic-layer model, metastore,
   semantic-metric, semantic-dataset, semantic-relationship,
   semantic-constraint, semantic-glossary, add metric, edit metric,
@@ -123,6 +127,13 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Remove an active member from a project (destructive) | `kbagent project member-remove --project PROJECT --email EMAIL` |
 | Change an existing member's role (PATCH) | `kbagent project member-set-role --project PROJECT --email EMAIL --role ROLE` |
 | Set up projects and register them in the kbagent config | `kbagent org setup --url URL` |
+| List all feature flags defined on the stack | `kbagent feature list --project PROJECT` |
+| Show feature flags assigned to a project | `kbagent feature project-show --project PROJECT` |
+| Enable a feature flag on a project | `kbagent feature project-add --project PROJECT --feature FEATURE` |
+| Disable a feature flag on a project (destructive) | `kbagent feature project-remove --project PROJECT --feature FEATURE` |
+| Show feature flags assigned to a user | `kbagent feature user-show --project PROJECT --email EMAIL` |
+| Enable a feature flag on a user | `kbagent feature user-add --project PROJECT --email EMAIL --feature FEATURE` |
+| Disable a feature flag on a user (destructive) | `kbagent feature user-remove --project PROJECT --email EMAIL --feature FEATURE` |
 | List available components from connected projects | `kbagent component list` |
 | Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
 | List configurations from connected projects | `kbagent config list` |

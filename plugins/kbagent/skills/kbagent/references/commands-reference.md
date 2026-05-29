@@ -43,6 +43,16 @@ All seven commands authenticate via `KBC_MANAGE_API_TOKEN` (Manage API), not the
 - `org setup --org-id ID --url URL [--dry-run] [--yes]` -- bulk-onboard all projects from an org (org admin; manage token via interactive prompt by default, or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.29.0+)
 - `org setup --project-ids 1,2,3 --url URL [--dry-run] [--yes]` -- onboard specific projects by ID (any project member; manage token / Personal Access Token via interactive prompt by default, or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.29.0+)
 
+## Feature Flags (since v0.48.0)
+Requires a **super-admin** Manage API token (same kind as `org setup`). Same default-deny token policy: interactive hidden prompt by default, or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI. `--project ALIAS` resolves the stack URL (and, for project ops, the numeric `project_id`) from config -- the alias is the only handle you pass.
+- `feature list --project ALIAS` -- the stack-wide feature catalogue (`GET /manage/features`). Returns `{alias, stack_url, features: [{name, title, description, type, ...}]}`. Only `name` is a stable identifier; extra fields pass through unmodified.
+- `feature project-show --project ALIAS` -- features assigned to a project, read from the project object's `features` array. Returns `{alias, project_id, project_name, features: [...]}`.
+- `feature project-add --project ALIAS --feature NAME [--dry-run] [--yes]` -- enable a feature on a project (`POST /manage/projects/{id}/features`, body `{"feature": NAME}`). Permission class `admin`.
+- `feature project-remove --project ALIAS --feature NAME [--dry-run] [--yes]` -- disable a feature on a project (`DELETE /manage/projects/{id}/features/{name}`). Permission class `destructive`.
+- `feature user-show --project ALIAS --email EMAIL` -- features assigned to a user (`GET /manage/users/{email}`). Returns `{alias, stack_url, email, features: [...]}`.
+- `feature user-add --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]` -- enable a feature on a user (`POST /manage/users/{email}/features`).
+- `feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]` -- disable a feature on a user (`DELETE /manage/users/{email}/features/{name}`).
+
 ## Component Discovery
 - `component list [--project NAME] [--type TYPE] [--query "text"]` -- list/search components (AI-powered with `--query`)
 - `component detail --component-id ID [--project NAME]` -- show component schema, docs URL, examples

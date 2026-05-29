@@ -512,6 +512,26 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Default-deny since 0.29.0 -- closes the AI-exfiltration risk where
     subprocesses inherit the manage token via env.
 
+### Feature Flags (since v0.48.0)
+
+  Requires a SUPER-ADMIN Manage API token (same kind as `org setup`). Same
+  default-deny token policy: interactive hidden prompt by default; pass
+  top-level --allow-env-manage-token to read KBC_MANAGE_API_TOKEN from env.
+  --project resolves the stack URL (and, for project ops, the numeric
+  project_id) from config -- the alias is the only handle you pass.
+
+  kbagent feature list --project ALIAS
+    Stack-wide feature catalogue (GET /manage/features).
+  kbagent feature project-show --project ALIAS
+    Features assigned to a project.
+  kbagent feature project-add --project ALIAS --feature NAME [--dry-run] [--yes]
+  kbagent feature project-remove --project ALIAS --feature NAME [--dry-run] [--yes]
+    Enable / disable a feature on a project. add=admin, remove=destructive.
+  kbagent feature user-show --project ALIAS --email EMAIL
+  kbagent feature user-add --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
+  kbagent feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
+    Per-user features (GET/POST/DELETE /manage/users/{{email}}/features).
+
 ### Flows (Orchestrator + Conditional)
 
   kbagent flow list [--project NAME] [--branch ID] [--with-schedules]

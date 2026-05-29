@@ -31,6 +31,15 @@ OPERATION_REGISTRY: dict[str, str] = {
     "project.invitation-cancel": "admin",
     "project.member-remove": "destructive",
     "project.member-set-role": "admin",
+    # Feature flags (super-admin manage token). Reads are safe; enabling a
+    # feature is an org-level decision (admin); removing one is destructive.
+    "feature.list": "read",
+    "feature.project-show": "read",
+    "feature.project-add": "admin",
+    "feature.project-remove": "destructive",
+    "feature.user-show": "read",
+    "feature.user-add": "admin",
+    "feature.user-remove": "destructive",
     # Config browsing & management
     "config.list": "read",
     "config.detail": "read",
