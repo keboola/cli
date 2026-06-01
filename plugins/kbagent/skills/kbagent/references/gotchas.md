@@ -813,7 +813,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   `branch use`) is set.
 - Permission class: `write` (creates a branch-local copy; never deletes).
 
-## Dev-branch merge carries only configurations, NOT storage schema (verified 2026-06-01)
+## Dev-branch merge carries only configurations, NOT storage schema (since v0.52.0, verified 2026-06-01)
 
 - When a dev branch is merged to production, Keboola propagates
   **configuration** changes only. Physical storage tables -- their
