@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from keboola_agent_cli.constants import DP_MFA_CHALLENGE_TYPE
 from keboola_agent_cli.dev_portal_client import DeveloperPortalClient
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import DeveloperPortalIdentity
@@ -66,7 +67,7 @@ class TestLoginMfaPath:
                 "email": "u@k.com",
                 "session": "sess-1",
                 "code": "123456",
-                "challenge": "SOFTWARE_TOKEN_MFA",
+                "challenge": DP_MFA_CHALLENGE_TYPE,
             },
         )
         monkeypatch.setattr(
@@ -98,7 +99,7 @@ class TestLoginMfaPath:
                 "email": "u@k.com",
                 "session": "sess-1",
                 "code": "999999",
-                "challenge": "SOFTWARE_TOKEN_MFA",
+                "challenge": DP_MFA_CHALLENGE_TYPE,
             },
         )
         monkeypatch.setattr(
