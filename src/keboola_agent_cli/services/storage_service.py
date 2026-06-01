@@ -1344,7 +1344,7 @@ class StorageService(BaseService):
         branch_id: int | None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Swap two storage tables (dev branch only).
+        """Swap two storage tables (branch-scoped; branch_id mandatory).
 
         After the swap, the two tables exchange physical positions. Aliases
         are NOT transferred -- they keep pointing at the same physical
@@ -1352,9 +1352,11 @@ class StorageService(BaseService):
         This is the documented behavior of the Storage API; the service
         layer does not try to rewrite alias targets.
 
-        The Storage API rejects this operation on production -- a dev branch
-        ID is mandatory. The service raises ConfigError before any HTTP call
-        when ``branch_id`` is None.
+        ``branch_id`` is mandatory and the service raises ConfigError before
+        any HTTP call when it is None. Any branch is accepted, INCLUDING the
+        default/production branch -- a default-branch swap is the supported
+        way to retype a production table (dev-branch merge does not propagate
+        storage schema, so a swap done in a dev branch never reaches prod).
 
         Args:
             alias: Project alias.

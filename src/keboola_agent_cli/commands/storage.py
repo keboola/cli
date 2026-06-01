@@ -1308,9 +1308,10 @@ def storage_swap_tables(
         None,
         "--branch",
         help=(
-            "Dev branch ID. Required by the Storage API; defaults to the "
-            "active branch set via 'kbagent branch use'. Production swaps "
-            "are rejected by the API."
+            "Branch ID. Required; defaults to the active branch set via "
+            "'kbagent branch use'. Any branch works, including the "
+            "default/production branch -- a default-branch swap is how a "
+            "typed rebuild is applied to production."
         ),
     ),
     dry_run: bool = typer.Option(
@@ -1334,10 +1335,12 @@ def storage_swap_tables(
     name ("data") without touching downstream config references.
 
     \b
-    The Storage API restricts this to dev branches. The command resolves
-    the active branch from 'kbagent branch use' if --branch is omitted;
-    if no branch is set in either place, the call is rejected before any
-    HTTP call.
+    branch_id is mandatory (the swap is always branch-scoped): the command
+    resolves the active branch from 'kbagent branch use' if --branch is
+    omitted, and exits 5 before any HTTP call if no branch is set in either
+    place. Any branch works, INCLUDING the default/production branch -- a
+    default-branch swap is how a typed rebuild is applied to prod, since a
+    dev-branch merge does not carry storage schema.
 
     \b
     Example:

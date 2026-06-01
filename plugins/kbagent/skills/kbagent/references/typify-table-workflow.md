@@ -14,12 +14,23 @@ canonical move is:
                        (downstream sees real types)        (now holds the old typeless data)
 ```
 
-The whole thing happens inside a **dev branch** so production transformations
-keep running on the typeless original until the user merges. Aliases stay
-put across the swap (they expose the OTHER table's data after -- see
-`gotchas.md` "swap-tables aliases stay put").
+**Two-stage model -- rehearse in a dev branch, apply in production.**
+Dev-branch merge propagates only *configurations*, NOT storage table
+schema (see `gotchas.md` "Dev-branch merge carries only configurations"),
+so a swap done inside a dev branch never reaches production via merge. The
+dev branch is therefore a **rehearsal**: profile the data, build the typed
+sibling, swap, and run downstream configs against it to *prove the typed
+schema is consumer-safe*. Once proven, **discard the branch** and run the
+real build + swap directly in the production (default) branch -- a
+default-branch swap is supported (verified live) and is the only path that
+actually retypes the production table. Aliases stay put across the swap
+(they expose the OTHER table's data after -- see `gotchas.md`
+"swap-tables aliases stay put").
 
-Since v0.28.0 (`storage swap-tables` + `config update` script[] auto-normalize).
+Since v0.28.0 (`storage swap-tables` + `config update` script[]
+auto-normalize); `storage clone-table` (v0.52.0) materializes a prod table
+into a branch when the rehearsal needs the original branch-local on
+storage-branches projects.
 
 ## Phase 0 -- Decide if you should do this
 
@@ -59,10 +70,13 @@ kbagent --json project status --project ALIAS
 # -> branch field shows the new branch_id
 ```
 
-Why a dev branch:
+Why a dev branch (this is a **rehearsal**, not the thing that ships):
 
+- You use the branch to prove the typed schema is downstream-safe. The
+  production retype (Phase 8) repeats the build + swap in the default
+  branch -- merge does NOT carry the swapped schema to prod, only configs.
 - Production transformations and writers keep targeting the typeless
-  original; the rebuild is invisible to them until merge.
+  original; the rehearsal is invisible to them.
 - All the writes below (`storage create-table`, `workspace query`
   CTAS, `swap-tables`) are scoped to the branch by `branch use`'s active-branch
   resolution.
@@ -265,7 +279,10 @@ For BigQuery dialect callers, also validate `bigquery_path` consumers
 (see `storage-describe-workflow.md`'s `bucket-detail` section -- BQ
 emits backtick-quoted `\`dataset\`.\`table\`` paths since v0.25.3).
 
-## Phase 5 -- Swap
+## Phase 5 -- Swap (in the rehearsal branch)
+
+This swap happens in the dev branch to prove the typed schema works; the
+production swap is repeated in Phase 8.
 
 ```bash
 # 5.0. storage-branches projects ONLY: the swap is a write, and the dev
@@ -314,7 +331,7 @@ After the swap:
 - Aliases pointing at either table keep pointing at the same physical
   position, so they expose the OTHER table's data. If any downstream
   config refers to an alias, run a manual sanity check on it before
-  merge.
+  applying the retype in production (Phase 8).
 
 ## Phase 6 -- Smoke-test downstream
 
@@ -347,75 +364,85 @@ verify row counts, not just job exit status. Ideally diff
 `data_typed` (= the old typeless rows) against the swapped `data`
 on a key column to confirm row-level identity.
 
-## Phase 7 -- Cleanup `data_typed` (optional)
+## Phase 7 -- Tear down the rehearsal branch
 
-After a successful smoke test, the `data_typed` sibling holds the
-old typeless rows and can be deleted. **Do this only after the user
-confirms the merge.** Until merge, the sibling is the primary rollback
-artifact (re-swap to undo).
+Once Phases 4-6 prove the typed schema is consumer-safe, the dev branch
+has done its job. **Nothing in it ships** -- merge will not carry the
+swapped schema to production (only configs merge). Delete the branch
+(this also drops the branch-local `data_typed` sibling):
 
 ```bash
-# After merge (Phase 8 below), in main:
-kbagent storage delete-table \
-  --project ALIAS \
-  --table-id in.c-foo.data_typed \
-  --yes
+kbagent branch delete --project ALIAS --branch <BRANCH_ID> --yes
 ```
 
-## Phase 8 -- Handoff protocol for the user (merge step)
+Keep a written record of what the rehearsal proved -- the Phase 2 profile
+summary and the Phase 4/6 downstream job results -- because Phase 8
+repeats the build in production with the same type decisions.
 
-The Keboola Storage API does not merge dev branches via API -- the
-merge is a human action in the UI. kbagent's `branch merge` command
-returns a URL pointing the user to the right place.
+## Phase 8 -- Apply the retype in production
 
-Hand the user a structured summary so they can review before clicking
-merge. Recommended shape:
+Because dev-branch merge does not carry storage schema (see `gotchas.md`
+"Dev-branch merge carries only configurations"), the real retype runs in
+the **production (default) branch**, repeating the validated build:
+
+```bash
+# 8a. Resolve the default (production) branch ID.
+kbagent --json branch list --project ALIAS
+#     -> the entry with isDefault=true; call it <PROD_BRANCH_ID>.
+
+# 8b. Build the typed sibling in PRODUCTION using the exact types the
+#     rehearsal validated (Phase 2/3): same create-table + data copy as
+#     Phase 3, but targeting the default branch.
+kbagent --json storage create-table --project ALIAS \
+  --bucket-id in.c-foo --name data_typed \
+  --column id:VARCHAR(40) --column amount:"NUMBER(18,2)" --branch <PROD_BRANCH_ID>
+#     ...then copy rows in (in-workspace INSERT or an SQL transformation,
+#     exactly as in Phase 3 Option A / B).
+
+# 8c. Swap in production. A default-branch swap is supported.
+kbagent --json storage swap-tables --project ALIAS \
+  --table-id in.c-foo.data \
+  --target-table-id in.c-foo.data_typed \
+  --branch <PROD_BRANCH_ID> --yes
+#     -> in.c-foo.data now carries the typed schema in production.
+
+# 8d. Smoke-test a downstream config in production, then clean up.
+kbagent storage delete-table --project ALIAS --table-id in.c-foo.data_typed --yes
+```
+
+Two production-only cautions the rehearsal does not surface:
+
+- **Inconsistency window.** Between 8b (copy) and 8c (swap), upstream
+  writers may append rows to the live `data`. Either quiesce the upstream
+  load for the swap window, or run a final incremental catch-up INSERT
+  right before the swap. The swap itself is atomic and sub-15s on Snowflake.
+- **Rollback.** `data_typed` (now holding the old typeless rows) is the
+  rollback artifact -- re-swap to undo -- until you delete it in 8d.
+
+Hand the user a structured summary before running 8c. Recommended shape:
 
 ```text
-TYPIFY READY FOR MERGE -- in.c-foo.data
+TYPIFY READY TO APPLY IN PRODUCTION -- in.c-foo.data (project ALIAS)
 
-Branch: <BRANCH_ID> (<BRANCH_NAME>)
-Source:  in.c-foo.data         (was: typeless STRING(16M); now: typed)
-Sibling: in.c-foo.data_typed   (was: typed empty; now: typeless rows preserved)
-
-Phase 2 profile summary:
+Rehearsal branch <BRANCH_ID> proved the schema is downstream-safe:
   rows: 1,234,567
   id:   STRING -> VARCHAR(40)   (max observed length: 36)
-  name: STRING -> VARCHAR(256)  (max observed length: 247)
   amount: STRING -> NUMBER(18,2) (max precision: 14, max scale: 2)
   created_at: STRING -> TIMESTAMP_NTZ (0 parse failures across 1.2M rows)
   is_paid: STRING -> BOOLEAN (values: 'true' (840k), 'false' (390k))
+  downstream config <DOWNSTREAM_CONFIG_ID>: green pre- and post-swap in the
+    branch, rows_out unchanged.
 
-Phase 4 baseline (pre-swap):
-  config <DOWNSTREAM_CONFIG_ID> -- ran in <BRANCH_ID> against typeless source
-  job <JOB_ID_BEFORE>: status=success, rows_in=1,234,567, rows_out=N
+Production plan (default branch <PROD_BRANCH_ID>):
+  1. create in.c-foo.data_typed with the types above
+  2. copy rows (quiesce writers or do a final catch-up INSERT first)
+  3. swap-tables in.c-foo.data <-> in.c-foo.data_typed
+  4. smoke-test <DOWNSTREAM_CONFIG_ID>, then delete in.c-foo.data_typed
 
-Phase 5 swap:
-  storage job <STORAGE_JOB_ID>: operationName=tableSwap, status=success, took=12s
-
-Phase 6 smoke (post-swap):
-  config <DOWNSTREAM_CONFIG_ID> -- ran in <BRANCH_ID> against typed source
-  job <JOB_ID_AFTER>: status=success, rows_in=1,234,567, rows_out=N
-  rows_out matches pre-swap value: YES
-
-Validate:
-  - kbagent storage table-detail --project ALIAS --table-id in.c-foo.data --branch <ID>
-    (column_details should show VARCHAR/NUMBER/TIMESTAMP/BOOLEAN, not STRING)
-  - Spot-check 5 rows: SELECT * FROM "in.c-foo.data" LIMIT 5 in workspace W_ID
-
-Merge: <KEBOOLA_UI_MERGE_URL_FROM_BRANCH_MERGE>
-Rollback (pre-merge): kbagent storage swap-tables --project ALIAS \
-                        --table-id in.c-foo.data \
-                        --target-table-id in.c-foo.data_typed \
-                        --branch <BRANCH_ID> --yes
-After-merge cleanup: kbagent storage delete-table --project ALIAS \
-                       --table-id in.c-foo.data_typed --yes
+Rollback (pre-cleanup): re-run swap-tables to put the typeless table back.
 ```
 
-The user reviews, clicks merge, and the typed schema lands in
-production. The sibling carrying the typeless rows survives the merge
-(branched-storage propagation); cleanup happens in `main` per the
-note above.
+The rehearsal branch is already gone (Phase 7); there is no merge step.
 
 ## Failure modes to anticipate
 

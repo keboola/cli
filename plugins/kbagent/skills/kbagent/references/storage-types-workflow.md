@@ -240,7 +240,12 @@ needs to flip the typed copy back into the original name so downstream
 configs (extractors, transformations, writers) keep working unchanged.
 
 ```bash
-# 1. Isolate the work in a dev branch
+# 1. Rehearse in a dev branch (validate the typed schema against downstream
+#    configs). The REAL retype is then repeated in the default/production
+#    branch -- dev-branch merge does NOT carry storage schema. For the full
+#    rehearsal-then-production procedure, see typify-table-workflow.md.
+#    <ID> below is the rehearsal branch; for the production run pass the
+#    default-branch ID instead.
 kbagent branch create --project prod --name typify-data
 kbagent branch use --project prod --branch <ID>
 
@@ -274,8 +279,11 @@ kbagent storage swap-tables \
   --target-table-id in.c-foo.data_change_log \
   --branch <ID> --yes
 
-# 4. Merge the dev branch when satisfied
-kbagent branch merge --project prod --branch <ID>
+# 4. There is NO merge step: dev-branch merge carries only configs, not
+#    storage schema. Once the rehearsal proves the schema is safe, delete
+#    the branch and repeat steps 2-3 in the default/production branch
+#    (pass the default-branch ID to --branch on swap-tables).
+kbagent branch delete --project prod --branch <ID> --yes
 ```
 
 Rules:
@@ -285,12 +293,14 @@ Rules:
   found" until you `clone-table` it into the branch (step 2b). The typed
   sibling built by the in-branch CTAS is already branch-local. Legacy
   fake-branch projects don't need this.
-- The Storage API rejects this on production. The service refuses with
-  exit 5 (`ConfigError`) before any HTTP if `--branch` is missing AND no
-  active branch is set via `branch use`.
+- branch_id is mandatory: the service refuses with exit 5 (`ConfigError`)
+  before any HTTP if `--branch` is missing AND no active branch is set via
+  `branch use`. Any branch works, INCLUDING the default/production branch
+  -- a default-branch swap is how the retype reaches prod (the earlier
+  "rejected on production" claim was wrong).
 - Aliases keep pointing at the same physical position, i.e. they expose
   the OTHER table's data after the swap. If your downstream relies on
-  alias-by-name, validate post-swap before merging.
+  alias-by-name, validate post-swap before applying in production.
 - The Storage API queues the swap as an async storage job
   (`operationName: tableSwap`); the kbagent client polls the job to
   completion before returning, so callers can rely on the schemas being

@@ -493,7 +493,7 @@ HintRegistry.register(
             ),
         ],
         notes=[
-            "Storage API rejects swaps on production: branch_id is mandatory.",
+            "branch_id is mandatory (the swap is branch-scoped); any branch works, including the default/production branch -- a default-branch swap retypes a prod table (dev-branch merge does not carry storage schema).",
             "Returns a completed storage job dict (operationName=tableSwap); the client polls the async job to completion before returning.",
             "Aliases keep pointing at the same physical position, exposing the OTHER table's data after the swap.",
         ],

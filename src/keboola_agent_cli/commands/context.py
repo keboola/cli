@@ -398,8 +398,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Swap two storage tables in a dev branch (POST /tables/{id}/swap). Both tables exchange physical positions;
     aliases are NOT transferred (they keep pointing at the same physical position and therefore expose the
     OTHER table's data after the swap). Use to promote a typed rebuild back into the original name without
-    touching downstream config references. Storage API rejects this on production: --branch (or active branch
-    via 'kbagent branch use') is mandatory. Service guards before any HTTP call when no branch is set.
+    touching downstream config references. branch_id is mandatory (--branch or active branch via 'kbagent
+    branch use'); service guards before any HTTP call when none is set. Any branch works, INCLUDING the
+    default/production branch -- a default-branch swap is how a typed rebuild reaches prod (dev-branch merge
+    does not carry storage schema).
 
   kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
     Clone (pull) a production table into a dev branch (POST /tables/{id}/pull). On storage-branches projects a
