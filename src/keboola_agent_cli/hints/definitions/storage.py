@@ -500,44 +500,6 @@ HintRegistry.register(
     )
 )
 
-# ── storage clone-table ───────────────────────────────────────────
-
-HintRegistry.register(
-    CommandHint(
-        cli_command="storage.clone-table",
-        description="Clone (pull) a production table into a dev branch",
-        steps=[
-            HintStep(
-                comment="Materialize a production table into the dev branch (one-way: default -> branch)",
-                client=ClientCall(
-                    method="pull_table",
-                    args={
-                        "table_id": "{table_id}",
-                        "branch_id": "{branch}",
-                    },
-                    result_var="result",
-                ),
-                service=ServiceCall(
-                    service_class="StorageService",
-                    service_module="storage_service",
-                    method="clone_table",
-                    args={
-                        "alias": "{project}",
-                        "table_id": "{table_id}",
-                        "branch_id": "{branch}",
-                        "dry_run": "{dry_run}",
-                    },
-                ),
-            ),
-        ],
-        notes=[
-            "Required before swap-tables / column drops on storage-branches projects: a dev branch reads prod tables transparently until first write, so schema mutations need a branch-local copy first.",
-            "Branch is mandatory (the pull is one-way default -> branch); without it the service raises ConfigError before any HTTP call.",
-            "Returns a completed storage job dict; the client polls the async job to completion before returning.",
-        ],
-    )
-)
-
 # ── storage files ──────��──────────────────────────────────���────────
 
 HintRegistry.register(

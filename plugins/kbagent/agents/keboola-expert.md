@@ -67,10 +67,10 @@ a critical failure.
    needed for the current task (e.g. `flow update` needs 0.22.0+,
    `schedule find` needs 0.23.0+, `config set-default-bucket` needs
    0.26.0+, `data-app create / deploy / start / stop / delete / password`
-   need 0.27.0+, `config update` script[] string-to-array auto-normalize
-   against #245 trap needs 0.28.0+, list-element re-split against
+   need 0.27.0+, `config update` script[] auto-normalize (#245) needs
+   0.28.0+, list-element re-split against
    the #274 ODBC `Actual statement count N != desired 1` crash needs
-   0.31.0+, `storage swap-tables` needs 0.28.0+,
+   0.31.0+, `storage swap-tables` needs 0.28.0+, `storage clone-table` = 0.52.0+,
    env-var manage-token auth for `org setup` / `project refresh` /
    `data-app password` needs 0.29.0+ with `--allow-env-manage-token`,
    `project invite` / `project member-*` / `project invitation-*`

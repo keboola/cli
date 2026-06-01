@@ -1469,16 +1469,6 @@ def storage_clone_table(
       kbagent storage swap-tables --project P \\
         --table-id in.c-foo.data --target-table-id in.c-foo.data_typed
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "storage.clone-table",
-            project=project,
-            table_id=table_id,
-            branch=branch,
-            dry_run=dry_run,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
