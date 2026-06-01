@@ -10696,6 +10696,81 @@ class TestDevPortalE2E:
         )
         assert result.exit_code == 0, result.output
 
+    def test_role_hint_typo_rejected_at_cli_layer(self) -> None:
+        """`identity add --role-hint vendr` is rejected by Typer's
+        `click.Choice(["vendor", "admin"])` validator before any model
+        construction happens (since v0.51.1).
+
+        Offline -- the rejection is a Typer usage error (exit 2), no
+        network is touched. Note the layering: the Pydantic validator on
+        the model itself deliberately *downgrades* unknown values to
+        "vendor" with a stderr warning, so legacy free-text values in a
+        pre-0.51.1 `config.json` still load. That tolerance is appropriate
+        for `ConfigStore.load()` but wrong at the CLI -- a typo the user
+        just typed should fail loudly, not silently land as "vendor". The
+        `click.Choice` wiring in `commands/dev_portal.py` provides that
+        separation.
+        """
+        result = _invoke(
+            self.config_dir,
+            [
+                "dev-portal",
+                "identity",
+                "add",
+                "--alias",
+                "bad-role",
+                "--username",
+                "u",
+                "--password",
+                "p",
+                "--role-hint",
+                "vendr",  # typo
+            ],
+        )
+        # Typer/Click usage error -> exit 2
+        assert result.exit_code == 2
+        assert "vendor" in result.output.lower() or "admin" in result.output.lower()
+
+    def test_vendor_role_admin_only_field_fails_fast(self) -> None:
+        """`prepare_patch` preflight refuses admin-only fields on a vendor identity
+        (since v0.51.1). Runs offline -- preflight fires before any portal call,
+        so no creds needed. Verifies the user-facing error names the offending
+        field and points at the admin-identity workaround.
+        """
+        from keboola_agent_cli.config_store import ConfigStore
+        from keboola_agent_cli.models import DeveloperPortalIdentity
+
+        store = ConfigStore(self.config_dir, source="cli-flag")
+        store.add_dev_portal_identity(
+            "vendor-e2e",
+            DeveloperPortalIdentity(
+                username="u", password="p", vendor="keboola", role_hint="vendor"
+            ),
+        )
+
+        payload_path = self.config_dir / "patch.json"
+        payload_path.write_text(json.dumps({"complexity": "easy"}))
+        result = _invoke(
+            self.config_dir,
+            [
+                "dev-portal",
+                "patch",
+                "--app",
+                "keboola.ex-bogus",
+                "--data",
+                str(payload_path),
+                "--identity",
+                "vendor-e2e",
+                "--dry-run",
+            ],
+        )
+        # exit non-zero because validation error
+        assert result.exit_code != 0
+        # error mentions the offending field and the admin workaround
+        out_lower = result.output.lower()
+        assert "complexity" in out_lower
+        assert "admin" in out_lower
+
 
 @skip_without_credentials
 @pytest.mark.e2e

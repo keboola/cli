@@ -583,6 +583,42 @@ class TestDeveloperPortalIdentity:
         )
         assert ident.portal_url == "https://apps-api.staging.keboola.dev"
 
+    def test_role_hint_accepts_admin(self) -> None:
+        from keboola_agent_cli.models import DeveloperPortalIdentity
+
+        ident = DeveloperPortalIdentity(username="u", password="p", role_hint="admin")
+        assert ident.role_hint == "admin"
+
+    def test_role_hint_normalises_case(self) -> None:
+        from keboola_agent_cli.models import DeveloperPortalIdentity
+
+        ident = DeveloperPortalIdentity(username="u", password="p", role_hint="ADMIN")
+        assert ident.role_hint == "admin"
+
+    def test_role_hint_typo_downgrades_to_vendor_with_warning(self, capsys) -> None:
+        """Typos do NOT raise: pre-0.51.1 configs had free-text values, so we
+        normalise unknown strings to 'vendor' with a stderr warning to keep
+        ConfigStore.load() from crashing the CLI on upgrade."""
+        from keboola_agent_cli.models import DeveloperPortalIdentity
+
+        ident = DeveloperPortalIdentity(username="u", password="p", role_hint="vendr")
+        assert ident.role_hint == "vendor"
+        captured = capsys.readouterr()
+        assert "role_hint" in captured.err
+        assert "downgrading" in captured.err
+
+    def test_legacy_freetext_role_hint_loads_cleanly(self, capsys) -> None:
+        """Backwards compat: a config.json carrying any free-text role_hint
+        (allowed pre-0.51.1) must round-trip through Pydantic without raising.
+        Empty strings, hand-edited values, even non-string types get normalised."""
+        from keboola_agent_cli.models import DeveloperPortalIdentity
+
+        for legacy in ("keboola-admin", "", "  ADMIN  ", 42):
+            ident = DeveloperPortalIdentity.model_validate(
+                {"username": "u", "password": "p", "role_hint": legacy}
+            )
+            assert ident.role_hint in ("vendor", "admin")
+
 
 class TestAppConfigDevPortalFields:
     """Tests for AppConfig dev_portal_identities and default_dev_portal_identity fields."""

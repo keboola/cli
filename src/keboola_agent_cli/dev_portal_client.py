@@ -21,6 +21,7 @@ from typing import Any
 
 import httpx
 
+from .constants import DP_MFA_CHALLENGE_TYPE, MAX_API_ERROR_LENGTH
 from .errors import ErrorCode, KeboolaApiError
 from .http_base import BaseHttpClient
 from .models import DeveloperPortalIdentity
@@ -119,6 +120,17 @@ class DeveloperPortalClient(BaseHttpClient):
         )
 
     def _login_with_mfa(self, username: str, session: str) -> str:
+        """Confirm an MFA-gated login.
+
+        Per the Keboola Developer Portal apiary spec, the same POST /auth/login
+        endpoint accepts {email, session, code, challenge}. The `challenge`
+        field is documented as optional with default SOFTWARE_TOKEN_MFA, but
+        in practice the server rejects calls that omit it (404 with the
+        misleading "must be one of" enum message attached to the admin schema).
+        Send it explicitly. Single attempt only -- /auth/login consumes the
+        session, so any retry on the same session always 404s with "Invalid
+        code or auth state for the user" regardless of the new challenge type.
+        """
         code = _tty_prompt("MFA code: ")
         if not code:
             raise KeboolaApiError(
@@ -130,28 +142,44 @@ class DeveloperPortalClient(BaseHttpClient):
                 ),
                 error_code=ErrorCode.DP_MFA_REQUIRED,
             )
+        body = {
+            "email": username,
+            "session": session,
+            "code": code.strip(),
+            "challenge": DP_MFA_CHALLENGE_TYPE,
+        }
         try:
-            resp = self._client.post(
-                "/auth/login",
-                json={"email": username, "session": session, "code": code.strip()},
-            )
+            resp = self._client.post("/auth/login", json=body)
         except httpx.HTTPError as exc:
             raise KeboolaApiError(
                 message=f"Developer Portal MFA login transport error: {exc}",
                 error_code=ErrorCode.CONNECTION_ERROR,
             ) from exc
-        if resp.status_code != 200:
+        if resp.status_code == 200:
+            payload = resp.json()
+            if isinstance(payload, dict) and payload.get("token"):
+                return payload["token"]
             raise KeboolaApiError(
-                message=f"Developer Portal MFA login failed (HTTP {resp.status_code})",
+                message=(
+                    "Developer Portal MFA login returned HTTP 200 but no "
+                    f"'token' field in response: {payload!r}"
+                ),
                 error_code=ErrorCode.DP_LOGIN_FAILED,
             )
-        payload = resp.json()
-        if not isinstance(payload, dict) or not payload.get("token"):
-            raise KeboolaApiError(
-                message="Developer Portal MFA login response missing token",
-                error_code=ErrorCode.DP_LOGIN_FAILED,
-            )
-        return payload["token"]
+        try:
+            body_text = resp.text[:MAX_API_ERROR_LENGTH]
+        except (UnicodeDecodeError, AttributeError):
+            body_text = "<unreadable>"
+        raise KeboolaApiError(
+            message=(
+                f"Developer Portal MFA login failed (HTTP {resp.status_code}): "
+                f"{body_text}. If your TOTP code rotates every 30s, this is "
+                "often a stale code -- retry promptly. If the server says "
+                "'Invalid code or auth state' on a fresh session, the code "
+                "itself was wrong."
+            ),
+            error_code=ErrorCode.DP_LOGIN_FAILED,
+        )
 
     # ----- Reads -----
 
@@ -190,8 +218,20 @@ class DeveloperPortalClient(BaseHttpClient):
         return resp.json()
 
     def patch_app(self, vendor: str, app_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """PATCH an app. Routes by identity role:
+        - admin -> PATCH /admin/apps/{app_id} (permissive schema, accepts the
+          9 fields forbidden() on the vendor schema: complexity, categories,
+          forwardToken, forwardTokenDetails, injectEnvironment, processTimeout,
+          requiredMemory, features, category).
+        - vendor -> PATCH /vendors/{vendor}/apps/{app_id} (default, restricted
+          schema). The `vendor` arg is still required for the path.
+        """
         self._ensure_authenticated()
-        resp = self._do_request("PATCH", f"/vendors/{vendor}/apps/{app_id}", json=payload)
+        if self._identity.role_hint == "admin":
+            path = f"/admin/apps/{app_id}"
+        else:
+            path = f"/vendors/{vendor}/apps/{app_id}"
+        resp = self._do_request("PATCH", path, json=payload)
         if resp.status_code not in (200, 204):
             self._raise_dp_error(resp, action="patch app", vendor=vendor, app_id=app_id)
         return resp.json() if resp.content else {}

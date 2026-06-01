@@ -7,8 +7,11 @@ bypass and no env-var override.
 
 from __future__ import annotations
 
+import getpass
+import sys
 from typing import TYPE_CHECKING, Any
 
+import click
 import typer
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
@@ -24,6 +27,16 @@ from ._helpers import (
     map_error_to_exit_code,
     resolve_identity_alias,
 )
+
+# CLI-layer enforcement of the role_hint enum. The Pydantic validator on
+# DeveloperPortalIdentity intentionally silent-downgrades unknown values to
+# "vendor" for backwards compatibility with pre-0.51.1 config.json files
+# that may carry arbitrary free-text strings. That tolerance is wrong at the
+# CLI surface, where the user just typed a value RIGHT NOW -- a typo should
+# fail loudly, not silently land as "vendor" and confuse the next operation.
+# Wiring `click.Choice` here gives the Typer-level rejection (exit 2 + usage
+# error) before any model construction.
+_ROLE_HINT_CHOICES = ["vendor", "admin"]
 
 dev_portal_app = typer.Typer(
     help="Keboola Developer Portal — multi-identity, production-safe writes.",
@@ -56,6 +69,19 @@ def _split_app(app: str) -> tuple[str, str]:
     return vendor, app
 
 
+def _read_password_stdin() -> str:
+    """Read a password from stdin.
+
+    TTY -> getpass (hidden, line-based, Enter to confirm).
+    Pipe/redirected -> read to EOF, strip whitespace.
+    Using `sys.stdin.read()` unconditionally would hang interactively
+    until the user sent EOF (Ctrl-D); getpass on TTY fixes that.
+    """
+    if sys.stdin.isatty():
+        return getpass.getpass("Password: ").strip()
+    return sys.stdin.read().strip()
+
+
 # ----- Identity subcommands -----
 
 
@@ -70,9 +96,14 @@ def identity_add(
     password_stdin: bool = typer.Option(
         False,
         "--password-stdin",
-        help="Read password from stdin (paste from a secrets manager).",
+        help="Read password from stdin. On a TTY this is a hidden prompt (Enter to confirm); on a pipe it reads until EOF (e.g. `echo $PASS | … --password-stdin`).",
     ),
-    role_hint: str = typer.Option("vendor", "--role-hint"),
+    role_hint: str = typer.Option(
+        "vendor",
+        "--role-hint",
+        click_type=click.Choice(_ROLE_HINT_CHOICES),
+        help="Identity role: 'vendor' (default) or 'admin'. Routes write commands to different apps-api endpoints -- admin uses PATCH /admin/apps/{app} which accepts complexity/categories/forwardToken/processTimeout/etc. that the vendor endpoint forbids.",
+    ),
     vendor: str | None = typer.Option(None, "--vendor"),
     portal_url: str = typer.Option(
         "https://apps-api.keboola.com",
@@ -81,9 +112,7 @@ def identity_add(
 ) -> None:
     formatter = get_formatter(ctx)
     if password_stdin:
-        import sys as _sys
-
-        password = _sys.stdin.read().strip()
+        password = _read_password_stdin()
     if not password:
         raise typer.BadParameter("Pass --password or --password-stdin.")
     identity = DeveloperPortalIdentity(
@@ -149,16 +178,18 @@ def identity_edit(
     username: str | None = typer.Option(None, "--username"),
     password: str | None = typer.Option(None, "--password"),
     password_stdin: bool = typer.Option(False, "--password-stdin"),
-    role_hint: str | None = typer.Option(None, "--role-hint"),
+    role_hint: str | None = typer.Option(
+        None,
+        "--role-hint",
+        click_type=click.Choice(_ROLE_HINT_CHOICES),
+    ),
     vendor: str | None = typer.Option(None, "--vendor"),
     new_alias: str | None = typer.Option(None, "--new-alias"),
 ) -> None:
     formatter = get_formatter(ctx)
     svc = get_dev_portal_service(ctx)
     if password_stdin:
-        import sys as _sys
-
-        password = _sys.stdin.read().strip()
+        password = _read_password_stdin()
     try:
         if new_alias:
             svc.rename_identity(alias, new_alias)
@@ -255,7 +286,6 @@ def get_app_cmd(
 # ----- Write commands -----
 
 import json  # noqa: E402
-import sys as _sys  # noqa: E402
 from dataclasses import asdict  # noqa: E402
 from pathlib import Path  # noqa: E402
 
@@ -270,9 +300,9 @@ def _assert_tty(action_description: str) -> None:
     and AI agents are rejected before any file or stdin access happens.
     The full random-code prompt fires later (after the preview) on TTY.
     """
-    is_tty = hasattr(_sys.stdin, "isatty") and _sys.stdin.isatty()
+    is_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
     if not is_tty:
-        _sys.stderr.write(
+        sys.stderr.write(
             f"\nRefusing to {action_description}: this action requires a "
             "real terminal so a human can type the confirmation code. "
             "There is no --yes bypass by design.\n"
@@ -284,9 +314,7 @@ def _load_payload(data: str | None) -> dict:
     if data is None:
         raise typer.BadParameter("--data is required")
     if data == "-":
-        import sys as _sys
-
-        return json.loads(_sys.stdin.read())
+        return json.loads(sys.stdin.read())
     return json.loads(Path(data).read_text())
 
 

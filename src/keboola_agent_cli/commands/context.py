@@ -1120,8 +1120,28 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
   **Identity management** -- portal logins are stored per-alias in `config.json`:
 
     kbagent dev-portal identity add --alias vendor-keboola \\
-      --username service.keboola.xxxxx --password ... --vendor keboola
+      --username service.keboola.xxxxx --password ... --vendor keboola \\
+      --role-hint vendor    # default; restricts PATCH to vendor endpoint
+    kbagent dev-portal identity add --alias admin-keboola \\
+      --username admin@keboola.com --role-hint admin --password-stdin
     kbagent dev-portal identity use vendor-keboola
+
+  **`role_hint` is load-bearing (since v0.51.1)**: `vendor` (default) routes
+  `dev-portal patch` to `PATCH /vendors/{{vendor}}/apps/{{app}}` (restricted
+  schema); `admin` routes it to `PATCH /admin/apps/{{app}}` (permissive
+  schema). The admin endpoint is the **only** way to set the 9 fields
+  apps-api `.forbidden()`s on vendor: `complexity`, `categories`, `category`,
+  `features`, `forwardToken`, `forwardTokenDetails`, `injectEnvironment`,
+  `processTimeout`, `requiredMemory`. Sending any of those with a `vendor`
+  identity fails fast at preflight with the exact command to switch
+  identity (server-side it would have returned a misleading 422 saying
+  "must be one of: easy, medium, hard"; that message is a known apps-api
+  bug -- the field is actually `forbidden()`, not enum-validated).
+
+  **`--password-stdin` (since v0.51.1)** works on TTY (hidden line-based
+  prompt, Enter to confirm) AND on a pipe (`echo $PASS | … --password-stdin`,
+  reads to EOF). Pre-0.51.1 the flag hung interactively because it always
+  waited for EOF.
 
   **Read commands** (unrestricted; good for peer-config research):
 

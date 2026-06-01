@@ -43,6 +43,13 @@ class TestLoginTokenPath:
 
 class TestLoginMfaPath:
     def test_mfa_prompt_completes_login(self, httpx_mock, monkeypatch):
+        """TOTP authenticator app path: explicit SOFTWARE_TOKEN_MFA challenge.
+
+        The server requires the `challenge` field even though the apiary spec
+        calls it optional with a SOFTWARE_TOKEN_MFA default -- omitting it
+        gives a 404 with the misleading "must be one of: ..." enum error
+        attached to the admin schema. Send it explicitly to avoid that.
+        """
         httpx_mock.add_response(
             method="POST",
             url="https://apps-api.keboola.com/auth/login",
@@ -55,9 +62,13 @@ class TestLoginMfaPath:
             url="https://apps-api.keboola.com/auth/login",
             json={"token": "Bearer xyz"},
             status_code=200,
-            match_json={"email": "u@k.com", "session": "sess-1", "code": "123456"},
+            match_json={
+                "email": "u@k.com",
+                "session": "sess-1",
+                "code": "123456",
+                "challenge": "SOFTWARE_TOKEN_MFA",
+            },
         )
-        # Mock the /dev/tty MFA prompt.
         monkeypatch.setattr(
             "keboola_agent_cli.dev_portal_client._tty_prompt",
             lambda label, secret=False: "123456",
@@ -66,6 +77,41 @@ class TestLoginMfaPath:
         with DeveloperPortalClient(ident) as client:
             client._ensure_authenticated()
             assert client._bearer == "Bearer xyz"
+
+    def test_mfa_failure_surfaces_server_body(self, httpx_mock, monkeypatch):
+        """Single attempt only. Surface the actual server body so the user can
+        tell whether the code was wrong, the session expired, or something else.
+        Hint about stale TOTP appears in the message."""
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            json={"session": "sess-1"},
+            status_code=200,
+            match_json={"email": "u@k.com", "password": "p"},
+        )
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            status_code=400,
+            text='{"errorMessage":"Invalid code","errorCode":400}',
+            match_json={
+                "email": "u@k.com",
+                "session": "sess-1",
+                "code": "999999",
+                "challenge": "SOFTWARE_TOKEN_MFA",
+            },
+        )
+        monkeypatch.setattr(
+            "keboola_agent_cli.dev_portal_client._tty_prompt",
+            lambda label, secret=False: "999999",
+        )
+        ident = DeveloperPortalIdentity(username="u@k.com", password="p")
+        with DeveloperPortalClient(ident) as client:
+            with pytest.raises(KeboolaApiError) as exc:
+                client._ensure_authenticated()
+            assert exc.value.error_code == ErrorCode.DP_LOGIN_FAILED
+            assert "Invalid code" in str(exc.value)
+            assert "TOTP" in str(exc.value) or "stale" in str(exc.value)
 
     def test_mfa_no_tty_raises_mfa_required(self, httpx_mock, monkeypatch):
         httpx_mock.add_response(
@@ -138,7 +184,7 @@ class TestPortalWrites:
             )
             assert resp["id"] == "ex-foo"
 
-    def test_patch_app(self, httpx_mock):
+    def test_patch_app_vendor_role_hits_vendor_endpoint(self, httpx_mock):
         httpx_mock.add_response(
             method="POST",
             url="https://apps-api.keboola.com/auth/login",
@@ -152,6 +198,25 @@ class TestPortalWrites:
         with DeveloperPortalClient(_identity()) as client:
             resp = client.patch_app("keboola", "keboola.ex-foo", {"name": "Foo 2"})
             assert resp["name"] == "Foo 2"
+
+    def test_patch_app_admin_role_hits_admin_endpoint(self, httpx_mock):
+        """An admin-role identity must route PATCH to /admin/apps/{app} so the
+        permissive schema accepts admin-only fields like complexity. httpx_mock
+        has NO entry for /vendors/.../apps/... -- if the client wrongly routes
+        there, the test fails with an unmocked-request error."""
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
+            json={"token": "Bearer admin-bearer"},
+        )
+        httpx_mock.add_response(
+            method="PATCH",
+            url="https://apps-api.keboola.com/admin/apps/keboola.ex-foo",
+            json={"id": "ex-foo", "complexity": "easy"},
+        )
+        with DeveloperPortalClient(_identity(role_hint="admin")) as client:
+            resp = client.patch_app("keboola", "keboola.ex-foo", {"complexity": "easy"})
+            assert resp["complexity"] == "easy"
 
     def test_publish_app(self, httpx_mock):
         httpx_mock.add_response(

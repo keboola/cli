@@ -12,6 +12,73 @@ from keboola_agent_cli.cli import app
 runner = CliRunner()
 
 
+class TestReadPasswordStdin:
+    """--password-stdin must work in BOTH TTY mode (hidden getpass prompt,
+    Enter to confirm) AND pipe mode (read until EOF). The original version
+    called sys.stdin.read() unconditionally, which hung interactively until
+    the user sent Ctrl-D."""
+
+    def test_tty_uses_getpass(self, monkeypatch):
+        from keboola_agent_cli.commands.dev_portal import _read_password_stdin
+
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "pw-typed\n")
+        assert _read_password_stdin() == "pw-typed"
+
+    def test_pipe_reads_until_eof(self, monkeypatch):
+        import io
+        import sys as _sys
+
+        from keboola_agent_cli.commands.dev_portal import _read_password_stdin
+
+        fake_stdin = io.StringIO("pw-piped\n")
+        # Use monkeypatch.setattr (not direct attribute assignment) -- ty rejects
+        # `fake_stdin.isatty = lambda: False` because the slot expects `(self) -> bool`
+        # and the lambda's signature is `() -> Literal[False]`. monkeypatch handles
+        # the duck-typed override cleanly without a ty: ignore.
+        monkeypatch.setattr(fake_stdin, "isatty", lambda: False)
+        monkeypatch.setattr(_sys, "stdin", fake_stdin)
+        assert _read_password_stdin() == "pw-piped"
+
+    def test_identity_add_password_stdin_end_to_end(self, tmp_config_dir):
+        """End-to-end CliRunner test: --password-stdin in pipe mode (the
+        CliRunner's stdin is not a TTY) must thread the piped password through
+        Typer's flag parsing into the helper and into the persisted identity.
+        Catches a regression where the flag and the helper get rewired
+        independently and the password silently lands as empty."""
+        from keboola_agent_cli.config_store import ConfigStore
+
+        with patch(
+            "keboola_agent_cli.services.dev_portal_service.DeveloperPortalService.add_identity"
+        ) as add_:
+            r = runner.invoke(
+                app,
+                [
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "--json",
+                    "dev-portal",
+                    "identity",
+                    "add",
+                    "--alias",
+                    "piped",
+                    "--username",
+                    "u",
+                    "--password-stdin",
+                ],
+                input="my-piped-secret\n",
+            )
+        assert r.exit_code == 0, r.output
+        add_.assert_called_once()
+        # The identity object passed to the service must carry the piped password,
+        # stripped of trailing newline.
+        call_args = add_.call_args
+        identity = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs["identity"]
+        assert identity.password == "my-piped-secret"
+        # Sanity: nothing was persisted on disk (add_identity is mocked).
+        assert ConfigStore(tmp_config_dir, source="cli-flag").load().dev_portal_identities == {}
+
+
 class TestIdentityCommands:
     def test_identity_add_and_list_json(self, tmp_config_dir):
         with patch(

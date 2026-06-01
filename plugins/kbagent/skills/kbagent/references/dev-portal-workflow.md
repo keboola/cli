@@ -13,12 +13,38 @@ as KB project tokens, under 0600 protection:
 ```
 kbagent dev-portal identity add --alias vendor-keboola --username service.keboola.xxxxx --password ... --vendor keboola
 kbagent dev-portal identity add --alias vendor-kds     --username service.kds-team.xxxxx --password ... --vendor kds-team
-kbagent dev-portal identity add --alias admin-foo      --username admin@keboola.com --password-stdin
+kbagent dev-portal identity add --alias admin-keboola  --username admin@keboola.com --role-hint admin --password-stdin
 kbagent dev-portal identity use vendor-keboola         # default for subsequent commands
 ```
 
 Service accounts (`service.{vendor}.{id}`) skip MFA. Personal admin
-accounts prompt for the MFA code on /dev/tty at login time.
+accounts prompt for the MFA code on `/dev/tty` at login time
+(`SOFTWARE_TOKEN_MFA`, i.e. a TOTP authenticator app like 1Password / Authy /
+Google Authenticator).
+
+`--password-stdin` works in both pipe mode (`echo $PASS | … --password-stdin`,
+reads to EOF) and TTY mode (hidden line-based prompt, Enter to confirm).
+
+### `role_hint` is load-bearing (since v0.51.1)
+
+`--role-hint` is **not** a free-text label. It picks which apps-api
+endpoint kbagent uses for `dev-portal patch`:
+
+| Role | PATCH endpoint | Schema | Use for |
+|------|----------------|--------|---------|
+| `vendor` (default) | `/vendors/{vendor}/apps/{app}` | `clientAppSchema` (restricted) | Cookiecutter-backed properties, schemas, UI options, descriptions, icon |
+| `admin` | `/admin/apps/{app}` | `adminAppSchema` (permissive) | The 9 fields forbidden on vendor: `complexity`, `categories`, `category`, `features`, `forwardToken`, `forwardTokenDetails`, `injectEnvironment`, `processTimeout`, `requiredMemory` |
+
+`role_hint` is validated (`vendor` or `admin`, case-folded). kbagent does
+not verify the server-side role of the credential -- if you set `admin`
+but the account isn't actually a portal admin, the PATCH fails at the
+apps-api with an unambiguous 403.
+
+When a vendor-role identity tries to patch one of the 9 admin-only
+fields, the service **fail-fasts** with a message that names the
+offending fields, explains why the server's 422 ("must be one of: ...")
+is misleading, and shows the exact command to add and use an admin
+identity. No portal call is made.
 
 ## Safety contract (read this before issuing any write)
 
