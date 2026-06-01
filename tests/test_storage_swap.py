@@ -433,7 +433,7 @@ class TestSwapTablesCLI:
         ):
             MockStore.return_value = store
             svc = MockSvc.return_value
-            svc.swap_tables.side_effect = ConfigError("swap-tables requires a dev branch.")
+            svc.swap_tables.side_effect = ConfigError("swap-tables requires a branch.")
             result = runner.invoke(
                 app,
                 [
@@ -453,4 +453,4 @@ class TestSwapTablesCLI:
         assert result.exit_code == 5
         payload = json.loads(result.output)
         assert payload["status"] == "error"
-        assert "dev branch" in payload["error"]["message"]
+        assert "requires a branch" in payload["error"]["message"]

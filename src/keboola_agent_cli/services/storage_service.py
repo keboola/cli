@@ -1362,7 +1362,7 @@ class StorageService(BaseService):
             alias: Project alias.
             table_id: Full ID of the first table.
             target_table_id: Full ID of the second table.
-            branch_id: Dev branch ID (must not be None).
+            branch_id: Branch ID (must not be None; any branch accepted, including the default/production branch).
             dry_run: If True, only report what would be swapped.
 
         Returns:
