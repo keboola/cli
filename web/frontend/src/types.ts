@@ -177,3 +177,46 @@ export interface Component {
   component_type: string;
   description?: string;
 }
+
+/**
+ * Data Streams (OTLP) source -- list view. The secret embedded in the OTLP
+ * ingest URL is never part of the list payload; only the secret-free
+ * `base_endpoint` is surfaced. Mirrors `StreamService._summarise_sources`.
+ */
+export interface DataStreamSource {
+  source_id: string;
+  name: string;
+  type: string;
+  description: string;
+  base_endpoint: string;
+}
+
+/**
+ * Full `stream detail` picture for one source. `endpoint` / `signal_endpoints`
+ * are masked (the secret replaced with `***`) unless the request opted in with
+ * `reveal=true`, in which case `secret_revealed` is true. Mirrors
+ * `StreamService._assemble_detail`.
+ */
+export interface DataStreamDetail {
+  alias?: string;
+  status?: string; // "created" | "skipped" on create-source
+  branch_id: string;
+  source_id: string;
+  name: string;
+  type: string;
+  description: string;
+  endpoint: string;
+  base_endpoint: string;
+  signal_endpoints: Record<string, string>;
+  protocol: string;
+  secret_revealed: boolean;
+  destination: {
+    bucket: string;
+    buckets: string[];
+    tables: Record<string, string>;
+  };
+  import_conditions: Record<string, unknown> | null;
+  // Raw passthrough -- surfaced only via the detail drawer's "Raw JSON" tab.
+  sinks: Array<Record<string, unknown>>;
+  source: Record<string, unknown>;
+}
