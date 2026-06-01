@@ -21,6 +21,7 @@ import { SchedulesPage } from "./pages/Schedules";
 import { SearchPage } from "./pages/Search";
 import { SharingPage } from "./pages/Sharing";
 import { StoragePage } from "./pages/Storage";
+import { StreamsPage } from "./pages/Streams";
 import { WorkspacesPage } from "./pages/Workspaces";
 import { UIStateProvider, useUIState } from "./state";
 import { ThemeProvider } from "./theme";
@@ -38,6 +39,8 @@ function Router() {
       return <ComponentsPage />;
     case "storage":
       return <StoragePage />;
+    case "stream":
+      return <StreamsPage />;
     case "jobs":
       return <JobsPage />;
     case "branches":

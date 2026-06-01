@@ -10,6 +10,7 @@ export type PageId =
   | "projects"
   | "configs"
   | "storage"
+  | "stream"
   | "jobs"
   | "branches"
   | "workspaces"

@@ -32,6 +32,7 @@ EXPECTED_ROUTER_PREFIXES = {
     "/configs",
     "/components",
     "/storage/buckets",
+    "/stream/{project}/list",
     "/jobs",
     "/branches",
     "/workspaces",
@@ -102,6 +103,32 @@ def test_openapi_lists_all_routers(client: TestClient) -> None:
     paths = set(spec["paths"].keys())
     missing = EXPECTED_ROUTER_PREFIXES - paths
     assert not missing, f"OpenAPI is missing expected paths: {sorted(missing)}"
+
+
+def test_every_router_tag_has_openapi_metadata(client: TestClient) -> None:
+    """Every tag used by an operation must have an OPENAPI_TAGS description block.
+
+    Regression guard for the bug that hid the ``stream`` router: it was wired
+    via ``include_router`` and fully callable, but its tag was missing from
+    ``OPENAPI_TAGS`` in ``server/app.py`` -- so Swagger UI rendered a bare,
+    description-less ``stream`` section out of its logical group. Registration
+    (``include_router``) and documentation (``openapi_tags``) are independent
+    layers; this test ties them together so a new router can't ship invisible
+    in ``/docs`` again.
+    """
+    http_methods = {"get", "post", "put", "delete", "patch", "options", "head", "trace"}
+    spec = client.get("/openapi.json").json()
+    documented = {tag["name"] for tag in spec.get("tags", [])}
+    used: set[str] = set()
+    for path_item in spec["paths"].values():
+        for method, operation in path_item.items():
+            if method in http_methods and isinstance(operation, dict):
+                used.update(operation.get("tags", []))
+    undocumented = used - documented
+    assert not undocumented, (
+        "Routers expose tags with no OPENAPI_TAGS description block: "
+        f"{sorted(undocumented)}. Add an entry to OPENAPI_TAGS in server/app.py."
+    )
 
 
 def test_org_setup_requires_manage_token(client: TestClient) -> None:

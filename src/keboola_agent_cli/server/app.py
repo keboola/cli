@@ -153,6 +153,16 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "stream",
+        "description": (
+            "**Data.** "
+            "Data Streams (OpenTelemetry / OTLP) -- list, create, and "
+            "delete ingest sources and retrieve their endpoints. The OTLP "
+            "URL embeds a secret that is masked unless `reveal=true`. "
+            "Mirrors `kbagent stream list|create-source|detail|delete`."
+        ),
+    },
+    {
         "name": "search",
         "description": (
             "**Data.** "
