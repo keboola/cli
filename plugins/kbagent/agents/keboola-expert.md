@@ -112,7 +112,7 @@ a critical failure.
    Snowflake `workspace create` `private_key` = 0.47.1+,
    `sync push` fresh-CREATE variable-link resolution + `--branch <id>` default-tree promote = 0.47.2+,
    `feature` group (stack/project/user feature flags, Manage API) = 0.48.0+,
-   `dev-portal` command group = 0.49.0+,
+   `dev-portal` = 0.49.0+ (admin-role PATCH = 0.51.1+),
    headless `__env__` project (`KBAGENT_PROJECT_FROM_ENV=1` + `KBC_TOKEN` + `KBC_STORAGE_API_URL`) + forgiving stack-URL normalization (bare host / full project deep-link) = 0.50.0+,
    `stream` command group (Data Streams / OTLP) = 0.50.0+,
    `storage retype` is a future composite), you

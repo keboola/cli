@@ -466,6 +466,9 @@ kbagent dev-portal upload-icon --app VENDOR.APP_ID --file PATH [--identity A] [-
 kbagent dev-portal publish --app VENDOR.APP_ID [--identity A] [--dry-run]
 kbagent dev-portal deprecate --app VENDOR.APP_ID [--identity A] [--dry-run]
 # All writes require an interactive random-code TTY confirm; no --yes / no env bypass.
+# Since v0.51.1: --role-hint is validated (vendor/admin) and load-bearing -- admin identities route
+# `patch` to PATCH /admin/apps/{app} (permissive schema). Vendor + admin-only field => fail-fast preflight.
+# --password-stdin works on TTY (hidden prompt) AND on a pipe (reads to EOF).
 
 kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]
 

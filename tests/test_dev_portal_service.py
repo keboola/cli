@@ -126,6 +126,50 @@ class TestReadsAndPrepareApply:
         assert result["name"] == "New"
         fake_client.patch_app.assert_called_with("keboola", "keboola.ex-a", {"name": "New"})
 
+    def test_prepare_patch_vendor_role_rejects_admin_only_fields(
+        self, service, fake_client, config_store
+    ):
+        """Vendor-role identity + admin-only field => fail-fast with switch-to-admin guidance.
+
+        No portal call happens (we fail before get_app). The error names every
+        offending field and tells the user how to switch identity.
+        """
+        from keboola_agent_cli.models import DeveloperPortalIdentity
+
+        fake_client._ensure_authenticated.return_value = None
+        ident = DeveloperPortalIdentity(username="u", password="p", role_hint="vendor")
+        service.add_identity("vendor-alpha", ident)
+        with pytest.raises(KeboolaApiError) as exc:
+            service.prepare_patch(
+                "vendor-alpha",
+                "keboola",
+                "keboola.ex-a",
+                {"name": "New", "complexity": "easy", "categories": ["x"]},
+            )
+        assert exc.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert "complexity" in str(exc.value)
+        assert "categories" in str(exc.value)
+        assert "admin" in str(exc.value).lower()
+        fake_client.get_app.assert_not_called()
+
+    def test_prepare_patch_admin_role_allows_admin_only_fields(
+        self, service, fake_client, config_store
+    ):
+        """Admin-role identity bypasses the preflight; the client routes the
+        actual PATCH to /admin/apps (verified in client tests). Here we just
+        check the service's preflight gate is permissive for admin role."""
+        from keboola_agent_cli.models import DeveloperPortalIdentity
+
+        fake_client._ensure_authenticated.return_value = None
+        ident = DeveloperPortalIdentity(username="a", password="p", role_hint="admin")
+        service.add_identity("admin-bob", ident)
+        fake_client.get_app.return_value = {"id": "ex-a", "complexity": None}
+        pending = service.prepare_patch(
+            "admin-bob", "keboola", "keboola.ex-a", {"complexity": "easy"}
+        )
+        keys = {d.key for d in pending.diff}
+        assert keys == {"complexity"}
+
     def test_prepare_publish_missing_fields(self, service, fake_client):
         self._setup(service, fake_client)
         fake_client.get_app.return_value = {

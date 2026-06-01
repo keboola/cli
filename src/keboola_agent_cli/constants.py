@@ -27,6 +27,15 @@ DEFAULT_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=30.0, write=10.
 # --- API Error Handling ---
 MAX_API_ERROR_LENGTH: int = 500
 
+# --- Developer Portal MFA ---
+# Challenge type sent on the second `/auth/login` step (after the first call
+# returns a `session` token). The apiary spec documents `SOFTWARE_TOKEN_MFA`
+# (TOTP authenticator app) as the default and `SMS_MFA` as the only other
+# member, but in practice the server 404s when the field is omitted, so we
+# send it explicitly. If apps-api ever adds a third member (e.g. EMAIL_OTP),
+# wire it in here and add a per-identity `mfa_challenge` field.
+DP_MFA_CHALLENGE_TYPE: str = "SOFTWARE_TOKEN_MFA"
+
 # --- UNEXPECTED_ERROR truncation ---
 # Unhandled ``Exception`` messages surfaced to per-project error envelopes are
 # truncated to this many characters before being returned. Exceptions can

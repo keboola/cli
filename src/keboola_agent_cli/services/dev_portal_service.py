@@ -35,6 +35,27 @@ _REQUIRED_PUBLISH_FIELDS = (
     "documentationUrl",
 )
 
+# Fields that the apps-api server `.forbidden()`s on the vendor PATCH endpoint
+# (PATCH /vendors/{vendor}/apps/{app}). Settable only via PATCH /admin/apps/{app}
+# with an admin-role token. Sending any of these on the vendor endpoint returns
+# a 422 with a misleading "must be one of: ..." error message because the
+# enum-validation error annotation is attached in the shared admin schema
+# before clientAppSchema overrides with `.forbidden()`. Source of truth:
+# keboola/developer-portal:src/lib/validation.js -> clientAppSchema().
+_ADMIN_ONLY_PATCH_FIELDS = frozenset(
+    {
+        "category",
+        "categories",
+        "complexity",
+        "features",
+        "forwardToken",
+        "forwardTokenDetails",
+        "injectEnvironment",
+        "processTimeout",
+        "requiredMemory",
+    }
+)
+
 
 @dataclass(frozen=True)
 class FieldDiff:
@@ -214,6 +235,27 @@ class DeveloperPortalService:
         app_id: str,
         payload: dict[str, Any],
     ) -> PendingPatch:
+        ident = self._resolve_identity(alias)
+        admin_only_in_payload = sorted(_ADMIN_ONLY_PATCH_FIELDS & set(payload.keys()))
+        if admin_only_in_payload and ident.role_hint != "admin":
+            raise KeboolaApiError(
+                message=(
+                    f"Cannot patch admin-only field(s) via the vendor endpoint: "
+                    f"{admin_only_in_payload}. The apps-api server forbids these "
+                    f"on PATCH /vendors/{vendor}/apps/{app_id} (the 422 you'd "
+                    "otherwise see -- 'must be one of: ...' -- is a misleading "
+                    "server-side message hiding the real reason: the field is "
+                    "forbidden() on the vendor schema, not enum-validated). "
+                    "Switch to an admin identity to route this PATCH through "
+                    "/admin/apps/{app} instead: `kbagent dev-portal identity add "
+                    "--alias <name> --username <admin-email> --role-hint admin "
+                    "--password-stdin` and re-run with `--identity <name>`. "
+                    "Alternatively, drop the field and ask a Developer Portal "
+                    "admin to set it. Canonical list: keboola/developer-portal "
+                    "src/lib/validation.js -> clientAppSchema()."
+                ),
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
         with self._authed_client(alias) as client:
             current = client.get_app(vendor, app_id)
         diff = [

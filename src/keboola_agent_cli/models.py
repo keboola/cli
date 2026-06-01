@@ -1,5 +1,6 @@
 """Pydantic models shared across all layers of the application."""
 
+import sys
 from typing import Any
 from urllib.parse import urlparse
 
@@ -104,8 +105,15 @@ class DeveloperPortalIdentity(BaseModel):
     role_hint: str = Field(
         default="vendor",
         description=(
-            "Free-text label shown in `dev-portal identity list` "
-            "(e.g. 'vendor', 'admin'). Not validated against the portal."
+            "Identity role: 'vendor' (default) or 'admin'. Load-bearing -- "
+            "write commands route to different apps-api endpoints based on "
+            "role: 'admin' uses PATCH /admin/apps/{app} (permissive schema, "
+            "can set complexity/categories/forwardToken/processTimeout/etc.); "
+            "'vendor' uses PATCH /vendors/{vendor}/apps/{app} (those fields "
+            "are forbidden()). kbagent does not verify the server-side role "
+            "of the credential -- if you set 'admin' but the account isn't "
+            "actually a portal admin, the write fails at the apps-api with "
+            "an unambiguous 403."
         ),
     )
     vendor: str | None = Field(
@@ -128,6 +136,39 @@ class DeveloperPortalIdentity(BaseModel):
         if not v.startswith("https://"):
             raise ValueError(f"Portal URL must use https:// scheme, got: {v!r}")
         return v
+
+    @field_validator("role_hint", mode="before")
+    @classmethod
+    def validate_role_hint(cls, v: object) -> str:
+        """Normalise `role_hint` to the validated enum {vendor, admin}.
+
+        Before v0.51.1 the field was free-text and documented as "not
+        validated against the portal", so existing on-disk configs may
+        carry arbitrary strings (e.g. 'keboola-admin', empty string,
+        non-string types from hand-edits). A strict raise would crash
+        `ConfigStore.load()` -> the entire CLI on startup for every
+        pre-0.51.1 user with a non-standard value; that's a worse UX
+        than a silent downgrade.
+
+        Behaviour:
+        - "vendor" / "admin" (case-insensitive, whitespace-stripped)
+          pass through normalised.
+        - Anything else is downgraded to "vendor" with a one-shot stderr
+          warning. The user still sees what happened; the CLI keeps
+          working. To force admin routing they can rerun
+          `dev-portal identity edit --alias A --role-hint admin`.
+        """
+        if not isinstance(v, str):
+            v = "" if v is None else str(v)
+        normalized = v.strip().lower()
+        if normalized in ("vendor", "admin"):
+            return normalized
+        sys.stderr.write(
+            f"Warning: role_hint={v!r} is not 'vendor' or 'admin' -- "
+            "downgrading to 'vendor'. Use `kbagent dev-portal identity "
+            "edit --alias <A> --role-hint admin` to switch.\n"
+        )
+        return "vendor"
 
 
 class PermissionPolicy(BaseModel):

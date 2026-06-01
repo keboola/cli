@@ -2331,3 +2331,54 @@ materialize lazily on first import (the bucket/table appear in Storage seconds
 after the first record arrives, not at create time). `create-source` / `delete`
 / sink creation are **async**: the API returns a Task that kbagent polls to
 completion before returning.
+
+## `dev-portal patch`: admin-only fields need an admin-role identity, vendor PATCH lies about why
+
+`PATCH /vendors/{vendor}/apps/{app}` on apps-api `.forbidden()`s 9 fields:
+`complexity`, `categories`, `category`, `features`, `forwardToken`,
+`forwardTokenDetails`, `injectEnvironment`, `processTimeout`,
+`requiredMemory`. Sending any of them via a vendor identity returns
+`422 Parameter complexity must be one of: easy, medium, hard` (or the
+analogous enum message for the other fields). **The message is a server
+bug** — the enum-validation `.error()` annotation lives on the shared
+admin schema before `clientAppSchema()` overrides with `.forbidden()`,
+so when `.forbidden()` fires Joi reuses the unrelated enum message
+instead of saying "this field is not allowed here".
+
+To set any of these you need an admin identity that routes the PATCH
+to `PATCH /admin/apps/{app}` instead (since v0.51.1):
+
+```
+kbagent dev-portal identity add --alias admin-keboola \
+    --username admin@keboola.com --role-hint admin --password-stdin
+kbagent dev-portal patch --app keboola.ex-foo \
+    --data /tmp/patch.json --identity admin-keboola
+```
+
+With `role_hint: vendor` (the default), kbagent now pre-flights the
+payload and fails fast with the same guidance instead of letting the
+apps-api return the misleading 422 (since v0.51.1). The 9 forbidden
+fields are documented in
+[keboola/developer-portal:src/lib/validation.js](https://github.com/keboola/developer-portal/blob/master/src/lib/validation.js)
+under `clientAppSchema()`.
+
+## `dev-portal identity add`: MFA logins for TOTP accounts need the `challenge` field explicit (since v0.51.1)
+
+The apiary spec calls `challenge` optional with default `SOFTWARE_TOKEN_MFA`
+on the second-step `POST /auth/login`, but in practice the server 404s
+when it is omitted on a personal-account TOTP login. kbagent now sends
+`challenge: SOFTWARE_TOKEN_MFA` explicitly. Single attempt only:
+`/auth/login` consumes the session, so any retry with a different
+challenge type would always 404 with `Invalid code or auth state for
+the user` and mask the real first failure. The raised error includes
+the server response body and a hint about TOTP code rotation, so
+"stale code" can be distinguished from "wrong code" / "expired session".
+
+## `dev-portal identity {add,edit} --password-stdin` works in both TTY and pipe mode (since v0.51.1)
+
+Pre-0.51.1 the flag did `sys.stdin.read().strip()` unconditionally,
+which waits for EOF rather than Enter — pasting a password and pressing
+Enter just hung until Ctrl-C. The helper now branches on
+`sys.stdin.isatty()`: TTY uses `getpass.getpass()` (hidden, line-based,
+Enter confirms); pipe (`echo $PASS | kbagent dev-portal identity add
+--password-stdin`) still reads to EOF.
