@@ -216,6 +216,7 @@ export interface DataStreamDetail {
     tables: Record<string, string>;
   };
   import_conditions: Record<string, unknown> | null;
+  // Raw passthrough -- surfaced only via the detail drawer's "Raw JSON" tab.
   sinks: Array<Record<string, unknown>>;
   source: Record<string, unknown>;
 }

@@ -79,6 +79,9 @@ export function StreamsPage() {
           </button>
         }
       />
+      {deleteMu.error ? (
+        <ErrorBox message={`Delete failed: ${(deleteMu.error as Error).message}`} />
+      ) : null}
       {!project ? (
         <Empty title="Select a project" />
       ) : q.isLoading ? (
@@ -423,10 +426,14 @@ function SourceDetailDrawer({
 
               <div className="nerd-card">
                 <h3 className="text-sm font-bold text-keboola mb-3">Destination</h3>
-                {detail.destination?.bucket || tables.length > 0 ? (
+                {detail.destination?.bucket ||
+                detail.destination?.buckets?.length ||
+                tables.length > 0 ? (
                   <div className="space-y-2 text-xs">
                     {detail.destination?.bucket ? (
                       <KV label="Bucket" value={detail.destination.bucket} mono />
+                    ) : detail.destination?.buckets?.length ? (
+                      <KV label="Buckets" value={detail.destination.buckets.join(", ")} mono />
                     ) : null}
                     {tables.map(([signal, tableId]) => (
                       <div key={signal} className="flex items-center gap-2">
