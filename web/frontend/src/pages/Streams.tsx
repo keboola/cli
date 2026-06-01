@@ -22,6 +22,18 @@ interface StreamListResp {
   sources: DataStreamSource[];
 }
 
+/**
+ * The stream control-plane API types its branch ref as a string. The UI's
+ * global `branchId` is a numeric Storage branch ID; numeric IDs are valid refs
+ * (see `test_branch_override` in `tests/test_stream_service.py`, which drives
+ * `branch_id="1234"`), so we stringify here to match the API contract
+ * explicitly rather than lean on JSON/query coercion. `null` (default branch)
+ * maps to `undefined`, letting the backend fall back to its `"default"` ref.
+ */
+function branchRef(branchId: number | null): string | undefined {
+  return branchId != null ? String(branchId) : undefined;
+}
+
 export function StreamsPage() {
   const { project, branchId } = useUIState();
   const qc = useQueryClient();
@@ -32,7 +44,7 @@ export function StreamsPage() {
     queryKey: ["streams", project, branchId],
     queryFn: () =>
       api.get(`/stream/${encodeURIComponent(project ?? "")}/list`, {
-        query: { branch: branchId ?? undefined },
+        query: { branch: branchRef(branchId) },
       }),
     enabled: !!project,
   });
@@ -43,7 +55,7 @@ export function StreamsPage() {
     mutationFn: (sourceId: string) =>
       api.post(`/stream/${encodeURIComponent(project ?? "")}/delete`, {
         source_id: sourceId,
-        branch_id: branchId ?? undefined,
+        branch_id: branchRef(branchId),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["streams"] });
@@ -188,7 +200,7 @@ function CreateSourceDrawer({
       api.post<DataStreamDetail>(`/stream/${encodeURIComponent(project)}/create-source`, {
         name,
         source_type: sourceType,
-        branch_id: branchId ?? undefined,
+        branch_id: branchRef(branchId),
         provision_sinks: provisionSinks,
         if_not_exists: ifNotExists,
       }),
@@ -304,7 +316,7 @@ function SourceDetailDrawer({
       api.get(`/stream/${encodeURIComponent(project)}/detail`, {
         query: {
           source_id: source.source_id,
-          branch: branchId ?? undefined,
+          branch: branchRef(branchId),
           reveal,
         },
       }),
