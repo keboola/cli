@@ -67,10 +67,10 @@ a critical failure.
    needed for the current task (e.g. `flow update` needs 0.22.0+,
    `schedule find` needs 0.23.0+, `config set-default-bucket` needs
    0.26.0+, `data-app create / deploy / start / stop / delete / password`
-   need 0.27.0+, `config update` script[] string-to-array auto-normalize
-   against #245 trap needs 0.28.0+, list-element re-split against
+   need 0.27.0+, `config update` script[] auto-normalize (#245) needs
+   0.28.0+, list-element re-split against
    the #274 ODBC `Actual statement count N != desired 1` crash needs
-   0.31.0+, `storage swap-tables` needs 0.28.0+,
+   0.31.0+, `storage swap-tables` needs 0.28.0+, `storage clone-table` = 0.52.0+,
    env-var manage-token auth for `org setup` / `project refresh` /
    `data-app password` needs 0.29.0+ with `--allow-env-manage-token`,
    `project invite` / `project member-*` / `project invitation-*`
@@ -147,9 +147,9 @@ a critical failure.
 | Fetch a specific config | `kbagent config detail --project P --component-id C --config-id K --json` | `tool call get_config` | re-using an earlier JSON dump |
 | Override the auto-derived output bucket on a config | `kbagent config set-default-bucket --bucket in.c-name` (0.26.0+) -- read-modify-write of `storage.output.default_bucket`, preserves siblings; `--clear` removes it | `kbagent config update --set 'storage.output.default_bucket=in.c-name'` (works pre-0.26.0 but not discoverable) | editing the raw JSON in the UI; full-config replace with `--configuration` (wipes other storage keys) |
 | Cross-project migration | `kbagent sync pull` + edit files locally + `kbagent sync push --dry-run` | -- | repeated `tool call` loops, one per resource |
-| Retype table columns | fetch types via `workspace query`, draft types YAML, write new transformation that produces typed output table, then `kbagent storage swap-tables` (0.28.0+) to flip the typed copy into the original name in a dev branch | `kbagent --hint client create_table_definition` if the future `storage retype` composite (§14.3) is not yet present | `POST /v2/storage/buckets/.../tables-definition` (REST) followed by manual config rewrites |
+| Retype table columns | fetch types via `workspace query`, draft types YAML, write new transformation that produces typed output table, then `kbagent storage swap-tables` (0.28.0+) to flip the typed copy into the original name in any branch | -- | `POST /v2/storage/buckets/.../tables-definition` (REST) followed by manual config rewrites |
 | Create typed table with native types | `kbagent storage create-table --column pk:VARCHAR(40) --column amount:NUMBER(18,2) --not-null pk --default amount=0` (0.25.0+) | `tool call create_table` (accepts the same `definition.length` shape via MCP) | re-creating via raw REST to `/v2/storage/...tables-definition` |
-| Promote typed rebuild back into the original name | `kbagent storage swap-tables --project P --table-id in.c-foo.data --target-table-id in.c-foo.data_change_log --branch <ID> --yes` (0.28.0+) -- async storage job (`tableSwap`); client polls to completion before returning. Service refuses without a branch | -- | renaming or deleting + re-uploading (loses history; downstream configs need to be rewritten) |
+| Promote typed rebuild back into the original name | `kbagent storage swap-tables --project P --table-id in.c-foo.data --target-table-id in.c-foo.data_change_log --branch <ID> --yes` (0.28.0+) -- async storage job (`tableSwap`); client polls to completion. Service refuses without a branch; any branch incl. prod | -- | renaming or deleting + re-uploading (loses history; downstream configs need to be rewritten) |
 | Re-seed a table without losing its schema / PK / dependents | `kbagent storage truncate-table --project P --table-id in.c-foo.data [--branch ID] [--dry-run] [--yes]` (0.32.0+) -- DELETE `/tables/{id}/rows?allowTruncate=1`; endpoint is uniformly async on every branch (returns a queued `tableRowsDelete` job; client polls via `_wait_for_storage_job`). Do NOT pass `async=true` -- the API rejects it. Batch via repeated `--table-id`. Returns `{truncated[], failed[], dry_run, project_alias}` with `truncated[]` entries carrying `{table_id, rows_before, rows_after, branch_id}`. Permission class: `destructive` | `tool call delete_table_rows` if the upstream MCP exposes it | drop + recreate the table (loses descriptions, PK, sharing edges, and breaks every downstream config reference); deleting rows via raw SQL in a workspace (bypasses the Storage API audit trail) |
 | Debug a failed job | `kbagent job detail --project P --job-id J --json` + `kbagent job run ... --log-tail-lines 200` | `kbagent workspace from-transformation` for SQL repro | "I think the issue is..." without reading logs |
 | Ad-hoc SQL / row-count / type audit | `kbagent workspace create` + `kbagent workspace load` + `kbagent workspace query --sql "..."` | `kbagent workspace from-transformation` for existing transform debugging; `workspace list --qs-compatible` (0.42.0+, #304) for data-app reuse | querying Keboola Storage directly via Snowflake credentials outside the workspace abstraction |
@@ -294,12 +294,16 @@ success, not a failure.
   plan -- it sets up the user for an impossible step.
 
 - **`storage create-table` in a dev branch auto-materializes the bucket**
-  (0.25.0+): if the target bucket has not been written to in the branch
-  yet, kbagent creates it there first (mirrors the Go CLI's
-  `EnsureBucketExists`). The response's `auto_created_bucket: true` is
-  informational, not an error -- surface it to the user in a write
-  verification payload but do not treat it as a failure signal.
-  Production writes never materialize anything.
+  (0.25.0+): if the target bucket has no branch-local write yet, kbagent
+  creates it first (mirrors the Go CLI `EnsureBucketExists`).
+  `auto_created_bucket: true` is informational, not a failure. Production
+  writes never materialize anything.
+- **`storage clone-table` before an in-branch `swap-tables` / column drop**
+  (0.52.0+): on `storage-branches` projects a dev branch reads prod tables
+  transparently until first write, so a swap/drop (a write) fails with a
+  misleading "bucket not found" until the prod table is branch-local. Run
+  `kbagent storage clone-table --project P --table-id T --branch <ID>`
+  first (one-way default->branch). See `gotchas.md`.
 
 - **`storage truncate-table` is row-only; schema and dependents are
   preserved** (0.32.0+): the underlying call is
@@ -483,31 +487,17 @@ success, not a failure.
   `--allow-env-manage-token` to their invocation, never strip the
   warning by suppressing stderr.
 
-- **Semantic-layer gotchas (since v0.41.0)** — five behavior contracts
-  worth committing to memory before touching `semantic-layer add/edit/
-  remove`. Full prose lives in
-  [`gotchas.md` § Semantic-layer](../skills/kbagent/references/gotchas.md);
-  the short form:
-  - **Constraint `rule` is a STRING**, never `{bounds: {min, max}}`. The
-    sl-builder skill docs are wrong on this. kbagent enforces it.
-  - **Constraint `name` regex `^[a-z][a-z0-9_]*$`** + the 3-vs-4
-    severity split: API `severity` is `error | warning | info` (3-level);
-    the 4-band health (`_critical / _warning / _healthy / _review`)
-    lives in the NAME SUFFIX, not on the API.
-  - **`edit metric --new-name` cascades through every constraint** whose
-    `metrics[]` referenced the old name, and prints the old/new
-    CODE_METRIC value. Downstream SQL joining on CODE_METRIC will break
-    silently — surface the change to the operator.
-  - **`remove metric` orphans constraints** that reference it. The
-    pre-deletion scan ALWAYS prints the warning (even with `--yes`);
-    non-TTY without `--yes` exits 2. Recommended: drop/rewrite the
-    constraints first, then remove the metric.
-  - **`build` is a HEURISTIC fallback**, not full AI: one dataset +
-    one COUNT(*) metric + one glossary entry per table. Response carries
-    `fallback_used: "heuristic"`. Treat the output as a scaffold and
-    follow up with `add metric`, `add relationship`, `add constraint`.
-    The full AI wizard lives in the `sl-build` skill under
-    `04_AI_Kit/ai-kit/`.
+- **Semantic-layer gotchas (since v0.41.0)** — full prose in
+  [`gotchas.md` § Semantic-layer](../skills/kbagent/references/gotchas.md).
+  Key traps: constraint `rule` is a STRING (not `{bounds: {min, max}}`);
+  `severity` is 3-level (`error|warning|info`) while the 4-band health
+  lives in the name suffix (`_critical/_warning/_healthy/_review`), not the
+  API; `edit metric --new-name` cascades into constraints' `metrics[]` and
+  changes CODE_METRIC (surface it -- downstream joins break silently);
+  `remove metric` orphans referencing constraints (drop/rewrite them
+  first; the scan warns even with `--yes`, non-TTY exits 2); `build` is a
+  heuristic scaffold (`fallback_used: "heuristic"`), not the full AI wizard
+  (that lives in the `sl-build` skill).
 
 ---
 

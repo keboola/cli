@@ -1,4 +1,4 @@
-"""Tests for storage swap-tables: client, service, and CLI."""
+"""Tests for storage clone-table (pull endpoint): client, service, and CLI."""
 
 import json
 from pathlib import Path
@@ -47,27 +47,25 @@ def _make_service(store: ConfigStore, mock_client: MagicMock) -> StorageService:
 # ---------------------------------------------------------------------------
 
 
-class TestSwapTablesClient:
-    """Tests for KeboolaClient.swap_tables() - HTTP layer."""
+class TestPullTableClient:
+    """Tests for KeboolaClient.pull_table() - HTTP layer."""
 
-    def test_correct_url_and_body(self, httpx_mock) -> None:
-        """POSTs to /v2/storage/branch/{branch}/tables/{tid}/swap with targetTableId in body.
+    def test_correct_url_and_no_body(self, httpx_mock) -> None:
+        """POSTs to /v2/storage/branch/{branch}/tables/{tid}/pull with no body.
 
-        Storage API responds with a queued storage job (operationName=tableSwap);
-        the client polls to completion. Returning ``status: success`` from the
-        first response avoids exercising the poll loop in this unit test.
+        The Storage API responds with a queued storage job
+        (operationName=devBranchTablePull) which the client polls to
+        completion. Returning ``status: success`` from the first response
+        avoids exercising the poll loop in this unit test.
         """
         httpx_mock.add_response(
-            url="https://connection.keboola.com/v2/storage/branch/9999/tables/in.c-foo.data/swap",
+            url="https://connection.keboola.com/v2/storage/branch/9999/tables/in.c-foo.data/pull",
             method="POST",
             json={
-                "id": 386488069,
+                "id": 388266099,
                 "status": "success",
-                "operationName": "tableSwap",
-                "operationParams": {
-                    "branchId": 9999,
-                    "targetTableStringId": "in.c-foo.data_change_log",
-                },
+                "operationName": "devBranchTablePull",
+                "operationParams": {"branchId": 9999},
             },
             status_code=200,
         )
@@ -76,20 +74,15 @@ class TestSwapTablesClient:
             stack_url="https://connection.keboola.com",
             token=TEST_TOKEN,
         )
-        result = client.swap_tables(
-            table_id="in.c-foo.data",
-            target_table_id="in.c-foo.data_change_log",
-            branch_id=9999,
-        )
+        result = client.pull_table(table_id="in.c-foo.data", branch_id=9999)
 
         # Returned dict is the completed storage job
         assert result["status"] == "success"
-        assert result["operationName"] == "tableSwap"
+        assert result["operationName"] == "devBranchTablePull"
 
-        # Verify request body contained targetTableId
+        # The pull endpoint takes no request body (verified live against the API)
         sent_request = httpx_mock.get_request()
-        body = json.loads(sent_request.content.decode("utf-8"))
-        assert body == {"targetTableId": "in.c-foo.data_change_log"}
+        assert sent_request.content == b""
         client.close()
 
     def test_dotted_table_id_passed_verbatim_in_path(self, httpx_mock) -> None:
@@ -100,9 +93,9 @@ class TestSwapTablesClient:
         in the path verbatim (a reserved char, if present, would be encoded).
         """
         httpx_mock.add_response(
-            url="https://connection.keboola.com/v2/storage/branch/1/tables/in.c-bucket-with-dashes.tbl/swap",
+            url="https://connection.keboola.com/v2/storage/branch/1/tables/in.c-bucket-with-dashes.tbl/pull",
             method="POST",
-            json={"id": 1, "status": "success", "operationName": "tableSwap"},
+            json={"id": 1, "status": "success", "operationName": "devBranchTablePull"},
             status_code=200,
         )
 
@@ -110,26 +103,21 @@ class TestSwapTablesClient:
             stack_url="https://connection.keboola.com",
             token=TEST_TOKEN,
         )
-        client.swap_tables(
-            table_id="in.c-bucket-with-dashes.tbl",
-            target_table_id="in.c-bucket-with-dashes.tbl2",
-            branch_id=1,
-        )
+        client.pull_table(table_id="in.c-bucket-with-dashes.tbl", branch_id=1)
         client.close()
 
     def test_polls_async_job_to_completion(self, httpx_mock) -> None:
         """If POST returns ``status: waiting``, client polls /v2/storage/jobs/{id}."""
         httpx_mock.add_response(
-            url="https://connection.keboola.com/v2/storage/branch/42/tables/in.c-foo.a/swap",
+            url="https://connection.keboola.com/v2/storage/branch/42/tables/in.c-foo.a/pull",
             method="POST",
-            json={"id": 555, "status": "waiting", "operationName": "tableSwap"},
+            json={"id": 555, "status": "waiting", "operationName": "devBranchTablePull"},
             status_code=200,
         )
-        # Subsequent poll returns success
         httpx_mock.add_response(
             url="https://connection.keboola.com/v2/storage/jobs/555",
             method="GET",
-            json={"id": 555, "status": "success", "operationName": "tableSwap"},
+            json={"id": 555, "status": "success", "operationName": "devBranchTablePull"},
             status_code=200,
         )
 
@@ -137,21 +125,17 @@ class TestSwapTablesClient:
             stack_url="https://connection.keboola.com",
             token=TEST_TOKEN,
         )
-        result = client.swap_tables(
-            table_id="in.c-foo.a",
-            target_table_id="in.c-foo.b",
-            branch_id=42,
-        )
+        result = client.pull_table(table_id="in.c-foo.a", branch_id=42)
         assert result["status"] == "success"
         client.close()
 
     def test_api_error_propagates(self, httpx_mock) -> None:
         """Storage API 4xx propagates as KeboolaApiError."""
         httpx_mock.add_response(
-            url="https://connection.keboola.com/v2/storage/branch/9999/tables/in.c-foo.x/swap",
+            url="https://connection.keboola.com/v2/storage/branch/9999/tables/in.c-foo.x/pull",
             method="POST",
-            json={"error": "Source and target tables have different column sets"},
-            status_code=400,
+            json={"error": "Table not found in the default branch"},
+            status_code=404,
         )
 
         client = KeboolaClient(
@@ -159,11 +143,7 @@ class TestSwapTablesClient:
             token=TEST_TOKEN,
         )
         with pytest.raises(KeboolaApiError):
-            client.swap_tables(
-                table_id="in.c-foo.x",
-                target_table_id="in.c-foo.y",
-                branch_id=9999,
-            )
+            client.pull_table(table_id="in.c-foo.x", branch_id=9999)
         client.close()
 
 
@@ -172,31 +152,28 @@ class TestSwapTablesClient:
 # ---------------------------------------------------------------------------
 
 
-class TestSwapTablesService:
-    """Tests for StorageService.swap_tables()."""
+class TestCloneTableService:
+    """Tests for StorageService.clone_table()."""
 
     def test_success(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.swap_tables.return_value = {"status": "ok"}
+        mock_client.pull_table.return_value = {"status": "ok"}
         service = _make_service(store, mock_client)
 
-        result = service.swap_tables(
+        result = service.clone_table(
             alias="test",
             table_id="in.c-foo.data",
-            target_table_id="in.c-foo.data_change_log",
             branch_id=9999,
         )
 
         assert result["project_alias"] == "test"
         assert result["branch_id"] == 9999
         assert result["table_id"] == "in.c-foo.data"
-        assert result["target_table_id"] == "in.c-foo.data_change_log"
         assert result["dry_run"] is False
         assert result["response"] == {"status": "ok"}
-        mock_client.swap_tables.assert_called_once_with(
+        mock_client.pull_table.assert_called_once_with(
             table_id="in.c-foo.data",
-            target_table_id="in.c-foo.data_change_log",
             branch_id=9999,
         )
         mock_client.close.assert_called_once()
@@ -206,46 +183,30 @@ class TestSwapTablesService:
         mock_client = MagicMock()
         service = _make_service(store, mock_client)
 
-        result = service.swap_tables(
+        result = service.clone_table(
             alias="test",
             table_id="in.c-foo.a",
-            target_table_id="in.c-foo.b",
             branch_id=42,
             dry_run=True,
         )
 
         assert result["dry_run"] is True
         assert "response" not in result
-        mock_client.swap_tables.assert_not_called()
+        mock_client.pull_table.assert_not_called()
 
     def test_no_branch_raises_config_error(self, tmp_path: Path) -> None:
-        """Mandatory branch enforcement: production swap is rejected before any HTTP."""
+        """Mandatory branch enforcement: pull is one-way default -> branch."""
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         service = _make_service(store, mock_client)
 
         with pytest.raises(ConfigError, match="dev branch"):
-            service.swap_tables(
+            service.clone_table(
                 alias="test",
                 table_id="in.c-foo.a",
-                target_table_id="in.c-foo.b",
                 branch_id=None,
             )
-        mock_client.swap_tables.assert_not_called()
-
-    def test_same_table_id_raises_config_error(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        mock_client = MagicMock()
-        service = _make_service(store, mock_client)
-
-        with pytest.raises(ConfigError, match="two different tables"):
-            service.swap_tables(
-                alias="test",
-                table_id="in.c-foo.a",
-                target_table_id="in.c-foo.a",
-                branch_id=42,
-            )
-        mock_client.swap_tables.assert_not_called()
+        mock_client.pull_table.assert_not_called()
 
     def test_unknown_project(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -253,26 +214,24 @@ class TestSwapTablesService:
         service = _make_service(store, mock_client)
 
         with pytest.raises(ConfigError):
-            service.swap_tables(
+            service.clone_table(
                 alias="nonexistent",
                 table_id="in.c-foo.a",
-                target_table_id="in.c-foo.b",
                 branch_id=42,
             )
 
     def test_api_error_propagates(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.swap_tables.side_effect = KeboolaApiError(
-            "Schema mismatch", status_code=400, error_code="STORAGE_VALIDATION"
+        mock_client.pull_table.side_effect = KeboolaApiError(
+            "Table not found", status_code=404, error_code="NOT_FOUND"
         )
         service = _make_service(store, mock_client)
 
         with pytest.raises(KeboolaApiError):
-            service.swap_tables(
+            service.clone_table(
                 alias="test",
                 table_id="in.c-foo.a",
-                target_table_id="in.c-foo.b",
                 branch_id=42,
             )
         # Service must close the client even when the API call raises
@@ -285,15 +244,15 @@ class TestSwapTablesService:
 # ---------------------------------------------------------------------------
 
 
-class TestSwapTablesCLI:
-    """CLI tests for `kbagent storage swap-tables`."""
+class TestCloneTableCLI:
+    """CLI tests for `kbagent storage clone-table`."""
 
     def _project_with_active_branch(self, store: ConfigStore, branch_id: int) -> None:
         config = store.load()
         config.projects["test"].active_branch_id = branch_id
         store.save(config)
 
-    def test_swap_json(self, tmp_path: Path) -> None:
+    def test_clone_json(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         self._project_with_active_branch(store, 9999)
 
@@ -303,11 +262,10 @@ class TestSwapTablesCLI:
         ):
             MockStore.return_value = store
             svc = MockSvc.return_value
-            svc.swap_tables.return_value = {
+            svc.clone_table.return_value = {
                 "project_alias": "test",
                 "branch_id": 9999,
                 "table_id": "in.c-foo.data",
-                "target_table_id": "in.c-foo.data_change_log",
                 "dry_run": False,
                 "response": {"status": "ok"},
             }
@@ -316,32 +274,27 @@ class TestSwapTablesCLI:
                 [
                     "--json",
                     "storage",
-                    "swap-tables",
+                    "clone-table",
                     "--project",
                     "test",
                     "--table-id",
                     "in.c-foo.data",
-                    "--target-table-id",
-                    "in.c-foo.data_change_log",
-                    "--yes",
                 ],
             )
 
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)["data"]
         assert data["table_id"] == "in.c-foo.data"
-        assert data["target_table_id"] == "in.c-foo.data_change_log"
         assert data["branch_id"] == 9999
 
-        svc.swap_tables.assert_called_once_with(
+        svc.clone_table.assert_called_once_with(
             alias="test",
             table_id="in.c-foo.data",
-            target_table_id="in.c-foo.data_change_log",
             branch_id=9999,
             dry_run=False,
         )
 
-    def test_swap_dry_run(self, tmp_path: Path) -> None:
+    def test_clone_dry_run(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         self._project_with_active_branch(store, 42)
 
@@ -351,11 +304,10 @@ class TestSwapTablesCLI:
         ):
             MockStore.return_value = store
             svc = MockSvc.return_value
-            svc.swap_tables.return_value = {
+            svc.clone_table.return_value = {
                 "project_alias": "test",
                 "branch_id": 42,
                 "table_id": "in.c-foo.a",
-                "target_table_id": "in.c-foo.b",
                 "dry_run": True,
             }
             result = runner.invoke(
@@ -363,13 +315,11 @@ class TestSwapTablesCLI:
                 [
                     "--json",
                     "storage",
-                    "swap-tables",
+                    "clone-table",
                     "--project",
                     "test",
                     "--table-id",
                     "in.c-foo.a",
-                    "--target-table-id",
-                    "in.c-foo.b",
                     "--dry-run",
                 ],
             )
@@ -377,11 +327,11 @@ class TestSwapTablesCLI:
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)["data"]
         assert data["dry_run"] is True
-        svc.swap_tables.assert_called_once()
-        call_kwargs = svc.swap_tables.call_args.kwargs
+        svc.clone_table.assert_called_once()
+        call_kwargs = svc.clone_table.call_args.kwargs
         assert call_kwargs["dry_run"] is True
 
-    def test_swap_explicit_branch_overrides_active(self, tmp_path: Path) -> None:
+    def test_clone_explicit_branch_overrides_active(self, tmp_path: Path) -> None:
         """--branch flag takes precedence over project's active_branch_id."""
         store = _make_store(tmp_path)
         self._project_with_active_branch(store, 100)
@@ -392,11 +342,10 @@ class TestSwapTablesCLI:
         ):
             MockStore.return_value = store
             svc = MockSvc.return_value
-            svc.swap_tables.return_value = {
+            svc.clone_table.return_value = {
                 "project_alias": "test",
                 "branch_id": 555,
                 "table_id": "in.c-foo.a",
-                "target_table_id": "in.c-foo.b",
                 "dry_run": False,
                 "response": {"status": "ok"},
             }
@@ -405,24 +354,21 @@ class TestSwapTablesCLI:
                 [
                     "--json",
                     "storage",
-                    "swap-tables",
+                    "clone-table",
                     "--project",
                     "test",
                     "--table-id",
                     "in.c-foo.a",
-                    "--target-table-id",
-                    "in.c-foo.b",
                     "--branch",
                     "555",
-                    "--yes",
                 ],
             )
 
         assert result.exit_code == 0, result.output
-        call_kwargs = svc.swap_tables.call_args.kwargs
+        call_kwargs = svc.clone_table.call_args.kwargs
         assert call_kwargs["branch_id"] == 555
 
-    def test_swap_missing_branch_fails_clearly(self, tmp_path: Path) -> None:
+    def test_clone_missing_branch_fails_clearly(self, tmp_path: Path) -> None:
         """Without an active branch and without --branch, ConfigError -> exit 5."""
         store = _make_store(tmp_path)
         # No active_branch_id set on project
@@ -433,20 +379,17 @@ class TestSwapTablesCLI:
         ):
             MockStore.return_value = store
             svc = MockSvc.return_value
-            svc.swap_tables.side_effect = ConfigError("swap-tables requires a dev branch.")
+            svc.clone_table.side_effect = ConfigError("clone-table requires a dev branch.")
             result = runner.invoke(
                 app,
                 [
                     "--json",
                     "storage",
-                    "swap-tables",
+                    "clone-table",
                     "--project",
                     "test",
                     "--table-id",
                     "in.c-foo.a",
-                    "--target-table-id",
-                    "in.c-foo.b",
-                    "--yes",
                 ],
             )
 

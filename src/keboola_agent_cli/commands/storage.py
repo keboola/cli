@@ -1308,9 +1308,10 @@ def storage_swap_tables(
         None,
         "--branch",
         help=(
-            "Dev branch ID. Required by the Storage API; defaults to the "
-            "active branch set via 'kbagent branch use'. Production swaps "
-            "are rejected by the API."
+            "Branch ID. Required; defaults to the active branch set via "
+            "'kbagent branch use'. Any branch works, including the "
+            "default/production branch -- a default-branch swap is how a "
+            "typed rebuild is applied to production."
         ),
     ),
     dry_run: bool = typer.Option(
@@ -1334,10 +1335,12 @@ def storage_swap_tables(
     name ("data") without touching downstream config references.
 
     \b
-    The Storage API restricts this to dev branches. The command resolves
-    the active branch from 'kbagent branch use' if --branch is omitted;
-    if no branch is set in either place, the call is rejected before any
-    HTTP call.
+    branch_id is mandatory (the swap is always branch-scoped): the command
+    resolves the active branch from 'kbagent branch use' if --branch is
+    omitted, and exits 5 before any HTTP call if no branch is set in either
+    place. Any branch works, INCLUDING the default/production branch -- a
+    default-branch swap is how a typed rebuild is applied to prod, since a
+    dev-branch merge does not carry storage schema.
 
     \b
     Example:
@@ -1420,6 +1423,93 @@ def storage_swap_tables(
         formatter.console.print(
             f"[bold green]Swapped:[/bold green] {result['table_id']} <-> "
             f"{result['target_table_id']} (branch {result['branch_id']})"
+        )
+
+
+@storage_app.command("clone-table", rich_help_panel=_TABLES)
+def storage_clone_table(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    table_id: str = typer.Option(
+        ...,
+        "--table-id",
+        help="Table ID to pull into the branch (e.g. 'in.c-bucket.table')",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help=(
+            "Target dev branch ID. Required; defaults to the active branch "
+            "set via 'kbagent branch use'. The pull is one-way: default -> branch."
+        ),
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be pulled without executing",
+    ),
+) -> None:
+    """Clone (pull) a production table into a development branch.
+
+    On storage-branches projects a dev branch reads production tables
+    transparently until the first write. To mutate a table's schema in the
+    branch -- e.g. 'swap-tables' or dropping a column -- you first need a
+    branch-local copy of the production table; without it the Storage API
+    reports the bucket as "not found" in the branch. This materializes that
+    copy from the default branch (one-way: default -> branch).
+
+    \b
+    Example:
+      kbagent branch use --project P --branch 1234
+      kbagent storage clone-table --project P --table-id in.c-foo.data
+      kbagent storage swap-tables --project P \\
+        --table-id in.c-foo.data --target-table-id in.c-foo.data_typed
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    try:
+        result = service.clone_table(
+            alias=project,
+            table_id=table_id,
+            branch_id=effective_branch,
+            dry_run=dry_run,
+        )
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            project=project,
+            retryable=exc.retryable,
+        )
+        raise typer.Exit(code=exit_code) from None
+
+    if dry_run:
+        if formatter.json_mode:
+            formatter.output(result)
+        else:
+            formatter.console.print(
+                f"[bold blue]Would clone (branch {result['branch_id']}):[/bold blue] "
+                f"{result['table_id']} (default -> branch)"
+            )
+        return
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        formatter.console.print(
+            f"[bold green]Cloned:[/bold green] {result['table_id']} "
+            f"into branch {result['branch_id']}"
         )
 
 

@@ -1344,7 +1344,7 @@ class StorageService(BaseService):
         branch_id: int | None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Swap two storage tables (dev branch only).
+        """Swap two storage tables (branch-scoped; branch_id mandatory).
 
         After the swap, the two tables exchange physical positions. Aliases
         are NOT transferred -- they keep pointing at the same physical
@@ -1352,9 +1352,11 @@ class StorageService(BaseService):
         This is the documented behavior of the Storage API; the service
         layer does not try to rewrite alias targets.
 
-        The Storage API rejects this operation on production -- a dev branch
-        ID is mandatory. The service raises ConfigError before any HTTP call
-        when ``branch_id`` is None.
+        ``branch_id`` is mandatory and the service raises ConfigError before
+        any HTTP call when it is None. Any branch is accepted, INCLUDING the
+        default/production branch -- a default-branch swap is the supported
+        way to retype a production table (dev-branch merge does not propagate
+        storage schema, so a swap done in a dev branch never reaches prod).
 
         Args:
             alias: Project alias.
@@ -1412,6 +1414,72 @@ class StorageService(BaseService):
             "branch_id": branch_id,
             "table_id": table_id,
             "target_table_id": target_table_id,
+            "dry_run": False,
+            "response": response,
+        }
+
+    def clone_table(
+        self,
+        alias: str,
+        table_id: str,
+        branch_id: int | None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Pull (clone) a production table into a dev branch (branch required).
+
+        On ``storage-branches`` projects a dev branch reads production tables
+        transparently until the first write, so mutating a table's schema in
+        the branch (e.g. ``swap_tables`` or a column drop) first needs a
+        branch-local copy of the production table. This materializes that copy
+        from the default branch. The pull is one-way (default -> branch); the
+        service raises ConfigError before any HTTP call when ``branch_id`` is
+        None.
+
+        Args:
+            alias: Project alias.
+            table_id: Full ID of the table to pull into the branch.
+            branch_id: Target dev branch ID (must not be None).
+            dry_run: If True, only report what would be pulled.
+
+        Returns:
+            Dict with 'project_alias', 'branch_id', 'table_id', 'dry_run',
+            and (when not dry-run) 'response'.
+
+        Raises:
+            ConfigError: If branch_id is None.
+            KeboolaApiError: If the API call fails.
+        """
+        if branch_id is None:
+            raise ConfigError(
+                "clone-table requires a dev branch. Set one with "
+                "'kbagent branch use --project <P> --branch <ID>' or pass "
+                "--branch <ID> directly. The pull is one-way: default -> branch."
+            )
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        if dry_run:
+            return {
+                "project_alias": alias,
+                "branch_id": branch_id,
+                "table_id": table_id,
+                "dry_run": True,
+            }
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            response = client.pull_table(
+                table_id=table_id,
+                branch_id=branch_id,
+            )
+        finally:
+            client.close()
+
+        return {
+            "project_alias": alias,
+            "branch_id": branch_id,
+            "table_id": table_id,
             "dry_run": False,
             "response": response,
         }

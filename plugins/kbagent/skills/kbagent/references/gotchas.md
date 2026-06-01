@@ -766,23 +766,67 @@ events and emits a final `done` SSE frame mirroring the same record.
   latest -- previously only the latest was reported, leaving the user with
   no signal whether their cache was stale.
 
-## `storage swap-tables` is dev-branch only and aliases stay put (since v0.28.0)
+## `storage swap-tables` is branch-scoped and aliases stay put (since v0.28.0)
 
 - `kbagent storage swap-tables --project P --table-id A --target-table-id B
-  --branch <ID>` swaps two tables' physical positions in a dev branch
+  --branch <ID>` swaps two tables' physical positions
   (`POST /v2/storage/branch/{branch}/tables/{id}/swap`).
-- The Storage API rejects this on production. The service refuses with
-  exit 5 / `ConfigError` *before* any HTTP call when neither `--branch`
-  nor an active branch (via `branch use`) is set.
+- **branch_id is mandatory, but any branch works -- including the
+  default/production branch.** The service refuses with exit 5 /
+  `ConfigError` *before* any HTTP call only when neither `--branch` nor an
+  active branch (via `branch use`) is set. (The earlier "rejected on
+  production" claim was wrong -- verified live 2026-06-01: a default-branch
+  swap succeeds and is the supported way to retype a prod table.)
 - **Aliases are NOT transferred.** They keep pointing at the same
   physical position, so after the swap they expose the OTHER table's
   data. Plan downstream config rewrites if any aliased consumer relies
   on schema, not data.
-- Typical use: AI agent profiles a typeless table, builds a typed
-  rebuild called `<name>_change_log` via CTAS in a dev branch, then
-  swaps it back into the original name. After merging the branch the
-  original table now carries the typed schema with no downstream config
-  rewrite required.
+- **Dev-branch merge does NOT carry storage schema** (only configs), so a
+  swap done inside a dev branch never reaches production via merge. The
+  dev branch is a *rehearsal* -- profile the typeless table, build a typed
+  rebuild (`<name>_change_log`) via CTAS, swap, and run downstream configs
+  against it to prove the typed schema is consumer-safe. Then discard the
+  branch and run the real build + swap in the production (default) branch.
+  Full procedure: `typify-table-workflow.md`.
+
+## `storage clone-table` materializes a prod table into a dev branch (since v0.52.0)
+
+- `kbagent storage clone-table --project P --table-id T --branch <ID>`
+  pulls a production table into a dev branch
+  (`POST /v2/storage/branch/{branch}/tables/{id}/pull`, operationName
+  `devBranchTablePull` -- the same call the platform issues on a branch's
+  first write to a prod table).
+- **Why it matters on `storage-branches` projects:** a dev branch reads
+  production tables transparently (copy-on-write) until the first write.
+  A schema mutation in the branch -- `swap-tables`, dropping a column --
+  targets a table that is not yet branch-local, so the Storage API fails
+  with a misleading `"bucket ... was not found in the project"`. Run
+  `clone-table` first to materialize the table branch-local; the swap /
+  drop then succeeds. (Verified live 2026-06-01 on project 10539 with
+  storage-branches ON: clone -> in-branch swap succeeds; production left
+  untouched.)
+- **One-way (default -> branch).** There is no "push branch -> default":
+  branch storage is never merged back to production (only configurations
+  are). The pull is the only API path between the two table stores.
+- Branch is mandatory: the service refuses with exit 5 (`ConfigError`)
+  before any HTTP call when neither `--branch` nor an active branch (via
+  `branch use`) is set.
+- Permission class: `write` (creates a branch-local copy; never deletes).
+
+## Dev-branch merge carries only configurations, NOT storage schema (since v0.52.0, verified 2026-06-01)
+
+- When a dev branch is merged to production, Keboola propagates
+  **configuration** changes only. Physical storage tables -- their
+  schema, column types, and rows -- are **not** merged back. (Confirmed
+  by the storage-branches designer and Keboola's public docs:
+  help.keboola.com/tutorial/branches/merge-to-production.)
+- Consequence for retyping: a `swap-tables` (or `clone-table`) done inside
+  a dev branch stays in the branch. To retype a **production** table you
+  run the build + `swap-tables` in the production (default) branch itself.
+  The dev branch is only a rehearsal that validates the typed schema
+  against downstream configs. Full procedure: `typify-table-workflow.md`.
+- The only API path between the two table stores is `clone-table` (pull,
+  default -> branch). There is no "push branch -> default".
 
 ## `storage truncate-table` preserves schema; endpoint is uniformly async-via-job (since v0.32.0)
 

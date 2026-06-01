@@ -184,6 +184,9 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.create-bucket": "write",
     "storage.create-table": "write",
     "storage.upload-table": "write",
+    # clone-table pulls a prod table into a dev branch (materialization); it
+    # creates a branch-local copy and never deletes -- write, not destructive.
+    "storage.clone-table": "write",
     # Storage files
     "storage.files": "read",
     "storage.file-detail": "read",

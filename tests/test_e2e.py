@@ -7288,6 +7288,167 @@ class TestE2EStorageSwapTables:
 
 
 # ---------------------------------------------------------------------------
+# TestE2EStorageCloneTable -- storage clone-table (pull) into a dev branch
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EStorageCloneTable:
+    """End-to-end coverage for ``kbagent storage clone-table``.
+
+    Verifies:
+    - a production table can be pulled (cloned) into a dev branch and is
+      then visible/materialized in that branch,
+    - dry-run skips the HTTP call,
+    - calls without a branch are rejected before any HTTP traffic.
+
+    On storage-branches projects this materializes the prod table into the
+    branch (the prerequisite for in-branch swap / column drops). On
+    legacy-branch projects the pull still succeeds; the assertion only checks
+    the table is visible in the branch afterwards, which holds for both.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-clone"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+
+        self._created_branch_ids: list[int] = []
+        self._created_buckets: list[str] = []
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        yield
+
+        # Teardown: branches first (cascades to their materialized tables),
+        # then the production bucket we created outside of a branch.
+        for branch_id in self._created_branch_ids:
+            with contextlib.suppress(Exception):
+                self.client.delete_dev_branch(branch_id)
+        for bucket_id in self._created_buckets:
+            with contextlib.suppress(Exception):
+                self.client.delete_bucket(bucket_id, force=True)
+        self.client.close()
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(_invoke(self.config_dir, ["--json", *args]))
+
+    def test_clone_prod_table_into_dev_branch(self) -> None:
+        """Live pull: a production table becomes available in the dev branch."""
+        bucket_id = f"in.c-{RUN_ID.replace('-', '_')}_clone"
+        table_id = f"{bucket_id}.source"
+
+        _step(1, "create a production table (default branch)")
+        self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            "source",
+            "--column",
+            "id:VARCHAR(40)",
+            "--column",
+            "value:VARCHAR(20)",
+            "--primary-key",
+            "id",
+        )
+        self._created_buckets.append(bucket_id)
+
+        _step(2, "branch create", "target dev branch for the pull")
+        branch = self._run_ok(
+            "branch", "create", "--project", self.alias, "--name", f"{RUN_ID}-clone-branch"
+        )["data"]
+        branch_id = int(branch["branch_id"])
+        self._created_branch_ids.append(branch_id)
+
+        _step(3, "storage clone-table", "POST /tables/.../pull (default -> branch)")
+        result = self._run_ok(
+            "storage",
+            "clone-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--branch",
+            str(branch_id),
+        )["data"]
+        assert result["table_id"] == table_id
+        assert result["branch_id"] == branch_id
+        assert result["dry_run"] is False
+        assert result["response"]["status"] == "success"
+
+        _step(4, "table-detail in branch", "table is materialized/visible after pull")
+        detail = self.client.get_table_detail(table_id, branch_id=branch_id)
+        col_names = {c["name"] for c in detail["definition"]["columns"]}
+        assert col_names == {"id", "value"}
+
+    def test_clone_dry_run_does_not_call_api(self) -> None:
+        """Dry-run skips the HTTP call: exit 0, no response key."""
+        _step(1, "branch create", "dry-run still requires a branch context")
+        branch = self._run_ok(
+            "branch", "create", "--project", self.alias, "--name", f"{RUN_ID}-clone-dry"
+        )["data"]
+        branch_id = int(branch["branch_id"])
+        self._created_branch_ids.append(branch_id)
+
+        result = self._run_ok(
+            "storage",
+            "clone-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            "in.c-foo.bar",
+            "--branch",
+            str(branch_id),
+            "--dry-run",
+        )["data"]
+        assert result["dry_run"] is True
+        assert "response" not in result
+
+    def test_clone_without_branch_is_rejected(self) -> None:
+        """Without active branch and without --branch, exit 5 before any HTTP."""
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "storage",
+                "clone-table",
+                "--project",
+                self.alias,
+                "--table-id",
+                "in.c-foo.bar",
+            ],
+        )
+        assert result.exit_code == 5, result.output
+        payload = json.loads(result.output)
+        assert payload["status"] == "error"
+        assert "dev branch" in payload["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
 # TestE2EDataAppLifecycle -- data-app create / detail / deploy / start / stop / delete
 # ---------------------------------------------------------------------------
 
