@@ -395,7 +395,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Delete one or more buckets. --force cascade-deletes tables. Linked/shared buckets protected. Branch-aware.
 
   kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes]
-    Swap two storage tables in a dev branch (POST /tables/{id}/swap). Both tables exchange physical positions;
+    Swap two storage tables in any branch, including the default/production branch (POST /tables/{id}/swap). Both tables exchange physical positions;
     aliases are NOT transferred (they keep pointing at the same physical position and therefore expose the
     OTHER table's data after the swap). Use to promote a typed rebuild back into the original name without
     touching downstream config references. branch_id is mandatory (--branch or active branch via 'kbagent

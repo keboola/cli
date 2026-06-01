@@ -219,12 +219,12 @@ class TestSwapTablesService:
         mock_client.swap_tables.assert_not_called()
 
     def test_no_branch_raises_config_error(self, tmp_path: Path) -> None:
-        """Mandatory branch enforcement: production swap is rejected before any HTTP."""
+        """Mandatory branch enforcement: swap-tables without --branch or active branch raises ConfigError before any HTTP."""
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         service = _make_service(store, mock_client)
 
-        with pytest.raises(ConfigError, match="dev branch"):
+        with pytest.raises(ConfigError, match="requires a branch"):
             service.swap_tables(
                 alias="test",
                 table_id="in.c-foo.a",

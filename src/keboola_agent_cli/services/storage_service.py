@@ -1375,10 +1375,10 @@ class StorageService(BaseService):
         """
         if branch_id is None:
             raise ConfigError(
-                "swap-tables requires a dev branch. Set one with "
+                "swap-tables requires a branch. Set one with "
                 "'kbagent branch use --project <P> --branch <ID>' or pass "
-                "--branch <ID> directly. The Storage API rejects this on "
-                "production."
+                "--branch <ID> directly. Any branch works, including the "
+                "default/production branch."
             )
 
         if table_id == target_table_id:

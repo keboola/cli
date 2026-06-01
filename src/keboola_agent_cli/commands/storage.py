@@ -1326,7 +1326,7 @@ def storage_swap_tables(
         help="Skip confirmation prompt",
     ),
 ) -> None:
-    """Swap two storage tables in a development branch.
+    """Swap two storage tables (any branch, including the default/production branch).
 
     Both tables exchange physical positions. Aliases are NOT transferred --
     they keep pointing at the same physical position and therefore expose
