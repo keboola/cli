@@ -92,8 +92,13 @@ class TestSwapTablesClient:
         assert body == {"targetTableId": "in.c-foo.data_change_log"}
         client.close()
 
-    def test_url_encoding_for_special_characters(self, httpx_mock) -> None:
-        """Table IDs with dots/dashes are URL-encoded in the path."""
+    def test_dotted_table_id_passed_verbatim_in_path(self, httpx_mock) -> None:
+        """Dotted/dashed table IDs land in the path as-is.
+
+        Dots and dashes are RFC 3986 unreserved, so ``quote(..., safe="")``
+        does not percent-encode them; this verifies the table ID is placed
+        in the path verbatim (a reserved char, if present, would be encoded).
+        """
         httpx_mock.add_response(
             url="https://connection.keboola.com/v2/storage/branch/1/tables/in.c-bucket-with-dashes.tbl/swap",
             method="POST",
