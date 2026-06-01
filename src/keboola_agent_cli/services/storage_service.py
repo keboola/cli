@@ -1362,7 +1362,7 @@ class StorageService(BaseService):
             alias: Project alias.
             table_id: Full ID of the first table.
             target_table_id: Full ID of the second table.
-            branch_id: Dev branch ID (must not be None).
+            branch_id: Branch ID (must not be None; any branch accepted, including the default/production branch).
             dry_run: If True, only report what would be swapped.
 
         Returns:
@@ -1375,10 +1375,10 @@ class StorageService(BaseService):
         """
         if branch_id is None:
             raise ConfigError(
-                "swap-tables requires a dev branch. Set one with "
+                "swap-tables requires a branch. Set one with "
                 "'kbagent branch use --project <P> --branch <ID>' or pass "
-                "--branch <ID> directly. The Storage API rejects this on "
-                "production."
+                "--branch <ID> directly. Any branch works, including the "
+                "default/production branch."
             )
 
         if table_id == target_table_id:
