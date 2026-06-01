@@ -355,6 +355,7 @@ kbagent storage truncate-table --project NAME --table-id ID [--table-id ...] [--
 kbagent storage delete-column --project NAME --table-id ID --column COL [--column ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes]
+kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
 kbagent storage describe-bucket --project NAME --bucket-id ID [--text STR | --file PATH | --stdin] [--branch ID]
 kbagent storage describe-table --project NAME --table-id ID [--text STR | --file PATH | --stdin] [--branch ID]
 kbagent storage describe-column --project NAME --table-id ID --column NAME=DESC [--column ...] [--branch ID]

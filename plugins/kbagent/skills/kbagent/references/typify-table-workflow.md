@@ -268,6 +268,17 @@ emits backtick-quoted `\`dataset\`.\`table\`` paths since v0.25.3).
 ## Phase 5 -- Swap
 
 ```bash
+# 5.0. storage-branches projects ONLY: the swap is a write, and the dev
+#      branch still reads the original 'data' transparently from prod, so
+#      the swap fails with a misleading "bucket not found" until 'data' is
+#      materialized branch-local. Pull it in first. ('data_typed', built
+#      in Phase 3, is already branch-local.) Skip on legacy-branch projects
+#      -- check with: kbagent project info --project ALIAS | grep storage-branches
+kbagent --json storage clone-table \
+  --project ALIAS \
+  --table-id in.c-foo.data \
+  --branch <BRANCH_ID>
+
 # 5a. Dry-run first. Should report dry_run: true, never call the API.
 kbagent --json storage swap-tables \
   --project ALIAS \

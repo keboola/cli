@@ -254,6 +254,17 @@ kbagent workspace query --workspace-id W --sql "
 "
 # (or use kbagent storage create-table + an SQL transformation)
 
+# 2b. storage-branches projects only: the dev branch reads 'data'
+#     transparently until first write, so swap (a write) fails with a
+#     misleading "bucket not found" until 'data' is materialized
+#     branch-local. Pull it in first. (data_change_log, built by the
+#     in-branch CTAS above, is already branch-local. Skip on
+#     legacy-branch projects.)
+kbagent storage clone-table \
+  --project prod \
+  --table-id in.c-foo.data \
+  --branch <ID>
+
 # 3. Swap: the typed copy becomes 'data', the typeless original moves
 #    to 'data_change_log'. Aliases stay put -- they expose the OTHER
 #    table's data after the swap.
@@ -268,6 +279,12 @@ kbagent branch merge --project prod --branch <ID>
 ```
 
 Rules:
+- **storage-branches projects:** `swap-tables` operates on branch-local
+  tables. The original (`in.c-foo.data`) is read transparently from prod
+  until first write, so the swap fails with a misleading "bucket not
+  found" until you `clone-table` it into the branch (step 2b). The typed
+  sibling built by the in-branch CTAS is already branch-local. Legacy
+  fake-branch projects don't need this.
 - The Storage API rejects this on production. The service refuses with
   exit 5 (`ConfigError`) before any HTTP if `--branch` is missing AND no
   active branch is set via `branch use`.

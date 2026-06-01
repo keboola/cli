@@ -68,6 +68,10 @@ class SwapTables(BaseModel):
     branch_id: int
 
 
+class CloneTable(BaseModel):
+    branch_id: int
+
+
 @router.get("/buckets", summary="List storage buckets")
 def list_buckets(
     project: str | None = None,
@@ -337,6 +341,29 @@ def swap_tables(
         alias=project,
         table_id=table_id,
         target_table_id=body.target_table_id,
+        branch_id=body.branch_id,
+        dry_run=dry_run,
+    )
+
+
+@router.post(
+    "/tables/{project}/{table_id:path}/pull",
+    summary="Clone a table into a dev branch",
+)
+def clone_table(
+    project: str,
+    table_id: str,
+    body: CloneTable,
+    dry_run: bool = False,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Pull (clone) a production table into a dev branch.
+
+    Mirrors `kbagent storage clone-table`.
+    """
+    return registry.storage.clone_table(
+        alias=project,
+        table_id=table_id,
         branch_id=body.branch_id,
         dry_run=dry_run,
     )

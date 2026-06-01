@@ -401,6 +401,12 @@ remain branch-aware because modifying a dev branch is the expected intent.
     touching downstream config references. Storage API rejects this on production: --branch (or active branch
     via 'kbagent branch use') is mandatory. Service guards before any HTTP call when no branch is set.
 
+  kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
+    Clone (pull) a production table into a dev branch (POST /tables/{id}/pull). On storage-branches projects a
+    dev branch reads prod tables transparently until first write, so mutating a table's schema in the branch
+    (swap-tables, dropping columns) first needs a branch-local copy. This materializes that copy (one-way:
+    default -> branch). Branch is mandatory; service guards before any HTTP call when no branch is set.
+
 ### Storage Descriptions
 
   kbagent storage describe-bucket --project NAME --bucket-id ID [--text STR | --file PATH | --stdin] [--branch ID]

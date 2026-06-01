@@ -1804,6 +1804,36 @@ class KeboolaClient(BaseHttpClient):
         response = self._request("POST", f"{prefix}/tables/{safe_id}/swap", json=body)
         return self._wait_for_storage_job(response.json())
 
+    def pull_table(self, table_id: str, branch_id: int) -> dict[str, Any]:
+        """Pull (clone) a table from the default branch into a dev branch.
+
+        On ``storage-branches`` projects a dev branch reads production tables
+        transparently (copy-on-write) until the first write. Operations that
+        mutate a table in the branch -- such as ``swap_tables`` or a column
+        drop -- require a branch-local materialization of the table first;
+        otherwise the Storage API reports the bucket as "not found" in the
+        branch. This endpoint performs that materialization: it copies the
+        table from the default (production) branch into the branch's isolated
+        storage. It is the same call the platform issues on a branch's first
+        write to a production table.
+
+        The pull is one-way (default -> branch). The API returns a queued
+        storage job which this method polls to completion before returning,
+        mirroring ``swap_tables`` semantics.
+
+        Args:
+            table_id: Full ID of the table to pull (e.g. "in.c-bucket.table").
+            branch_id: Target development branch ID. The source is always the
+                default/production branch.
+
+        Returns:
+            Completed storage job dict.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}"
+        safe_id = quote(table_id, safe="")
+        response = self._request("POST", f"{prefix}/tables/{safe_id}/pull")
+        return self._wait_for_storage_job(response.json())
+
     def list_tables_with_metadata(self) -> list[dict[str, Any]]:
         """List all storage tables with columns and metadata.
 

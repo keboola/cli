@@ -784,6 +784,30 @@ events and emits a final `done` SSE frame mirroring the same record.
   original table now carries the typed schema with no downstream config
   rewrite required.
 
+## `storage clone-table` materializes a prod table into a dev branch (since v0.52.0)
+
+- `kbagent storage clone-table --project P --table-id T --branch <ID>`
+  pulls a production table into a dev branch
+  (`POST /v2/storage/branch/{branch}/tables/{id}/pull`, operationName
+  `devBranchTablePull` -- the same call the platform issues on a branch's
+  first write to a prod table).
+- **Why it matters on `storage-branches` projects:** a dev branch reads
+  production tables transparently (copy-on-write) until the first write.
+  A schema mutation in the branch -- `swap-tables`, dropping a column --
+  targets a table that is not yet branch-local, so the Storage API fails
+  with a misleading `"bucket ... was not found in the project"`. Run
+  `clone-table` first to materialize the table branch-local; the swap /
+  drop then succeeds. (Verified live 2026-06-01 on project 10539 with
+  storage-branches ON: clone -> in-branch swap succeeds; production left
+  untouched.)
+- **One-way (default -> branch).** There is no "push branch -> default":
+  branch storage is never merged back to production (only configurations
+  are). The pull is the only API path between the two table stores.
+- Branch is mandatory: the service refuses with exit 5 (`ConfigError`)
+  before any HTTP call when neither `--branch` nor an active branch (via
+  `branch use`) is set.
+- Permission class: `write` (creates a branch-local copy; never deletes).
+
 ## `storage truncate-table` preserves schema; endpoint is uniformly async-via-job (since v0.32.0)
 
 - `kbagent storage truncate-table --project P --table-id T [--branch ID]
