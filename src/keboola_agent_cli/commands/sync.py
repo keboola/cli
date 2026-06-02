@@ -248,8 +248,10 @@ def _format_diff_result(formatter: Any, result: dict) -> None:
         formatter.console.print(f"  {len(remote_only)} new remote-only config(s)")
 
 
-def _format_conflict_list(formatter: Any, conflicts: list[dict]) -> None:
+def _format_conflict_list(formatter: Any, conflicts: list[dict[str, str]]) -> None:
     """Print the per-config force-pull conflict list (human mode only)."""
+    if not conflicts:
+        return
     n = len(conflicts)
     formatter.console.print(
         f"\n[bold red]Merge conflict:[/bold red] {n} config(s) changed BOTH "

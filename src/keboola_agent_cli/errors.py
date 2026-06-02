@@ -195,7 +195,7 @@ class SyncConflictError(Exception):
     optional ``row_id``.
     """
 
-    def __init__(self, conflicts: list[dict]) -> None:
+    def __init__(self, conflicts: list[dict[str, str]]) -> None:
         self.conflicts = conflicts
         n = len(conflicts)
         plural = "s" if n != 1 else ""
