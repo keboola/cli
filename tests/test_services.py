@@ -67,7 +67,9 @@ class TestAddProject:
         # Verification client and the stored/returned URL all use the clean base.
         assert captured["url"] == "https://connection.keboola.com"
         assert result["stack_url"] == "https://connection.keboola.com"
-        assert store.get_project("prod").stack_url == "https://connection.keboola.com"
+        saved = store.get_project("prod")
+        assert saved is not None
+        assert saved.stack_url == "https://connection.keboola.com"
 
     def test_add_project_invalid_token(self, tmp_config_dir: Path) -> None:
         """add_project raises KeboolaApiError when token verification fails."""

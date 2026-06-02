@@ -962,7 +962,9 @@ class TestEnvProjectInjection:
         )
         # No opt-in -> the persisted entry is the only one; editing must work.
         store.edit_project("__env__", project_name="Renamed")
-        assert store.get_project("__env__").project_name == "Renamed"
+        renamed = store.get_project("__env__")
+        assert renamed is not None
+        assert renamed.project_name == "Renamed"
 
     def test_default_blanked_when_ephemeral_stripped(
         self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
