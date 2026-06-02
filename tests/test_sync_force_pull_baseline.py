@@ -241,3 +241,31 @@ def test_force_pull_aborts_on_row_conflict(tmp_config_dir: Path, tmp_path: Path)
 
     scopes = {c["scope"] for c in excinfo.value.conflicts}
     assert "row" in scopes
+
+
+# ===================================================================
+# --all-projects keeps the conflict structured (not a flat string)
+# ===================================================================
+
+
+def test_force_pull_all_projects_emits_structured_conflict(
+    tmp_config_dir: Path, tmp_path: Path
+) -> None:
+    """`pull_all` must surface SYNC_CONFLICT + conflicts, not just `str(exc)`."""
+    base_dir = tmp_path / "base"
+    project_root = base_dir / "prod"
+    project_root.mkdir(parents=True)
+    store = _init_and_pull(tmp_config_dir, project_root, REMOTE_V1)
+
+    config_file = _config_yml(project_root, under_rows=False)
+    _edit_param(config_file, "baseUrl", "https://changed.example.com")
+
+    # Remote moved on -> conflict. pull_all catches it per-project; assert it
+    # keeps the structured payload a JSON consumer needs (not a flat string).
+    result = _svc(store, REMOTE_V2).pull_all(base_dir, force=True)
+    proj = result["projects"]["prod"]
+    assert proj.get("error_code") == "SYNC_CONFLICT"
+    assert proj.get("conflicts"), "conflicts list must be present on the error entry"
+    assert proj["conflicts"][0]["config_id"] == "cfg-001"
+    assert result["summary"]["failed"] == 1
+    assert result["summary"]["success"] == 0

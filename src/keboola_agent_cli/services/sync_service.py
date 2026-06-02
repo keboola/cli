@@ -2480,6 +2480,17 @@ class SyncService(BaseService):
                 )
                 results[alias] = result
                 success_count += 1
+            except SyncConflictError as exc:
+                # Preserve the structured conflict so a programmatic / AI
+                # consumer of `--all-projects --json` can tell a merge conflict
+                # apart from any other error and read the conflicting configs --
+                # the single-project path emits the same code + conflicts.
+                results[alias] = {
+                    "error": exc.message,
+                    "error_code": exc.error_code,
+                    "conflicts": exc.conflicts,
+                }
+                failed_count += 1
             except Exception as exc:
                 results[alias] = {"error": str(exc)}
                 failed_count += 1
