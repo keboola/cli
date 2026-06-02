@@ -304,6 +304,14 @@ success, not a failure.
   misleading "bucket not found" until the prod table is branch-local. Run
   `kbagent storage clone-table --project P --table-id T --branch <ID>`
   first (one-way default->branch). See `gotchas.md`.
+- **`sync pull --force` is conflict-aware, not a blind overwrite** (0.53.0+):
+  a locally-modified config whose remote is UNCHANGED is preserved (its pending
+  delta stays pushable); a true merge conflict (local AND remote both changed
+  since last pull) ABORTS the pull with exit 1 / `SYNC_CONFLICT` instead of
+  silently discarding work (pre-0.53.0 it silently corrupted the baseline and
+  stranded the edits). Safe to force-pull an unrelated config while you have
+  un-pushed edits elsewhere. To discard a local edit on purpose, delete the
+  file/dir then pull. See `gotchas.md`.
 
 - **`storage truncate-table` is row-only; schema and dependents are
   preserved** (0.32.0+): the underlying call is

@@ -447,6 +447,17 @@ kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
 kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR] [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run]
 
+# sync: GitOps -- configs as local files. init/pull/push/diff are filesystem-local (no serve REST surface).
+kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
+kbagent sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
+# `sync pull --force` is conflict-aware (since 0.53.0): locally-modified config whose remote is UNCHANGED is preserved (delta stays pushable, never silently re-stamped); a true merge conflict (local AND remote both changed since last pull) aborts (exit 1, SYNC_CONFLICT, --json lists details.conflicts); local-untouched + remote-changed takes remote. Discard local edits on purpose by deleting the file/dir then pulling.
+kbagent sync status [--directory DIR]
+kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
+kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
+kbagent sync branch-link --project ALIAS (--branch-id ID | --branch-name NAME) [--directory DIR]
+kbagent sync branch-unlink [--directory DIR]
+kbagent sync branch-status [--directory DIR]
+
 kbagent dev-portal identity add --alias A --username U [--password P | --password-stdin]
                                 [--role-hint vendor|admin] [--vendor V] [--portal-url URL]
 kbagent dev-portal identity list

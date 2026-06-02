@@ -9,7 +9,7 @@ from typing import Any
 
 import typer
 
-from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
 from ._helpers import check_cli_permission, get_formatter, get_service, map_error_to_exit_code
 
 sync_app = typer.Typer(help="Sync project configurations with local filesystem")
@@ -248,6 +248,21 @@ def _format_diff_result(formatter: Any, result: dict) -> None:
         formatter.console.print(f"  {len(remote_only)} new remote-only config(s)")
 
 
+def _format_conflict_list(formatter: Any, conflicts: list[dict]) -> None:
+    """Print the per-config force-pull conflict list (human mode only)."""
+    n = len(conflicts)
+    formatter.console.print(
+        f"\n[bold red]Merge conflict:[/bold red] {n} config(s) changed BOTH "
+        f"locally and on the remote since the last pull:"
+    )
+    for c in conflicts:
+        label = "row" if c.get("scope") == "row" else "config"
+        formatter.console.print(
+            f"  [red]![/red] {c.get('component_id')}/{c.get('config_id')} "
+            f"[dim]({label})[/dim]  {c.get('config_name', '')}"
+        )
+
+
 def _format_push_result(formatter: Any, result: dict) -> None:
     """Format a single-project push result for human output."""
     status = result.get("status", "")
@@ -409,7 +424,12 @@ def sync_pull(
     force: bool = typer.Option(
         False,
         "--force",
-        help="Overwrite local files without checking for modifications",
+        help=(
+            "Force re-pull. Locally-modified configs whose remote is unchanged "
+            "are PRESERVED (kept as pending changes for `sync push`); a true "
+            "merge conflict (local AND remote both changed since the last pull) "
+            "aborts the pull so you can resolve it."
+        ),
     ),
     dry_run: bool = typer.Option(
         False,
@@ -531,6 +551,16 @@ def sync_pull(
             max_samples=max_samples,
             branch_override=branch,
         )
+    except SyncConflictError as exc:
+        if not formatter.json_mode:
+            _format_conflict_list(formatter, exc.conflicts)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            project=project or "",
+            details={"conflicts": exc.conflicts},
+        )
+        raise typer.Exit(code=1) from None
     except FileNotFoundError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
         raise typer.Exit(code=1) from None

@@ -2426,3 +2426,24 @@ Enter just hung until Ctrl-C. The helper now branches on
 `sys.stdin.isatty()`: TTY uses `getpass.getpass()` (hidden, line-based,
 Enter confirms); pipe (`echo $PASS | kbagent dev-portal identity add
 --password-stdin`) still reads to EOF.
+
+## `sync pull --force` preserves un-pushed edits and aborts on conflict (since v0.53.0)
+
+`--force` is **conflict-aware**, not a blind overwrite. Pre-0.53.0 a force-pull
+run while you had un-pushed local edits to a config whose remote was unchanged
+**silently corrupted the sync baseline**: it re-stamped the manifest `pull_hash`
+from the *edited* on-disk file, so `sync diff` / `sync push` then reported "in
+sync" and shipped nothing while the remote still held the old config -- the edits
+were stranded with no signal. Fixed: `--force` now branches on the 3-way state.
+
+- Local edited, remote unchanged -> **preserved** (pending delta stays pushable).
+- Local edited AND remote also changed (true conflict) -> **aborts** with exit 1
+  and error code `SYNC_CONFLICT`; the `--json` envelope carries
+  `details.conflicts: [{scope, component_id, config_id, config_name, path, row_id?}]`.
+  Resolve via `sync diff` then `sync push`-or-discard, then pull again.
+- Local untouched, remote changed -> takes remote (unchanged behavior).
+
+Consequence: `--force` no longer discards non-conflicting local edits. To
+intentionally drop a local edit, delete the file (or the config dir) and pull.
+Applies at config and row granularity. `--all-projects` reports a per-project
+conflict as that project's error without aborting the rest of the batch.
