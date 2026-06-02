@@ -342,7 +342,8 @@ Stored in `.keboola/branch-mapping.json`:
 ## Key behaviors
 
 - **Pull is idempotent**: re-running pull when nothing changed writes zero files
-- **Pull protects local edits**: modified files are skipped (use `--force` to overwrite)
+- **Pull protects local edits**: locally-modified files are skipped by default
+- **`--force` is conflict-aware (since 0.53.0)**: see below -- it no longer blindly overwrites
 - **Push only sends local changes**: remote_modified and conflict changes are skipped
 - **Encrypted values**: nonce differences are ignored in diff (no false positives)
 - **New configs**: push auto-assigns IDs from the API, updates manifest
@@ -350,3 +351,23 @@ Stored in `.keboola/branch-mapping.json`:
 - **Jobs are per-config**: `_jobs.jsonl` shows recent N jobs (default 5) with status + timing
 - **Data samples auto-trim**: tables with >30 columns export only first 30 (API sync limit)
 - **Encrypted columns masked**: columns starting with `#` show `***ENCRYPTED***` in samples
+
+## `sync pull --force` is conflict-aware (since 0.53.0)
+
+`--force` no longer blindly overwrites locally-modified configs. It branches on
+the 3-way diff state per config (and per row):
+
+- **Local edited, remote UNCHANGED** -> the file and its sync baseline are
+  **preserved**. The pending delta stays visible to `sync diff` / `sync push`.
+  `--force` does **not** discard the edit and does **not** silently re-stamp the
+  baseline (that was the pre-0.53.0 data-loss bug).
+- **Local edited AND remote also changed** since the last pull (a true merge
+  conflict) -> the pull **aborts before writing anything** with exit code 1 and
+  error code `SYNC_CONFLICT`, listing every conflicting config/row. Resolve with
+  `sync diff`, then `sync push` your edits (or discard them), then pull again.
+- **Local untouched, remote changed** -> `--force` takes remote as before.
+
+> Safe to run `sync pull --force` to refresh an unrelated config even while you
+> have un-pushed edits elsewhere: non-conflicting edits survive; a real conflict
+> stops you loudly instead of losing work. To intentionally drop a local edit,
+> delete the file (or the config directory) and pull.

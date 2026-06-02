@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.errors import ConfigError, KeboolaApiError, SyncConflictError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.project_service import ProjectService
 
@@ -466,6 +466,85 @@ class TestSyncPullCli:
             )
 
         assert result.exit_code == 3  # auth error
+
+    def _conflict_error(self) -> SyncConflictError:
+        return SyncConflictError(
+            [
+                {
+                    "scope": "config",
+                    "component_id": "keboola.ex-http",
+                    "config_id": "cfg-001",
+                    "config_name": "My HTTP Extractor",
+                    "path": "extractor/keboola.ex-http/my-http-extractor",
+                }
+            ]
+        )
+
+    def test_sync_pull_force_conflict_human(self, tmp_path: Path) -> None:
+        """sync pull --force aborts with exit 1 and lists the conflict (human)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.pull.side_effect = self._conflict_error()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                ["sync", "pull", "--project", "prod", "--force", "--directory", str(tmp_path)],
+            )
+
+        assert result.exit_code == 1
+        out = _strip_ansi(result.output)
+        assert "conflict" in out.lower()
+        assert "keboola.ex-http/cfg-001" in out
+
+    def test_sync_pull_force_conflict_json(self, tmp_path: Path) -> None:
+        """sync pull --force conflict emits a SYNC_CONFLICT error envelope (JSON)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.pull.side_effect = self._conflict_error()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "pull",
+                    "--project",
+                    "prod",
+                    "--force",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["status"] == "error"
+        assert payload["error"]["code"] == "SYNC_CONFLICT"
+        assert payload["error"]["details"]["conflicts"][0]["config_id"] == "cfg-001"
 
 
 # ===================================================================

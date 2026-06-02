@@ -814,6 +814,12 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   kbagent sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
     Download configs as local files. Idempotent, protects local modifications.
+    --force (semantics corrected since 0.53.0): re-pull over locally-modified configs.
+    A config edited locally whose remote is UNCHANGED is PRESERVED (its pending delta stays
+    pushable -- NOT discarded, NOT silently re-stamped). A true merge conflict (the config
+    changed BOTH locally and on the remote since the last pull) ABORTS the pull (exit 1,
+    SYNC_CONFLICT) listing each conflict; resolve via sync diff then push-or-discard, then pull.
+    To intentionally drop local edits, delete the file/dir and pull. Applies to rows too.
     --job-limit controls max recent jobs per config (default 5). For large projects,
     automatically falls back to per-config job fetching to ensure all configs get job history.
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).

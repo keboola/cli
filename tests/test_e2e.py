@@ -3964,6 +3964,115 @@ class TestE2ESyncWorkflow:
         )
         assert data["status"] == "ok"
 
+    def test_sync_force_pull_conflict_aware(self) -> None:
+        """`sync pull --force` is conflict-aware (0.53.0+), end-to-end.
+
+        Locks both halves of the baseline-corruption fix against real Storage:
+
+        * (b) local edited, remote UNCHANGED -> force-pull PRESERVES the edit
+          (does not silently re-stamp the baseline); ``sync diff`` afterward
+          still reports the config as modified.
+        * (a) local edited AND remote also changed -> force-pull ABORTS with
+          exit 1 and error code ``SYNC_CONFLICT``.
+
+        Creates + cleans up a dedicated config so the test is idempotent.
+        """
+        import yaml as _yaml
+
+        from keboola_agent_cli.client import KeboolaClient
+        from keboola_agent_cli.constants import CONFIG_FILENAME
+
+        cfg: dict = {}
+        try:
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                cfg = api.create_config(
+                    component_id=TEST_COMPONENT_ID,
+                    name=f"{RUN_ID}-forcepull",
+                    description="E2E force-pull conflict fixture",
+                    configuration={"parameters": {"db": {"host": "orig.example.com"}}},
+                )
+            cfg_id = str(cfg["id"])
+
+            # --- init + pull, locate the config's _config.yml ---
+            _step("7a", "sync init + pull (force-pull fixture)")
+            self._run_ok(
+                "sync", "init", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            matches = [
+                p
+                for p in self.project_dir.rglob(CONFIG_FILENAME)
+                if "rows" not in p.relative_to(self.project_dir).parts
+                and str(
+                    _yaml.safe_load(p.read_text(encoding="utf-8"))
+                    .get("_keboola", {})
+                    .get("config_id")
+                )
+                == cfg_id
+            ]
+            assert len(matches) == 1, f"config YAML not found after pull: {matches}"
+            config_file = matches[0]
+
+            # --- edit locally ---
+            local = _yaml.safe_load(config_file.read_text(encoding="utf-8"))
+            local.setdefault("parameters", {})["_e2e_marker"] = "x"
+            config_file.write_text(_yaml.dump(local, default_flow_style=False), encoding="utf-8")
+
+            # --- (b) force-pull, remote UNCHANGED -> edit preserved ---
+            _step("7b", "force-pull preserves edit when remote unchanged")
+            self._run_ok(
+                "sync",
+                "pull",
+                "--project",
+                self.alias,
+                "--directory",
+                str(self.project_dir),
+                "--force",
+            )
+            diff_after = self._run_ok(
+                "sync", "diff", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            modified = [c for c in diff_after["data"]["changes"] if c["change_type"] == "modified"]
+            assert any(c["config_id"] == cfg_id for c in modified), (
+                f"force-pull stranded the un-pushed edit: {diff_after['data']['summary']}"
+            )
+
+            # --- (a) mutate remote, force-pull -> SYNC_CONFLICT abort ---
+            _step("7c", "force-pull aborts on a true conflict")
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                api.update_config(
+                    component_id=TEST_COMPONENT_ID,
+                    config_id=cfg_id,
+                    configuration={"parameters": {"db": {"host": "remote-moved.example.com"}}},
+                    change_description="e2e force-pull conflict",
+                )
+            conflict_result = self._run(
+                "sync",
+                "pull",
+                "--project",
+                self.alias,
+                "--directory",
+                str(self.project_dir),
+                "--force",
+            )
+            assert conflict_result.exit_code == 1, (
+                f"expected exit 1 on conflict, got {conflict_result.exit_code}"
+            )
+            envelope = json.loads(conflict_result.output)
+            assert envelope["status"] == "error"
+            assert envelope["error"]["code"] == "SYNC_CONFLICT"
+            assert any(c["config_id"] == cfg_id for c in envelope["error"]["details"]["conflicts"])
+        finally:
+            cfg_id = cfg.get("id") if cfg else None
+            if cfg_id:
+                try:
+                    with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                        api.delete_config(component_id=TEST_COMPONENT_ID, config_id=cfg_id)
+                except Exception as exc:
+                    print(f"  [cleanup] Failed to delete {TEST_COMPONENT_ID}/{cfg_id}: {exc}")
+
     def test_sync_push_variable_row_round_trip(self) -> None:
         """PR1 P0-1 acceptance: edit a keboola.variables values row, push, pull back.
 

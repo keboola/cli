@@ -88,6 +88,7 @@ class ErrorCode(StrEnum):
     # Sync
     PARENT_CONFIG_NOT_TRACKED = "PARENT_CONFIG_NOT_TRACKED"
     VARIABLE_LINK_UNRESOLVED = "VARIABLE_LINK_UNRESOLVED"
+    SYNC_CONFLICT = "SYNC_CONFLICT"
 
     # Encryption
     ENCRYPTION_FAILED = "ENCRYPTION_FAILED"
@@ -176,6 +177,41 @@ class ConfigError(Exception):
         self.message = message
 
 
+class SyncConflictError(Exception):
+    """Raised when ``sync pull --force`` would overwrite locally-modified
+    configs whose remote **also** changed since the last pull -- a true 3-way
+    merge conflict (local and remote both diverged from the synced base).
+
+    ``--force`` deliberately bypasses the "preserve locally-modified files"
+    guard, so without this check it would silently adopt the edited on-disk
+    file as the new synced baseline (issue: force-pull baseline corruption).
+    Rather than discard un-pushed work, the pull aborts *before writing
+    anything* and asks the user to resolve each conflict (push or discard
+    local edits, then pull again).
+
+    ``conflicts`` carries one dict per conflicting config/row so the command
+    layer can list them. Each dict has ``component_id``, ``config_id``,
+    ``config_name``, ``path``, ``scope`` (``"config"`` or ``"row"``), and an
+    optional ``row_id``.
+    """
+
+    def __init__(self, conflicts: list[dict[str, str]]) -> None:
+        self.conflicts = conflicts
+        n = len(conflicts)
+        plural = "s" if n != 1 else ""
+        message = (
+            f"{n} config{plural} ha{'ve' if n != 1 else 's'} un-pushed local "
+            f"edits AND changed on the remote since the last pull (merge "
+            f"conflict). `sync pull --force` refuses to overwrite them so your "
+            f"local work is not lost. Resolve each conflict first: review with "
+            f"`kbagent sync diff`, then either `kbagent sync push` your local "
+            f"edits or discard them, and pull again."
+        )
+        super().__init__(message)
+        self.message = message
+        self.error_code = ErrorCode.SYNC_CONFLICT
+
+
 class PermissionDeniedError(Exception):
     """Raised when an operation is blocked by the permission policy."""
 
@@ -196,6 +232,7 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.NOT_FOUND: "not_found",
     ErrorCode.CONFIG_ERROR: "configuration",
     ErrorCode.VALIDATION_ERROR: "validation",
+    ErrorCode.SYNC_CONFLICT: "conflict",
     ErrorCode.PERMISSION_DENIED: "authorization",
     ErrorCode.DP_LOGIN_FAILED: "authentication",
     ErrorCode.DP_MFA_REQUIRED: "authentication",
