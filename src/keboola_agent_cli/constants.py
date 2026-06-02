@@ -324,6 +324,32 @@ GLOBAL_SEARCH_FEATURE: str = "global-search"
 OAUTH_HOST: str = "external.keboola.com"
 OAUTH_PATH: str = "/oauth/index.html"
 
+# --- OAuth project login (`kbagent project login`, since 0.54.0) ---
+# Browser-based Authorization Code + PKCE login against the Connection OAuth
+# server (the same League OAuth2 server the remote MCP server authenticates
+# to). Distinct from OAUTH_HOST/OAUTH_PATH above, which point at the
+# *component-credentials* wizard.
+OAUTH_LOGIN_AUTHORIZE_PATH: str = "/oauth/authorize"
+OAUTH_LOGIN_TOKEN_PATH: str = "/oauth/token"
+# Public-client identifier. Must match the client registered per stack via
+# `league:oauth2-server:create-client ... --public`. Overridable until the
+# cross-stack registration name is finalized (and for fake-server tests).
+DEFAULT_OAUTH_CLIENT_ID: str = "kbagent-cli"
+ENV_OAUTH_CLIENT_ID: str = "KBAGENT_OAUTH_CLIENT_ID"
+# Loopback callback (RFC 8252). The League server validates redirect URIs by
+# EXACT match, so each `http://127.0.0.1:<port>/callback` candidate below must
+# be whitelisted on the registered client -- keep this tuple in sync with the
+# registration request.
+OAUTH_CALLBACK_PATH: str = "/callback"
+OAUTH_CALLBACK_PORTS: tuple[int, ...] = (8765, 8766, 8767, 8768, 8769)
+# How long `project login` waits for the user to finish the browser flow.
+OAUTH_LOGIN_TIMEOUT_SECONDS: float = 300.0
+# Lifetime of the Storage token minted from the OAuth access token (mirrors
+# the MCP server's ~2h mint), and how close to expiry we proactively refresh.
+OAUTH_SAPI_TOKEN_LIFETIME_SECONDS: int = 7200
+OAUTH_REFRESH_MARGIN_SECONDS: int = 300
+OAUTH_SAPI_TOKEN_DESCRIPTION: str = "Created by kbagent OAuth login"
+
 # --- Kai (Keboola AI Assistant) ---
 KAI_FEATURE_FLAG: str = "agent-chat"
 KAI_REQUEST_TIMEOUT: float = 300.0  # 5 min for non-streaming requests

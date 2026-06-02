@@ -8,6 +8,30 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.54.0": [
+        "New `kbagent project login` -- browser OAuth project authorization (Authorization Code + "
+        "PKCE, RFC 7636/8252) against the Connection OAuth server (the same League OAuth2 server "
+        "the remote MCP server authenticates to). The CLI opens the stack login page, the user "
+        "authenticates and selects a project on the consent screen, and kbagent receives the "
+        "authorization code on a 127.0.0.1 loopback callback -- no manual token copying. Public "
+        "client, NO client_secret. kbagent persists the OAuth refresh token (config.json, 0600) "
+        "plus a short-lived Storage API token minted from the OAuth access token via `POST "
+        "/v2/storage/tokens` with `Authorization: Bearer` (the production MCP-server pattern -- "
+        "Queue API and AI Service do not accept Bearer yet, so the minted token keeps every "
+        "existing command path unchanged). The minted token auto-renews silently at project "
+        "resolve time (`BaseService.resolve_projects()` chokepoint -- covers CLI, the MCP "
+        "subprocess env, and `kbagent serve`), with refresh-token rotation persisted under an "
+        "inter-process flock (the OAuth server revokes the old refresh token on rotation, so "
+        "concurrent kbagent processes must not race). Re-login into an already-registered "
+        "project updates the entry in place (preserves active_branch_id; never duplicates). "
+        "New ErrorCode `OAUTH_ERROR` (maps to exit 3, auth). PREREQUISITE: the stack's "
+        "Connection must have the kbagent public OAuth client registered "
+        "(`league:oauth2-server:create-client ... --public` with loopback redirect URIs "
+        "http://127.0.0.1:8765-8769/callback whitelisted, authorization_code + refresh_token "
+        "grants); until the cross-stack registration name is finalized, override the client id "
+        "via KBAGENT_OAUTH_CLIENT_ID. Tests include a full real-HTTP protocol round-trip "
+        "against an in-repo fake Connection OAuth server that enforces PKCE S256.",
+    ],
     "0.53.0": [
         'Fix (`sync pull --force`, silent baseline corruption -> data loss): a config with un-pushed local edits is no longer silently de-synced when a force-pull runs while the remote is unchanged. Repro (reported on v0.51.1, project 5785): pull a config, edit its `_config.yml` (`sync diff` correctly shows `1 to update`), then run `sync pull --force` -- typically to resolve an *unrelated* config\'s conflict. Pre-0.53.0, `--force` skipped the "locally modified" guard in `SyncService.pull()`, so for a config whose remote had not changed the `remote_unchanged` short-circuit re-stamped the manifest `pull_hash` from the *edited on-disk file*. Afterwards `sync diff` and `sync push` both reported "in sync" and a real `push` shipped nothing, while the live remote still held the old config -- the local edits were stranded with no visible signal. Root cause was an interaction of two individually-reasonable decisions: `--force` bypassing the overwrite guard, and the `diff` `local_override_hashes` optimization that skips re-reading a file whose hash matches `pull_hash` (so the edited content was never even compared). The fix splits `--force` behaviour by 3-way diff state, per the maintainer decision: (b) local edited + remote UNCHANGED -> the file AND its 3-way base (`pull_hash` + `pull_config_hash`) are preserved, so the pending delta stays visible to `sync push` (no data loss, no silent revert); (a) local edited + remote ALSO changed since the last pull (a true merge conflict) -> the pull aborts before writing anything with the new `SyncConflictError` (exit 1, error code `SYNC_CONFLICT`), listing every conflicting config/row so the user resolves it (`sync diff`, then `push` or discard, then pull again). A no-conflict force-pull (remote changed, local untouched) still takes remote as before. Applies at config and row granularity. Note: `--force` no longer discards un-pushed non-conflicting edits -- that was the dangerous behaviour; to intentionally drop local edits, delete the file (or the config dir) and pull. New: `errors.SyncConflictError` + `ErrorCode.SYNC_CONFLICT`; `SyncService._detect_force_pull_conflicts` / `_is_conflict` (read-only pre-pass that runs before any write); `commands/sync.py` catches the error and prints a red per-config conflict block (human) or a `SYNC_CONFLICT` envelope with a `details.conflicts` array (`--json`). The pull `--force` help now documents the preserve/abort semantics. `--all-projects` surfaces a per-project conflict as a structured entry (`error_code: SYNC_CONFLICT` + the `conflicts` list, matching the single-project envelope) without aborting the batch. Tests: `tests/test_sync_force_pull_baseline.py` (config + row, preserve case b, abort case a, remote-only-changed takes remote, `--all-projects` structured conflict), `tests/test_sync_cli.py` (exit 1 + human/JSON conflict envelope), and `tests/test_e2e.py::TestE2ESyncWorkflow::test_sync_force_pull_conflict_aware` (real Storage: preserve when remote unchanged, then `SYNC_CONFLICT` after a remote mutation).',
     ],

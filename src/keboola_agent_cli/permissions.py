@@ -15,6 +15,7 @@ from .models import PermissionPolicy
 OPERATION_REGISTRY: dict[str, str] = {
     # Project management
     "project.add": "admin",
+    "project.login": "admin",
     "project.list": "read",
     "project.remove": "admin",
     "project.edit": "admin",

@@ -86,7 +86,7 @@ def get_service(ctx: typer.Context, key: str) -> Any:
 def map_error_to_exit_code(exc: KeboolaApiError) -> int:
     """Map a KeboolaApiError to a CLI exit code.
 
-    - INVALID_TOKEN -> 3 (authentication error)
+    - INVALID_TOKEN / MISSING_MASTER_TOKEN / OAUTH_ERROR -> 3 (authentication error)
     - TIMEOUT / CONNECTION_ERROR / RETRY_EXHAUSTED / QUEUE_JOB_TIMEOUT -> 4
       (network/retryable; QUEUE_JOB_TIMEOUT means local gave up AND the
       remote-kill attempt also failed, so the job may still be running)
@@ -95,7 +95,7 @@ def map_error_to_exit_code(exc: KeboolaApiError) -> int:
       job; scripts can distinguish "we killed it" from "it failed on its own")
     - Everything else -> 1 (general error)
     """
-    if exc.error_code in ("INVALID_TOKEN", "MISSING_MASTER_TOKEN"):
+    if exc.error_code in ("INVALID_TOKEN", "MISSING_MASTER_TOKEN", "OAUTH_ERROR"):
         return 3
     if exc.error_code in (
         "TIMEOUT",

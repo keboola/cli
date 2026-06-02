@@ -14,7 +14,7 @@ from ..client import KeboolaClient
 from ..config_store import ConfigStore
 from ..constants import ENV_MAX_PARALLEL_WORKERS, UNEXPECTED_ERROR_MAX_MESSAGE_LEN
 from ..errors import ConfigError
-from ..models import ProjectConfig
+from ..models import OAuthCredentials, ProjectConfig
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,13 @@ class BaseService:
     def resolve_projects(self, aliases: list[str] | None = None) -> dict[str, ProjectConfig]:
         """Resolve project aliases to ProjectConfig instances.
 
+        Projects added via ``kbagent project login`` (OAuth) get their minted
+        Storage token silently refreshed here when it is expired or near
+        expiry -- this is the single chokepoint through which every service,
+        the MCP subprocess env, and the `kbagent serve` routers receive
+        tokens, so no per-call-site changes are needed. Classic token
+        projects pass through untouched (zero network calls).
+
         Args:
             aliases: Specific project aliases. If None or empty, returns all.
 
@@ -80,15 +87,31 @@ class BaseService:
         config = self._config_store.load()
 
         if not aliases:
-            return dict(config.projects)
+            resolved = dict(config.projects)
+        else:
+            resolved = {}
+            for alias in aliases:
+                if alias not in config.projects:
+                    raise ConfigError(f"Project '{alias}' not found.")
+                resolved[alias] = config.projects[alias]
 
-        resolved: dict[str, ProjectConfig] = {}
-        for alias in aliases:
-            if alias not in config.projects:
-                raise ConfigError(f"Project '{alias}' not found.")
-            resolved[alias] = config.projects[alias]
+        return {
+            alias: self._ensure_fresh_token(alias, project) for alias, project in resolved.items()
+        }
 
-        return resolved
+    def _ensure_fresh_token(self, alias: str, project: ProjectConfig) -> ProjectConfig:
+        """Silently refresh an OAuth project's minted Storage token if stale.
+
+        Lazy import keeps the OAuth/httpx machinery off the hot path for the
+        common case (no OAuth projects configured). The isinstance gate (not
+        a None check) keeps mock ProjectConfig objects used across the test
+        suite from tripping the refresh path.
+        """
+        if not isinstance(getattr(project, "oauth", None), OAuthCredentials):
+            return project
+        from ..oauth import ensure_fresh_oauth_token
+
+        return ensure_fresh_oauth_token(self._config_store, alias, project)
 
     def _resolve_max_workers(self) -> int:
         """Resolve max parallel workers: env var > config.json > default (10).

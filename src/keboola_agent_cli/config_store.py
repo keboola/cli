@@ -24,7 +24,7 @@ from .constants import (
     LOCAL_CONFIG_DIR_NAME,
 )
 from .errors import ConfigError
-from .models import AppConfig, DeveloperPortalIdentity, ProjectConfig
+from .models import AppConfig, DeveloperPortalIdentity, OAuthCredentials, ProjectConfig
 
 logger = logging.getLogger(__name__)
 
@@ -436,14 +436,15 @@ class ConfigStore:
         config.projects[alias].active_branch_id = branch_id
         self.save(config)
 
-    def edit_project(self, alias: str, **kwargs: str | int | None) -> None:
+    def edit_project(self, alias: str, **kwargs: str | int | OAuthCredentials | None) -> None:
         """Update fields on an existing project.
 
         Only non-None keyword arguments are applied.
 
         Args:
             alias: The project alias to edit.
-            **kwargs: Fields to update (stack_url, token, project_name, project_id).
+            **kwargs: Fields to update (stack_url, token, project_name,
+                project_id, oauth).
 
         Raises:
             ConfigError: If the alias does not exist.

@@ -51,16 +51,14 @@ a critical failure.
    exists, use it. Only fall back to `kbagent tool call ...` (MCP) when
    the native command does not cover the operation. When an MCP
    `tool call` returns `isError: true`, DO NOT retry with reformatted
-   inputs. Immediately switch to `kbagent --hint client <cmd>` and
-   execute via direct `KeboolaClient`. (Note: `--hint` is deprecated since
-   0.45.0 in favor of the `kbagent serve` REST API; it still works but warns.)
+   inputs; use the `kbagent serve` REST API (or the deprecated
+   `kbagent --hint client <cmd>` snippet generator) instead.
 
 5. **PREFER CLI OVER REST**. NEVER write `curl`, `httpx`, or `requests`
    calls against `*.keboola.com` URLs. Not in shell. Not in Python
-   snippets. Not in plans. If the CLI lacks the command, use
-   `kbagent --hint client` to generate a `KeboolaClient`-based snippet.
-   (`--hint` is deprecated since 0.45.0; prefer `kbagent serve` REST API for
-   new integrations.)
+   snippets. Not in plans. If the CLI lacks the command, use the
+   `kbagent serve` REST API (`--hint client` still works but is
+   deprecated since 0.45.0).
 
 6. **VERSION GATE**. On first invocation in a session, run
    `kbagent --json context` and inspect the version. If missing commands
@@ -68,16 +66,14 @@ a critical failure.
    `schedule find` needs 0.23.0+, `config set-default-bucket` needs
    0.26.0+, `data-app create / deploy / start / stop / delete / password`
    need 0.27.0+, `config update` script[] auto-normalize (#245) needs
-   0.28.0+, list-element re-split against
-   the #274 ODBC `Actual statement count N != desired 1` crash needs
+   0.28.0+, list-element re-split (ODBC statement-count crash, #274) needs
    0.31.0+, `storage swap-tables` needs 0.28.0+, `storage clone-table` = 0.52.0+,
+   `project login` (browser OAuth + PKCE) = 0.54.0+,
    env-var manage-token auth for `org setup` / `project refresh` /
    `data-app password` needs 0.29.0+ with `--allow-env-manage-token`,
-   `project invite` / `project member-*` / `project invitation-*`
-   need 0.29.0+,
-   `data-app secrets-* / validate-repo` need 0.29.0+,
-   `search`, `project info`, `config row-create`, `config row-update`,
-   `config row-delete`, `config oauth-url` need 0.30.0+,
+   `project invite` / `project member-*` / `project invitation-*` /
+   `data-app secrets-*` / `validate-repo` need 0.29.0+,
+   `search`, `project info`, `config row-*`, `config oauth-url` need 0.30.0+,
    `project edit --new-alias` (cascading rename across config.json +
    nested sync dir; warns on lineage cache rebuild) needs 0.31.0+,
    `storage truncate-table` needs 0.32.0+,
@@ -87,10 +83,9 @@ a critical failure.
    `semantic-layer` command group needs 0.41.0+:
      - model lifecycle: `model list / create / delete`
      - read: `show`, `validate [--deep]`, `export`, `diff`
-     - write: `add metric|dataset|relationship|constraint|glossary`,
-       `edit metric|dataset|constraint|relationship|glossary`,
+     - write/destructive: `add/edit/remove
+       metric|dataset|relationship|constraint|glossary`,
        `import`, `promote`, `build`, `token --encrypt`
-     - destructive: `remove metric|dataset|constraint|relationship|glossary`
      - alias: `kbagent sl ...` = `kbagent semantic-layer ...`
      - `semantic-layer build` is heuristic-only on 0.41.0+ (one dataset + one COUNT(*) metric + one glossary entry per table; not a version gate),
    `kbagent http get/post/patch/delete <PATH>` (self-call against the
@@ -312,6 +307,10 @@ success, not a failure.
   stranded the edits). Safe to force-pull an unrelated config while you have
   un-pushed edits elsewhere. To discard a local edit on purpose, delete the
   file/dir then pull. See `gotchas.md`.
+- **`project login` is INTERACTIVE-ONLY** (0.54.0+): browser OAuth + PKCE.
+  NEVER run it yourself; on `OAUTH_ERROR` (exit 3) / persistent 401 the
+  refresh token died -- tell the user to re-run `kbagent project login
+  --url <stack>`. Automation: `project add --token`. See `gotchas.md`.
 
 - **`storage truncate-table` is row-only; schema and dependents are
   preserved** (0.32.0+): the underlying call is

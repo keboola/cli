@@ -60,6 +60,16 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent project add --project NAME --url URL --token TOKEN
     Add a new project connection. Token verified against API.
 
+  kbagent project login [--url URL] [--project ALIAS] [--port N] [--no-browser] [--timeout SECONDS]
+    Browser OAuth login (PKCE, since 0.54.0): opens the stack login page, the
+    user picks the project, kbagent receives credentials on a localhost
+    callback -- no manual token copying. Stores a refresh token and a
+    short-lived minted Storage token that auto-renews silently; when the
+    refresh token eventually expires (~1 month idle), re-run login.
+    INTERACTIVE: requires a human at a browser -- agents must never drive it;
+    fall back to `project add` with a provided token in automation. Requires
+    the stack to have the kbagent public OAuth client registered.
+
   kbagent project list
     List all connected projects (tokens always masked).
 

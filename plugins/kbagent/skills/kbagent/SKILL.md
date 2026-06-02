@@ -63,7 +63,9 @@ description: >
   developer portal, dev-portal, apps-api, register component, vendor app,
   portal property, ui-options, encryption portal, defaultBucket portal,
   app icon, configurationSchema portal, publish component, deprecate component,
-  kbagent dev-portal, portal identity, vendor login, service account portal.
+  kbagent dev-portal, portal identity, vendor login, service account portal,
+  project login, browser login, oauth login, OAuth project authorization,
+  PKCE, log into keboola, login keboola project, refresh token expired.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -117,6 +119,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Set the permission policy (firewall rules) | `kbagent permissions set --mode MODE` |
 | Remove all permission restrictions | `kbagent permissions reset` |
 | Check if a specific operation is allowed | `kbagent permissions check <OPERATION>` |
+| Log into a Keboola project via the browser (OAuth + PKCE) | `kbagent project login` |
 | Add a new Keboola project connection | `kbagent project add --project ALIAS` |
 | List all connected Keboola projects | `kbagent project list` |
 | Remove a Keboola project connection | `kbagent project remove --project ALIAS` |

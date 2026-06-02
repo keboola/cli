@@ -45,6 +45,36 @@ def normalize_stack_url(value: str) -> str:
     return f"https://{parsed.netloc}"
 
 
+class OAuthCredentials(BaseModel):
+    """OAuth session persisted for a project added via ``kbagent project login``.
+
+    Only the refresh token is stored -- the short-lived OAuth access token is
+    used transiently to mint a Storage API token (kept in
+    ``ProjectConfig.token`` like any other project) and then discarded. The
+    refresh token has the same risk profile as a Storage token and lives
+    under the same config.json protections (0600, atomic write, flock).
+
+    The Connection OAuth server ROTATES the refresh token on every refresh
+    (the old one is revoked), so this model is rewritten by the silent
+    refresh in ``oauth.ensure_fresh_oauth_token()``.
+    """
+
+    client_id: str = Field(
+        description="Public OAuth client id registered on the stack (no secret -- PKCE)"
+    )
+    refresh_token: str = Field(
+        description="Long-lived OAuth refresh token (rotated on every refresh)"
+    )
+    token_expires_at: float | None = Field(
+        default=None,
+        description=(
+            "Unix timestamp when the minted Storage token in ProjectConfig.token "
+            "expires; the silent refresh fires within OAUTH_REFRESH_MARGIN_SECONDS "
+            "of this. None means unknown -- treated as expired (refresh eagerly)."
+        ),
+    )
+
+
 class ProjectConfig(BaseModel):
     """Configuration for a single Keboola project connection."""
 
@@ -76,6 +106,15 @@ class ProjectConfig(BaseModel):
             "KBC_STORAGE_API_URL (headless mode, issue #359). Excluded from "
             "serialization and stripped by ConfigStore.save() so the env "
             "token is never written to disk."
+        ),
+    )
+    oauth: OAuthCredentials | None = Field(
+        default=None,
+        description=(
+            "OAuth session for projects added via `kbagent project login` "
+            "(browser PKCE flow). None for classic token-based projects. "
+            "When set, ProjectConfig.token holds a short-lived minted Storage "
+            "token that is silently refreshed at resolve time."
         ),
     )
 

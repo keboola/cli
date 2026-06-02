@@ -60,6 +60,7 @@ from .services.kai_service import KaiService
 from .services.lineage_service import LineageService
 from .services.mcp_service import McpService
 from .services.member_service import MemberService
+from .services.oauth_login_service import OAuthLoginService
 from .services.org_service import OrgService
 from .services.project_service import ProjectService
 from .services.repo_validate_service import RepoValidateService
@@ -339,6 +340,7 @@ def main(
     config_store = ConfigStore(config_dir=resolved_dir, source=source)
 
     project_service = ProjectService(config_store=config_store)
+    oauth_login_service = OAuthLoginService(config_store=config_store)
     component_service = ComponentService(config_store=config_store)
     config_service = ConfigService(config_store=config_store)
     job_service = JobService(config_store=config_store)
@@ -401,6 +403,7 @@ def main(
     ctx.obj["allow_env_manage_token"] = allow_env_manage_token
     ctx.obj["config_store"] = config_store
     ctx.obj["project_service"] = project_service
+    ctx.obj["oauth_login_service"] = oauth_login_service
     ctx.obj["component_service"] = component_service
     ctx.obj["config_service"] = config_service
     ctx.obj["job_service"] = job_service

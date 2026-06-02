@@ -32,8 +32,13 @@ from ._helpers import (
     should_hint,
 )
 from ._metadata_input import resolve_text_input
+from .project_login import project_login
 
 project_app = typer.Typer(help="Manage connected Keboola projects")
+
+# Registered here (defined in project_login.py) because this file is over its
+# size budget; the command still lives under `kbagent project ...`.
+project_app.command("login")(project_login)
 
 
 @project_app.callback(invoke_without_command=True)

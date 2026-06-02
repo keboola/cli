@@ -49,6 +49,7 @@ import contextlib
 import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -11097,3 +11098,51 @@ class TestHeadlessEnvProject:
             result = _invoke(self.config_dir, ["--json", "project", "list"])
         data = _json_ok(result)
         assert data["data"] == [], data
+
+
+@pytest.mark.e2e
+class TestE2EOAuthLogin:
+    """E2E for `kbagent project login` (browser OAuth + PKCE).
+
+    The real-stack flow needs a PUBLIC OAuth client registered in the
+    stack's Connection OAuth server (`league:oauth2-server:create-client
+    ... --public` with the loopback redirect URIs whitelisted) AND a human
+    in front of a browser -- neither is available in CI. Until the client
+    registration lands, this suite covers the full protocol against the
+    in-repo fake Connection server (see tests/test_oauth.py
+    TestFullProtocolRoundTrip for the real-HTTP PKCE round-trip) and
+    asserts the --help flags here.
+
+    To run the interactive real-stack check manually once the client exists:
+
+        KBAGENT_OAUTH_CLIENT_ID=<registered-id> E2E_OAUTH_INTERACTIVE=1 \
+            uv run pytest tests/test_e2e.py::TestE2EOAuthLogin -v -s
+    """
+
+    def test_login_help_flags(self, tmp_path: Path) -> None:
+        _step("OAUTH-1", "project login --help exposes the documented flags")
+        result = _invoke(tmp_path, ["project", "login", "--help"])
+        assert result.exit_code == 0
+        # CI renders help with ANSI colors; Rich then emits `--url` as
+        # `-<esc>-url`, so the literal flag never appears in the raw bytes.
+        plain_output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        for flag in ("--url", "--project", "--port", "--no-browser", "--timeout"):
+            assert flag in plain_output, f"missing {flag} in --help"
+
+    @pytest.mark.skipif(
+        not os.environ.get("E2E_OAUTH_INTERACTIVE"),
+        reason=(
+            "Interactive browser login: needs the registered public OAuth "
+            "client (KBAGENT_OAUTH_CLIENT_ID) and a human at a browser. "
+            "Set E2E_OAUTH_INTERACTIVE=1 to run."
+        ),
+    )
+    def test_interactive_browser_login(self, tmp_path: Path) -> None:
+        _step("OAUTH-2", "full browser login against the real stack")
+        url = os.environ.get(ENV_URL, "connection.keboola.com")
+        result = _invoke(tmp_path, ["--json", "project", "login", "--url", url])
+        data = _json_ok(result)
+        assert data["data"]["auth_type"] == "oauth"
+        # The minted token must verify against the real API.
+        status = _invoke(tmp_path, ["--json", "project", "status"])
+        assert _json_ok(status)

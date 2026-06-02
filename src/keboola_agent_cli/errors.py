@@ -18,6 +18,7 @@ class ErrorCode(StrEnum):
     PERMISSION_DENIED = "PERMISSION_DENIED"
     MISSING_MASTER_TOKEN = "MISSING_MASTER_TOKEN"
     UNAUTHORIZED = "UNAUTHORIZED"  # Bearer-auth rejection by `kbagent serve` (0.40.0+)
+    OAUTH_ERROR = "OAUTH_ERROR"  # `project login` / silent OAuth refresh failure (0.54.0+)
 
     # Network / transport
     TIMEOUT = "TIMEOUT"

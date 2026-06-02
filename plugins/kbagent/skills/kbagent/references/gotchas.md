@@ -11,6 +11,27 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## `project login` is interactive-only; its minted token self-renews but the session can still die (since v0.54.0)
+
+- `kbagent project login` runs a browser OAuth flow (Authorization Code + PKCE) -- it
+  REQUIRES a human at a browser. An AI agent must never invoke it to "fix" auth;
+  the fallback for automation is `project add --token` / headless env mode.
+- Projects added via login carry an `oauth` block in config.json and their
+  `token` is a SHORT-LIVED minted Storage token (~2h). It silently renews at
+  project-resolve time, so commands just work -- but if the stack reports
+  `OAUTH_ERROR` (exit 3) or a 401 persists across retries, the refresh token
+  itself has expired or been revoked (~1 month idle): tell the user to re-run
+  `kbagent project login --url <stack>`. Do not try to repair the oauth block
+  by hand-editing config.json.
+- The flow only works on stacks where the kbagent public OAuth client is
+  registered. `OAUTH_ERROR` mentioning `invalid_client` on `/oauth/authorize`
+  means the stack does not have the registration yet -- fall back to
+  `project add`.
+- Concurrent kbagent processes coordinate refresh-token rotation via an
+  flock on `<config_dir>/.oauth-refresh.lock`; if a shared config dir lives on
+  a filesystem without POSIX locks (some network mounts), parallel refreshes
+  can race and kill the session (symptom: spurious re-login prompts).
+
 ## `sync push` fresh-CREATE writeback now updates placeholders in place (since v0.47.0)
 
 Before v0.47.0, `kbagent sync push` always **appended** new `ManifestConfiguration`

@@ -297,6 +297,10 @@ plugins/kbagent/
 # Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
 
 kbagent project add --project NAME --url URL --token TOKEN
+kbagent project login [--url URL] [--project ALIAS] [--port N] [--no-browser] [--timeout SECONDS]
+# login (0.54.0+): browser OAuth + PKCE against connection.<stack>/oauth/authorize -- user logs in,
+# picks the project, kbagent gets a refresh token + minted Storage token (silently auto-renewed at
+# resolve time). INTERACTIVE only; needs the kbagent public OAuth client registered on the stack.
 kbagent project list
 kbagent project remove --project NAME
 kbagent project edit --project NAME [--url URL] [--token TOKEN] [--new-alias NEW]
