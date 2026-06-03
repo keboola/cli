@@ -181,7 +181,11 @@ kbagent project     add | list | remove | edit | status | refresh | info | use |
                     invite | member-list | member-remove | member-set-role
                     invitation-list | invitation-cancel
 kbagent org         setup
+kbagent feature     list | project-show | project-add | project-remove
+                    user-show | user-add | user-remove   # super-admin Manage API (0.48.0)
 kbagent component   list | detail
+kbagent dev-portal  identity (add|list|remove|edit|use|current|verify)
+                    list | get | create | patch | upload-icon | publish | deprecate   # Developer Portal (0.49.0)
 kbagent config      list | detail | search | update | set-default-bucket | rename | delete | new
                     metadata-list | get-metadata | set-metadata | delete-metadata | set-folder
                     variables-set | variables-get | variables-clear
@@ -191,10 +195,11 @@ kbagent job         list | detail | run | terminate
 kbagent flow        list | detail | schema | new | update | delete | schedule | schedule-remove
 kbagent storage     buckets | bucket-detail | create-bucket | delete-bucket
                     tables | table-detail | create-table | upload-table | download-table
-                    delete-table | delete-column | swap-tables
+                    delete-table | truncate-table | delete-column | swap-tables | clone-table
                     describe-bucket | describe-table | describe-column | describe-batch
                     files | file-detail | file-upload | file-download | file-tag | file-delete
                     load-file | unload-table
+kbagent stream      list | create-source | detail | delete   # Data Streams / OTLP (0.50.0)
 kbagent sharing     list | share | unshare | link | unlink | edges
 kbagent data-app    list | detail | create | deploy | start | stop | delete | password | logs
                     secrets-set | secrets-list | secrets-get | secrets-remove
@@ -208,7 +213,7 @@ kbagent workspace   create | list | detail | delete | password | load | query | 
 kbagent tool        list | call
 kbagent sync        init | pull | status | diff | push | branch-link | branch-unlink | branch-status
 kbagent schedule    list | detail | find
-kbagent kai         ping | ask | chat | history
+kbagent kai         ping | preflight | ask | chat | chat-detail | history
 kbagent encrypt     values
 kbagent permissions list | show | set | reset | check
 kbagent agent       list | show | create | update | delete | run | runs | run-detail | run-events
