@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -498,99 +496,3 @@ class TestValidateRepoCli:
         assert result.exit_code == 2
         body = json.loads(result.output)
         assert body["error"]["code"] == "USAGE_ERROR"
-
-
-# ---------------------------------------------------------------------------
-# Hint-compile guard: every new --hint client/service produces valid Python
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "args",
-    [
-        [
-            "--hint",
-            "client",
-            "data-app",
-            "secrets-set",
-            "--project",
-            "prod",
-            "--app-id",
-            "999",
-            "--secret",
-            "#K=V",
-        ],
-        [
-            "--hint",
-            "service",
-            "data-app",
-            "secrets-set",
-            "--project",
-            "prod",
-            "--app-id",
-            "999",
-            "--secret",
-            "#K=V",
-        ],
-        ["--hint", "client", "data-app", "secrets-list", "--project", "prod", "--app-id", "999"],
-        ["--hint", "service", "data-app", "secrets-list", "--project", "prod", "--app-id", "999"],
-        [
-            "--hint",
-            "client",
-            "data-app",
-            "secrets-get",
-            "--project",
-            "prod",
-            "--app-id",
-            "999",
-            "--key",
-            "#K",
-        ],
-        [
-            "--hint",
-            "service",
-            "data-app",
-            "secrets-get",
-            "--project",
-            "prod",
-            "--app-id",
-            "999",
-            "--key",
-            "#K",
-        ],
-        [
-            "--hint",
-            "client",
-            "data-app",
-            "secrets-remove",
-            "--project",
-            "prod",
-            "--app-id",
-            "999",
-            "--key",
-            "#K",
-        ],
-        [
-            "--hint",
-            "service",
-            "data-app",
-            "secrets-remove",
-            "--project",
-            "prod",
-            "--app-id",
-            "999",
-            "--key",
-            "#K",
-        ],
-        ["--hint", "service", "data-app", "validate-repo", "--git-repo", "https://github.com/o/r"],
-    ],
-)
-def test_hint_snippet_compiles(tmp_path: Path, args: list[str]) -> None:
-    store = _setup_config(tmp_path / "cfg")
-    mock = MagicMock()
-    repo_mock = MagicMock()
-    result = _invoke(args, store=store, data_app_mock=mock, repo_validate_mock=repo_mock)
-    assert result.exit_code == 0, result.output
-    snippet = result.output
-    # AST-parse to ensure the snippet is valid Python.
-    ast.parse(snippet)

@@ -21,12 +21,10 @@ from rich.table import Table
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     get_formatter,
     get_service,
     map_error_to_exit_code,
     resolve_branch,
-    should_hint,
 )
 
 logger = logging.getLogger(__name__)
@@ -137,15 +135,6 @@ def schedule_list(
     Each row shows: project alias, schedule ID + name, parent component ID
     and config name, cron expression, timezone, and enabled state.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "schedule.list",
-            project=project,
-            enabled_only=enabled_only,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "schedule_service")
     config_store = ctx.obj["config_store"]
@@ -202,15 +191,6 @@ def schedule_detail(
     Returns the cron expression, timezone, enabled state, and the parent
     configuration the schedule targets (component_id + config_id + name).
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "schedule.detail",
-            project=project,
-            schedule_id=schedule_id,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "schedule_service")
     config_store = ctx.obj["config_store"]
@@ -317,16 +297,6 @@ def schedule_find(
       # Force last_run_at population on every row (no staleness filter)
       kbagent --json schedule find --not-run-since 0
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "schedule.find",
-            project=project,
-            cron_window=cron_window,
-            not_run_since=not_run_since,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "schedule_service")
     config_store = ctx.obj["config_store"]

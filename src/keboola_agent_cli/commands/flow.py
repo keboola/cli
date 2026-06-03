@@ -19,12 +19,10 @@ from rich.table import Table
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     get_formatter,
     get_service,
     map_error_to_exit_code,
     resolve_branch,
-    should_hint,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,16 +119,6 @@ def flow_list(
     ``{schedule_id, cron, timezone, enabled}`` entries. Flows without
     any schedule get ``schedules=[]``.
     """
-    if should_hint(ctx):
-        command_key = "flow.list-with-schedules" if with_schedules else "flow.list"
-        emit_hint(
-            ctx,
-            command_key,
-            project=project,
-            branch=branch,
-            with_schedules=with_schedules,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
     config_store = ctx.obj["config_store"]
@@ -228,16 +216,6 @@ def flow_detail(
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
 ) -> None:
     """Show detailed flow information including phases and tasks."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "flow.detail",
-            project=project,
-            flow_id=flow_id,
-            component_id=component_id,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
     config_store = ctx.obj["config_store"]
@@ -399,16 +377,6 @@ def flow_new(
       # Pipe from stdin
       cat flow.yaml | kbagent flow new --project prod --name "Daily ETL" --file -
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "flow.new",
-            project=project,
-            name=name,
-            component_id=component_id,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
 
@@ -487,16 +455,6 @@ def flow_update(
       # Replace phases + tasks from file
       kbagent flow update --project prod --flow-id 123 --file @flow.yaml
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "flow.update",
-            project=project,
-            flow_id=flow_id,
-            component_id=component_id,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
 
@@ -577,16 +535,6 @@ def flow_delete(
     Note: associated keboola.scheduler configs are NOT automatically removed.
     Run 'flow schedule-remove' first if you want to clean up schedules.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "flow.delete",
-            project=project,
-            flow_id=flow_id,
-            component_id=component_id,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
 
@@ -672,17 +620,6 @@ def flow_schedule(
       # Run hourly, disabled by default
       kbagent flow schedule --project prod --flow-id 123 --cron "0 * * * *" --disabled
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "flow.schedule",
-            project=project,
-            flow_id=flow_id,
-            component_id=component_id,
-            cron=cron,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
 
@@ -752,16 +689,6 @@ def flow_schedule_remove(
 
     Idempotent: safe to run even if no schedules exist.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "flow.schedule-remove",
-            project=project,
-            flow_id=flow_id,
-            component_id=component_id,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
 

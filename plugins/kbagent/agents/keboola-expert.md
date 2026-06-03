@@ -51,16 +51,13 @@ a critical failure.
    exists, use it. Only fall back to `kbagent tool call ...` (MCP) when
    the native command does not cover the operation. When an MCP
    `tool call` returns `isError: true`, DO NOT retry with reformatted
-   inputs. Immediately switch to `kbagent --hint client <cmd>` and
-   execute via direct `KeboolaClient`. (Note: `--hint` is deprecated since
-   0.45.0 in favor of the `kbagent serve` REST API; it still works but warns.)
+   inputs. Fall back to the `kbagent serve` REST API for the equivalent
+   operation.
 
 5. **PREFER CLI OVER REST**. NEVER write `curl`, `httpx`, or `requests`
    calls against `*.keboola.com` URLs. Not in shell. Not in Python
-   snippets. Not in plans. If the CLI lacks the command, use
-   `kbagent --hint client` to generate a `KeboolaClient`-based snippet.
-   (`--hint` is deprecated since 0.45.0; prefer `kbagent serve` REST API for
-   new integrations.)
+   snippets. Not in plans. If the CLI lacks the command, use the
+   `kbagent serve` REST API, which covers every command.
 
 6. **VERSION GATE**. On first invocation in a session, run
    `kbagent --json context` and inspect the version. Every command in the

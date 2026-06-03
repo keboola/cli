@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -386,170 +385,6 @@ class TestDataAppPassword:
 # ---------------------------------------------------------------------------
 
 
-class TestDataAppHintMode:
-    """Compile-check every rendered ``--hint`` snippet for the data-app group.
-
-    Iterations 4 and 5 each caught a hint that rendered to invalid Python:
-    iteration 4 found ``os.environ[""PAT_VAR""]`` (doubled quotes) and a
-    missing ``import os`` in ``create``; iteration 5 found a sibling
-    ``manage_token=<KBC_MANAGE_API_TOKEN>`` placeholder reaching the
-    snippet verbatim in ``password``. The class below enumerates every
-    ``data-app`` subcommand and ``ast.parse``s both the client- and
-    service-mode renders so this entire bug class is caught at CI rather
-    than by a fresh-context reviewer.
-    """
-
-    def _setup(self, tmp_path: Path) -> tuple[ConfigStore, MagicMock]:
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
-        return store, MagicMock()
-
-    def _hint(self, store: ConfigStore, mock: MagicMock, args: list[str]) -> str:
-        result = _invoke(args, store=store, data_app_mock=mock)
-        assert result.exit_code == 0, result.output
-        return result.output
-
-    # One sample CLI invocation per subcommand, chosen to exercise the
-    # most variable args (private repo for create, --config-version for
-    # deploy, etc.). Both client and service renders are compile-checked.
-    _SAMPLE_INVOCATIONS: tuple[tuple[str, list[str]], ...] = (
-        ("list", ["data-app", "list", "--project", "prod"]),
-        (
-            "detail",
-            ["data-app", "detail", "--project", "prod", "--app-id", "42"],
-        ),
-        (
-            "create",
-            [
-                "data-app",
-                "create",
-                "--project",
-                "prod",
-                "--name",
-                "X",
-                "--slug",
-                "x-x",
-                "--git-repo",
-                "https://github.com/o/r",
-                "--git-username",
-                "u",
-                "--git-pat-env",
-                "PAT_VAR",
-                "--auth",
-                "password",
-            ],
-        ),
-        (
-            "deploy",
-            [
-                "data-app",
-                "deploy",
-                "--project",
-                "prod",
-                "--app-id",
-                "42",
-                "--config-version",
-                "5",
-            ],
-        ),
-        (
-            "start",
-            ["data-app", "start", "--project", "prod", "--app-id", "42"],
-        ),
-        (
-            "stop",
-            ["data-app", "stop", "--project", "prod", "--app-id", "42"],
-        ),
-        (
-            "delete",
-            ["data-app", "delete", "--project", "prod", "--app-id", "42"],
-        ),
-        (
-            "password",
-            ["data-app", "password", "--project", "prod", "--app-id", "42"],
-        ),
-        (
-            "logs",
-            ["data-app", "logs", "--project", "prod", "--app-id", "42"],
-        ),
-    )
-
-    @pytest.mark.parametrize(
-        "name,subcommand_args",
-        _SAMPLE_INVOCATIONS,
-        ids=[name for name, _ in _SAMPLE_INVOCATIONS],
-    )
-    @pytest.mark.parametrize("mode", ["client", "service"])
-    def test_hint_snippet_compiles(
-        self, tmp_path: Path, mode: str, name: str, subcommand_args: list[str]
-    ) -> None:
-        import ast
-
-        store, mock = self._setup(tmp_path)
-        snippet = self._hint(
-            store,
-            mock,
-            ["--hint", mode, *subcommand_args],
-        )
-        ast.parse(snippet)  # raises SyntaxError if the render is broken
-
-    def test_create_service_hint_imports_os_and_quotes_pat_env(self, tmp_path: Path) -> None:
-        """Anchor for the iteration-4 fix: ``import os`` is emitted and
-        the ``os.environ`` access uses single quotes (no doubling)."""
-        store, mock = self._setup(tmp_path)
-        snippet = self._hint(
-            store,
-            mock,
-            [
-                "--hint",
-                "service",
-                "data-app",
-                "create",
-                "--project",
-                "prod",
-                "--name",
-                "X",
-                "--slug",
-                "x-x",
-                "--git-repo",
-                "https://github.com/o/r",
-                "--git-username",
-                "u",
-                "--git-pat-env",
-                "PAT_VAR",
-                "--auth",
-                "password",
-            ],
-        )
-        assert "import os" in snippet
-        assert 'os.environ["PAT_VAR"]' in snippet
-        # The doubled-quote bug must never recur.
-        assert 'os.environ[""' not in snippet
-
-    def test_password_service_hint_uses_os_environ(self, tmp_path: Path) -> None:
-        """Anchor for the iteration-5 fix: the ``manage_token`` kwarg
-        renders as a parseable ``os.environ[...]`` lookup, not a literal
-        ``<KBC_MANAGE_API_TOKEN>`` placeholder."""
-        store, mock = self._setup(tmp_path)
-        snippet = self._hint(
-            store,
-            mock,
-            [
-                "--hint",
-                "service",
-                "data-app",
-                "password",
-                "--project",
-                "prod",
-                "--app-id",
-                "42",
-            ],
-        )
-        assert "manage_token=os.environ" in snippet
-        assert "<KBC_MANAGE_API_TOKEN>" not in snippet
-
-
 class TestDataAppErrorMapping:
     def test_config_error_maps_to_exit_5(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
@@ -577,9 +412,7 @@ class TestDataAppLogs:
 
     Service is mocked; tests cover the command's own job (argument
     parsing, mutex enforcement, --since validation, default-translation,
-    error -> exit-code mapping, dual JSON/human output). The 2 auto-
-    parametrized ``--hint client`` / ``--hint service`` compile checks
-    fire via TestDataAppHintMode._SAMPLE_INVOCATIONS.
+    error -> exit-code mapping, dual JSON/human output).
     """
 
     SAMPLE_LOGS = (

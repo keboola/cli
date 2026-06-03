@@ -1201,7 +1201,7 @@ class TestDataAppLogs:
         ds_mock.close.assert_not_called()
 
     def test_logs_negative_lines_raises_invalid_argument(self, tmp_path: Path) -> None:
-        """Service-layer guard for `kbagent serve` / `--hint service` callers."""
+        """Service-layer guard for `kbagent serve` REST callers."""
         store = _make_store(tmp_path)
         service, ds_mock, _storage, _enc = _make_service(store)
 

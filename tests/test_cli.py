@@ -657,29 +657,6 @@ class TestProjectUse:
         data = json.loads(result.output)
         assert data["error"]["code"] == "PERMISSION_DENIED"
 
-    def test_hint_on_non_api_project_use(self, tmp_path: Path) -> None:
-        """project use is purely local -- --hint must exit cleanly, not crash."""
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        self._seed(config_dir, "prod")
-
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
-            MockStore.return_value = ConfigStore(config_dir=config_dir)
-            result = runner.invoke(app, ["--hint", "client", "project", "use", "prod"])
-        # Should exit 0 with a clear message -- no hint available for local ops.
-        assert result.exit_code == 0
-
-    def test_hint_on_non_api_project_current(self, tmp_path: Path) -> None:
-        """project current is purely local -- --hint must exit cleanly, not crash."""
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        self._seed(config_dir, "prod")
-
-        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
-            MockStore.return_value = ConfigStore(config_dir=config_dir)
-            result = runner.invoke(app, ["--hint", "service", "project", "current"])
-        assert result.exit_code == 0
-
     def test_project_current_allowed_under_deny_writes(self, tmp_path: Path) -> None:
         """project current is classified read, so cli:write deny must NOT block it."""
         from keboola_agent_cli.models import PermissionPolicy

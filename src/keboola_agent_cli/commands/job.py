@@ -26,13 +26,11 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_job_detail, format_jobs_table
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
     resolve_branch,
-    should_hint,
     validate_branch_requires_project,
 )
 
@@ -74,17 +72,6 @@ def job_list(
     ),
 ) -> None:
     """List jobs from connected projects."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "job.list",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            status=status,
-            limit=limit,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "job_service")
 
@@ -138,9 +125,6 @@ def job_detail(
     job_id: str = typer.Option(..., "--job-id", help="Job ID"),
 ) -> None:
     """Show detailed information about a specific job."""
-    if should_hint(ctx):
-        emit_hint(ctx, "job.detail", project=project, job_id=job_id)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "job_service")
 
@@ -275,24 +259,6 @@ def job_run(
     4 (QUEUE_JOB_TIMEOUT, retryable) so scripts can tell "we killed it"
     from "local gave up, remote may still be running".
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "job.run",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            row_id=row_id,
-            wait=wait,
-            timeout=timeout,
-            branch=branch,
-            mode=mode,
-            variable_values_id=variable_values_id,
-            no_variables=no_variables,
-            poll_strategy=poll_strategy,
-            log_tail_lines=log_tail_lines,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "job_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -492,21 +458,6 @@ def job_terminate(
     counted as 'already_finished' — safe to re-run this command idempotently
     for cleanup purposes.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "job.terminate",
-            project=project,
-            job_id=job_id,
-            status=status,
-            component_id=component_id,
-            config_id=config_id,
-            limit=limit,
-            branch=branch,
-            dry_run=dry_run,
-        )
-        return
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "job_service")
     config_store: ConfigStore = ctx.obj["config_store"]

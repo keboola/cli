@@ -12,12 +12,10 @@ from ..constants import DEFAULT_TOKEN_DESCRIPTION, ENV_KBC_STORAGE_API_URL
 from ..errors import ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     get_formatter,
     get_service,
     map_error_to_exit_code,
     resolve_manage_token,
-    should_hint,
 )
 
 org_app = typer.Typer(help="Organization management")
@@ -207,9 +205,6 @@ def org_setup(
     flag to read KBC_MANAGE_API_TOKEN from env (CI/CD). Never passed as
     a CLI argument.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "org.setup", org_id=org_id, url=url, dry_run=dry_run)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "org_service")
 

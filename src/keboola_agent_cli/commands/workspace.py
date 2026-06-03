@@ -14,13 +14,11 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_query_results, format_workspaces_table
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
     resolve_branch,
-    should_hint,
 )
 
 workspace_app = typer.Typer(help="Workspace lifecycle for SQL debugging")
@@ -65,16 +63,6 @@ def workspace_create(
     Default: fast headless mode via Storage API (~1s).
     With --ui: creates via Queue job (~15s), visible in Keboola UI Workspaces tab.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "workspace.create",
-            project=project,
-            name=name,
-            backend=backend,
-            read_only=read_only,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
@@ -155,9 +143,6 @@ def workspace_list(
     `qs_compatible` so data-app developers can pick a Query-Service-compatible
     workspace without firing a probe query (closes #304).
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "workspace.list", project=project, branch=branch)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -223,11 +208,6 @@ def workspace_detail(
     verify a workspace is Query-Service-compatible before issuing a query
     (closes #304).
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx, "workspace.detail", project=project, workspace_id=workspace_id, branch=branch
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -290,9 +270,6 @@ def workspace_delete(
     ),
 ) -> None:
     """Delete a workspace."""
-    if should_hint(ctx):
-        emit_hint(ctx, "workspace.delete", project=project, workspace_id=workspace_id)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
@@ -330,9 +307,6 @@ def workspace_password(
     ),
 ) -> None:
     """Reset workspace password and show the new one."""
-    if should_hint(ctx):
-        emit_hint(ctx, "workspace.password", project=project, workspace_id=workspace_id)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
@@ -386,16 +360,6 @@ def workspace_load(
 
     Waits for the async load job to complete.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "workspace.load",
-            project=project,
-            workspace_id=workspace_id,
-            tables=tables,
-            preserve=preserve,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
@@ -455,16 +419,6 @@ def workspace_query(
 
     Provide SQL via --sql or --file (exactly one required).
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "workspace.query",
-            project=project,
-            workspace_id=workspace_id,
-            sql=sql,
-            transactional=transactional,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
@@ -540,9 +494,6 @@ def workspace_gc(
     sandbox config no longer exists. Running gc deletes those workspaces
     (and any lingering sandbox configs). Use --dry-run to preview first.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "workspace.gc", project=project, dry_run=dry_run)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
@@ -621,17 +572,6 @@ def workspace_from_transformation(
     Reads the transformation, creates a config-tied workspace, and loads
     all input tables. Returns credentials ready for SQL debugging.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "workspace.from-transformation",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            row_id=row_id,
-            backend=backend,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 

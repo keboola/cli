@@ -11,12 +11,10 @@ import typer
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    should_hint,
 )
 
 sharing_app = typer.Typer(
@@ -48,9 +46,6 @@ def sharing_list(
     Shows buckets shared within your organization that can be linked
     into your projects. Uses the regular project token.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "sharing.list", project=project)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "sharing_service")
 
@@ -135,17 +130,6 @@ def sharing_share(
 
     Falls back to the project's configured token if no master token is set.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "sharing.share",
-            project=project,
-            bucket_id=bucket_id,
-            type=sharing_type,
-            target_project_ids=target_project_ids,
-            target_users=target_users,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "sharing_service")
 
@@ -212,9 +196,6 @@ def sharing_unshare(
 
     Requires a master token (see 'sharing share --help' for env var details).
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "sharing.unshare", project=project, bucket_id=bucket_id)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "sharing_service")
 
@@ -265,16 +246,6 @@ def sharing_link(
 
     Use 'sharing list' to discover available shared buckets.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "sharing.link",
-            project=project,
-            source_project_id=source_project_id,
-            bucket_id=bucket_id,
-            name=name,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "sharing_service")
 
@@ -317,9 +288,6 @@ def sharing_unlink(
     Deletes the linked bucket. Does not affect the source bucket or
     other projects that have linked it. Uses the regular project token.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "sharing.unlink", project=project, bucket_id=bucket_id)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "sharing_service")
 
@@ -354,9 +322,6 @@ def sharing_edges(
 
     For column-level lineage, use `lineage build` + `lineage show`.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "sharing.edges", project=project)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "lineage_service")
 

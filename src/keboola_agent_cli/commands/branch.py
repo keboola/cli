@@ -12,12 +12,10 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_branch_metadata_table, format_branches_table
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    should_hint,
 )
 from ._metadata_input import resolve_text_input
 
@@ -39,9 +37,6 @@ def branch_list(
     ),
 ) -> None:
     """List development branches from connected projects."""
-    if should_hint(ctx):
-        emit_hint(ctx, "branch.list", project=project)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 
@@ -82,9 +77,6 @@ def branch_create(
     The created branch becomes the active branch for the project,
     so subsequent tool calls will automatically use it.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "branch.create", project=project, name=name, description=description)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 
@@ -195,9 +187,6 @@ def branch_delete(
     If the deleted branch was the active branch, it is automatically
     reset to main/production.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "branch.delete", project=project, branch=branch)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 
@@ -279,9 +268,6 @@ def branch_metadata_list(
     Metadata lives on a branch (not on the project) and is keyed by
     arbitrary strings like ``KBC.projectDescription``.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "branch.metadata-list", project=project, branch=branch)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 
@@ -316,9 +302,6 @@ def branch_metadata_get(
 
     Exits with code 1 (NOT_FOUND) if the key is not present on the branch.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "branch.metadata-get", project=project, key=key, branch=branch)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 
@@ -373,16 +356,6 @@ def branch_metadata_set(
         formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
 
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "branch.metadata-set",
-            project=project,
-            key=key,
-            value=value,
-            branch=branch,
-        )
-        return
     service = get_service(ctx, "branch_service")
 
     try:
@@ -422,15 +395,6 @@ def branch_metadata_delete(
     ),
 ) -> None:
     """Delete a branch metadata entry by its numeric ID."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "branch.metadata-delete",
-            project=project,
-            metadata_id=metadata_id,
-            branch=branch,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 

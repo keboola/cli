@@ -939,8 +939,7 @@ class DataAppService(BaseService):
 
         The command layer enforces the same mutex with a clean exit-2
         usage error; this service-layer guard is the contract for
-        ``--hint service`` snippet users and any future programmatic
-        caller (e.g. ``kbagent serve`` route).
+        programmatic callers (e.g. the ``kbagent serve`` route).
 
         Returns a dict with the raw text, the request echo (so callers
         can correlate envelopes to invocations), and a line count
@@ -965,10 +964,10 @@ class DataAppService(BaseService):
             )
         # Validation paths below are duplicated in the CLI command
         # (exit-2 USAGE_ERROR for a clean Click UX). The service-layer
-        # guards are the contract for ``--hint service`` snippet users
-        # and the ``kbagent serve`` GET /data-apps/{p}/{id}/logs route;
-        # without them, those audiences would round-trip a 400 the
-        # server can phrase only as "Invalid value".
+        # guards are the contract for the ``kbagent serve``
+        # GET /data-apps/{p}/{id}/logs route; without them, those
+        # audiences would round-trip a 400 the server can phrase only
+        # as "Invalid value".
         if lines is not None and lines < 0:
             raise KeboolaApiError(
                 message=(
@@ -1636,9 +1635,9 @@ class DataAppService(BaseService):
         git_pat_encrypted: str | None,
     ) -> None:
         # Defence-in-depth length / control-char checks at the service
-        # boundary. The service can be invoked directly (via --hint service
-        # snippets or external Python callers) so we do not rely on the
-        # command layer alone.
+        # boundary. The service can be invoked directly (via the
+        # ``kbagent serve`` REST API or external Python callers) so we do
+        # not rely on the command layer alone.
         for field_name, field_value, max_len, allow_ws in (
             ("--name", name, MAX_NAME_LENGTH, False),
             ("--description", description, MAX_DESCRIPTION_LENGTH, True),

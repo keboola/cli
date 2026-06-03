@@ -431,7 +431,7 @@ you can rely on:
    call without explicit go-ahead.
 3. **Never chain `config update` + `job run`** in one response.
 4. **Prefer CLI over MCP tool call** -- MCP only when CLI does not
-   cover; on `isError: true`, fall back to `kbagent --hint client`
+   cover; on `isError: true`, fall back to the `kbagent serve` REST API
    instead of retrying with reformatted inputs.
 5. **Prefer CLI over REST** -- never constructs raw
    curl/httpx/requests calls against `*.keboola.com`.
@@ -765,8 +765,7 @@ The `basetype` column is what the API derives automatically and what
 downstream Keboola components read for schema inference. You do not
 need to pass `basetype` manually.
 
-For the full reference including the BOOLEAN/INTEGER gotchas and the
-`--hint client|service` code-generation contract, see
+For the full reference including the BOOLEAN/INTEGER gotchas, see
 [plugins/kbagent/skills/kbagent/references/storage-types-workflow.md](../plugins/kbagent/skills/kbagent/references/storage-types-workflow.md).
 
 ---
@@ -954,8 +953,8 @@ the same slug mints a new numeric `id` (the URL hostname embeds the
 numeric id, so even with the same slug the new URL differs).
 
 For the full reference including the API endpoints behind each command,
-the four-footgun mental model in detail, encrypted-PAT round-trip
-shapes, and the `--hint client|service` code-generation contract, see
+the four-footgun mental model in detail, and encrypted-PAT round-trip
+shapes, see
 [plugins/kbagent/skills/kbagent/references/data-app-workflow.md](../plugins/kbagent/skills/kbagent/references/data-app-workflow.md).
 
 ---

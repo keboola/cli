@@ -20,13 +20,11 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_config_detail, format_configs_table, format_search_results
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
     resolve_branch,
-    should_hint,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,17 +104,6 @@ def config_list(
     If a dev branch is active (via 'branch use'), configs from that branch
     are listed. Use --branch to override.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.list",
-            project=project,
-            component_type=component_type,
-            component_id=component_id,
-            branch=branch,
-            include_rows=include_rows,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -231,17 +218,6 @@ def config_detail(
       # Bulk: every Snowflake writer across many projects (with runtime state)
       kbagent --json config detail --project prod --project stage --component-id keboola.wr-db-snowflake --with-state
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.detail",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            branch=branch,
-            with_state=with_state,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -454,19 +430,6 @@ def config_search(
     If a dev branch is active (via 'branch use'), configs from that branch
     are searched. Use --branch to override.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.search",
-            query=query,
-            project=project,
-            component_type=component_type,
-            component_id=component_id,
-            ignore_case=ignore_case,
-            regex=use_regex,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -832,19 +795,6 @@ def config_set_default_bucket(
       kbagent config set-default-bucket --project P --component-id keboola.ex-db-snowflake \\
         --config-id 12345 --bucket in.c-preferred-name --dry-run
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.set-default-bucket",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            bucket=bucket,
-            clear=clear,
-            dry_run=dry_run,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
 
@@ -967,17 +917,6 @@ def config_rename(
       kbagent config rename --project prod --component-id kds-team.app-custom-python \\
         --config-id abc123 --name "Stripe Extractor" --directory ./my-project
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.rename",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            name=name,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
 
@@ -1309,20 +1248,6 @@ def config_new(
 
     # ── Push path: also create remotely via Storage API ──────────────────────
     if push:
-        if should_hint(ctx):
-            emit_hint(
-                ctx,
-                "config.new",
-                project=project,
-                component_id=component_id,
-                name=name,
-                description=description,
-                configuration=config_body if config_body is not None else {},
-                no_validate=no_validate,
-                branch=branch,
-                dry_run=dry_run,
-            )
-
         config_service = get_service(ctx, "config_service")
         try:
             push_result = config_service.create_config(
@@ -1508,16 +1433,6 @@ def config_metadata_list(
     ),
 ) -> None:
     """List all metadata entries on a configuration."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.metadata-list",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            branch=branch,
-        )
-        return
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
     _, effective_branch = resolve_branch(config_store, formatter, project, branch)
@@ -1564,17 +1479,6 @@ def config_get_metadata(
 
     Exits with code 1 (NOT_FOUND) if the key is not present.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.get-metadata",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            key=key,
-            branch=branch,
-        )
-        return
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
     _, effective_branch = resolve_branch(config_store, formatter, project, branch)
@@ -1609,18 +1513,6 @@ def config_set_metadata(
     ),
 ) -> None:
     """Set a metadata key/value on a configuration (upsert)."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.set-metadata",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            key=key,
-            value=value,
-            branch=branch,
-        )
-        return
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
     _, effective_branch = resolve_branch(config_store, formatter, project, branch)
@@ -1658,17 +1550,6 @@ def config_delete_metadata(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
 ) -> None:
     """Delete a configuration metadata entry by its numeric ID."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.delete-metadata",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            metadata_id=metadata_id,
-            branch=branch,
-        )
-        return
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
     _, effective_branch = resolve_branch(config_store, formatter, project, branch)
@@ -1717,17 +1598,6 @@ def config_set_folder(
     Organises configs into named groups in the Keboola UI.
     Pass an empty string to remove the folder assignment.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.set-folder",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            name=name,
-            branch=branch,
-        )
-        return
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
     _, effective_branch = resolve_branch(config_store, formatter, project, branch)
@@ -1811,21 +1681,6 @@ def config_variables_set(
     rows is hidden: first call creates the sibling config named
     <parent-name>-vars + default row; subsequent calls update the same row.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.variables-set",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            variable=variable,
-            replace=replace,
-            variables_id=variables_id,
-            values_id=values_id,
-            branch=branch,
-        )
-        return
-
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
 
@@ -1931,17 +1786,6 @@ def config_variables_get(
     branch: int | None = typer.Option(None, "--branch", help="Development branch ID (per-project)"),
 ) -> None:
     """Read the current variable values attached to a config."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.variables-get",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            branch=branch,
-        )
-        return
-
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
     _, effective_branch = resolve_branch(config_store, formatter, project, branch)
@@ -1990,17 +1834,6 @@ def config_variables_clear(
     ),
 ) -> None:
     """Unlink variables from a config (does NOT delete the underlying keboola.variables)."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.variables-clear",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            branch=branch,
-        )
-        return
-
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
     _, effective_branch = resolve_branch(config_store, formatter, project, branch)
@@ -2213,20 +2046,6 @@ def config_row_create(
       kbagent config row-create --project P --component-id C --config-id ID \\
         --name "Row 1" --is-disabled
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.row-create",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            name=name,
-            description=description,
-            configuration=configuration,
-            is_disabled=is_disabled,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
 
@@ -2398,24 +2217,6 @@ def config_row_update(
     elif is_enabled:
         is_disabled_value = False
 
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.row-update",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            row_id=row_id,
-            name=name,
-            description=description,
-            configuration=configuration,
-            set=set_values,
-            merge=merge,
-            dry_run=dry_run,
-            is_disabled=is_disabled_value,
-            branch=branch,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
 
@@ -2521,18 +2322,6 @@ def config_row_delete(
       kbagent config row-delete --project P --component-id C --config-id ID --row-id ROW
       kbagent config row-delete --project P --component-id C --config-id ID --row-id ROW --yes
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.row-delete",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            row_id=row_id,
-            branch=branch,
-        )
-        return
-
     formatter = get_formatter(ctx)
 
     if (
@@ -2621,16 +2410,6 @@ def config_oauth_url(
       kbagent config oauth-url --project P --component-id keboola.ex-google-drive --config-id ID \\
         --redirect-url https://example.com/oauth-done
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "config.oauth-url",
-            project=project,
-            component_id=component_id,
-            config_id=config_id,
-            redirect_url=redirect_url,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
 

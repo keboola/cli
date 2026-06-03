@@ -9,11 +9,9 @@ import typer
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    should_hint,
 )
 
 kai_app = typer.Typer(
@@ -41,9 +39,6 @@ def kai_ping(
     ),
 ) -> None:
     """Check Kai server health and MCP connection status."""
-    if should_hint(ctx):
-        emit_hint(ctx, "kai.ping", project=project)
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "kai_service")
 
@@ -88,9 +83,6 @@ def kai_ask(
     via MCP tools. Use this for Keboola-specific questions that require
     project context.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "kai.ask", project=project, message=message)
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "kai_service")
 
@@ -135,9 +127,6 @@ def kai_chat(
     Use --chat-id to continue a previous conversation.
     Without --chat-id, starts a new chat.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "kai.chat", project=project, message=message, chat_id=chat_id)
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "kai_service")
 
@@ -175,9 +164,6 @@ def kai_preflight(
     automation that need to render an informative warning instead of an
     error cascade.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "kai.preflight", project=project)
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "kai_service")
 
@@ -231,9 +217,6 @@ def kai_chat_detail(
     calls and other non-text parts are skipped (they are Kai's internal
     streaming protocol, not user-facing content).
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "kai.chat-detail", project=project, chat_id=chat_id)
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "kai_service")
 
@@ -281,9 +264,6 @@ def kai_history(
     ),
 ) -> None:
     """List recent Kai chat sessions."""
-    if should_hint(ctx):
-        emit_hint(ctx, "kai.history", project=project, limit=limit)
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "kai_service")
 

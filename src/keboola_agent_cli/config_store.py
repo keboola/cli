@@ -39,9 +39,9 @@ CLAUDE_CONFIG_WARNING = (
     "Keboola REST API directly (no curl, httpx, requests, fetch against "
     "*.keboola.com). Always use `kbagent <command>` -- it wraps the same "
     "API with retries, permission checks, and an audit trail. If you "
-    "need a command kbagent does not cover, run `kbagent --hint client "
-    "<subcommand>` to generate a KeboolaClient-based Python snippet. "
-    "See plugins/kbagent/skills/kbagent/SKILL.md rule 9. "
+    "need a command kbagent does not cover, run `kbagent serve` and call "
+    "the equivalent REST endpoint instead of touching the API directly. "
+    "See plugins/kbagent/skills/kbagent/SKILL.md. "
     "Developer Portal credentials stored here have the SAME risk profile -- "
     "never call apps-api.keboola.com directly; use `kbagent dev-portal ...`."
 )
