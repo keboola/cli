@@ -1,7 +1,7 @@
 """HTTP integration tests for ``/semantic-layer/*`` routes (real metastore).
 
 Bootstraps a throwaway ``kbagent_e2e_<ts>`` model on ``e2e-1143``
-(``E2E_URL`` / ``E2E_API_TOKEN``), exercises every one of the 14 routes
+(``E2E_URL`` / ``E2E_API_TOKEN``), exercises every one of the 18 routes
 declared in :mod:`keboola_agent_cli.server.routers.semantic_layer` against
 the real ``SemanticLayerService`` (NOT mocked), and tears down in a
 ``finally`` block. Residue assertion at session end verifies no
@@ -504,6 +504,91 @@ def test_post_token_encrypt(http_session: dict[str, Any]) -> None:
     assert token_field.startswith("KBC::ProjectSecure"), (
         f"Expected KBC::ProjectSecure envelope, got: {token_field[:50]}"
     )
+
+
+# ── reference-data routes (PUT create-or-replace / GET list / GET id / DELETE) ──
+
+
+def test_put_reference_data_create(http_session: dict[str, Any]) -> None:
+    """PUT /semantic-layer/reference-data — create a Chart-of-Accounts record."""
+    dimension = f"{http_session['tag']}_coa"
+    res = http_session["client"].put(
+        "/semantic-layer/reference-data",
+        headers=_auth(),
+        json={
+            "project": _PROJECT_ALIAS,
+            "model": http_session["model_name"],
+            "dimension": dimension,
+            "members": [
+                {"account_code": "4011", "account_name": "Revenue", "is_leaf": 1},
+                {"account_code": "ISR99999", "account_name": "Revenue Rollup", "is_leaf": 0},
+            ],
+            "dataset_id": "out.c-syn.DIM_COA",
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["action"] == "created"
+    assert body["dimension_name"] == dimension
+    assert body["member_count"] == 2
+    http_session["refdata_dimension"] = dimension
+    http_session["refdata_id"] = body["id"]
+    http_session["created_items"].append(("semantic-reference-data", body["id"]))
+
+
+def test_get_reference_data_list(http_session: dict[str, Any]) -> None:
+    """GET /semantic-layer/reference-data — the created dimension is listed."""
+    res = http_session["client"].get(
+        f"/semantic-layer/reference-data?project={_PROJECT_ALIAS}", headers=_auth()
+    )
+    assert res.status_code == 200, res.text
+    dims = {r["dimension_name"] for r in res.json()["reference_data"]}
+    assert http_session["refdata_dimension"] in dims
+
+
+def test_get_reference_data_by_id(http_session: dict[str, Any]) -> None:
+    """GET /semantic-layer/reference-data/{id} — returns all members."""
+    res = http_session["client"].get(
+        f"/semantic-layer/reference-data/{http_session['refdata_id']}?project={_PROJECT_ALIAS}",
+        headers=_auth(),
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["member_count"] == 2
+    codes = {m["account_code"] for m in body["members"]}
+    assert codes == {"4011", "ISR99999"}
+
+
+def test_put_reference_data_replace(http_session: dict[str, Any]) -> None:
+    """PUT again — same (model, dimension) replaces in place (revision++)."""
+    res = http_session["client"].put(
+        "/semantic-layer/reference-data",
+        headers=_auth(),
+        json={
+            "project": _PROJECT_ALIAS,
+            "model": http_session["model_name"],
+            "dimension": http_session["refdata_dimension"],
+            "members": [{"account_code": "4011", "account_name": "Revenue (EU)", "is_leaf": 1}],
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["action"] == "updated"
+    assert body["member_count"] == 1
+    assert body["id"] == http_session["refdata_id"]
+
+
+def test_delete_reference_data(http_session: dict[str, Any]) -> None:
+    """DELETE /semantic-layer/reference-data/{id} — removes the record."""
+    res = http_session["client"].delete(
+        f"/semantic-layer/reference-data/{http_session['refdata_id']}?project={_PROJECT_ALIAS}",
+        headers=_auth(),
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["removed"]["id"] == http_session["refdata_id"]
+    http_session["created_items"] = [
+        (t, i) for (t, i) in http_session["created_items"] if t != "semantic-reference-data"
+    ]
 
 
 def test_delete_items_remove_glossary(http_session: dict[str, Any]) -> None:

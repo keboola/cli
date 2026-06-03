@@ -144,6 +144,43 @@ project's semantic model is populated before kicking off a downstream
 pipeline; the previous workaround (a `keboola-mcp-server` MCP server entry
 in `.mcp.json` solely for these two tools) can be dropped.
 
+## `semantic-layer reference-data` holds a whole dimension as ONE record; `set` is PUT-replace, not append (since v0.55.0)
+
+`semantic-reference-data` stores one record **per dimension** (e.g. a Chart
+of Accounts), with the full member list in a `members[]` array — NOT one
+record per member. Consequences an agent must internalize:
+
+- **`set` replaces the entire members array.** `kbagent sl reference-data
+  set --dimension chart_of_accounts --members-file coa.json` is
+  create-or-replace, idempotent on the `dimension`. To add/remove a
+  single account you must `get` the record, mutate the array client-side,
+  and `set` the whole thing back. There is no per-member endpoint.
+- **It uses the metastore's real `PUT`** (revisioned update, `meta.revision`
+  increments, history preserved) when a record for that dimension already
+  exists — distinct from the DELETE+POST that `edit metric|…` uses.
+  A brand-new dimension is `POST`-ed.
+- **The envelope `name` is the dimension, unique per project per type, so
+  the `set`/`get` lookup is project-wide.** Because the dimension name is the
+  project-unique key, `set` finds and PUT-replaces an existing record
+  regardless of which `--model` you pass (the resolved model is just stored
+  on the record) — it does NOT POST and collide with `ALREADY_EXISTS`. For
+  the same reason `get --dimension` needs no `--model` (one dimension name
+  per project for this type). `get` rejects passing both `--id` and
+  `--dimension` (exit 2).
+- **Member field names mirror the `DIM_COA` columns 1:1 (snake_case):**
+  `account_code` (required key), `account_name`, `parent_code`, `is_leaf`
+  (integer 0/1, not bool), `level_1_code`, `cf_category`, … The metastore
+  schema sets `additionalProperties: true` on members, so unknown columns
+  are stored but not validated.
+- **Deliberately invisible to `build` / `export` / `diff` / cascade /
+  `PUSH_ORDER`.** Deleting a model does NOT cascade-delete its
+  reference-data records (they are not model children in the snapshot
+  sense); `export`/`diff` will not include them. Manage them only through
+  the `reference-data` sub-app.
+- **JSON Schema cannot enforce cross-member referential integrity** (every
+  `parent_code` resolving to some member `account_code`). That stays an
+  app/sync-layer concern.
+
 ## `workspace list` / `workspace detail` now expose loginType + RO + qs_compatible (since v0.42.0, closes #304)
 
 Before v0.42.0 the Storage workspace endpoint already returned

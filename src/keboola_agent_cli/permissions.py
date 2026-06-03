@@ -259,6 +259,15 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.remove.constraint": "destructive",
     "semantic-layer.remove.relationship": "destructive",
     "semantic-layer.remove.glossary": "destructive",
+    # `reference-data` sub-app: dimension-member records (e.g. a Chart of
+    # Accounts). Parent key at the least-privileged level (read) so the
+    # top-level `semantic-layer` callback does not over-block `list` / `get`;
+    # per-leaf keys carry the real classification.
+    "semantic-layer.reference-data": "read",
+    "semantic-layer.reference-data.list": "read",
+    "semantic-layer.reference-data.get": "read",
+    "semantic-layer.reference-data.set": "write",
+    "semantic-layer.reference-data.delete": "destructive",
     # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
     # Categorised by the underlying HTTP method: GET = read, mutating verbs
     # = write. The serve's own routes enforce their own permissions on top.

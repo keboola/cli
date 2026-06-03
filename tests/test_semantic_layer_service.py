@@ -2680,3 +2680,193 @@ class TestGetContext:
             service.get_context("prod", "x")
 
         mock.__exit__.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# reference-data (dimension-member records, e.g. Chart of Accounts)
+# ---------------------------------------------------------------------------
+
+
+def _refdata_item(
+    item_id: str,
+    dimension: str,
+    model_uuid: str = "U",
+    members: list[dict[str, Any]] | None = None,
+    revision: int = 1,
+) -> dict[str, Any]:
+    return {
+        "type": "semantic-reference-data",
+        "id": item_id,
+        "attributes": {
+            "modelUUID": model_uuid,
+            "dimensionName": dimension,
+            "members": members if members is not None else [],
+        },
+        "meta": {"revision": revision},
+    }
+
+
+class TestReferenceData:
+    @staticmethod
+    def _model_only_list(extra: dict[str, list[dict[str, Any]]] | None = None):
+        """Build a list_items side_effect: one model + per-type extras.
+
+        Mirrors the real ``MetastoreClient.list_items`` client-side
+        ``modelUUID`` filter so that model-scoped vs project-wide lookups are
+        actually distinguishable (a model-scoped lookup of a record living
+        under a *different* model must return ``[]`` here, exactly as it would
+        against the live metastore).
+        """
+        extra = extra or {}
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            items = extra.get(item_type, [])
+            if model_uuid is not None:
+                items = [
+                    i for i in items if (i.get("attributes") or {}).get("modelUUID") == model_uuid
+                ]
+            return items
+
+        return _list
+
+    def test_list_summarizes_records(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.side_effect = self._model_only_list(
+            {
+                "semantic-reference-data": [
+                    _refdata_item("r1", "chart_of_accounts", members=[{"account_code": "4011"}]),
+                ]
+            }
+        )
+        out = service.list_reference_data("prod")
+        assert out["project"] == "prod"
+        assert len(out["reference_data"]) == 1
+        rec = out["reference_data"][0]
+        assert rec["dimension_name"] == "chart_of_accounts"
+        assert rec["member_count"] == 1
+        assert "members" not in rec
+
+    def test_get_by_id_returns_members(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        members = [{"account_code": "4011", "account_name": "Revenue"}]
+        mock.get_item.return_value = _refdata_item("r1", "chart_of_accounts", members=members)
+        out = service.get_reference_data("prod", record_id="r1")
+        mock.get_item.assert_called_once_with("semantic-reference-data", "r1")
+        assert out["members"] == members
+        assert out["member_count"] == 1
+
+    def test_get_by_dimension(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.list_items.side_effect = self._model_only_list(
+            {"semantic-reference-data": [_refdata_item("r1", "chart_of_accounts")]}
+        )
+        out = service.get_reference_data("prod", dimension="chart_of_accounts")
+        assert out["id"] == "r1"
+        mock.get_item.assert_not_called()
+
+    def test_get_requires_id_or_dimension(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ = _make_service(store)
+        with pytest.raises(KeboolaApiError) as exc:
+            service.get_reference_data("prod")
+        assert exc.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_get_by_dimension_not_found(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.side_effect = self._model_only_list({"semantic-reference-data": []})
+        with pytest.raises(KeboolaApiError) as exc:
+            service.get_reference_data("prod", dimension="missing")
+        assert exc.value.error_code == ErrorCode.NOT_FOUND
+
+    def test_set_creates_when_absent(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.side_effect = self._model_only_list({"semantic-reference-data": []})
+        mock.post_item.return_value = _refdata_item("r1", "chart_of_accounts")
+        members = [{"account_code": "4011", "account_name": "Revenue"}]
+        out = service.set_reference_data(
+            "prod",
+            None,
+            dimension="chart_of_accounts",
+            members=members,
+            dataset_id="in.c-f.DIM_COA",
+        )
+        assert out["action"] == "created"
+        mock.post_item.assert_called_once()
+        mock.put_item.assert_not_called()
+        _, kwargs = mock.post_item.call_args
+        assert kwargs["name"] == "chart_of_accounts"
+        assert kwargs["data"]["modelUUID"] == "U"
+        assert kwargs["data"]["dimensionName"] == "chart_of_accounts"
+        assert kwargs["data"]["members"] == members
+        assert kwargs["data"]["datasetId"] == "in.c-f.DIM_COA"
+
+    def test_set_replaces_when_present(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        existing = _refdata_item("r1", "chart_of_accounts", revision=1)
+        mock.list_items.side_effect = self._model_only_list({"semantic-reference-data": [existing]})
+        mock.put_item.return_value = _refdata_item("r1", "chart_of_accounts", revision=2)
+        out = service.set_reference_data(
+            "prod", None, dimension="chart_of_accounts", members=[{"account_code": "4011"}]
+        )
+        assert out["action"] == "updated"
+        mock.put_item.assert_called_once()
+        mock.post_item.assert_not_called()
+        args, _ = mock.put_item.call_args
+        assert args[0] == "semantic-reference-data"
+        assert args[1] == "r1"
+
+    def test_set_is_idempotent_across_models(self, tmp_path: Path) -> None:
+        """Regression: dimension name is unique per project, so an existing
+        record under a *different* model must still PUT-replace (not POST and
+        collide with ALREADY_EXISTS) -- lookup is project-wide by dimension."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        existing = _refdata_item("r1", "chart_of_accounts", model_uuid="OTHER_MODEL", revision=1)
+        mock.list_items.side_effect = self._model_only_list({"semantic-reference-data": [existing]})
+        mock.put_item.return_value = _refdata_item("r1", "chart_of_accounts", revision=2)
+        out = service.set_reference_data(
+            "prod", None, dimension="chart_of_accounts", members=[{"account_code": "4011"}]
+        )
+        assert out["action"] == "updated"
+        mock.put_item.assert_called_once()
+        mock.post_item.assert_not_called()
+
+    def test_set_rejects_non_list_members(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ = _make_service(store)
+        # Intentionally wrong type (Any-typed) to exercise the runtime guard.
+        bad_members: Any = {"not": "a list"}
+        with pytest.raises(KeboolaApiError) as exc:
+            service.set_reference_data(
+                "prod",
+                None,
+                dimension="chart_of_accounts",
+                members=bad_members,
+            )
+        assert exc.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_delete_echoes_dimension(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.get_item.return_value = _refdata_item("r1", "chart_of_accounts")
+        out = service.delete_reference_data("prod", "r1")
+        mock.delete_item.assert_called_once_with("semantic-reference-data", "r1")
+        assert out["removed"]["id"] == "r1"
+        assert out["removed"]["dimension_name"] == "chart_of_accounts"
+
+
+class TestReferenceDataPermissions:
+    def test_registry_entries(self) -> None:
+        from keboola_agent_cli.permissions import OPERATION_REGISTRY
+
+        assert OPERATION_REGISTRY["semantic-layer.reference-data.list"] == "read"
+        assert OPERATION_REGISTRY["semantic-layer.reference-data.get"] == "read"
+        assert OPERATION_REGISTRY["semantic-layer.reference-data.set"] == "write"
+        assert OPERATION_REGISTRY["semantic-layer.reference-data.delete"] == "destructive"
