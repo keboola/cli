@@ -11,6 +11,32 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## `config create/update` + rows auto-encrypt `#`-prefixed secrets before write (since v0.54.0, closes #378)
+
+- **Before v0.54.0 this was a plaintext leak.** `config new --push`,
+  `config update`, `config row-create`, and `config row-update` POSTed/PUT the
+  configuration JSON straight to Storage **without encrypting** `#`-prefixed
+  values. The Storage API stores config JSON verbatim -- it does NOT encrypt
+  `#`-values server-side -- so a `#password` / `#api_token` landed readable in
+  plaintext in Storage, in every config version, and was re-exposed on every
+  read. (The `sync push` and variables paths already encrypted; only the
+  interactive config paths skipped it.) Verified live on projects 4214 + 10539.
+- **Since v0.54.0** these paths call the Encryption API first, so a read-back
+  returns `KBC::ProjectSecure::...` (not the plaintext). Same service layer
+  (`ConfigService`) backs the CLI, the `serve` REST config routes, and the
+  `kbagent tool` MCP passthrough, so all three are covered.
+- **Fail-closed by default.** If encryption fails (or the project scope cannot
+  be resolved) the write is aborted with `ENCRYPTION_FAILED` rather than
+  writing plaintext. Pass `--allow-plaintext-on-encrypt-failure` (named to
+  match `sync push`) to downgrade to a warning -- bootstrap/debug only.
+- **Dry-run is NOT encrypted on purpose.** `config update --dry-run` shows the
+  plaintext value in the diff so it stays readable and deterministic
+  (ciphertext is non-deterministic); nothing is written to Storage.
+- **`--set` targets a dot-path.** `--set '#password=...'` sets a *top-level*
+  `#password` key, not `parameters.#password`. For a nested secret use
+  `--set 'parameters.#password=...'` or a full `--configuration`. (Either way
+  the value is now encrypted before write.)
+
 ## `sync push` fresh-CREATE writeback now updates placeholders in place (since v0.47.0)
 
 Before v0.47.0, `kbagent sync push` always **appended** new `ManifestConfiguration`

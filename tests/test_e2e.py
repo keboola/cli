@@ -11097,3 +11097,157 @@ class TestHeadlessEnvProject:
             result = _invoke(self.config_dir, ["--json", "project", "list"])
         data = _json_ok(result)
         assert data["data"] == [], data
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EConfigSecretEncryption:
+    """Prove `config new --push` / `config update` encrypt #-secrets before write (#378).
+
+    Regression guard for the v0.54.0 fix. The Storage API stores config JSON
+    verbatim, so a #-prefixed value must read back as ``KBC::ProjectSecure::...``
+    -- never as the literal plaintext that was sent. Exercises the create path
+    (config new --push) and the update path against a live project, then deletes
+    the probe config in teardown.
+    """
+
+    COMPONENT = "keboola.ex-pohoda-mserver"
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-cfgsecret"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+        self._created: list[tuple[str, str]] = []
+
+        yield
+
+        for component_id, config_id in reversed(self._created):
+            try:
+                self.client.delete_config(component_id=component_id, config_id=config_id)
+            except Exception as exc:
+                print(
+                    f"  {_DIM}(teardown) delete_config {component_id}/{config_id} failed: {exc}{_RESET}"
+                )
+        self.client.close()
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(_invoke(self.config_dir, ["--json", *args]))
+
+    def _read_password(self, config_id: str) -> str:
+        data = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.COMPONENT,
+            "--config-id",
+            config_id,
+        )
+        return data["configuration"]["parameters"]["#password"]
+
+    def test_config_create_and_update_encrypt_secret(self) -> None:
+        _step(1, "config new --push with a #password", "must encrypt before write")
+        created = self._run_ok(
+            "config",
+            "new",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.COMPONENT,
+            "--name",
+            f"{RUN_ID}-secret-probe",
+            "--push",
+            "--no-files",
+            "--no-validate",
+            "--configuration",
+            '{"parameters":{"#password":"e2e-canary-create"}}',
+        )
+        config_id = str(created["id"])
+        self._created.append((self.COMPONENT, config_id))
+
+        _step(2, "read-back: #password must be KBC::, not plaintext")
+        pw = self._read_password(config_id)
+        print(f"  {_DIM}create read-back #password={pw[:24]}...{_RESET}")
+        assert pw.startswith("KBC::"), f"create stored plaintext: {pw!r}"
+        assert pw != "e2e-canary-create"
+
+        _step(3, "config update with a new #password")
+        self._run_ok(
+            "config",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.COMPONENT,
+            "--config-id",
+            config_id,
+            "--configuration",
+            '{"parameters":{"#password":"e2e-canary-update"}}',
+        )
+
+        _step(4, "read-back after update: still KBC::")
+        pw2 = self._read_password(config_id)
+        print(f"  {_DIM}update read-back #password={pw2[:24]}...{_RESET}")
+        assert pw2.startswith("KBC::"), f"update stored plaintext: {pw2!r}"
+        assert pw2 != "e2e-canary-update"
+
+    def test_config_update_dry_run_is_not_encrypted(self) -> None:
+        _step(1, "create a probe config to dry-run against")
+        created = self._run_ok(
+            "config",
+            "new",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.COMPONENT,
+            "--name",
+            f"{RUN_ID}-dryrun-probe",
+            "--push",
+            "--no-files",
+            "--no-validate",
+            "--configuration",
+            '{"parameters":{"user":"probe"}}',
+        )
+        config_id = str(created["id"])
+        self._created.append((self.COMPONENT, config_id))
+
+        _step(2, "config update --dry-run keeps plaintext in the diff (deterministic)")
+        data = self._run_ok(
+            "config",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.COMPONENT,
+            "--config-id",
+            config_id,
+            "--configuration",
+            '{"parameters":{"#password":"e2e-canary-dryrun"}}',
+            "--dry-run",
+        )
+        new_pw = data["new_configuration"]["parameters"]["#password"]
+        assert new_pw == "e2e-canary-dryrun", f"dry-run encrypted the diff: {new_pw!r}"

@@ -408,24 +408,23 @@ success, not a failure.
   feature flag, not by this setting -- see the `legacy_branch_storage`
   gotcha above for what the runner actually does on `--branch` writes.
 
+- **`config create/update/row-*` auto-encrypt `#`-secrets** (0.54.0+, #378):
+  pre-encrypt via Encryption API; fail-closed (`--allow-plaintext-on-encrypt-failure`
+  overrides); `--dry-run` not encrypted; covers CLI + `serve` + MCP passthrough.
+  **VERSION GATE**: < 0.54.0 wrote `#`-secrets to Storage in PLAINTEXT -- warn +
+  recommend `kbagent update` or `sync push`. Full note in gotchas.md.
+
 - **Data apps need `data-app deploy` after `config update`** (0.27.0+):
-  the deployment record's `configVersion` is a pinned pointer that does
-  NOT auto-advance when Storage advances. Editing the `keboola.data-apps`
-  config via `kbagent config update` bumps the Storage version, but the
-  running container keeps using the OLD version until a `kbagent data-app
-  deploy --project P --app-id N` PATCHes the deployment with the
-  §9 trio `{desiredState=running, configVersion, restartIfRunning=true}`.
-  Sending bare `desiredState=running` (or just `configVersion`) silently
-  pins to v2 (the empty shell from `POST /apps`) and the runner errors
-  `dataApp.git.repository is required in /data/config.json` with no
-  top-level error surfaced -- only visible in the UI's Terminal Logs.
-  `kbagent data-app start` is the cheap restart for an auto-suspended
-  app; it does NOT bump the configVersion. Use `data-app deploy` for new
-  code/config rollouts, `data-app start` for waking a parked container.
-  PAT encryption is per-project KMS -- ciphertext does NOT cross
-  projects, so `kbagent data-app create` always re-encrypts plaintext via
-  the target project's Encryption API and refuses to write plaintext if
-  the round-trip does not return a `KBC::Project*` ciphertext.
+  the deployment's `configVersion` is pinned and does NOT auto-advance.
+  `config update` bumps the Storage version but the running container keeps
+  the OLD one until `data-app deploy` PATCHes the §9 trio
+  `{desiredState=running, configVersion, restartIfRunning=true}`. Bare
+  `desiredState=running` silently pins to the v2 empty shell -> runner errors
+  `dataApp.git.repository is required` (only in the UI Terminal Logs).
+  `data-app start` just wakes an auto-suspended app (no configVersion bump);
+  use `data-app deploy` for code/config rollouts. PAT encryption is
+  per-project KMS; `data-app create` re-encrypts plaintext and refuses to
+  write a non-`KBC::Project*` value.
 
 - **`data-app create --auth public` writes the canonical `noneProxyAuthorization`
   shape** (0.29.0+, fixes a v0.27.0 silent-503 bug): v0.27.0 wrote NO
