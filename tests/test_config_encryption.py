@@ -13,11 +13,16 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from typer.testing import CliRunner
 
+from helpers import setup_single_project
+from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.config_service import ConfigService
+
+runner = CliRunner()
 
 COMPONENT_ID = "keboola.ex-db-snowflake"
 CONFIG_ID = "cfg-001"
@@ -255,3 +260,163 @@ class TestDryRunNotEncrypted:
         client.encrypt_values.assert_not_called()
         client.update_config.assert_not_called()
         assert result["new_configuration"]["parameters"]["#password"] == "plain-secret"
+
+
+# ---------------------------------------------------------------------------
+# CLI wiring: --allow-plaintext-on-encrypt-failure reaches the service layer
+# ---------------------------------------------------------------------------
+
+
+class TestCliFlagWiring:
+    """The CLI flag must arrive at the service as allow_plaintext_fallback.
+
+    The service-layer behavior is covered above with a real ConfigService; here
+    the service is a MagicMock so the assertion is purely about CLI wiring.
+    """
+
+    SECRET_CFG = '{"parameters":{"#password":"v"}}'
+
+    @staticmethod
+    def _patch(monkeypatch: pytest.MonkeyPatch, svc: MagicMock) -> None:
+        monkeypatch.setattr(
+            "keboola_agent_cli.commands.config.get_service",
+            lambda ctx, name: svc,
+        )
+
+    def _run(self, tmp_config_dir: Path, args: list[str]):
+        return runner.invoke(app, ["--json", "--config-dir", str(tmp_config_dir), "config", *args])
+
+    def test_update_forwards_flag(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        setup_single_project(tmp_config_dir)
+        svc = MagicMock()
+        svc.update_config.return_value = {"id": CONFIG_ID}
+        self._patch(monkeypatch, svc)
+        result = self._run(
+            tmp_config_dir,
+            [
+                "update",
+                "--project",
+                "prod",
+                "--component-id",
+                COMPONENT_ID,
+                "--config-id",
+                CONFIG_ID,
+                "--configuration",
+                self.SECRET_CFG,
+                "--allow-plaintext-on-encrypt-failure",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert svc.update_config.call_args.kwargs["allow_plaintext_fallback"] is True
+
+    def test_update_defaults_flag_false(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        setup_single_project(tmp_config_dir)
+        svc = MagicMock()
+        svc.update_config.return_value = {"id": CONFIG_ID}
+        self._patch(monkeypatch, svc)
+        result = self._run(
+            tmp_config_dir,
+            [
+                "update",
+                "--project",
+                "prod",
+                "--component-id",
+                COMPONENT_ID,
+                "--config-id",
+                CONFIG_ID,
+                "--configuration",
+                self.SECRET_CFG,
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert svc.update_config.call_args.kwargs["allow_plaintext_fallback"] is False
+
+    def test_new_push_forwards_flag(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        setup_single_project(tmp_config_dir)
+        svc = MagicMock()
+        svc.create_config.return_value = {
+            "id": CONFIG_ID,
+            "validation_status": "skipped",
+            "validation_errors": [],
+        }
+        self._patch(monkeypatch, svc)
+        result = self._run(
+            tmp_config_dir,
+            [
+                "new",
+                "--project",
+                "prod",
+                "--component-id",
+                COMPONENT_ID,
+                "--name",
+                "t",
+                "--push",
+                "--no-files",
+                "--no-validate",
+                "--configuration",
+                self.SECRET_CFG,
+                "--allow-plaintext-on-encrypt-failure",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert svc.create_config.call_args.kwargs["allow_plaintext_fallback"] is True
+
+    def test_row_create_forwards_flag(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        setup_single_project(tmp_config_dir)
+        svc = MagicMock()
+        svc.create_config_row.return_value = {"id": ROW_ID}
+        self._patch(monkeypatch, svc)
+        result = self._run(
+            tmp_config_dir,
+            [
+                "row-create",
+                "--project",
+                "prod",
+                "--component-id",
+                COMPONENT_ID,
+                "--config-id",
+                CONFIG_ID,
+                "--name",
+                "r",
+                "--configuration",
+                self.SECRET_CFG,
+                "--allow-plaintext-on-encrypt-failure",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert svc.create_config_row.call_args.kwargs["allow_plaintext_fallback"] is True
+
+    def test_row_update_forwards_flag(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        setup_single_project(tmp_config_dir)
+        svc = MagicMock()
+        svc.update_config_row.return_value = {"id": ROW_ID}
+        self._patch(monkeypatch, svc)
+        result = self._run(
+            tmp_config_dir,
+            [
+                "row-update",
+                "--project",
+                "prod",
+                "--component-id",
+                COMPONENT_ID,
+                "--config-id",
+                CONFIG_ID,
+                "--row-id",
+                ROW_ID,
+                "--configuration",
+                self.SECRET_CFG,
+                "--allow-plaintext-on-encrypt-failure",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert svc.update_config_row.call_args.kwargs["allow_plaintext_fallback"] is True
