@@ -83,6 +83,10 @@ class DoctorService:
         plugin_check = self._check_claude_plugin()
         all_checks.append(plugin_check)
 
+        # Check 8: Plaintext #-secrets in synced configs (issue #378)
+        sync_secret_check = self._check_sync_secrets()
+        all_checks.append(sync_secret_check)
+
         # Build summary
         total = len(all_checks)
         passed = sum(1 for c in all_checks if c["status"] == "pass")
@@ -100,6 +104,58 @@ class DoctorService:
                 "skipped": skipped,
                 "healthy": failed == 0,
             },
+        }
+
+    def _check_sync_secrets(self) -> dict[str, Any]:
+        """Check 8: flag plaintext ``#``-secrets in synced configs (issue #378).
+
+        Only meaningful inside a sync working tree (a directory containing
+        ``.keboola/manifest.json``); skipped otherwise. Read-only -- filesystem
+        and manifest only, no API call. An in-sync config whose ``#``-secret is
+        still plaintext means the remote holds it unencrypted.
+        """
+        # Local import: sync_service is heavy and most doctor runs are not in a
+        # sync tree, so keep it off the cold-start path.
+        from .sync_service import scan_synced_plaintext_secrets
+
+        cwd = Path.cwd()
+        if not (cwd / ".keboola" / "manifest.json").exists():
+            return {
+                "check": "sync_secrets",
+                "name": "Synced config secrets",
+                "status": "skip",
+                "message": "Not a sync working tree (no .keboola/manifest.json in current dir).",
+            }
+
+        try:
+            warnings = scan_synced_plaintext_secrets(cwd)
+        except Exception as exc:
+            return {
+                "check": "sync_secrets",
+                "name": "Synced config secrets",
+                "status": "warn",
+                "message": f"Could not scan synced configs for plaintext secrets: {exc}",
+            }
+
+        if not warnings:
+            return {
+                "check": "sync_secrets",
+                "name": "Synced config secrets",
+                "status": "pass",
+                "message": "No plaintext #-secrets in synced configs.",
+            }
+
+        shown = ", ".join(w["path"] for w in warnings[:5])
+        more = f" (+{len(warnings) - 5} more)" if len(warnings) > 5 else ""
+        return {
+            "check": "sync_secrets",
+            "name": "Synced config secrets",
+            "status": "warn",
+            "message": (
+                f"{len(warnings)} synced config(s) hold #-secrets in PLAINTEXT (issue #378): "
+                f"{shown}{more}. Re-push on kbagent >=0.54.0 to encrypt, then ROTATE the "
+                f"credential -- config version history keeps the old plaintext."
+            ),
         }
 
     def _check_config_source(self) -> dict[str, Any]:

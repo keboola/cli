@@ -11,6 +11,26 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## `sync status` + `doctor` flag plaintext `#`-secrets in synced configs (since v0.55.0)
+
+- **What it catches.** The v0.54.0 fix is forward-looking -- it does NOT
+  retroactively encrypt secrets written by older versions. This audit finds
+  them: an **in-sync** config/row (local file hash == manifest `pull_hash`)
+  whose `#`-prefixed value is still plaintext means the remote holds it
+  unencrypted (it passed through the sync baseline unencrypted).
+- **`sync status`** adds a `plaintext_secret_warnings` array (`--json`) / red
+  block (human) listing affected configs + key *paths* (never the secret
+  values). It prints even when there are no local changes.
+- **`doctor`** adds a `sync_secrets` check: `warn` (with the affected configs)
+  when the current dir is a sync working tree (`.keboola/manifest.json`) holding
+  plaintext secrets, else `pass`; `skip` outside a sync tree.
+- **Pending edits are NOT flagged.** A locally-edited-but-unpushed config (hash
+  != `pull_hash`) is skipped -- a `sync push` on >=0.54.0 encrypts it on write,
+  so flagging it would be noise. Only already-synced plaintext is a real leak.
+- **Remediation in the warning:** re-push on >=0.54.0 to encrypt AND **rotate**
+  the credential -- config version history keeps the old plaintext. Read-only,
+  no API call.
+
 ## `config create/update` + rows auto-encrypt `#`-prefixed secrets before write (since v0.54.0, closes #378)
 
 - **Before v0.54.0 this was a plaintext leak.** `config new --push`,
