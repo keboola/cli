@@ -163,11 +163,15 @@ Use `kbagent <command> --help` for full flag details and examples.
     Use storage_workspace_id with `kbagent workspace detail --workspace-id ID`,
     NOT parameters.id (which 404s).
 
-  kbagent config update --project NAME --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--dry-run] [--branch ID]
+  kbagent config update --project NAME --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--dry-run] [--branch ID] [--allow-plaintext-on-encrypt-failure]
     Update config metadata and/or configuration content. --set targets a
     nested key (e.g. parameters.db.host=new-host). --merge deep-merges into
     existing config (preserves sibling keys). --dry-run previews changes.
-    Paths are always relative to the configuration root.
+    Paths are always relative to the configuration root. #-prefixed secrets
+    auto-encrypt via the Encryption API before write (fail-closed; since
+    0.54.0); --allow-plaintext-on-encrypt-failure overrides. --dry-run keeps
+    plaintext in the diff. Note --set '#k=v' sets a top-level key; for a
+    nested secret use --set 'parameters.#k=v'.
     Auto-normalize (0.28.0+; #245): parameters.blocks[].codes[].script
     strings are silently rewritten to arrays before pushing to Storage --
     SQL transformations split on statement boundaries (state machine
@@ -193,7 +197,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     Delete a configuration. Branch-aware.
 
   kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR]
-                     [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run]
+                     [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run --allow-plaintext-on-encrypt-failure]
     Default: generate boilerplate config from component schema (scaffold to --output-dir or stdout).
     With --push (0.33.0+): also create the config remotely via Storage API in one shot.
     --push requires --project AND a non-empty --name. --no-files skips the filesystem step
@@ -235,11 +239,11 @@ Use `kbagent <command> --help` for full flag details and examples.
     Sugar: writes KBC.configuration.folderName metadata. Groups the config in the Keboola UI.
     Pass --name "" to remove the folder assignment.
 
-  kbagent config row-create --project NAME --component-id ID --config-id ID --name ROW_NAME [--description D] [--configuration JSON|@file|-] [--is-disabled] [--branch ID]
-    Create a new configuration row. Returns the new row ID. Optional --configuration accepts JSON inline, @file, or stdin.
+  kbagent config row-create --project NAME --component-id ID --config-id ID --name ROW_NAME [--description D] [--configuration JSON|@file|-] [--is-disabled] [--branch ID] [--allow-plaintext-on-encrypt-failure]
+    Create a new configuration row. Returns the new row ID. Optional --configuration accepts JSON inline, @file, or stdin. #-prefixed secrets auto-encrypt before write (fail-closed; since 0.54.0).
 
-  kbagent config row-update --project NAME --component-id ID --config-id ID --row-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--is-disabled | --is-enabled] [--branch ID]
-    Update an existing configuration row. Pass only the fields you want to change.
+  kbagent config row-update --project NAME --component-id ID --config-id ID --row-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--is-disabled | --is-enabled] [--branch ID] [--allow-plaintext-on-encrypt-failure]
+    Update an existing configuration row. Pass only the fields you want to change. #-prefixed secrets auto-encrypt before write (fail-closed; since 0.54.0).
 
   kbagent config row-delete --project NAME --component-id ID --config-id ID --row-id ID [--branch ID] [--yes]
     Delete a configuration row. Destructive; --yes to skip confirmation prompt.

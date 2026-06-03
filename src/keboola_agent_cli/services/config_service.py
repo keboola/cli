@@ -22,6 +22,7 @@ from ..models import ComponentDetail, ProjectConfig
 from ..sync.code_extraction import normalize_blocks_codes_script
 from ..sync.manifest import Manifest, load_manifest, save_manifest
 from ..sync.naming import sanitize_name
+from ._encryption import collect_secrets, encrypt_secrets_in_config
 from .base import BaseService, ClientFactory, sanitize_unexpected_error
 from .workspace_service import find_storage_workspace_for_sandbox_config
 
@@ -578,6 +579,74 @@ class ConfigService(BaseService):
         finally:
             client.close()
 
+    def _encrypt_secrets_before_write(
+        self,
+        client: Any,
+        project: ProjectConfig,
+        component_id: str,
+        configuration: dict[str, Any] | None,
+        *,
+        allow_plaintext_fallback: bool,
+    ) -> dict[str, Any] | None:
+        """Encrypt ``#``-prefixed secrets in *configuration* before it is written.
+
+        The Storage API stores configuration JSON verbatim -- it does **not**
+        encrypt ``#``-prefixed values server-side. Unless the client pre-encrypts
+        them via the Encryption API, secrets land in Storage as plaintext
+        (readable in every config version, re-exposed on every read, and handed
+        live to sync actions like ``testConnection``). This mirrors the
+        encrypt-before-write contract already enforced by ``sync push`` and the
+        variables path. See issue #378.
+
+        Fail-closed by default: a failed or un-scopable encryption raises
+        :class:`KeboolaApiError` (``ENCRYPTION_FAILED``) rather than writing
+        plaintext. ``allow_plaintext_fallback=True`` downgrades that to a logged
+        warning (bootstrap/debug only).
+
+        The ``project_id`` needed for the Encryption API scope is read from the
+        stored project config and falls back to ``verify_token`` (covers configs
+        added before project_id was persisted and env-synthesized projects). It
+        is resolved only when secrets are actually present, so secret-free writes
+        skip the extra round-trip entirely.
+        """
+        if not configuration:
+            return configuration
+
+        secrets: dict[str, str] = {}
+        collect_secrets(configuration, "", secrets)
+        if not secrets:
+            return configuration
+
+        project_id = project.project_id or client.verify_token().project_id
+        if not project_id:
+            # Secrets present but the Encryption API call cannot be scoped.
+            # Fail closed rather than silently write plaintext.
+            if allow_plaintext_fallback:
+                logger.warning(
+                    "Cannot resolve project_id for %s; writing %d secret(s) as "
+                    "plaintext (allow_plaintext_fallback=True)",
+                    component_id,
+                    len(secrets),
+                )
+                return configuration
+            raise KeboolaApiError(
+                message=(
+                    f"Cannot resolve project_id for {component_id} to encrypt "
+                    f"secrets. Refusing to write plaintext secrets. Use "
+                    f"--allow-plaintext-on-encrypt-failure to override."
+                ),
+                status_code=0,
+                error_code=ErrorCode.ENCRYPTION_FAILED,
+            )
+
+        return encrypt_secrets_in_config(
+            client,
+            project_id,
+            component_id,
+            configuration,
+            allow_plaintext_fallback=allow_plaintext_fallback,
+        )
+
     def update_config(
         self,
         alias: str,
@@ -590,6 +659,7 @@ class ConfigService(BaseService):
         merge: bool = False,
         dry_run: bool = False,
         branch_id: int | None = None,
+        allow_plaintext_fallback: bool = False,
     ) -> dict[str, Any]:
         """Update a configuration's metadata and/or content.
 
@@ -608,6 +678,9 @@ class ConfigService(BaseService):
             dry_run: If True, compute and return the diff without applying.
             branch_id: If set, update in a specific dev branch.
                        If None, uses the project's active branch (if any).
+            allow_plaintext_fallback: If True, write ``#``-secrets as plaintext
+                when the Encryption API fails instead of raising. DANGEROUS --
+                see :meth:`_encrypt_secrets_before_write`.
 
         Returns:
             Dict with the updated configuration from the API.
@@ -677,6 +750,18 @@ class ConfigService(BaseService):
                     "new_configuration": new_cfg,
                     "normalizations": normalizations,
                 }
+
+            # Encrypt #-prefixed secrets before they reach Storage (issue #378).
+            # Only on a real write -- dry-run keeps plaintext so the diff stays
+            # readable and deterministic (ciphertext is non-deterministic).
+            if final_config is not None:
+                final_config = self._encrypt_secrets_before_write(
+                    client,
+                    project,
+                    component_id,
+                    final_config,
+                    allow_plaintext_fallback=allow_plaintext_fallback,
+                )
 
             change_parts = []
             if has_metadata:
@@ -1464,6 +1549,7 @@ class ConfigService(BaseService):
         configuration: dict[str, Any] | None = None,
         is_disabled: bool = False,
         branch_id: int | None = None,
+        allow_plaintext_fallback: bool = False,
     ) -> dict[str, Any]:
         """Create a new configuration row.
 
@@ -1477,6 +1563,9 @@ class ConfigService(BaseService):
             is_disabled: Create the row in disabled state (excluded from job runs).
             branch_id: If set, create in a specific dev branch. Falls back to
                 the project's active branch when None.
+            allow_plaintext_fallback: If True, write ``#``-secrets as plaintext
+                when the Encryption API fails instead of raising. DANGEROUS --
+                see :meth:`_encrypt_secrets_before_write`.
 
         Returns:
             The created row dict from the API (includes the new 'id').
@@ -1490,11 +1579,19 @@ class ConfigService(BaseService):
         effective_branch_id = branch_id or project.active_branch_id
         client = self._client_factory(project.stack_url, project.token)
         try:
+            # Encrypt #-prefixed secrets before they reach Storage (issue #378).
+            row_config = self._encrypt_secrets_before_write(
+                client,
+                project,
+                component_id,
+                configuration if configuration is not None else {},
+                allow_plaintext_fallback=allow_plaintext_fallback,
+            )
             result = client.create_config_row(
                 component_id=component_id,
                 config_id=config_id,
                 name=name,
-                configuration=configuration if configuration is not None else {},
+                configuration=row_config if row_config is not None else {},
                 description=description,
                 is_disabled=is_disabled,
                 branch_id=effective_branch_id,
@@ -1518,6 +1615,7 @@ class ConfigService(BaseService):
         branch_id: int | None = None,
         dry_run: bool = False,
         validate: bool = True,
+        allow_plaintext_fallback: bool = False,
     ) -> dict[str, Any]:
         """Create a new configuration via the Storage API (one-shot remote).
 
@@ -1542,6 +1640,9 @@ class ConfigService(BaseService):
                 validation result) without calling the Storage API.
             validate: If True (default), validate ``configuration`` against
                 the component schema when a body is explicitly provided.
+            allow_plaintext_fallback: If True, write ``#``-secrets as plaintext
+                when the Encryption API fails instead of raising. DANGEROUS --
+                see :meth:`_encrypt_secrets_before_write`.
 
         Returns:
             The created configuration dict from the API (includes the new
@@ -1599,10 +1700,18 @@ class ConfigService(BaseService):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
+            # Encrypt #-prefixed secrets before they reach Storage (issue #378).
+            encrypted_config = self._encrypt_secrets_before_write(
+                client,
+                project,
+                component_id,
+                effective_config,
+                allow_plaintext_fallback=allow_plaintext_fallback,
+            )
             result = client.create_config(
                 component_id=component_id,
                 name=name,
-                configuration=effective_config,
+                configuration=encrypted_config if encrypted_config is not None else {},
                 description=description,
                 branch_id=effective_branch_id,
             )
@@ -1697,6 +1806,7 @@ class ConfigService(BaseService):
         dry_run: bool = False,
         is_disabled: bool | None = None,
         branch_id: int | None = None,
+        allow_plaintext_fallback: bool = False,
     ) -> dict[str, Any]:
         """Update an existing configuration row.
 
@@ -1716,6 +1826,9 @@ class ConfigService(BaseService):
                    when None, leave the current state unchanged.
             branch_id: If set, update in a specific dev branch. Falls back to
                 the project's active branch when None.
+            allow_plaintext_fallback: If True, write ``#``-secrets as plaintext
+                when the Encryption API fails instead of raising. DANGEROUS --
+                see :meth:`_encrypt_secrets_before_write`.
 
         Returns:
             Dict with the updated row from the API.
@@ -1790,6 +1903,17 @@ class ConfigService(BaseService):
             if has_content:
                 change_parts.append("configuration")
             change_desc = f"Updated {' + '.join(change_parts)} via kbagent config row-update"
+
+            # Encrypt #-prefixed secrets before they reach Storage (issue #378).
+            # Real write only -- dry-run returned above with plaintext diff.
+            if final_config is not None:
+                final_config = self._encrypt_secrets_before_write(
+                    client,
+                    project,
+                    component_id,
+                    final_config,
+                    allow_plaintext_fallback=allow_plaintext_fallback,
+                )
 
             result = client.update_config_row(
                 component_id=component_id,

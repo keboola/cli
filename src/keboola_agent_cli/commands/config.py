@@ -607,6 +607,11 @@ def config_update(
         "--branch",
         help="Update in a specific dev branch ID (defaults to active branch)",
     ),
+    allow_plaintext: bool = typer.Option(
+        False,
+        "--allow-plaintext-on-encrypt-failure",
+        help="Allow write even if secret encryption fails (DANGEROUS: secrets stored as plaintext)",
+    ),
 ) -> None:
     """Update a configuration's metadata and/or content.
 
@@ -699,6 +704,7 @@ def config_update(
             merge=effective_merge,
             dry_run=dry_run,
             branch_id=branch,
+            allow_plaintext_fallback=allow_plaintext,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -1165,6 +1171,11 @@ def config_new(
         "--dry-run",
         help="With --push: show planned POST + validation result without creating",
     ),
+    allow_plaintext: bool = typer.Option(
+        False,
+        "--allow-plaintext-on-encrypt-failure",
+        help="With --push: allow create even if secret encryption fails (DANGEROUS: secrets stored as plaintext)",
+    ),
 ) -> None:
     """Generate boilerplate configuration files for a Keboola component, optionally creating the config remotely in one shot.
 
@@ -1323,6 +1334,7 @@ def config_new(
                 branch_id=branch,
                 dry_run=dry_run,
                 validate=not no_validate,
+                allow_plaintext_fallback=allow_plaintext,
             )
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -2176,6 +2188,11 @@ def config_row_create(
         "--branch",
         help="Create in a specific dev branch ID (defaults to active branch)",
     ),
+    allow_plaintext: bool = typer.Option(
+        False,
+        "--allow-plaintext-on-encrypt-failure",
+        help="Allow write even if secret encryption fails (DANGEROUS: secrets stored as plaintext)",
+    ),
 ) -> None:
     """Create a new configuration row.
 
@@ -2234,6 +2251,7 @@ def config_row_create(
             configuration=config_dict,
             is_disabled=is_disabled,
             branch_id=branch,
+            allow_plaintext_fallback=allow_plaintext,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -2330,6 +2348,11 @@ def config_row_update(
         None,
         "--branch",
         help="Update in a specific dev branch ID (defaults to active branch)",
+    ),
+    allow_plaintext: bool = typer.Option(
+        False,
+        "--allow-plaintext-on-encrypt-failure",
+        help="Allow write even if secret encryption fails (DANGEROUS: secrets stored as plaintext)",
     ),
 ) -> None:
     """Update an existing configuration row.
@@ -2436,6 +2459,7 @@ def config_row_update(
             dry_run=dry_run,
             is_disabled=is_disabled_value,
             branch_id=branch,
+            allow_plaintext_fallback=allow_plaintext,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
