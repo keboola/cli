@@ -2473,3 +2473,62 @@ Consequence: `--force` no longer discards non-conflicting local edits. To
 intentionally drop a local edit, delete the file (or the config dir) and pull.
 Applies at config and row granularity. `--all-projects` reports a per-project
 conflict as that project's error without aborting the rest of the batch.
+
+## Core platform gotchas (version-independent)
+
+These are Keboola-platform behaviors, not kbagent features, so they carry no
+`since` tag -- they hold on every kbagent version. The `keboola-expert` agent
+prompt keeps only a one-line trigger for each and links here for the full prose.
+
+### Flow phase `behavior.onError` is dropped by a full-replace `--file`
+
+`kbagent flow update` preserves `behavior.onError` on partial updates (rename,
+description only). BUT `--file` is a **full-replace** operation -- if your YAML
+omits `behavior` on a phase, that field is silently dropped. For structural
+edits, always fetch via `kbagent flow detail --json` first, merge your diff
+locally, then push via `--file`. Same failure shape as the pre-v1.60 MCP
+`update_flow` strip bug, reached via a different door. Integer-vs-string phase
+IDs are irrelevant to this -- MCP accepts both, and changing ID types does NOT
+make `update_flow` preserve `behavior.onError`. Don't waste retries on it.
+
+### Primary keys on new output tables crash the first run
+
+Keboola creates columns as nullable by default on first insert. A PK on a
+nullable column crashes the first run. Pattern: strip PKs before first run,
+run, restore PKs. Surface this to the user BEFORE they hit the crash.
+
+### `source` vs `destination` in output mappings
+
+`source` = the SQL alias your query creates (e.g. `SELECT ... FROM ... AS
+my_out`, source is `my_out`). `destination` = the full storage bucket path
+(`in.c-bucket.table`). Swapping them breaks the config SILENTLY -- no error at
+save time, just garbage at runtime.
+
+### Linked buckets exist only in the source project
+
+`in.c-X` exists only in the SOURCE project; the destination project must
+reference `out.c-X` of the local schema. If you see an input mapping
+referencing `in.c-X` in a project that did not create the bucket, it is likely
+a linked bucket and the reference needs rewriting to the local alias.
+
+### Google Sheets Writer OAuth is not exportable
+
+NOT exportable via API. On a cross-project migration, the user MUST manually
+re-authenticate in the destination project UI. Flag this BEFORE starting the
+migration, not after.
+
+### `kbagent storage rename-table` does not exist
+
+The Keboola Storage API does NOT support table renames. The only path is to
+create a new table with the desired name and update all downstream configs
+that reference the old name. Do NOT propose a rename in a plan -- it sets up
+the user for an impossible step. Likewise `kbagent flow migrate` does not exist:
+cross-project flow migration is a manual dance (`sync pull` source, edit,
+`sync push` destination, or component-by-component via `config detail` +
+`config new`).
+
+### `column_metadata: {}` in a synced file is not authoritative
+
+A `sync pull` without the right flags leaves column metadata empty in the local
+JSON. That does NOT mean Keboola has no metadata -- always re-fetch via
+`kbagent storage table-detail` when deciding about types.
