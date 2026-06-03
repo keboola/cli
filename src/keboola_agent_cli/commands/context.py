@@ -830,7 +830,10 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     --branch (since 0.47.0): per-invocation dev-branch override. Same semantics as sync push/diff.
 
   kbagent sync status [--directory DIR]
-    Show local changes since last pull (SHA256-based).
+    Show local changes since last pull (SHA256-based). Also returns
+    plaintext_secret_warnings (since 0.55.0): in-sync configs/rows whose
+    #-secrets are still plaintext on the remote (pre-0.54.0 leak; #378). Fix =
+    re-push on >=0.54.0 + rotate (version history keeps the plaintext).
 
   kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
     3-way diff: local vs pull-time snapshot vs remote. Detects conflicts.
@@ -1211,7 +1214,9 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     `uv pip install -e ".[server]"`.
 
   kbagent doctor [--fix]
-    Health checks. --fix auto-installs MCP server binary.
+    Health checks. --fix auto-installs MCP server binary. Inside a sync working
+    tree, the sync_secrets check (since 0.55.0) warns about in-sync configs that
+    still hold plaintext #-secrets (#378); skipped outside a sync tree.
 
   kbagent version [--beta]
     Version info for kbagent + keboola-mcp-server. Reports both the locally

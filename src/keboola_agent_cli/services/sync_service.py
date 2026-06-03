@@ -167,7 +167,9 @@ def _ensure_within_branch(
         )
 
 
-def scan_synced_plaintext_secrets(project_root: Path) -> list[dict[str, Any]]:
+def scan_synced_plaintext_secrets(
+    project_root: Path, manifest: Manifest | None = None
+) -> list[dict[str, Any]]:
     """Find in-sync configs/rows whose local files still hold plaintext #-secrets.
 
     Regression guard for issue #378. A config that is *in sync* with the remote
@@ -182,10 +184,18 @@ def scan_synced_plaintext_secrets(project_root: Path) -> list[dict[str, Any]]:
     Read-only -- filesystem + manifest only, no API client. Returns one entry
     per affected config/row with the secret *key paths* (never the values).
 
+    Args:
+        project_root: Root of the sync working tree.
+        manifest: Already-loaded manifest to reuse (callers like
+            :meth:`SyncService.status` load it themselves). Loaded from
+            *project_root* when ``None``.
+
     Raises:
-        FileNotFoundError: if *project_root* has no ``.keboola/manifest.json``.
+        FileNotFoundError: if *manifest* is ``None`` and *project_root* has no
+            ``.keboola/manifest.json``.
     """
-    manifest = load_manifest(project_root)
+    if manifest is None:
+        manifest = load_manifest(project_root)
     warnings: list[dict[str, Any]] = []
 
     def _branch_path(branch_id: int | None) -> str:
@@ -1068,7 +1078,9 @@ class SyncService(BaseService):
             project_root: Root directory of the sync working tree.
 
         Returns:
-            Dict with lists of modified/added/deleted configs and count of unchanged.
+            Dict with lists of modified/added/deleted configs, count of
+            unchanged, and ``plaintext_secret_warnings`` -- in-sync configs/rows
+            whose ``#``-secrets are still plaintext on the remote (issue #378).
         """
         manifest = load_manifest(project_root)
 
@@ -1126,7 +1138,13 @@ class SyncService(BaseService):
         added = self._find_untracked_configs(project_root, manifest)
 
         # Flag in-sync configs whose secrets are still plaintext (issue #378).
-        plaintext_secret_warnings = scan_synced_plaintext_secrets(project_root)
+        # Best-effort: a file race during the scan must not crash `sync status`
+        # (mirrors the doctor sync_secrets check's defensive guard).
+        try:
+            plaintext_secret_warnings = scan_synced_plaintext_secrets(project_root, manifest)
+        except Exception:
+            logger.warning("Plaintext-secret scan failed; skipping", exc_info=True)
+            plaintext_secret_warnings = []
 
         return {
             "modified": modified,

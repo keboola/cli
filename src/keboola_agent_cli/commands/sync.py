@@ -645,7 +645,7 @@ def sync_status(
         # Plaintext secret warning -- independent of local change state (issue #378).
         if secret_warnings:
             formatter.console.print(
-                f"\n[bold red]⚠ Plaintext secrets in {len(secret_warnings)} synced "
+                f"\n[bold red]PLAINTEXT SECRETS in {len(secret_warnings)} synced "
                 f"config(s)[/bold red] (issue #378) -- in sync with the remote but NOT encrypted:"
             )
             for w in secret_warnings:

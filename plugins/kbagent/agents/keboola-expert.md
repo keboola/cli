@@ -181,6 +181,9 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
   (`--allow-plaintext-on-encrypt-failure` overrides); `--dry-run` is not
   encrypted; covers CLI + `serve` + MCP passthrough. **VERSION GATE**: < 0.54.0
   wrote `#`-secrets to Storage in PLAINTEXT -- warn + recommend `kbagent update`.
+  To find pre-0.54.0 leaks in a synced tree use `sync status` / `doctor`
+  (0.55.0+) -- they flag in-sync configs whose `#`-secrets are still plaintext;
+  fix = re-push to encrypt AND rotate (version history keeps the plaintext).
 - **`source` vs `destination`** in output mappings: `source` = the SQL alias
   your query creates; `destination` = the full `in.c-bucket.table` path.
   Swapping them breaks the config SILENTLY (no save-time error).
