@@ -51,84 +51,52 @@ uv run pytest tests/test_cli.py::TestProjectAdd::test_project_add_success_json -
 
 ```
 src/keboola_agent_cli/
-  __init__.py           # __version__ = "0.5.0"
+  __init__.py           # exposes __version__ (read at runtime via importlib.metadata; never hardcoded)
   __main__.py           # python -m support
   cli.py                # Typer root app, global options, subcommand wiring
-  constants.py          # Shared constants (retry params, timeouts, defaults)
+  constants.py          # Shared constants (retry params, timeouts, exit codes, defaults)
   json_utils.py         # Deep-merge, set_nested_value, compute_diff utilities
-  http_base.py          # BaseHttpClient - shared HTTP foundation for both clients
-  client.py             # LAYER 3: HTTP client (Storage API + Queue API)
-  manage_client.py      # LAYER 3: HTTP client (Manage API, X-KBC-ManageApiToken)
-  ai_client.py          # LAYER 3: HTTP client (AI Service API, component schemas)
-  config_store.py       # JSON persistence for config.json (0600 permissions)
   models.py             # Pydantic models shared across layers
   output.py             # OutputFormatter: JSON vs Rich dual-mode output
-  errors.py             # KeboolaApiError, ConfigError, mask_token()
+  errors.py             # KeboolaApiError, ConfigError, ErrorCode enum, mask_token()
+  config_store.py       # JSON persistence for config.json (0600 permissions)
+  permissions.py        # PermissionEngine (--deny-writes / --deny-destructive session firewall)
   changelog.py          # Version changelog data + helpers (update on every release)
   auto_update.py        # Auto-update on startup + "What's new" display
-  commands/
-    _helpers.py         # Shared command-layer helpers (formatter, service factory, error mapping)
-    project.py          # LAYER 1: CLI commands for project management
-    config.py           # LAYER 1: CLI commands for config browsing
-    job.py              # LAYER 1: CLI commands for job history (Queue API)
-    lineage.py          # LAYER 1: CLI commands for cross-project data lineage
-    org.py              # LAYER 1: CLI commands for organization bulk onboarding
-    tool.py             # LAYER 1: CLI commands for MCP tool list/call (supports --branch)
-    branch.py           # LAYER 1: CLI commands for branch lifecycle (list/create/use/reset/delete/merge)
-    workspace.py        # LAYER 1: CLI commands for workspace lifecycle (create/list/delete/query)
-    component.py        # LAYER 1: CLI commands for component discovery and scaffold
-    changelog.py        # LAYER 1: Changelog display
-    context.py          # LAYER 1: Agent usage instructions
-    doctor.py           # LAYER 1: Health check command
-  hints/
-    __init__.py         # HintRegistry + render_hint() public API
-    models.py           # HintMode, ClientCall, ServiceCall, HintStep, CommandHint
-    renderer.py         # ClientRenderer + ServiceRenderer (Python code generation)
-    definitions/        # One file per command group (config.py, storage.py, job.py, ...)
-  services/
-    base.py             # LAYER 2: BaseService - shared parallel execution infrastructure
-    project_service.py  # LAYER 2: Business logic for projects
-    config_service.py   # LAYER 2: Business logic for configurations
-    job_service.py      # LAYER 2: Business logic for job history
-    lineage_service.py  # LAYER 2: Cross-project lineage via bucket sharing
-    org_service.py      # LAYER 2: Organization setup orchestration
-    mcp_service.py      # LAYER 2: MCP tool integration (keboola-mcp-server wrapper)
-    branch_service.py   # LAYER 2: Branch lifecycle (create/use/reset/delete/merge, async job polling)
-    workspace_service.py # LAYER 2: Workspace lifecycle (CRUD, table load, SQL query via Query Service)
-    component_service.py # LAYER 2: Component discovery, schema fetch, scaffold generation
-    deep_lineage_service.py # LAYER 2: Column-level lineage analysis (SQL parsing, AI enrichment)
-    doctor_service.py   # LAYER 2: Health check business logic
 
-tests/
+  # LAYER 3 -- HTTP clients (all inherit BaseHttpClient in http_base.py:
+  #            shared 429/5xx retry + exponential backoff)
+  http_base.py          # BaseHttpClient - shared retry/backoff + common HTTP infra
+  client.py             # Storage API + Queue API      (X-StorageApi-Token)
+  manage_client.py      # Manage API                   (X-KBC-ManageApiToken)
+  ai_client.py          # AI Service API               (component schemas, Kai)
+  data_science_client.py # Data Science API            (data apps)
+  metastore_client.py   # Metastore API                (semantic layer)
+  dev_portal_client.py  # Developer Portal API
+  stream_client.py      # Stream / Data Streams API    (OTLP/HTTP sources)
+
+  commands/             # LAYER 1 -- thin Typer commands, one file per group (32 modules):
+                        #   project config job storage flow branch workspace data_app
+                        #   sync semantic_layer agent stream feature dev_portal kai
+                        #   sharing lineage schedule search org tool component encrypt
+                        #   permissions serve http_client repl init doctor version
+                        #   changelog context
+                        # _helpers.py = formatter/service-factory/error-mapping; _*.py = private helpers
+  services/             # LAYER 2 -- business logic, one <group>_service.py per command group
+                        #   (DI: receives ConfigStore + client_factory; base.py = parallel infra;
+                        #    member_service, variables_service, repo_validate_service,
+                        #    mcp_service, mcp_transport, deep_lineage_service are extra non-1:1 services)
+  server/               # FastAPI app behind `kbagent serve` (REST API + Web UI mount + SSE)
+  sync/                 # GitOps sync engine (manifest v3, pull/push/diff, branch-linking)
+  hints/                # --hint client|service Python code generator (deprecated since 0.45.0)
+  _ui_dist/             # bundled React SPA served by `kbagent serve --ui`
+
+tests/                  # ~137 files; mirror the layers (one test_<module>.py per command/service)
   conftest.py           # Shared fixtures (tmp_config_dir, config_store, formatters)
   helpers.py            # Shared test utilities
-  test_cli.py           # End-to-end CLI tests via CliRunner
-  test_client.py        # API client tests with mocked HTTP
-  test_manage_client.py # Manage API client tests with mocked HTTP
-  test_config_store.py  # Config persistence tests
-  test_errors.py        # mask_token() tests
-  test_models.py        # Pydantic model tests
-  test_output.py        # OutputFormatter tests
-  test_services.py      # Business logic tests (project, config, parallel)
-  test_base_service.py     # BaseService unit tests (resolve, workers, parallel)
-  test_lineage_service.py  # Lineage service tests
-  test_mcp_service.py      # MCP service tests (incl. branch_id propagation)
-  test_branch_service.py   # Branch service tests (lifecycle, multi-project, errors)
-  test_org_service.py      # Org service tests (slugify, setup, idempotency)
-  test_workspace_service.py # Workspace service tests (CRUD, query, from-transformation)
-  test_workspace_cli.py    # Workspace CLI tests via CliRunner
-  test_json_utils.py       # Deep-merge and nested-path utility tests
-  test_config_update.py    # Config update with configuration content (merge, set, dry-run)
-  test_doctor_service.py   # Doctor service tests
-  test_http_base.py        # BaseHttpClient tests
-  test_helpers.py          # Command helpers tests
-  test_ai_client.py        # AI Service client tests
-  test_component_service.py # Component service tests
-  test_component_cli.py    # Component CLI tests via CliRunner
-  test_deep_lineage_service.py # Deep lineage service tests (column-level lineage, SQL parsing)
-  test_e2e.py              # E2E tests against real API (make test-e2e)
-  test_e2e_lineage_deep.py # E2E tests for deep lineage (build + show against real data)
-  test_integration.py      # Integration tests (edge cases, linting)
+  test_cli.py           # End-to-end CLI tests via typer.testing.CliRunner
+  test_e2e*.py          # E2E tests against a real API (make test-e2e; needs E2E_API_TOKEN + E2E_URL)
+  test_integration.py   # Integration tests (edge cases, linting)
 ```
 
 ## Architecture: 3-Layer Design
@@ -138,18 +106,21 @@ CLI Commands (commands/)  -->  Services (services/)  -->  API Client (client.py,
   Typer, output                 Business logic             HTTP, endpoints
 ```
 
-- API changes: modify only `client.py` or `manage_client.py`
+- API changes: modify only the relevant LAYER 3 client (`client.py`, `manage_client.py`, ...)
 - Business logic changes: modify only `services/`
 - UI changes: modify only `commands/`
 
-### Three HTTP Clients
+### HTTP Clients
+
+Seven clients, all inheriting `BaseHttpClient` (`http_base.py`) which provides shared retry/backoff logic (429/5xx, exponential backoff, 3 retries) and common HTTP infrastructure:
 
 - **KeboolaClient** (`client.py`): Storage API + Queue API, auth via `X-StorageApi-Token`
 - **ManageClient** (`manage_client.py`): Manage API, auth via `X-KBC-ManageApiToken`
-
-- **AiServiceClient** (`ai_client.py`): AI Service API, auth via `X-StorageApi-Token`, URL derived as `ai.{stack_suffix}`
-
-All three inherit from `BaseHttpClient` (`http_base.py`) which provides shared retry/backoff logic (429/5xx, exponential backoff, 3 retries) and common HTTP infrastructure.
+- **AiServiceClient** (`ai_client.py`): AI Service API (component schemas, Kai), URL derived as `ai.{stack_suffix}`
+- **DataScienceClient** (`data_science_client.py`): Data Science API (data apps)
+- **MetastoreClient** (`metastore_client.py`): Metastore API (semantic layer)
+- **DeveloperPortalClient** (`dev_portal_client.py`): Developer Portal API (component publishing)
+- **StreamClient** (`stream_client.py`): Stream / Data Streams API (OTLP/HTTP sources)
 
 ### MCP Integration
 
@@ -402,6 +373,15 @@ kbagent feature project-remove --project ALIAS --feature NAME [--dry-run] [--yes
 kbagent feature user-show --project ALIAS --email EMAIL
 kbagent feature user-add --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
 kbagent feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
+
+# permissions: session write/destructive firewall. The top-level --deny-writes / --deny-destructive
+# flags are the one-shot form; `permissions set` persists a policy (mode allow|deny + allow/deny patterns
+# like cli:write, cli:destructive, tool:write). The agent guards rails against mistakes; not a sandbox.
+kbagent permissions list [--category read|write|destructive|admin]
+kbagent permissions show
+kbagent permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]
+kbagent permissions reset
+kbagent permissions check OPERATION
 
 kbagent tool list [--project NAME] [--branch ID]
 kbagent tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]
