@@ -63,60 +63,11 @@ a critical failure.
    new integrations.)
 
 6. **VERSION GATE**. On first invocation in a session, run
-   `kbagent --json context` and inspect the version. If missing commands
-   needed for the current task (e.g. `flow update` needs 0.22.0+,
-   `schedule find` needs 0.23.0+, `config set-default-bucket` needs
-   0.26.0+, `data-app create / deploy / start / stop / delete / password`
-   need 0.27.0+, `config update` script[] auto-normalize (#245) needs
-   0.28.0+, list-element re-split against
-   the #274 ODBC `Actual statement count N != desired 1` crash needs
-   0.31.0+, `storage swap-tables` needs 0.28.0+, `storage clone-table` = 0.52.0+,
-   env-var manage-token auth for `org setup` / `project refresh` /
-   `data-app password` needs 0.29.0+ with `--allow-env-manage-token`,
-   `project invite` / `project member-*` / `project invitation-*`
-   need 0.29.0+,
-   `data-app secrets-* / validate-repo` need 0.29.0+,
-   `search`, `project info`, `config row-create`, `config row-update`,
-   `config row-delete`, `config oauth-url` need 0.30.0+,
-   `project edit --new-alias` (cascading rename across config.json +
-   nested sync dir; warns on lineage cache rebuild) needs 0.31.0+,
-   `storage truncate-table` needs 0.32.0+,
-   `data-app *` JSON output uses key `app_id` (was bare `id`) on 0.33.0+
-   -- pipe with `jq -r '.apps[].app_id'`, not `'.id'`,
-   `config new --push` (one-shot remote create) needs 0.33.0+,
-   `semantic-layer` command group needs 0.41.0+:
-     - model lifecycle: `model list / create / delete`
-     - read: `show`, `validate [--deep]`, `export`, `diff`
-     - write: `add metric|dataset|relationship|constraint|glossary`,
-       `edit metric|dataset|constraint|relationship|glossary`,
-       `import`, `promote`, `build`, `token --encrypt`
-     - destructive: `remove metric|dataset|constraint|relationship|glossary`
-     - alias: `kbagent sl ...` = `kbagent semantic-layer ...`
-     - `semantic-layer build` is heuristic-only on 0.41.0+ (one dataset + one COUNT(*) metric + one glossary entry per table; not a version gate),
-   `kbagent http get/post/patch/delete <PATH>` (self-call against the
-   running serve from a scheduled-agent subprocess; reads
-   `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` env vars) needs 0.40.0+,
-   `kbagent serve --ui` (mounts the React SPA, single-process
-   dashboard, auto-injected token) needs 0.40.0+,
-   AI-agent run timeline persistence (cost/token/per-tool summary on each
-   `AgentRun` + `GET /agents/{id}/runs/{run_id}/events` replay) needs 0.40.0+,
-   `POST /ai/chat/stream` (Local AI co-pilot chat backed by the user's
-   local claude / codex / gemini CLI; backs the dashboard Local AI tile
-   that replaces Kai for non-master-token projects) needs 0.41.9+,
-   data-app CLI sandbox annotation = 0.42.0+ (#304),
-   HTTP `?include_sandbox_annotation=true` = 0.43.1+ #312,
-   `kbagent update --beta` = 0.43.3+,
-   `data-app logs` = 0.43.8+,
-   `kbagent agent <verb>` (CLI parity /agents REST) = 0.44.0+,
-   `semantic-layer search-context|get-context`, `storage create-table --if-not-exists`, `sync push|pull|diff --branch`, `sync push --no-name-drift-warnings`, fresh-CREATE writeback + KBC.* = 0.47.0+,
-   Snowflake `workspace create` `private_key` = 0.47.1+,
-   `sync push` fresh-CREATE variable-link resolution + `--branch <id>` default-tree promote = 0.47.2+,
-   `feature` group (stack/project/user feature flags, Manage API) = 0.48.0+,
-   `dev-portal` = 0.49.0+ (admin-role PATCH = 0.51.1+),
-   headless `__env__` project (`KBAGENT_PROJECT_FROM_ENV=1` + `KBC_TOKEN` + `KBC_STORAGE_API_URL`) + forgiving stack-URL normalization (bare host / full project deep-link) = 0.50.0+,
-   `stream` command group (Data Streams / OTLP) = 0.50.0+,
-   `storage retype` is a future composite), you
-   MUST refuse the task and return a handoff message to the parent:
+   `kbagent --json context` and inspect the version. Every command in the
+   §2 matrix and §3 gotchas carries its own `(X.Y.Z+)` since-tag -- treat
+   those inline tags as the authoritative version floor for the task at
+   hand. If the installed version is below what the task needs, you MUST
+   refuse and return a handoff to the parent:
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
    Ask user to run kbagent update, then re-invoke me."` Do not attempt
    the task with workarounds that use MCP strip-bug-prone tools.
@@ -207,304 +158,112 @@ success, not a failure.
 
 ## 3. INLINE GOTCHAS (the ones that have bitten past sessions)
 
-- **Flow phase `behavior.onError`**: `kbagent flow update` preserves it
-  on partial updates (rename, description only). BUT `--file` is a
-  full-replace operation -- if your YAML omits `behavior` on a phase,
-  that field is silently dropped. For structural edits, always fetch
-  via `kbagent flow detail --json` first, merge your diff locally,
-  then push via `--file`. Same failure shape as the pre-v1.60 MCP
-  `update_flow` strip bug, reached via a different door.
+One-line triggers only. Full prose, exact error strings, issue numbers, and
+API quirks live in [`gotchas.md`](../skills/kbagent/references/gotchas.md) --
+read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
 
-- **Snowflake transformation scaffolding**: `tool call create_config`
-  REFUSES `keboola.snowflake-transformation`. Three options that work:
-  (a) `kbagent config new --component-id keboola.snowflake-transformation
-  --name N --project P --push --no-files` (0.33.0+) -- one-shot remote
-  create wrapping the raw Storage API, then `kbagent config update --set
-  parameters.blocks...=...` to fill in the body. **Recommended path.**
-  (b) `kbagent config new --component-id keboola.snowflake-transformation
-  --output-dir D` for the local scaffold, then `kbagent config update` for
-  the body. (c) MCP `tool call create_sql_transformation` which uses a
-  lower-level schema. `config new --push` does NOT inherit the MCP
-  refusal because it calls Storage API directly.
+**Flow / config edits**
 
-- **Snowflake workspace credentials** (0.47.1+): headless
-  `kbagent workspace create` returns `private_key` for Snowflake; `password`
-  is empty/unusable. Use the one-time PKCS8 PEM for key-pair auth. BigQuery
-  keeps the prior shape.
+- **Flow phase `behavior.onError`**: `flow update --file` is a **full-replace** --
+  omitting `behavior` on a phase silently drops it. Fetch `flow detail` first,
+  merge locally, then push. Integer-vs-string phase IDs are irrelevant to this.
+- **Snowflake transformation scaffolding**: MCP `create_config` REFUSES
+  `keboola.snowflake-transformation`. Use `config new --push --no-files`
+  (0.33.0+) or `config new --output-dir` then `config update`, or MCP
+  `create_sql_transformation`. `config new --push` hits the Storage API
+  directly, so it does NOT inherit the refusal.
+- **`script[]` normalization**: `config update` auto-fixes string-vs-array
+  (0.28.0+, #245) and re-splits multi-statement list elements (0.31.0+, #274);
+  inspect the result envelope's `normalizations: [...]`. The trap STILL fires
+  via MCP `update_sql_transformation` / raw `PUT` -- prefer `config update`.
+- **`config create/update/row-*` auto-encrypt `#`-secrets** (0.54.0+, #378):
+  pre-encrypt via the Encryption API; fail-closed
+  (`--allow-plaintext-on-encrypt-failure` overrides); `--dry-run` is not
+  encrypted; covers CLI + `serve` + MCP passthrough. **VERSION GATE**: < 0.54.0
+  wrote `#`-secrets to Storage in PLAINTEXT -- warn + recommend `kbagent update`.
+- **`source` vs `destination`** in output mappings: `source` = the SQL alias
+  your query creates; `destination` = the full `in.c-bucket.table` path.
+  Swapping them breaks the config SILENTLY (no save-time error).
+- **Primary keys on new output tables**: columns are nullable on first insert,
+  so a PK crashes the first run. Strip PKs, run, restore. Warn the user BEFORE
+  the crash.
 
-- **`script[]` string-vs-array runtime crash** (0.28.0+ auto-fix; #245):
-  the Storage API silently accepts `parameters.blocks[].codes[].script`
-  as a string, but the runtime validator rejects it (`Expected array,
-  got string`) -- the broken push lands silently and the job crashes
-  hours later (often via the scheduler). `kbagent config update`
-  auto-normalizes string -> array before pushing: SQL transformations
-  get statement-level split via the existing `split_statements()` state
-  machine; Python / R / `kds-team.app-custom-python` get a single-element
-  `[script]` wrap. Inspect the result envelope's `normalizations: [...]`
-  to see what was changed (empty list means already-valid input).
-  **Caveat**: the trap STILL FIRES if you bypass kbagent. `tool call
-  update_sql_transformation` / `create_sql_transformation` and raw
-  `PUT /v2/storage/components/.../configs/...` calls do NOT inherit the
-  normalization (as of MCP v1.59.x). For SQL transformation body
-  updates, prefer `kbagent config update` over MCP/REST.
+**Storage**
 
-- **`script[]` list-element-with-multiple-statements ODBC crash**
-  (0.31.0+ auto-fix; #274): the 0.28.0 fix above closes the
-  string-vs-array gap but NOT the case where `script` is already a
-  list and one element packs multiple `;`-separated statements --
-  e.g. `script: ["CREATE TABLE x ...; alter session unset
-  week_start;"]`. Storage API accepts the shape (it's a list of
-  strings), the runtime rejects it at ODBC with `Actual statement
-  count 2 did not match the desired statement count 1, SQL state
-  0A000`. Reported in #274 from a Slovak->Czech config migration.
-  Since 0.31.0, every SQL-transformation list element is re-run
-  through `split_statements()` and replaced inline when it yields
-  more than one statement -- emitted as a separate `sql_resplit`
-  entry in `normalizations` with `path: parameters.blocks[B].codes[C].script[E]`
-  (E is the original element index on input). Non-SQL components
-  (Python `;` is a valid intra-statement separator) skip this pass.
-  Same MCP / REST bypass caveat as #245 applies.
+- **`kbagent storage rename-table` does not exist** (nor `flow migrate`): the
+  Storage API has no table rename. Create-new + rewrite downstream configs;
+  never propose a rename step.
+- **`column_metadata: {}` in synced files** is not authoritative -- a `sync
+  pull` may not have fetched metadata. Re-fetch via `storage table-detail`
+  before any type decision; never trust a synced file for write-path metadata.
+- **Native types** (0.25.0+): `--column amount:NUMBER(18,2)` passes through;
+  `BOOLEAN` defaults must be lowercase; `INTEGER(10)` is invalid (use
+  `NUMBER(3,0)`); `--not-null` / `--default` must name a defined `--column`.
+- **`storage create-table` in a dev branch auto-materializes the bucket**
+  (0.25.0+); `auto_created_bucket: true` is informational, not a failure.
+- **`legacy_branch_storage: true`** (0.25.2+): on legacy fake-branch projects,
+  `--branch` writes land in `out.c-<branch_id>-*` in the DEFAULT branch -- do
+  NOT plan "look in out.c-foo" steps. Project 10539 is the canonical fake-branch
+  target; 901 / 10546 have `storage-branches` ON.
+- **`storage clone-table` before an in-branch `swap-tables` / column drop**
+  (0.52.0+): a write in a branch that still reads prod transparently fails
+  "bucket not found" until you clone the prod table branch-local first.
+- **`truncate-table` is row-only** (0.32.0+): schema / PK / dependents survive;
+  uniformly async-via-job on every branch; do NOT pass `async=true`.
+- **`bucket-detail` is dialect-aware** (0.25.3+): read `sql_dialect` + per-table
+  `sql_path` (already correctly quoted) -- don't branch on the backend yourself.
+- **`set-default-bucket`** (0.26.0+) writes `storage.output.default_bucket`
+  (read-modify-write, preserves siblings); only governs tables without their own
+  pinned `destination`.
 
-- **Primary keys on new output tables**: Keboola creates columns as
-  nullable by default on first insert. A PK on a nullable column
-  crashes the first run. Pattern: strip PKs before first run, run,
-  restore PKs. Surface this to the user BEFORE they hit the crash.
-
-- **`source` vs `destination` in output mappings**: `source` = the
-  SQL alias your query creates (e.g. `SELECT ... FROM ... AS my_out`,
-  source is `my_out`). `destination` = the full storage bucket path
-  (`in.c-bucket.table`). Swapping them breaks the config SILENTLY --
-  no error at save time, just garbage at runtime.
+**Migration**
 
 - **Linked buckets**: `in.c-X` exists only in the SOURCE project; the
-  destination project must reference `out.c-X` of the local schema.
-  If you see an input mapping referencing `in.c-X` in a project that
-  did not create the bucket, it is likely a linked bucket and the
-  reference needs rewriting to the local alias.
+  destination must reference its local `out.c-X`. Rewrite cross-project input
+  mappings.
+- **Google Sheets Writer OAuth**: NOT exportable -- the user must re-auth in the
+  destination UI. Flag this BEFORE the migration, not after.
 
-- **Google Sheets Writer OAuth**: NOT exportable via API. On a cross-
-  project migration, the user MUST manually re-authenticate in the
-  destination project UI. Flag this BEFORE starting the migration, not
-  after.
+**Data apps** (0.27.0+ unless noted)
 
-- **Storage table rename**: There is no `kbagent storage rename-table`.
-  Keboola Storage API does NOT support table renames. The only path is
-  to create a new table with the desired name and update all downstream
-  configs that reference the old name. Do NOT propose a rename in a
-  plan -- it sets up the user for an impossible step.
+- **`data-app deploy` required after `config update`**: `configVersion` is a
+  pinned pointer that does NOT auto-advance. Deploy sends the trio
+  `{desiredState=running, configVersion, restartIfRunning=true}`; bare
+  `desiredState=running` pins to the v2 empty shell and the runner errors
+  `dataApp.git.repository is required`. `start` wakes a parked app without
+  bumping the version.
+- **`--auth public`** (0.29.0+) writes the canonical `noneProxyAuthorization`
+  shape; v0.27.0 wrote none -> app-proxy 503. Recreate on 0.29.0+ or patch the
+  `authorization` block.
+- **`secrets-*`** (0.29.0+; plain-key reads 0.43.9+): encrypted keys never
+  decrypt; `secrets-set` needs `#`; `secrets-remove` is idempotent. Per-project
+  KMS -- ciphertext does NOT cross projects.
+- **`validate-repo`** (0.29.0+): GitHub-only, `--type python-js` only, <=5 API
+  calls; run BEFORE `data-app create`.
 
-- **`storage create-table` in a dev branch auto-materializes the bucket**
-  (0.25.0+): if the target bucket has no branch-local write yet, kbagent
-  creates it first (mirrors the Go CLI `EnsureBucketExists`).
-  `auto_created_bucket: true` is informational, not a failure. Production
-  writes never materialize anything.
-- **`storage clone-table` before an in-branch `swap-tables` / column drop**
-  (0.52.0+): on `storage-branches` projects a dev branch reads prod tables
-  transparently until first write, so a swap/drop (a write) fails with a
-  misleading "bucket not found" until the prod table is branch-local. Run
-  `kbagent storage clone-table --project P --table-id T --branch <ID>`
-  first (one-way default->branch). See `gotchas.md`.
-- **`sync pull --force` is conflict-aware, not a blind overwrite** (0.53.0+):
-  a locally-modified config whose remote is UNCHANGED is preserved (its pending
-  delta stays pushable); a true merge conflict (local AND remote both changed
-  since last pull) ABORTS the pull with exit 1 / `SYNC_CONFLICT` instead of
-  silently discarding work (pre-0.53.0 it silently corrupted the baseline and
-  stranded the edits). Safe to force-pull an unrelated config while you have
-  un-pushed edits elsewhere. To discard a local edit on purpose, delete the
-  file/dir then pull. See `gotchas.md`.
+**Project / Manage**
 
-- **`storage truncate-table` is row-only; schema and dependents are
-  preserved** (0.32.0+): the underlying call is
-  `DELETE /v2/storage/[branch/{id}/]tables/{id}/rows?allowTruncate=1`.
-  The endpoint is **uniformly async** on every branch -- it returns
-  HTTP 202 with a queued storage job (`operationName: tableRowsDelete`)
-  that the client polls to completion via `_wait_for_storage_job`,
-  same machinery as `delete_table`. Production branches finish the
-  job in under a second; dev branches may take longer. **Do not pass
-  `async=true`** -- the Storage API rejects it with HTTP 400
-  ("async: This field was not expected.") for this endpoint, even
-  though sibling destructive endpoints (`delete_table`, `delete_bucket`)
-  require it. Aliases, sharing edges, primary keys, descriptions, and
-  downstream config references all survive -- only the rows are
-  removed. The Storage API requires the `allowTruncate=1` opt-in
-  whenever no row filter is sent; kbagent always passes it. Prefer
-  this over `delete-table` for any "re-seed" pattern; reach for
-  `delete-table` only when the table itself is being retired.
+- **Manage-token env var is opt-in** (0.28.0+): `KBC_MANAGE_API_TOKEN` is
+  ignored without `--allow-env-manage-token`. The "found but ignored" warning is
+  the expected default -- tell the user to add the flag; never suppress stderr.
+- **`project invite` "already invited / member"** (0.29.0+) is a no-op (exit 0,
+  `status="noop"`), not a failure -- do NOT retry on 400. `--from-csv` rows
+  return in completion order; match by `email`, not index.
+- **`project member-set-role` uses PATCH, not PUT** (0.29.0+); PUT 404s even on
+  real members.
 
-- **`project invite` "already invited / already member" is a no-op, not a failure** (0.29.0+):
-  Re-inviting a user the project already knows returns HTTP 400 from the
-  Manage API. kbagent normalises both "...already been invited..." and
-  "...already a member..." to `status="noop"` with a `note` field, exit 0.
-  **Do not retry on 400 from these commands** -- the user is already
-  on the project (or already pending). For bulk runs, `noop` rows count
-  toward `noop`, not `failed`, in the summary; surface that distinction
-  to the user when reporting bulk results.
+**Semantic-layer** (0.41.0+) -- full prose in
+[`gotchas.md`](../skills/kbagent/references/gotchas.md) § Semantic-layer:
 
-- **`project invite --from-csv` ordering is non-deterministic** (0.29.0+):
-  Bulk invitation parallelises via `ThreadPoolExecutor` (default 8 workers).
-  The `rows[]` array in the JSON result is in completion order, not CSV
-  order. When reporting per-row outcomes to the user, **match by `email`,
-  not by index**. Partial-success exits 0 with `failed > 0` reflected in
-  the JSON -- treat that as a soft failure that needs review, not a
-  catastrophe.
-
-- **`project member-set-role` uses PATCH, not PUT** (0.29.0+): The Manage
-  API endpoint is `PATCH /manage/projects/{id}/users/{userId}` with
-  `{"role": "..."}`. PUT returns 404 even on real members. kbagent's
-  `ManageClient.update_project_member_role` emits PATCH; if you script
-  against the endpoint directly, do the same.
-
-- **`legacy_branch_storage: true` on `--branch` writes** (0.25.2+):
-  Projects without the `storage-branches` feature flag (legacy fake-branch
-  projects) accept `--branch X` writes at the API level, but the
-  transformation runner ignores those buckets at job time and creates its
-  own `out.c-<branch_id>-*` bucket in the default branch. Both `kbagent
-  storage create-bucket --branch X` and `storage create-table --branch X`
-  surface this via `legacy_branch_storage: true` in the JSON response
-  (and a `[yellow]Warning:[/yellow]` line in human mode). When you see
-  this flag, **do NOT** plan downstream "look in `out.c-foo` for the
-  result" steps after a transformation runs -- the result lives in
-  `out.c-<branch_id>-foo` in the default branch. The kbagent-materialized
-  bucket is reachable from the branch view but is otherwise an orphan.
-  Project 10539 (`padak-2-0`) is the canonical fake-branch test target;
-  10546 (`kbagent-e2e`) and 901 (`padak`) have `storage-branches` ON.
-
-- **Native column types vs. base types** (0.25.0+): `--column pk:VARCHAR(40)`
-  and `--column amount:NUMBER(18,2)` now pass through to the Storage API
-  (no CLI whitelist). `BOOLEAN` defaults must be **lowercase**
-  (`--default flag=false`); uppercase is rejected. `INTEGER(10)` is
-  invalid -- use `NUMBER(3,0)` for narrow integers. `--not-null` and
-  `--default NAME=VALUE` must reference a defined `--column` name
-  (typos exit 2).
-
-- **`column_metadata: {}` in synced files**: A sync-pull without the
-  right flags leaves column metadata empty in the local JSON. That does
-  NOT mean Keboola has no metadata -- always re-fetch via
-  `kbagent storage table-detail` when deciding about types.
-
-- **Integer vs string phase IDs**: MCP accepts both. This is irrelevant
-  to the strip bug -- changing ID types does NOT make `update_flow`
-  preserve `behavior.onError`. Don't waste retries on this.
-
-- **`kbagent flow migrate` does not exist yet**: Cross-project flow
-  migration is a manual dance: `sync pull` source, edit, `sync push`
-  destination, or component-by-component via `config detail` +
-  `config new`. Don't pretend the composite exists.
-
-- **`config set-default-bucket` is the discoverable entry for
-  `storage.output.default_bucket`** (0.26.0+): writes
-  `configuration.storage.output.default_bucket` -- the same field the
-  raw-mode workaround Confluence article describes. Read-modify-write
-  preserves all other keys; `--clear` removes only `default_bucket`,
-  leaves an empty `storage.output: {}` if no siblings (intentional).
-  Same-value writes return `{"changed": false}` without an API call --
-  surface this as "no version bump needed". The setting only governs
-  output tables that DO NOT pin their own `destination`; tables with
-  explicit `destination: in.c-foo.bar` ignore it. For per-table
-  destination override (the second method in the support article), keep
-  using `kbagent config update --set 'storage.output.tables=[{...}]'` --
-  no dedicated wrapper because the per-table mapping has many fields.
-  Branch behavior is determined by the project's `storage-branches`
-  feature flag, not by this setting -- see the `legacy_branch_storage`
-  gotcha above for what the runner actually does on `--branch` writes.
-
-- **`config create/update/row-*` auto-encrypt `#`-secrets** (0.54.0+, #378):
-  pre-encrypt via Encryption API; fail-closed (`--allow-plaintext-on-encrypt-failure`
-  overrides); `--dry-run` not encrypted; covers CLI + `serve` + MCP passthrough.
-  **VERSION GATE**: < 0.54.0 wrote `#`-secrets to Storage in PLAINTEXT -- warn +
-  recommend `kbagent update` or `sync push`. Full note in gotchas.md.
-
-- **Data apps need `data-app deploy` after `config update`** (0.27.0+):
-  the deployment's `configVersion` is pinned and does NOT auto-advance.
-  `config update` bumps the Storage version but the running container keeps
-  the OLD one until `data-app deploy` PATCHes the §9 trio
-  `{desiredState=running, configVersion, restartIfRunning=true}`. Bare
-  `desiredState=running` silently pins to the v2 empty shell -> runner errors
-  `dataApp.git.repository is required` (only in the UI Terminal Logs).
-  `data-app start` just wakes an auto-suspended app (no configVersion bump);
-  use `data-app deploy` for code/config rollouts. PAT encryption is
-  per-project KMS; `data-app create` re-encrypts plaintext and refuses to
-  write a non-`KBC::Project*` value.
-
-- **`data-app create --auth public` writes the canonical `noneProxyAuthorization`
-  shape** (0.29.0+, fixes a v0.27.0 silent-503 bug): v0.27.0 wrote NO
-  `authorization` block when `--auth public` -- the Keboola app-proxy
-  refused to route (HTTP 503) and the UI's Authentication Type selector
-  showed blank. v0.29.0 writes
-  `{auth_providers: [], auth_rules: [{type: pathPrefix, value: /, auth_required: false}]}`
-  per the kbc-ui's `noneProxyAuthorization` constant. If a user reports a
-  v0.27.0 public app returning 503, the fix is to recreate on 0.29.0+
-  (the URL is bound to the deployment record so it retires either way),
-  OR to patch the existing config in-place via
-  `kbagent config update --component-id keboola.data-apps --config-id ID
-  --set 'authorization=...'` with the canonical shape. `--auth password`
-  behaviour is unchanged. Other auth providers (OIDC / GitHub / GitLab /
-  JumpCloud / Auth0) are not yet exposed by the CLI; tracked as a
-  follow-up issue.
-
-- **`data-app secrets-*`** (0.29.0+; plain-key reads since 0.43.9):
-  `secrets-get`/`secrets-remove` take keys with or without `#` (the block
-  holds encrypted secrets AND plain env vars; `secrets-set` still needs
-  `#` -- it encrypts). `secrets-get` on an ENCRYPTED key NEVER echoes the
-  decrypted plaintext (one-way Encryption API); a PLAIN key returns its
-  value (`encrypted: false`, already visible via `config detail`).
-  NOT_FOUND never enumerates siblings. `secrets-remove` is idempotent:
-  removing a non-existent key returns exit 0 with `removed: 0` and does
-  NOT bump the Storage version. A key whose derived env-var name collides
-  with the runtime-injected set (`KBC_TOKEN`, `KBC_URL`) is silently
-  shadowed by the platform; the CLI WARNs to stderr and sets
-  `shadowed_by_runtime` -- the WRITE still happens.
-
-- **`data-app validate-repo` is GitHub-only**, `--type python-js` only
-  (0.29.0+): pre-flight Golden-Rule check via the GitHub Trees+Contents
-  API. Total <=5 calls regardless of repo size. Use BEFORE
-  `data-app create` so the operator does not burn a deploy cycle on a
-  misconfigured repo. WARNs are advisory unless `--strict` is set;
-  BLOCKINGs always fail. Tracked follow-up: streamlit / pure-Python /
-  R / Node-only types, GitLab/Bitbucket hosts.
-
-- **`storage bucket-detail` is dialect-aware** (0.25.3+): the response
-  shape depends on the bucket's backend. Snowflake buckets carry
-  `snowflake_database` / `snowflake_schema` and per-table
-  `snowflake_path` quoted with `"..."`. BigQuery buckets carry
-  `bigquery_dataset` and per-table `bigquery_path` quoted with
-  backticks (`` `dataset`.`table` `` or `` `project`.`dataset`.`table` ``
-  when `databaseName` is surfaced). The misleading `snowflake_*`
-  keys are NOT included on BigQuery results -- pre-0.25.3 they were
-  emitted unconditionally and contained syntactically invalid SQL for
-  BQ. Always read `sql_dialect` ("snowflake" / "bigquery") and per-table
-  `sql_path` instead of branching on backend yourself; both are present
-  for any backend. When you write SQL for the user, use `sql_path`
-  verbatim -- it is already correctly quoted for the bucket's backend.
-  BigQuery `databaseName` is empty on Keboola-managed BQ projects, so
-  `bigquery_path` will be dataset-qualified only -- if the user needs a
-  fully-qualified GCP path, ask them for the project name explicitly.
-
-- **Manage-token env-var is opt-in (since 0.28.0)**.
-  `KBC_MANAGE_API_TOKEN` is no longer auto-resolved for `org setup`,
-  `project refresh`, or `data-app password`. Default behaviour: emit a
-  warning, ignore the env var, fall through to a TTY hidden-input prompt;
-  exit 2 with no TTY. To opt in (CI/CD), pass the top-level flag:
-  `kbagent --allow-env-manage-token --json org setup ...`. The flag is
-  session-only -- not persisted, no env-var equivalent. Default-deny
-  closes the AI-exfiltration risk where a subprocess running as the same
-  user (including the agent itself) inherits the manage token. If you
-  see `Warning: KBC_MANAGE_API_TOKEN found in environment but ignored`
-  in stderr, that is the expected default; tell the user to add
-  `--allow-env-manage-token` to their invocation, never strip the
-  warning by suppressing stderr.
-
-- **Semantic-layer gotchas (since v0.41.0)** — full prose in
-  [`gotchas.md` § Semantic-layer](../skills/kbagent/references/gotchas.md).
-  Key traps: constraint `rule` is a STRING (not `{bounds: {min, max}}`);
-  `severity` is 3-level (`error|warning|info`) while the 4-band health
-  lives in the name suffix (`_critical/_warning/_healthy/_review`), not the
-  API; `edit metric --new-name` cascades into constraints' `metrics[]` and
-  changes CODE_METRIC (surface it -- downstream joins break silently);
-  `remove metric` orphans referencing constraints (drop/rewrite them
-  first; the scan warns even with `--yes`, non-TTY exits 2); `build` is a
-  heuristic scaffold (`fallback_used: "heuristic"`), not the full AI wizard
-  (that lives in the `sl-build` skill).
+- constraint `rule` is a STRING (not `{bounds: {min, max}}`); `severity` is
+  3-level (`error|warning|info`) while the 4-band health lives in the name suffix
+  (`_critical/_warning/_healthy/_review`).
+- `edit metric --new-name` cascades into constraints' `metrics[]` and changes
+  CODE_METRIC -- downstream joins break silently, so surface it.
+- `remove metric` orphans referencing constraints (drop/rewrite first; the scan
+  warns even with `--yes`, non-TTY exits 2); `build` is a heuristic scaffold
+  (`fallback_used: "heuristic"`), not the full AI wizard (that is the `sl-build`
+  skill).
 
 ---
 
