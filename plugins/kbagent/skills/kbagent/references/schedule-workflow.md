@@ -13,7 +13,7 @@ Schedules are stored as ordinary Storage API configurations of the `keboola.sche
   "configuration": {
     "target": {
       "mode": "run",
-      "componentId": "keboola.orchestrator",
+      "componentId": "keboola.flow",
       "configurationId": "01kmjawd6w80vn2rgh6yeaa12r"
     },
     "schedule": {
@@ -47,7 +47,7 @@ Each row has every field you need for a spreadsheet or dashboard:
   "project_alias": "prod",
   "schedule_id": "01kpx6zv0krbp05gh7eb0dzd5y",
   "schedule_name": "1stFlow (Schedule)",
-  "parent_component_id": "keboola.orchestrator",
+  "parent_component_id": "keboola.flow",
   "parent_config_id": "01kmjawd6w80vn2rgh6yeaa12r",
   "parent_name": "1stFlow",
   "cron": "0 6 * * *",
@@ -55,6 +55,8 @@ Each row has every field you need for a spreadsheet or dashboard:
   "enabled": true
 }
 ```
+
+`schedule list` returns every `keboola.scheduler` config regardless of its target component, so legacy schedules may still show `"parent_component_id": "keboola.orchestrator"` -- those targets are no longer manageable via `kbagent flow` (orchestrator support was dropped in v0.56.0), but the schedules themselves list and audit normally.
 
 ## Inspect a single schedule
 

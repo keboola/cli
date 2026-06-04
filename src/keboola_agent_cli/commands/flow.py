@@ -6,6 +6,7 @@ No business logic belongs here.
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any
 import typer
 import yaml
 from rich.markup import escape
+from rich.syntax import Syntax
 from rich.table import Table
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
@@ -412,12 +414,8 @@ def flow_schema(
         if formatter.json_mode:
             formatter.output({"format": "json-schema", "schema": schema})
         else:
-            import json as _json
-
-            from rich.syntax import Syntax
-
             formatter.console.print(
-                Syntax(_json.dumps(schema, indent=2), "json", theme="monokai", line_numbers=False)
+                Syntax(json.dumps(schema, indent=2), "json", theme="monokai", line_numbers=False)
             )
         return
 
@@ -430,8 +428,6 @@ def flow_schema(
             }
         )
     else:
-        from rich.syntax import Syntax
-
         formatter.console.print(Syntax(_FLOW_SCHEMA, "yaml", theme="monokai", line_numbers=False))
 
 

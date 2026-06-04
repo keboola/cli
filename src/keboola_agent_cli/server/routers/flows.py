@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from ...services.flow_validation import find_unreachable_phases, validate_conditional_flow
 from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/flows", tags=["flows"])
@@ -34,6 +35,58 @@ class FlowSchedule(BaseModel):
     enabled: bool = True
     schedule_name: str | None = None
     branch_id: int | None = None
+
+
+class FlowValidate(BaseModel):
+    phases: list[dict[str, Any]] = []
+    tasks: list[dict[str, Any]] = []
+    project: str | None = None
+
+
+# NOTE: /validate and /{project}/schema are declared BEFORE the /{project}
+# and /{project}/{config_id} routes -- FastAPI matches in declaration order,
+# so the literal segments must win over the path parameters.
+
+
+@router.post("/validate", summary="Validate a conditional-flow definition")
+def validate(
+    body: FlowValidate, registry: ServiceRegistry = Depends(get_registry)
+) -> dict[str, Any]:
+    """Validate phases/tasks (schema + semantic checks). Mirrors `kbagent flow validate`.
+
+    With ``project`` the live keboola.flow JSON Schema is fetched from the stack
+    for structural validation; a fetch failure degrades to semantic-only and is
+    recorded in ``notes``. Without ``project`` only semantic checks run.
+    """
+    schema: dict[str, Any] | None = None
+    notes: list[str] = []
+    if body.project:
+        schema, reason = registry.flow.fetch_flow_schema(body.project)
+        if schema is None:
+            notes.append(f"structural schema validation skipped: {reason}")
+    else:
+        notes.append(
+            "structural schema validation skipped: no schema source "
+            "(pass 'project' to fetch the live schema from the stack)"
+        )
+    errors = validate_conditional_flow(body.phases, body.tasks, schema)
+    warnings = [
+        f"Phase '{pid}' is unreachable from the entry phase"
+        for pid in find_unreachable_phases(body.phases)
+    ]
+    return {"valid": not errors, "errors": errors, "warnings": warnings, "notes": notes}
+
+
+@router.get("/{project}/schema", summary="Fetch the live conditional-flow JSON Schema")
+def get_schema(project: str, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
+    """Dump the keboola.flow JSON Schema served by the stack. Mirrors `kbagent flow schema --full`."""
+    schema, reason = registry.flow.fetch_flow_schema(project)
+    if schema is None:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not fetch the conditional-flow schema: {reason}",
+        )
+    return {"format": "json-schema", "schema": schema}
 
 
 @router.get("", summary="List flows across projects")

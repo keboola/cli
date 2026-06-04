@@ -621,3 +621,141 @@ def test_reference_data_delete_route(tmp_path: Path) -> None:
     )
     assert resp.status_code == 200, resp.text
     sl.delete_reference_data.assert_called_once_with(alias=PROJECT, record_id="r1")
+
+
+# ---------------------------------------------------------------------------
+# flows.py  POST /flows/validate  +  GET /flows/{project}/schema
+# New in 0.56.0 -- mirror `flow validate` / `flow schema --full`.
+# ---------------------------------------------------------------------------
+
+_CF_PHASES = [{"id": "p1", "name": "Extract", "next": [{"id": "n1", "goto": None}]}]
+_CF_TASKS = [
+    {
+        "id": "t1",
+        "name": "Run extractor",
+        "phase": "p1",
+        "enabled": True,
+        "task": {"type": "job", "componentId": "keboola.ex-http", "configId": "1", "mode": "run"},
+    }
+]
+
+
+def test_flows_validate_without_project_is_semantic_only(tmp_path: Path) -> None:
+    """No `project` in body -> no schema fetch, semantic-only note, valid payload passes.
+
+    Also guards FastAPI route ordering: /flows/validate must NOT be captured by
+    POST /flows/{project} (which would call create_flow).
+    """
+    flow_svc = MagicMock()
+    registry = _mock_registry(flow=flow_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/flows/validate",
+            headers=AUTH,
+            json={"phases": _CF_PHASES, "tasks": _CF_TASKS},
+        )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["valid"] is True, body
+    assert any("no schema source" in n for n in body["notes"]), body
+    flow_svc.fetch_flow_schema.assert_not_called()
+    flow_svc.create_flow.assert_not_called()
+
+
+def test_flows_validate_with_project_fetches_live_schema(tmp_path: Path) -> None:
+    """`project` in body -> fetch_flow_schema(alias) is called and schema is applied."""
+    flow_svc = MagicMock()
+    flow_svc.fetch_flow_schema.return_value = (
+        {"type": "object", "required": ["phases", "tasks"]},
+        None,
+    )
+    registry = _mock_registry(flow=flow_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/flows/validate",
+            headers=AUTH,
+            json={"phases": _CF_PHASES, "tasks": _CF_TASKS, "project": PROJECT},
+        )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["valid"] is True, body
+    assert body["notes"] == [], body
+    flow_svc.fetch_flow_schema.assert_called_once_with(PROJECT)
+
+
+def test_flows_validate_schema_fetch_failure_degrades(tmp_path: Path) -> None:
+    """Fetch failure -> semantic-only validation + skip reason in notes, never 5xx."""
+    flow_svc = MagicMock()
+    flow_svc.fetch_flow_schema.return_value = (None, "AI Service unreachable")
+    registry = _mock_registry(flow=flow_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/flows/validate",
+            headers=AUTH,
+            json={"phases": _CF_PHASES, "tasks": _CF_TASKS, "project": PROJECT},
+        )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert any("AI Service unreachable" in n for n in body["notes"]), body
+
+
+def test_flows_validate_reports_semantic_errors(tmp_path: Path) -> None:
+    """Semantic violation (task references missing phase) -> valid=false with errors."""
+    registry = _mock_registry(flow=MagicMock())
+    app = _make_app_with_registry(tmp_path, registry)
+
+    bad_tasks = [dict(_CF_TASKS[0], phase="missing-phase")]
+    with TestClient(app) as client:
+        res = client.post(
+            "/flows/validate",
+            headers=AUTH,
+            json={"phases": _CF_PHASES, "tasks": bad_tasks},
+        )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["valid"] is False, body
+    assert body["errors"], body
+
+
+def test_flows_get_schema_returns_live_schema(tmp_path: Path) -> None:
+    """GET /flows/{project}/schema -> fetch_flow_schema(alias), json-schema envelope.
+
+    Also guards route ordering: /{project}/schema must NOT be captured by
+    GET /flows/{project}/{config_id} (which would call get_flow_detail).
+    """
+    flow_svc = MagicMock()
+    flow_svc.fetch_flow_schema.return_value = ({"type": "object"}, None)
+    registry = _mock_registry(flow=flow_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(f"/flows/{PROJECT}/schema", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert res.json() == {"format": "json-schema", "schema": {"type": "object"}}
+    flow_svc.fetch_flow_schema.assert_called_once_with(PROJECT)
+    flow_svc.get_flow_detail.assert_not_called()
+
+
+def test_flows_get_schema_fetch_failure_is_502(tmp_path: Path) -> None:
+    """Schema unavailable -> 502 with the reason (REST has no degrade path to offer)."""
+    flow_svc = MagicMock()
+    flow_svc.fetch_flow_schema.return_value = (None, "no configurationSchema")
+    registry = _mock_registry(flow=flow_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(f"/flows/{PROJECT}/schema", headers=AUTH)
+
+    assert res.status_code == 502, res.text
+    assert "no configurationSchema" in res.text

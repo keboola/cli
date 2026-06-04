@@ -74,7 +74,7 @@ def _collect_schedules_by_parent(
     try:
         all_sched = client.list_component_configs(SCHEDULER_COMPONENT_ID, branch_id=branch_id)
     except KeboolaApiError as exc:
-        if exc.error_code == "NOT_FOUND":
+        if exc.error_code == ErrorCode.NOT_FOUND:
             return {}
         raise
 
@@ -152,6 +152,10 @@ class FlowService(BaseService):
         except KeboolaApiError as exc:
             return None, exc.message
         except Exception as exc:
+            # Intentionally broad: ANY schema-fetch failure must degrade to
+            # semantic-only validation, never block the write. Narrowing to
+            # OSError-style transport errors would miss httpx exceptions
+            # (httpx.HTTPError does not subclass OSError) and re-raise them.
             return None, str(exc)
         finally:
             ai_client.close()
@@ -224,7 +228,7 @@ class FlowService(BaseService):
                         FLOW_COMPONENT_ID, branch_id=effective_branch
                     )
                 except KeboolaApiError as exc:
-                    if exc.error_code == "NOT_FOUND":
+                    if exc.error_code == ErrorCode.NOT_FOUND:
                         configs = []
                     else:
                         raise
@@ -248,7 +252,7 @@ class FlowService(BaseService):
                     )
                     legacy_count = len(legacy)
                 except KeboolaApiError as exc:
-                    if exc.error_code == "NOT_FOUND":
+                    if exc.error_code == ErrorCode.NOT_FOUND:
                         legacy_count = 0
                     else:
                         raise
@@ -544,7 +548,7 @@ class FlowService(BaseService):
                     SCHEDULER_COMPONENT_ID, branch_id=effective_branch
                 )
             except KeboolaApiError as exc:
-                if exc.error_code == "NOT_FOUND":
+                if exc.error_code == ErrorCode.NOT_FOUND:
                     all_sched = []
                 else:
                     raise
@@ -638,7 +642,7 @@ class FlowService(BaseService):
                     SCHEDULER_COMPONENT_ID, branch_id=effective_branch
                 )
             except KeboolaApiError as exc:
-                if exc.error_code == "NOT_FOUND":
+                if exc.error_code == ErrorCode.NOT_FOUND:
                     existing = []
                 else:
                     raise
@@ -707,7 +711,7 @@ class FlowService(BaseService):
                     SCHEDULER_COMPONENT_ID, branch_id=effective_branch
                 )
             except KeboolaApiError as exc:
-                if exc.error_code == "NOT_FOUND":
+                if exc.error_code == ErrorCode.NOT_FOUND:
                     all_sched = []
                 else:
                     raise
