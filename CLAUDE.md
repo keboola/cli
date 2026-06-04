@@ -542,7 +542,7 @@ kbagent flow update --project NAME --flow-id ID [--name N] [--description D] [--
 kbagent flow delete --project NAME --flow-id ID [--branch ID] [--yes]
 kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--timezone TZ] [--disabled] [--branch ID]
 kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
-# Flows are conditional flows (keboola.flow). keboola.orchestrator is NOT supported (dropped 0.56.0).
+# Flows are conditional flows (keboola.flow). keboola.orchestrator is NOT supported (dropped 0.57.0).
 # IDs are strings; phases use next[].goto + conditions; tasks are typed (job/notification/variable).
 # flow new/update validate against the live CF schema fetched from the stack (AI Service
 #   configurationSchema for keboola.flow; NOT bundled) -> INVALID_FLOW_DEFINITION on failure.

@@ -1,7 +1,7 @@
 # Design: Conditional Flow (`keboola.flow`) support in kbagent — drop `keboola.orchestrator`
 
 **Linear issue:** AJDA-2813 "CF: add support in new CLI"
-**Target release:** 0.56.0 (one breaking release)
+**Target release:** 0.57.0 (one breaking release)
 **Status:** design approved (subagent-driven; decisions recorded below)
 **Date:** 2026-06-04
 
@@ -131,7 +131,7 @@ should review them.
 | D10 | Behavior of `update_flow` validation. | Validation runs on the **merged** result (fetch current body when only one of phases/tasks supplied), preserving today's merge-aware behavior. | Matches issue Phase 2 and current code; avoids validating a half-config. |
 | D11 | `flow detail` JSON output. | **Full-body passthrough unchanged.** Only the **human** rendering is rewritten (per-phase transitions, task-type badges, retry). | Stable machine contract; agents already consume the raw body. |
 | D12 | `flow schema --full`. | Add `--full` to dump the **bundled JSON schema verbatim**; default prints the YAML template. JSON mode (`--json`) of `--full` returns the parsed schema object. | Agents need the exact contract; humans need a copy-paste template. |
-| D13 | Removing `INVALID_FLOW_DAG` from `ErrorCode`. | **Remove** it and add `INVALID_FLOW_DEFINITION`. Grep confirmed references are only in this repo (errors.py, flow_service.py, changelog.py history, tests, docs) — no external wire consumers known. | Per coding-convention note "renaming/removing a code = major bump"; we accept this as part of the single 0.56.0 breaking release and changelog it loudly. |
+| D13 | Removing `INVALID_FLOW_DAG` from `ErrorCode`. | **Remove** it and add `INVALID_FLOW_DEFINITION`. Grep confirmed references are only in this repo (errors.py, flow_service.py, changelog.py history, tests, docs) — no external wire consumers known. | Per coding-convention note "renaming/removing a code = major bump"; we accept this as part of the single 0.57.0 breaking release and changelog it loudly. |
 | D14 | `component_id` on REST models. | **Drop** `component_id` from `FlowCreate`/`FlowUpdate`/`FlowSchedule` and from query params on `detail`/`delete`/`list_schedules`/`remove_schedule`. Keep URL paths stable. | Issue Phase 4; CF is the only component now. |
 | D15 | Service signatures. | **Remove** `component_id` from all 8 service methods; hardcode `FLOW_COMPONENT_ID = "keboola.flow"`. Scheduler `target.componentId` is always `keboola.flow`. | Issue Phase 2. Reduces a whole class of "wrong default component" bugs. |
 | D16 | `notification` / `variable` task validation depth. | Rely on Draft7 structural validation for their internal shape; semantic layer only checks the cross-cutting rules (unique ids, phase refs, enabled-task-per-phase). | The schema already encodes their structure; re-implementing it in Python would drift. |
@@ -308,14 +308,14 @@ flow validate --file @flow.yaml   (offline)
 matrix); `SKILL.md` + `references/commands-reference.md`; full rewrite of
 `references/flow-workflow.md` (CF template, conditions cookbook, validate-before-push
 loop, `job run --component-id keboola.flow` to execute); `references/gotchas.md`
-new entries tagged `(since v0.56.0)` (orchestrator dropped, `--component-id`
+new entries tagged `(since v0.57.0)` (orchestrator dropped, `--component-id`
 removed, old `dependsOn` template invalid, `INVALID_FLOW_DAG` →
 `INVALID_FLOW_DEFINITION`, **string ids**), and mark the old default-component
 gotcha resolved; `README.md` if flows mentioned.
 
 ## 10. Release
 
-Bump `pyproject.toml` → `0.56.0`; add `changelog.py` entry with an explicit
+Bump `pyproject.toml` → `0.57.0`; add `changelog.py` entry with an explicit
 **breaking-change** callout (orchestrator dropped, `--component-id` removed,
 `INVALID_FLOW_DAG` → `INVALID_FLOW_DEFINITION`, CF schema validation, string
 ids); `make version-sync`; `make check`; `make test-e2e`.

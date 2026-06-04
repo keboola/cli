@@ -83,7 +83,7 @@ a critical failure.
 
 | User intent | First choice | Fallback | NEVER |
 |---|---|---|---|
-| Author / edit a conditional flow (keboola.flow) | `kbagent flow validate --file @flow.yaml --project ALIAS` (fetches live schema; loop until clean) then `kbagent flow new`/`flow update --file` | fetch `flow detail`, merge phases/tasks locally, re-validate, push | `--component-id` (removed 0.56.0); integer ids (ids are STRINGS); `dependsOn` (use `next[].goto` + conditions); `keboola.orchestrator` (dropped 0.56.0); assuming `flow schema --full` works offline (now needs `--project`) |
+| Author / edit a conditional flow (keboola.flow) | `kbagent flow validate --file @flow.yaml --project ALIAS` (fetches live schema; loop until clean) then `kbagent flow new`/`flow update --file` | fetch `flow detail`, merge phases/tasks locally, re-validate, push | `--component-id` (removed 0.57.0); integer ids (ids are STRINGS); `dependsOn` (use `next[].goto` + conditions); `keboola.orchestrator` (dropped 0.57.0); assuming `flow schema --full` works offline (now needs `--project`) |
 | Schedule flow | `kbagent flow schedule --cron ... [--timezone]` | `tool call create_flow_schedule` | raw REST to `/storage/configurations/keboola.scheduler` |
 | Create Snowflake transformation | `kbagent config new --component-id keboola.snowflake-transformation --name N --project P --push --no-files` (0.33.0+; one-shot, no scaffold, body defaults to `{}` and validation auto-skips for empty shell -- then `config update --set ...` to fill in script) **or** `kbagent config new --component-id keboola.snowflake-transformation --project P --output-dir D` + `config update --set ...` (scaffold-then-patch) | `tool call create_sql_transformation` (lower schema, avoids the MCP `create_config` Snowflake refusal) | `tool call create_config` (refuses keboola.snowflake-transformation) -- note: `config new --push` does NOT inherit this refusal because it wraps the raw Storage API directly |
 | Update SQL transformation body (script[]) | `kbagent config update --project P --component-id keboola.snowflake-transformation --config-id K --configuration @body.json` (0.28.0+ auto-normalizes string `script` to array; SQL gets statement-level split, Python/R gets `[script]` wrap; envelope's `normalizations: [...]` records every change. 0.31.0+ also re-splits multi-statement LIST elements -- closes the #274 ODBC `statement count 2 vs desired 1` crash that survives the 0.28.0 string fix) | -- | `tool call update_sql_transformation` -- still vulnerable to BOTH the #245 string-vs-array AND #274 list-element runtime crashes because it pushes raw to Storage API; raw `PUT /v2/storage/components/.../configs/...` -- same trap |
@@ -161,7 +161,7 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
 
 **Flow / config edits**
 
-- **Conditional flows only (since 0.56.0)**: `flow` targets `keboola.flow`;
+- **Conditional flows only (since 0.57.0)**: `flow` targets `keboola.flow`;
   `keboola.orchestrator` is dropped and `--component-id` is removed from every
   `flow` subcommand. IDs are **strings**; phases use `next[].goto` (a phase id or
   `null` to end) + optional `condition`; tasks are typed (`job`/`notification`/

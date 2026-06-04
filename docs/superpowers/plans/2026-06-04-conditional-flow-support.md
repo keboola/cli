@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Rewrite the `kbagent flow` surface to support `keboola.flow` (Conditional Flows) with correct schema-backed validation, and drop `keboola.orchestrator` support entirely, shipping as a single breaking release 0.56.0.
+**Goal:** Rewrite the `kbagent flow` surface to support `keboola.flow` (Conditional Flows) with correct schema-backed validation, and drop `keboola.orchestrator` support entirely, shipping as a single breaking release 0.57.0.
 
 **Architecture:** Follows the repo's 3-layer design (commands → services → client). A new pure-function module `services/flow_validation.py` loads a bundled copy of the upstream CF JSON Schema (`resources/conditional-flow-schema.json`) and performs structural (jsonschema Draft7) + semantic validation. `FlowService` hardcodes the single component `keboola.flow`, drops every `component_id` parameter, and calls the validator on create/update. The REST router mirror drops `component_id`.
 
@@ -261,7 +261,7 @@ with:
 ```python
     # Flow (new in 0.22.0)
     SCHEDULE_DELETE_FAILED = "SCHEDULE_DELETE_FAILED"
-    # Conditional-flow validation (replaces INVALID_FLOW_DAG; since 0.56.0)
+    # Conditional-flow validation (replaces INVALID_FLOW_DAG; since 0.57.0)
     INVALID_FLOW_DEFINITION = "INVALID_FLOW_DEFINITION"
 ```
 
@@ -1492,7 +1492,7 @@ In `_format_flows_table`, after the errors loop, add:
     if legacy:
         formatter.warning(
             f"{legacy} legacy keboola.orchestrator flow(s) are not shown "
-            f"(orchestrator support was dropped in 0.56.0; migrate to keboola.flow)."
+            f"(orchestrator support was dropped in 0.57.0; migrate to keboola.flow)."
         )
 ```
 
@@ -1932,7 +1932,7 @@ kbagent flow update --project NAME --flow-id ID [--name N] [--description D] [--
 kbagent flow delete --project NAME --flow-id ID [--branch ID] [--yes]
 kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--timezone TZ] [--disabled] [--branch ID]
 kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
-# Flows are conditional flows (keboola.flow). keboola.orchestrator is NOT supported (dropped 0.56.0).
+# Flows are conditional flows (keboola.flow). keboola.orchestrator is NOT supported (dropped 0.57.0).
 # Execute a flow with: kbagent job run --project NAME --component-id keboola.flow --config-id ID
 ```
 
@@ -1971,7 +1971,7 @@ git commit -m "docs(flow): refresh CLAUDE.md + AGENT_CONTEXT for conditional flo
 
 Update the tool-selection matrix / version gate: flows are conditional flows;
 `--component-id` removed; add `flow validate`; reference the validate-before-push
-loop; note orchestrator dropped in 0.56.0.
+loop; note orchestrator dropped in 0.57.0.
 
 - [ ] **Step 2: SKILL.md + commands-reference.md**
 
@@ -1989,7 +1989,7 @@ Remove all `dependsOn` content.
 
 - [ ] **Step 4: gotchas.md — new entries**
 
-Add, each tagged `(since v0.56.0)`:
+Add, each tagged `(since v0.57.0)`:
 - orchestrator support dropped; `flow list` hides legacy flows (shows a count).
 - `--component-id` removed from all flow subcommands.
 - old `dependsOn` template is invalid; use `phases[].next[].goto` + conditions.
@@ -2003,7 +2003,7 @@ Mark the old "flow default-component differs between subcommands" gotcha as
 
 ```bash
 git add plugins/kbagent/
-git commit -m "docs(plugin): sync flow surface to conditional flows (0.56.0)"
+git commit -m "docs(plugin): sync flow surface to conditional flows (0.57.0)"
 ```
 
 ---
@@ -2022,15 +2022,15 @@ Update any flow mention to conditional flows; drop `--component-id`.
 
 - [ ] **Step 2: Bump version**
 
-In `pyproject.toml`, change `version = "0.55.0"` to `version = "0.56.0"`.
+In `pyproject.toml`, change `version = "0.55.0"` to `version = "0.57.0"`.
 
 - [ ] **Step 3: Add changelog entry**
 
-In `src/keboola_agent_cli/changelog.py`, add a `"0.56.0"` key at the TOP of
+In `src/keboola_agent_cli/changelog.py`, add a `"0.57.0"` key at the TOP of
 `CHANGELOG` (newest-first) with a breaking-change callout, e.g.:
 
 ```python
-    "0.56.0": [
+    "0.57.0": [
         "BREAKING: `flow` command group now targets conditional flows "
         "(`keboola.flow`) only; `keboola.orchestrator` support is dropped. "
         "`--component-id` removed from every `flow` subcommand and from the "
@@ -2048,7 +2048,7 @@ In `src/keboola_agent_cli/changelog.py`, add a `"0.56.0"` key at the TOP of
 - [ ] **Step 4: Sync plugin version**
 
 Run: `make version-sync`
-Expected: `plugin.json` / `marketplace.json` updated to 0.56.0.
+Expected: `plugin.json` / `marketplace.json` updated to 0.57.0.
 
 - [ ] **Step 5: Full check suite**
 
@@ -2065,7 +2065,7 @@ Expected: PASS or clean CF-disabled skip.
 
 ```bash
 git add README.md pyproject.toml src/keboola_agent_cli/changelog.py plugins/kbagent/.claude-plugin/ .claude-plugin/
-git commit -m "release: 0.56.0 -- conditional flow support, drop orchestrator"
+git commit -m "release: 0.57.0 -- conditional flow support, drop orchestrator"
 ```
 
 ---

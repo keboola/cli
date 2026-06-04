@@ -98,7 +98,7 @@ class ErrorCode(StrEnum):
 
     # Flow (new in 0.22.0)
     SCHEDULE_DELETE_FAILED = "SCHEDULE_DELETE_FAILED"
-    # Conditional-flow validation (replaces INVALID_FLOW_DAG; since 0.56.0)
+    # Conditional-flow validation (replaces INVALID_FLOW_DAG; since 0.57.0)
     INVALID_FLOW_DEFINITION = "INVALID_FLOW_DEFINITION"
 
     # Data apps (new in 0.27.0)

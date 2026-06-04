@@ -564,7 +564,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
     Per-user features (GET/POST/DELETE /manage/users/{{email}}/features).
 
-### Flows (Conditional Flows -- keboola.flow only; orchestrator dropped in 0.56.0)
+### Flows (Conditional Flows -- keboola.flow only; orchestrator dropped in 0.57.0)
 
   kbagent flow list [--project NAME] [--branch ID] [--with-schedules]
     List conditional flows (keboola.flow) across projects. Legacy keboola.orchestrator

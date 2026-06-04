@@ -56,7 +56,7 @@ Each row has every field you need for a spreadsheet or dashboard:
 }
 ```
 
-`schedule list` returns every `keboola.scheduler` config regardless of its target component, so legacy schedules may still show `"parent_component_id": "keboola.orchestrator"` -- those targets are no longer manageable via `kbagent flow` (orchestrator support was dropped in v0.56.0), but the schedules themselves list and audit normally.
+`schedule list` returns every `keboola.scheduler` config regardless of its target component, so legacy schedules may still show `"parent_component_id": "keboola.orchestrator"` -- those targets are no longer manageable via `kbagent flow` (orchestrator support was dropped in v0.57.0), but the schedules themselves list and audit normally.
 
 ## Inspect a single schedule
 

@@ -2097,40 +2097,40 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   subdirectory and there is no risk of name collisions. Override with
   `--output DIR` if you need a custom location.
 
-## Flow: conditional flows only; `--component-id` removed (since v0.56.0)
+## Flow: conditional flows only; `--component-id` removed (since v0.57.0)
 
-- **RESOLVED (since v0.56.0):** the old foot-gun where `flow new` defaulted to
+- **RESOLVED (since v0.57.0):** the old foot-gun where `flow new` defaulted to
   `keboola.flow` but `flow detail/update/delete/schedule/...` defaulted to
   `keboola.orchestrator` is **gone**. The `flow` group now targets the single
   component `keboola.flow`, and `--component-id` has been **removed** from every
   `flow` subcommand. Passing it errors with "No such option".
-- **`keboola.orchestrator` is dropped (since v0.56.0).** `flow list` does NOT
+- **`keboola.orchestrator` is dropped (since v0.57.0).** `flow list` does NOT
   list orchestrator configs; it reports their total as `legacy_orchestrator_count`
   (+ a warning) so you can see why a legacy flow "disappeared". There is no
   migration command (cross-component migration is out of scope).
-- **IDs are STRINGS (since v0.56.0).** `phase.id`, `task.id`, `next.id`,
+- **IDs are STRINGS (since v0.57.0).** `phase.id`, `task.id`, `next.id`,
   `task.phase`, and `goto` are all JSON strings (`goto` is `string | null`).
   Integer ids fail Draft7 validation and are rejected with
   `INVALID_FLOW_DEFINITION`.
-- **The old `dependsOn` phase-DAG template is invalid (since v0.56.0).** Phases
+- **The old `dependsOn` phase-DAG template is invalid (since v0.57.0).** Phases
   use `next[].goto` (a phase id or `null` to end) with an optional `condition`;
   a phase with conditional transitions must end with a default (condition-less)
   transition. Tasks are typed (`job`/`notification`/`variable`).
-- **`INVALID_FLOW_DAG` was renamed to `INVALID_FLOW_DEFINITION` (since v0.56.0).**
+- **`INVALID_FLOW_DAG` was renamed to `INVALID_FLOW_DEFINITION` (since v0.57.0).**
   Update any code/string matching on the old error code.
-- **Validation (since v0.56.0):** `kbagent flow validate --file @flow.yaml [--project ALIAS]`.
+- **Validation (since v0.57.0):** `kbagent flow validate --file @flow.yaml [--project ALIAS]`.
   With `--project` it fetches the **live** JSON Schema from the stack and runs
   full structural + semantic checks; without `--project` it runs semantic-only
   and adds a note that structural validation was skipped (no schema source).
   Exit 0 valid, exit 2 on errors. Use it in a tight loop before
   `flow new`/`flow update`.
-- **Schema is fetched live from the stack, NOT bundled (since v0.56.0).** The
+- **Schema is fetched live from the stack, NOT bundled (since v0.57.0).** The
   conditional-flow JSON Schema is served by the stack's component registry and
   read at runtime via the AI Service `configurationSchema` for `keboola.flow`
   (the same path `config new --push` uses). There is nothing vendored, pinned,
   or to re-sync. `flow schema --full` therefore **requires `--project`** (plain
   `flow schema` is still the offline YAML template).
-- **Graceful semantic-only degradation (since v0.56.0).** If the live schema
+- **Graceful semantic-only degradation (since v0.57.0).** If the live schema
   fetch fails (network error, or the AI Service returns no `configurationSchema`),
   `flow new`/`flow update`/`flow validate --project` do **not** block: structural
   validation is skipped, the semantic checks still run (Storage does not validate

@@ -151,7 +151,7 @@ def flow_list(
     """List conditional flows (keboola.flow) across projects.
 
     Legacy keboola.orchestrator flows are NOT listed (orchestrator support was
-    dropped in 0.56.0); a count of any that exist is shown as a warning.
+    dropped in 0.57.0); a count of any that exist is shown as a warning.
 
     With ``--with-schedules`` each row includes a ``schedules`` list of
     ``{schedule_id, cron, timezone, enabled}`` entries. Flows without
@@ -237,7 +237,7 @@ def _format_flows_table(
     if legacy:
         formatter.warning(
             f"{legacy} legacy flow(s) are not shown "
-            f"(Legacy Flows were dropped in 0.56.0; migrate them to Conditional Flows)."
+            f"(Legacy Flows were dropped in 0.57.0; migrate them to Conditional Flows)."
         )
 
 

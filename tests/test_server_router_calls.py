@@ -625,7 +625,7 @@ def test_reference_data_delete_route(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # flows.py  POST /flows/validate  +  GET /flows/{project}/schema
-# New in 0.56.0 -- mirror `flow validate` / `flow schema --full`.
+# New in 0.57.0 -- mirror `flow validate` / `flow schema --full`.
 # ---------------------------------------------------------------------------
 
 _CF_PHASES = [{"id": "p1", "name": "Extract", "next": [{"id": "n1", "goto": None}]}]

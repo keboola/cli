@@ -110,7 +110,7 @@ class TestNonNegotiableRules:
 
 
 INLINE_GOTCHAS = [
-    # Conditional flows: validate-before-push + INVALID_FLOW_DEFINITION (since 0.56.0)
+    # Conditional flows: validate-before-push + INVALID_FLOW_DEFINITION (since 0.57.0)
     ("INVALID_FLOW_DEFINITION", "conditional-flow validation error code"),
     # Snowflake transformation scaffolding refusal by MCP create_config
     ("keboola.snowflake-transformation", "MCP create_config refuses this component"),

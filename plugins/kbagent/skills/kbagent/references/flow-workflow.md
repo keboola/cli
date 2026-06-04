@@ -1,6 +1,6 @@
 # Flow Workflow (Conditional Flows / keboola.flow)
 
-> **Since v0.56.0:** the `flow` command group targets **`keboola.flow`
+> **Since v0.57.0:** the `flow` command group targets **`keboola.flow`
 > (Conditional Flows) ONLY**. `keboola.orchestrator` support was dropped and
 > `--component-id` was removed from every subcommand. The old `dependsOn`
 > phase-DAG template is **invalid**. IDs are **strings**.

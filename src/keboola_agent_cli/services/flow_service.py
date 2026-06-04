@@ -3,7 +3,7 @@
 Provides CRUD for keboola.flow (Conditional Flow) configurations, plus
 schedule bind/unbind via keboola.scheduler component configs.
 
-keboola.orchestrator support was dropped in 0.56.0; this service targets the
+keboola.orchestrator support was dropped in 0.57.0; this service targets the
 single component keboola.flow. Legacy orchestrator configs are still counted
 (not listed) so the CLI can warn users why a flow "disappeared".
 
@@ -194,7 +194,7 @@ class FlowService(BaseService):
         Only ``keboola.flow`` configs are returned. Legacy
         ``keboola.orchestrator`` configs are counted (not listed) and surfaced
         as ``legacy_orchestrator_count`` so the CLI can warn users why a flow
-        "disappeared" (orchestrator support was dropped in 0.56.0).
+        "disappeared" (orchestrator support was dropped in 0.57.0).
 
         When ``with_schedules`` is True, each flow row is enriched with a
         ``schedules`` list pulled from the same project's
