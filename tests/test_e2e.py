@@ -5299,8 +5299,8 @@ class TestE2EFlowOperations:
         """Verify that ``kbagent flow update`` preserves ``behavior.onError``.
 
         If any assertion fails, the pilot agent prompt must route flow writes
-        through ``--hint client`` + direct API instead of ``kbagent flow
-        update`` as the first choice.
+        through the ``kbagent serve`` REST API + direct API instead of
+        ``kbagent flow update`` as the first choice.
 
         Covered scenarios:
             A. Rename-only update (no ``--file``) must leave behavior intact.

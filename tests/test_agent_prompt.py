@@ -151,7 +151,6 @@ TOOL_MATRIX_ROWS = [
     "kbagent config search",
     "kbagent sync pull",
     "kbagent sync push",
-    "kbagent --hint client",
     "kbagent workspace query",
 ]
 

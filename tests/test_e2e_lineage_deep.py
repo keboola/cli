@@ -382,29 +382,6 @@ class TestE2ELineageDeep:
         )
         assert result.exit_code == 1
 
-    # ── --hint service ─────────────────────────────────────────────
-
-    def test_11_hint_service(self) -> None:
-        """--hint service generates Python code."""
-        _step(11, "--hint service generates Python")
-
-        result = _invoke(
-            self.config_dir,
-            [
-                "--hint",
-                "service",
-                "lineage",
-                "build",
-                "-d",
-                str(self.lineage_dir),
-                "-o",
-                "lineage.json",
-            ],
-        )
-        assert result.exit_code == 0
-        assert "DeepLineageService" in result.output
-        assert "build_lineage" in result.output
-
     # ── Depth control ──────────────────────────────────────────────
 
     def test_12_depth_limits_traversal(self) -> None:

@@ -24,12 +24,10 @@ from ..constants import (
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     get_formatter,
     get_service,
     map_error_to_exit_code,
     resolve_manage_token,
-    should_hint,
 )
 from ._metadata_input import resolve_text_input
 
@@ -547,7 +545,6 @@ def project_use(
     The pin persists in config.json. ``KBAGENT_PROJECT`` overrides it for a
     single invocation; an explicit ``--project`` flag overrides both.
     """
-    # No --hint: local-only ConfigStore mutation; no client or service call to render.
     formatter = get_formatter(ctx)
     service = get_service(ctx, "project_service")
 
@@ -586,7 +583,6 @@ def project_current(ctx: typer.Context) -> None:
     (``env``) or the persisted pin (``pin``). Prints nothing but a hint if
     neither is set.
     """
-    # No --hint: local-only ConfigStore read; no client or service call to render.
     formatter = get_formatter(ctx)
     service = get_service(ctx, "project_service")
 
@@ -635,9 +631,6 @@ def project_description_get(
     branch - this is what the Keboola UI shows on the project dashboard.
     Returns an empty string if no description has been set.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "project.description-get", project=project)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 
@@ -690,14 +683,6 @@ def project_description_set(
         formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
 
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "project.description-set",
-            project=project,
-            description=description,
-        )
-        return
     service = get_service(ctx, "branch_service")
 
     try:
@@ -768,10 +753,6 @@ def project_info(
     Returns project name, ID, stack URL, default backend, feature flags,
     storage limits and metrics, and token information.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "project.info", project=project)
-        return
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "project_service")
 
@@ -965,29 +946,6 @@ def project_invite(
         )
         raise typer.Exit(code=2)
 
-    if should_hint(ctx):
-        if from_csv:
-            formatter.error(
-                message=(
-                    "--hint is not available for `project invite --from-csv`. "
-                    "Use --hint client/service on a single-shot invite "
-                    "(--project + --email + --role) instead, or open the "
-                    "MemberService source for the bulk pattern."
-                ),
-                error_code=ErrorCode.USAGE_ERROR,
-            )
-            raise typer.Exit(code=2)
-        emit_hint(
-            ctx,
-            "project.invite",
-            project=project,
-            project_id="<resolved-from-config>",
-            email=email,
-            role=role,
-            reason=reason or "",
-        )
-        return
-
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
 
@@ -1041,16 +999,6 @@ def project_member_list(
     """List active members of a project (and optionally pending invitations)."""
     formatter = get_formatter(ctx)
 
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "project.member-list",
-            project=project,
-            project_id="<resolved-from-config>",
-            include_pending=str(include_pending),
-        )
-        return
-
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
     try:
@@ -1079,15 +1027,6 @@ def project_invitation_list(
 ) -> None:
     """List pending project invitations."""
     formatter = get_formatter(ctx)
-
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "project.invitation-list",
-            project=project,
-            project_id="<resolved-from-config>",
-        )
-        return
 
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
@@ -1123,17 +1062,6 @@ def project_invitation_cancel(
 ) -> None:
     """Cancel a pending invitation."""
     formatter = get_formatter(ctx)
-
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "project.invitation-cancel",
-            project=project,
-            project_id="<resolved-from-config>",
-            email=email,
-            invitation_id=str(invitation_id) if invitation_id is not None else "None",
-        )
-        return
 
     if (
         not formatter.json_mode
@@ -1178,17 +1106,6 @@ def project_member_remove(
 ) -> None:
     """Remove an active member from a project (destructive)."""
     formatter = get_formatter(ctx)
-
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "project.member-remove",
-            project=project,
-            project_id="<resolved-from-config>",
-            user_id="<resolved-from-email>",
-            email=email,
-        )
-        return
 
     if (
         not formatter.json_mode
@@ -1238,18 +1155,6 @@ def project_member_set_role(
 ) -> None:
     """Change an existing member's role (PATCH)."""
     formatter = get_formatter(ctx)
-
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "project.member-set-role",
-            project=project,
-            project_id="<resolved-from-config>",
-            user_id="<resolved-from-email>",
-            email=email,
-            role=role,
-        )
-        return
 
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")

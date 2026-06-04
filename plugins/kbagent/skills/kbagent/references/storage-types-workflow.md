@@ -226,11 +226,6 @@ kbagent --json storage create-table \
 - `auto_created_bucket: true` is informational, not an error. Check
   the field in JSON mode; in human mode it is shown as a yellow note under
   the created-table banner.
-- Client-mode `--hint` returns raw CLI strings in `columns=[...]`; adapt
-  them to the API shape `[{"name": ..., "definition": {...}}]` before
-  sending via `KeboolaClient.create_table()`. Service-mode `--hint` uses
-  the service layer which does the parsing for you. (Note: `--hint` is
-  deprecated since 0.45.0 — use the `kbagent serve` REST API instead.)
 
 ## Promoting a typed rebuild back into the original name (since v0.28.0)
 

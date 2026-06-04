@@ -88,7 +88,6 @@ src/keboola_agent_cli/
                         #    mcp_service, mcp_transport, deep_lineage_service are extra non-1:1 services)
   server/               # FastAPI app behind `kbagent serve` (REST API + Web UI mount + SSE)
   sync/                 # GitOps sync engine (manifest v3, pull/push/diff, branch-linking)
-  hints/                # --hint client|service Python code generator (deprecated since 0.45.0)
   _ui_dist/             # bundled React SPA served by `kbagent serve --ui`
 
 tests/                  # ~137 files; mirror the layers (one test_<module>.py per command/service)
@@ -264,7 +263,7 @@ plugins/kbagent/
 > "Plugin synchronization map" for the full list.
 
 ```
-# Global options: --json, --verbose, --no-color, --config-dir, --hint client|service (deprecated, use kbagent serve REST API), --deny-writes, --deny-destructive, --allow-env-manage-token
+# Global options: --json, --verbose, --no-color, --config-dir, --deny-writes, --deny-destructive, --allow-env-manage-token
 # Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
 
 kbagent project add --project NAME --url URL --token TOKEN

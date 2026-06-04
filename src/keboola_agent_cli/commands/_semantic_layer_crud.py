@@ -15,10 +15,8 @@ from rich.console import Console
 from ..errors import ErrorCode
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     get_formatter,
     get_service,
-    should_hint,
 )
 from ._semantic_layer_helpers import _handle_service_call, _is_stdin_tty
 
@@ -72,18 +70,6 @@ def add_metric(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the dataset-mismatch warning"),
 ) -> None:
     """Add a metric to a semantic-layer model."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.add.metric",
-            project=project,
-            model=model,
-            name=name,
-            sql=sql,
-            dataset=dataset,
-            description=description,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
@@ -123,20 +109,6 @@ def add_dataset(
     ),
 ) -> None:
     """Add a dataset (FQN derived from tableId)."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.add.dataset",
-            project=project,
-            model=model,
-            name=name,
-            table_id=table_id,
-            description=description,
-            grain=grain,
-            primary_key=primary_key,
-            deep_fields=deep_fields,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
@@ -166,19 +138,6 @@ def add_relationship(
     type_: str = typer.Option("left", "--type", help="Join type: 'left' or 'inner'."),
 ) -> None:
     """Add a relationship between two datasets."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.add.relationship",
-            project=project,
-            model=model,
-            name=name,
-            from_=from_,
-            to=to,
-            on=on,
-            type_=type_,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
@@ -228,19 +187,6 @@ def add_constraint(
     ),
 ) -> None:
     """Add a constraint."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.add.constraint",
-            project=project,
-            model=model,
-            name=name,
-            constraint_type=constraint_type,
-            rule=rule,
-            metrics=metrics,
-            severity=severity,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     metrics_list = [m.strip() for m in metrics.split(",") if m.strip()]
@@ -273,16 +219,6 @@ def add_glossary(
     definition: str = typer.Option("", "--definition", help="Optional definition"),
 ) -> None:
     """Add a glossary term."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.add.glossary",
-            project=project,
-            model=model,
-            term=term,
-            definition=definition,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
@@ -371,19 +307,6 @@ def edit_metric(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the rename-cascade prompt"),
 ) -> None:
     """Edit a metric. Rename cascades to any constraint that references it."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.edit.metric",
-            project=project,
-            model=model,
-            name=name,
-            new_name=new_name,
-            new_sql=new_sql,
-            new_dataset=new_dataset,
-            new_description=new_description,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
@@ -416,18 +339,6 @@ def edit_dataset(
     new_grain: str | None = typer.Option(None, "--new-grain", help="Replace grain"),
 ) -> None:
     """Edit a dataset (no cascade — metric.dataset uses tableId, not name)."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.edit.dataset",
-            project=project,
-            model=model,
-            name=name,
-            new_name=new_name,
-            new_description=new_description,
-            new_grain=new_grain,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
@@ -464,20 +375,6 @@ def edit_constraint(
     ),
 ) -> None:
     """Edit a constraint (DELETE+POST, with local validators)."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.edit.constraint",
-            project=project,
-            model=model,
-            name=name,
-            new_name=new_name,
-            new_rule=new_rule,
-            new_constraint_type=new_constraint_type,
-            new_severity=new_severity,
-            new_metrics=new_metrics,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     metrics_list = (
@@ -515,20 +412,6 @@ def edit_relationship(
     ),
 ) -> None:
     """Edit a relationship (DELETE+POST). Validates ``--new-type`` locally."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.edit.relationship",
-            project=project,
-            model=model,
-            name=name,
-            new_name=new_name,
-            new_from=new_from,
-            new_to=new_to,
-            new_on=new_on,
-            new_type=new_type,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
@@ -568,17 +451,6 @@ def edit_glossary(
     ),
 ) -> None:
     """Edit a glossary term. ``--new-term`` is destructive for downstream joins."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.edit.glossary",
-            project=project,
-            model=model,
-            term=term,
-            new_term=new_term,
-            new_definition=new_definition,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
 
@@ -709,9 +581,6 @@ def remove_metric(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),
 ) -> None:
     """Remove a metric. Prints an orphan-warning when constraints reference it."""
-    if should_hint(ctx):
-        emit_hint(ctx, "semantic-layer.remove.metric", project=project, model=model, name=name)
-        return
     _run_remove(ctx, kind="metric", project=project, model=model, name=name, yes=yes)
 
 
@@ -724,9 +593,6 @@ def remove_dataset(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),
 ) -> None:
     """Remove a dataset."""
-    if should_hint(ctx):
-        emit_hint(ctx, "semantic-layer.remove.dataset", project=project, model=model, name=name)
-        return
     _run_remove(ctx, kind="dataset", project=project, model=model, name=name, yes=yes)
 
 
@@ -739,15 +605,6 @@ def remove_constraint(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),
 ) -> None:
     """Remove a constraint."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.remove.constraint",
-            project=project,
-            model=model,
-            name=name,
-        )
-        return
     _run_remove(ctx, kind="constraint", project=project, model=model, name=name, yes=yes)
 
 
@@ -760,15 +617,6 @@ def remove_relationship(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),
 ) -> None:
     """Remove a relationship. No orphan-check (relationships are leaf entities)."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.remove.relationship",
-            project=project,
-            model=model,
-            name=name,
-        )
-        return
     _run_remove(ctx, kind="relationship", project=project, model=model, name=name, yes=yes)
 
 
@@ -781,13 +629,4 @@ def remove_glossary(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),
 ) -> None:
     """Remove a glossary term. No orphan-check (glossary is a leaf entity)."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.remove.glossary",
-            project=project,
-            model=model,
-            term=term,
-        )
-        return
     _run_remove(ctx, kind="glossary", project=project, model=model, name=term, yes=yes)

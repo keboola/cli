@@ -229,13 +229,6 @@ def main(
         "--config-dir",
         help="Override config directory path.",
     ),
-    hint: str | None = typer.Option(
-        None,
-        "--hint",
-        help="[DEPRECATED -- use the `kbagent serve` REST API] Show equivalent Python "
-        "code instead of executing. Values: 'client' (direct API usage) or 'service' "
-        "(uses CLI config).",
-    ),
     deny_writes: bool = typer.Option(
         False,
         "--deny-writes",
@@ -263,34 +256,7 @@ def main(
     """Global options applied to all commands."""
     from .auto_update import maybe_auto_update, show_post_update_changelog
 
-    # Skip auto-update in hint mode (code generation only)
-    if hint:
-        from .hints.models import HintMode
-
-        valid_modes = [m.value for m in HintMode]
-        if hint not in valid_modes:
-            typer.echo(
-                f"Error: Invalid --hint value '{hint}'.\n"
-                f"Usage: kbagent --hint client <command>  (direct API calls)\n"
-                f"       kbagent --hint service <command> (uses CLI config)\n"
-                f"Valid values: {', '.join(valid_modes)}",
-                err=True,
-            )
-            raise typer.Exit(code=2) from None
-        # Only warn interactively: --hint streams machine-consumed Python code to
-        # stdout, so a stderr warning is for a human at a terminal. Suppressing it
-        # when stderr is not a TTY keeps piped/redirected output (and the snippet
-        # compile-check tests) clean.
-        if sys.stderr.isatty():
-            typer.secho(
-                "Warning: --hint is deprecated and will be removed in a future release. "
-                "The REST surface now covers every command -- run `kbagent serve` and call "
-                "the equivalent endpoint instead. See docs/hint-mode.md for the migration.",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
-    else:
-        maybe_auto_update()
+    maybe_auto_update()
 
     # If the user explicitly asked for `kbagent changelog`, they'll see the
     # full changelog below -- prepending the "What's new" summary is pure
@@ -382,17 +348,9 @@ def main(
     )
     permission_engine = PermissionEngine(session_policy)
 
-    # Resolve hint mode
-    hint_mode = None
-    if hint:
-        from .hints.models import HintMode
-
-        hint_mode = HintMode(hint)
-
     ctx.ensure_object(dict)
     ctx.obj["formatter"] = formatter
     ctx.obj["json_output"] = json_output
-    ctx.obj["hint_mode"] = hint_mode
     ctx.obj["permission_engine"] = permission_engine
     ctx.obj["verbose"] = verbose
     ctx.obj["no_color"] = effective_no_color
@@ -464,15 +422,6 @@ def main(
         "serve",
     }
     _is_help = "--help" in sys.argv or "-h" in sys.argv
-
-    # Hint mode on top-level commands — these are all local, no hints available
-    if hint_mode and ctx.invoked_subcommand in _top_level_commands:
-        typer.echo(
-            f"No --hint available for '{ctx.invoked_subcommand}'. "
-            f"This command operates locally and does not make API calls.",
-            err=True,
-        )
-        raise typer.Exit(0)
 
     if ctx.invoked_subcommand in _top_level_commands and not _is_help:
         try:

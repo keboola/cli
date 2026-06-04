@@ -142,7 +142,6 @@ verify the file IS updated in the diff. If not, flag it. Specifically:
 | `plugins/kbagent/skills/kbagent/references/gotchas.md` | New non-obvious behavior tagged `(since vX.Y.Z)`? | BLOCKING for behavior changes (missing version tag means AI agents recommend behavior on older installs) |
 | `plugins/kbagent/skills/kbagent/references/<topic>-workflow.md` | New workflow file for new topic, or extension of existing file for extended workflow? | NON-BLOCKING |
 | `src/keboola_agent_cli/permissions.py` `OPERATION_REGISTRY` | Every new CLI command MUST have a `"<subapp>.<command>": "<read|write|destructive|admin>"` entry. | BLOCKING (missing entry = permission engine silently allows the command under restrictive policy = security gap) |
-| ~~`src/keboola_agent_cli/hints/definitions/*.py`~~ | **DEPRECATED -- do NOT check.** `--hint` code generation is superseded by the `kbagent serve` REST API; new commands deliberately omit hint definitions. Never flag a missing `hints/definitions/` entry. | n/a (do not flag) |
 
 For each missed surface, your finding cites BOTH the original file/line in the
 diff that introduced the change AND the file path that should have been
@@ -194,7 +193,7 @@ confirmation that <X> happens at runtime").
 For every change to a `services/*.py` return dict or a `commands/*.py`
 output:
 
-- New field added? Confirm safe defaults for old consumers (False / [] / None / not-raising). Search downstream: `grep -rn '"<field_name>"' tests/ plugins/ docs/ src/keboola_agent_cli/hints/`. New field with no consumers is fine; new REQUIRED field that breaks old payload validators is BLOCKING.
+- New field added? Confirm safe defaults for old consumers (False / [] / None / not-raising). Search downstream: `grep -rn '"<field_name>"' tests/ plugins/ docs/`. New field with no consumers is fine; new REQUIRED field that breaks old payload validators is BLOCKING.
 - Field removed/renamed? `grep -rn '<old_name>' src/ tests/ plugins/ docs/`. Any hits remaining = BLOCKING.
 - Exit code changed? Cross-check `errors.py` `ErrorCode` enum and `commands/_helpers.py::map_error_to_exit_code`.
 - Command flag renamed? Check whether an alias was kept for one cycle.

@@ -23,13 +23,11 @@ from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
     resolve_manage_token,
-    should_hint,
 )
 
 # Canonical Keboola help-doc references appended to each --help epilog so
@@ -105,9 +103,6 @@ def data_app_list(
     ),
 ) -> None:
     """List data apps across one or more registered projects."""
-    if should_hint(ctx):
-        emit_hint(ctx, "data-app.list", project=project, branch=branch)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
     try:
@@ -148,9 +143,6 @@ def data_app_detail(
     ),
 ) -> None:
     """Show merged Data Science + Storage detail for one data app."""
-    if should_hint(ctx):
-        emit_hint(ctx, "data-app.detail", project=project, app_id=app_id, branch=branch)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
     try:
@@ -295,33 +287,6 @@ def data_app_create(
     ),
 ) -> None:
     """Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy)."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "data-app.create",
-            project=project,
-            name=name,
-            description=description,
-            slug=slug,
-            git_repo=git_repo,
-            git_branch=git_branch,
-            git_public=git_public,
-            git_username=git_username,
-            git_pat_env=git_pat_env,
-            git_pat_file=str(git_pat_file) if git_pat_file else None,
-            git_pat_encrypted=git_pat_encrypted,
-            auth=auth,
-            size=size,
-            auto_suspend=auto_suspend,
-            type_=type_,
-            branch=branch,
-            no_deploy=no_deploy,
-            wait=wait,
-            timeout=timeout,
-            keep_on_failure=keep_on_failure,
-            dry_run=dry_run,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
 
@@ -479,17 +444,6 @@ def data_app_deploy(
     ),
 ) -> None:
     """Deploy the latest Storage config (the §9 redeploy contract)."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "data-app.deploy",
-            project=project,
-            app_id=app_id,
-            config_version=config_version,
-            wait=wait,
-            branch=branch,
-        )
-        return
     _run_lifecycle(
         ctx,
         "deploy_data_app",
@@ -512,9 +466,6 @@ def data_app_start(
     ),
 ) -> None:
     """Wake an auto-suspended data app at its currently-pinned configVersion."""
-    if should_hint(ctx):
-        emit_hint(ctx, "data-app.start", project=project, app_id=app_id, wait=wait)
-        return
     _run_lifecycle(
         ctx,
         "start_data_app",
@@ -536,9 +487,6 @@ def data_app_stop(
     ),
 ) -> None:
     """Stop a running data app (preserves the URL and Storage config)."""
-    if should_hint(ctx):
-        emit_hint(ctx, "data-app.stop", project=project, app_id=app_id, wait=wait)
-        return
     _run_lifecycle(
         ctx,
         "stop_data_app",
@@ -567,9 +515,6 @@ def data_app_delete(
     ),
 ) -> None:
     """Delete the deployment AND the Storage config (cascade, irreversible)."""
-    if should_hint(ctx):
-        emit_hint(ctx, "data-app.delete", project=project, app_id=app_id)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
 
@@ -622,9 +567,6 @@ def data_app_password(
     prompt; pass top-level --allow-env-manage-token to read
     KBC_MANAGE_API_TOKEN from env (CI/CD). Never persisted, never logged.
     """
-    if should_hint(ctx):
-        emit_hint(ctx, "data-app.password", project=project, app_id=app_id)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
@@ -697,22 +639,11 @@ def data_app_logs(
     stdout/stderr (tracebacks, debug os.environ dumps). Consider secret
     hygiene before piping --json output into AI agent context.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "data-app.logs",
-            project=project,
-            app_id=app_id,
-            lines=lines,
-            since=since,
-        )
-        return
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
 
     # Command-layer validations (UX-level usage errors -> exit 2). The
-    # service has its own mutex guard for --hint service / programmatic
+    # service has its own mutex guard for `kbagent serve` / programmatic
     # callers; see DataAppService.get_app_logs.
     if lines is not None and since is not None:
         formatter.error(
@@ -912,17 +843,6 @@ def data_app_secrets_set(
     Reference: https://help.keboola.com/data-apps/python-js/
     """
 
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "data-app.secrets-set",
-            project=project,
-            app_id=app_id,
-            secret=secret,
-            branch=branch,
-        )
-        return
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
 
@@ -1028,16 +948,6 @@ def data_app_secrets_list(
     Reference: https://help.keboola.com/data-apps/python-js/
     """
 
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "data-app.secrets-list",
-            project=project,
-            app_id=app_id,
-            branch=branch,
-        )
-        return
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
     try:
@@ -1103,17 +1013,6 @@ def data_app_secrets_get(
 
     Reference: https://help.keboola.com/data-apps/python-js/
     """
-
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "data-app.secrets-get",
-            project=project,
-            app_id=app_id,
-            key=key,
-            branch=branch,
-        )
-        return
 
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
@@ -1190,17 +1089,6 @@ def data_app_secrets_remove(
 
     Reference: https://help.keboola.com/data-apps/python-js/
     """
-
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "data-app.secrets-remove",
-            project=project,
-            app_id=app_id,
-            key=key,
-            branch=branch,
-        )
-        return
 
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
@@ -1294,16 +1182,6 @@ def data_app_validate_repo(
 
     Reference: https://help.keboola.com/data-apps/python-js/
     """
-
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "data-app.validate-repo",
-            git_repo=git_repo,
-            git_branch=git_branch,
-            type_=type_,
-        )
-        return
 
     formatter = get_formatter(ctx)
     service = get_service(ctx, "repo_validate_service")

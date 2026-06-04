@@ -319,7 +319,6 @@ CLI parity for the `/agents` REST surface. Reads/writes `<config_dir>/agents.jso
 | `--verbose / -v` | Verbose output |
 | `--no-color` | Disable colors |
 | `--config-dir` | Override config directory |
-| `--hint client\|service` | Generate Python code instead of executing (see [programming-with-cli.md](programming-with-cli.md)) — **deprecated since 0.45.0; use `kbagent serve` REST API** |
 
 ## Environment Variables
 | Variable | Purpose |

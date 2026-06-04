@@ -882,7 +882,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   on the Storage API. The `allowTruncate=1` flag is a safety opt-in
   the API requires whenever no row filter is sent -- omitting it
   returns HTTP 400. kbagent always passes it; do the same in any
-  `--hint client` script.
+  direct `KeboolaClient` script.
 - **Do NOT pass `async=true` on this endpoint.** Sibling destructive
   endpoints (`delete_table`, `delete_bucket`) require `async=true`,
   but the row-delete endpoint **rejects** it with HTTP 400
@@ -1921,26 +1921,6 @@ scope to that branch:
 This means you can have production and dev branch configs side by side on disk
 without them overwriting each other.
 
-## --hint mode: generate Python code (deprecated since 0.45.0 — use `kbagent serve` REST API)
-
-> **Deprecated since 0.45.0.** `--hint` still works but prints a deprecation warning. Use the `kbagent serve` REST API for new integrations.
-
-Use `--hint` to generate equivalent Python code instead of executing a command:
-
-```bash
-kbagent --hint client config list --project myproj   # direct API calls
-kbagent --hint service config list --project myproj  # service layer with CLI config
-```
-
-Two modes:
-- **`--hint client`**: generates code using `KeboolaClient` with explicit URL + token
-- **`--hint service`**: generates code using the service layer with `ConfigStore`
-
-Important: `--hint` requires a value (`client` or `service`). Writing just `--hint`
-without a value will cause a parsing error.
-
-See [docs/hint-mode.md](../../../../../docs/hint-mode.md) for full documentation.
-
 ## Common mistakes
 
 - **Forgetting `--json`**: without it, output is human-formatted Rich text, not parseable
@@ -2277,21 +2257,6 @@ The `validate_trigger` (cycle/self-loop check) and `merge_runtime_input`
 new action type, update **both** the runner dispatcher (`agent_runner.py`)
 **and** `merge_runtime_input` to keep CRUD parity. Tests in
 `tests/test_agent_service.py` + `tests/test_agent_cli.py` catch drift.
-
-## `--hint` flag is deprecated (since v0.45.0)
-
-`--hint client` and `--hint service` are **deprecated since v0.45.0**. The flag
-still works and still generates Python code, but it now prints a deprecation
-warning to stderr. It will be removed in a future release.
-
-**Preferred alternative**: use the `kbagent serve` REST API, which exposes every
-command as an HTTP endpoint and is the recommended integration surface for AI
-agents and scripts. The REST API covers all commands that `--hint` covered, plus
-commands that never had `--hint` support.
-
-AI agents should prefer the REST surface over `--hint` for new integrations. Do
-not add new examples or workflows that teach `--hint`; point readers to
-`kbagent serve` instead.
 
 ## `feature` command group: super-admin token, no per-project endpoint, opaque schema (since v0.48.0)
 

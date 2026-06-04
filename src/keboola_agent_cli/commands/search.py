@@ -23,11 +23,9 @@ import typer
 from rich.table import Table
 
 from ..commands._helpers import (
-    emit_hint,
     emit_project_warnings,
     get_formatter,
     get_service,
-    should_hint,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 
@@ -91,17 +89,6 @@ def search_command(
 
       kbagent --json search revenue --type config --type flow
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "search.search",
-            query=query,
-            project=project,
-            item_type=item_type,
-            search_type=search_type,
-            limit=limit,
-        )
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "search_service")
 

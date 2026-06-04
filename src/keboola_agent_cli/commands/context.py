@@ -47,7 +47,6 @@ observability -- all API requests will include the X-Conversation-ID header.
   --verbose / -v    Verbose output
   --no-color        Disable colors (auto-disabled in non-TTY)
   --config-dir      Override config directory path
-  --hint MODE       [DEPRECATED since 0.45.0 -- use `kbagent serve` REST API] Generate Python code instead of executing (MODE: client or service)
   --deny-writes     Session-only firewall: block the WIDE NET -- every write, destructive, AND admin op (project add/remove/edit, org setup, all storage mutations)
   --deny-destructive  Session-only firewall: NARROW -- block only data-destructive ops in Keboola (delete-table/bucket/column, terminate-job, branch delete). Admin ops (project remove, org setup) stay allowed -- use --deny-writes for those
 
@@ -1323,17 +1322,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
        kbagent --json tool call get_configs --project prod --branch 456 \\
          --input '{{"configs": [{{"component_id": "keboola.snowflake-transformation", "configuration_id": "12345"}}]}}'
 
-10. Python code generation with --hint (DEPRECATED since 0.45.0 -- prefer the
-    `kbagent serve` REST API, which covers every command; --hint still works but warns):
-     kbagent --hint client config list --project prod   # Direct API calls (KeboolaClient)
-     kbagent --hint service config list --project prod  # Service layer (uses CLI config)
-     Two modes:
-       client  -- generates code with explicit URL + token, no CLI config dependency
-       service -- generates code using ConfigStore with explicit config_dir path
-     Works on all API-backed commands (45 total). No API calls are made.
-     Use this when building Python scripts that automate Keboola operations.
-
-11. Parquet export (typed analytics data, no CSV round-trip):
+10. Parquet export (typed analytics data, no CSV round-trip):
      # Export + download as Parquet dataset (default layout mirrors Keboola addressing)
      kbagent storage unload-table --project prod \\
        --table-id in.c-my-bucket.my-table \\

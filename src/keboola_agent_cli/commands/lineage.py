@@ -23,10 +23,8 @@ from ..errors import ErrorCode
 from ..services.deep_lineage_service import DeepLineageService, LineageGraph
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     get_formatter,
     get_service,
-    should_hint,
 )
 
 lineage_app = typer.Typer(
@@ -91,15 +89,6 @@ def lineage_build(
       3. kbagent lineage build -d /path -o lineage.json
          (automatically applies AI results if .lineage_ai_results.json exists)
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "lineage.build",
-            directory=str(directory),
-            ai=ai,
-        )
-        return
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "deep_lineage_service")
 
@@ -322,17 +311,6 @@ def lineage_show(
 
       kbagent lineage show -l lineage.json --downstream "project:table" -f html
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "lineage.show",
-            upstream=upstream,
-            downstream=downstream,
-            project=project,
-            depth=depth,
-        )
-        return
-
     formatter = get_formatter(ctx)
     service = get_service(ctx, "deep_lineage_service")
 

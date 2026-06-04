@@ -17,10 +17,8 @@ from rich.table import Table
 from ..errors import ErrorCode
 from ._helpers import (
     check_cli_permission,
-    emit_hint,
     get_formatter,
     get_service,
-    should_hint,
 )
 from ._semantic_layer_crud import add_app, edit_app, remove_app
 from ._semantic_layer_helpers import _handle_service_call
@@ -95,9 +93,6 @@ def model_list(
     project: str = typer.Option(..., "--project", help="Project alias"),
 ) -> None:
     """List all semantic-layer models in a project."""
-    if should_hint(ctx):
-        emit_hint(ctx, "semantic-layer.model.list", project=project)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(ctx, service.list_models, alias=project)
@@ -115,16 +110,6 @@ def model_create(
     ),
 ) -> None:
     """Create a new semantic-layer model."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.model.create",
-            project=project,
-            name=name,
-            description=description,
-            sql_dialect=sql_dialect,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
@@ -163,9 +148,6 @@ def model_delete(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
 ) -> None:
     """Delete a semantic-layer model and cascade-delete its children."""
-    if should_hint(ctx):
-        emit_hint(ctx, "semantic-layer.model.delete", project=project, model=model)
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
 
@@ -385,14 +367,6 @@ def semantic_layer_token(
     raw envelope ready to paste into `user_properties`; JSON mode emits
     the full `{encrypted, component_id, project}` response.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.token",
-            project=project,
-            component_id=component_id,
-        )
-        return
     formatter = get_formatter(ctx)
     if not encrypt:
         formatter.error(
@@ -468,19 +442,6 @@ def semantic_layer_build(
     `add` / `edit`. The fallback is logged in the response as
     `fallback_used: "heuristic"` so callers can detect it.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.build",
-            project=project,
-            model=model,
-            tables=tables or "",
-            name=name,
-            dry_run=dry_run,
-            keep_on_failure=keep_on_failure,
-            output=str(output) if output else "",
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
 
@@ -541,20 +502,6 @@ def semantic_layer_promote(
     DELETE+POSTed, IDENTICAL items are skipped. Items only present in
     the target are never touched (additive-only).
     """
-    if should_hint(ctx):
-        # Use `from_project` to resolve the hint stack URL.
-        emit_hint(
-            ctx,
-            "semantic-layer.promote",
-            project=from_project,
-            from_project=from_project,
-            to_project=to_project,
-            from_model=from_model,
-            to_model=to_model,
-            types=types,
-            dry_run=dry_run,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
@@ -612,18 +559,6 @@ def semantic_layer_import(
     ),
 ) -> None:
     """Replay a snapshot into a project. Default: skip on conflict (no surprise overwrites)."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.import",
-            project=project,
-            file=str(file),
-            model=model,
-            types=types,
-            dry_run=dry_run,
-            overwrite=overwrite,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     # --yes is the alias for the default skip-on-conflict mode; users can
@@ -661,15 +596,6 @@ def semantic_layer_show(
     ),
 ) -> None:
     """Show the entities in a semantic-layer model."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.show",
-            project=project,
-            model=model,
-            type=type_filter,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
@@ -750,15 +676,6 @@ def semantic_layer_export(
     ),
 ) -> None:
     """Snapshot a semantic-layer model to a self-describing JSON file."""
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.export",
-            project=project,
-            model=model,
-            output=str(output) if output else "",
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
@@ -831,21 +748,6 @@ def semantic_layer_diff(
     ``added``, ``removed``, ``changed`` (with ``diff_keys`` listing the
     attribute fields that differ).
     """
-    if should_hint(ctx):
-        # `project` resolves the hint stack URL; prefer A, fall back to B.
-        hint_project = project_a or project_b
-        emit_hint(
-            ctx,
-            "semantic-layer.diff",
-            project=hint_project,
-            project_a=project_a,
-            project_b=project_b,
-            model_a=model_a,
-            model_b=model_b,
-            file_a=str(file_a) if file_a else "",
-            file_b=str(file_b) if file_b else "",
-        )
-        return
     formatter = get_formatter(ctx)
 
     # Mutual exclusion: exactly one source per side.
@@ -898,15 +800,6 @@ def semantic_layer_validate(
     orphan, severity-suffix warning. With ``--deep``: also probe the actual
     Snowflake schema for phantom fields, phantom column refs, and AGG-on-STRING.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.validate",
-            project=project,
-            model=model,
-            deep=deep,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
@@ -1004,16 +897,6 @@ def semantic_layer_search_context(
     pre-flight check ("is the semantic model populated?") before kicking
     off a downstream pipeline that depends on it.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.search-context",
-            project=project,
-            pattern=pattern,
-            type_filter=type_filter,
-            limit=limit,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
@@ -1043,14 +926,6 @@ def semantic_layer_get_context(
     constraints / glossary) until it finds the entity, then returns the
     full attribute dict. Exits 1 if no type matches.
     """
-    if should_hint(ctx):
-        emit_hint(
-            ctx,
-            "semantic-layer.get-context",
-            project=project,
-            context_id=context_id,
-        )
-        return
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
