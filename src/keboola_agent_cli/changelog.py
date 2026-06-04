@@ -8,6 +8,20 @@ from __future__ import annotations
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.56.0": [
+        "Maintenance re-release -- no code changes since 0.55.0. The `0.55.0` version number lived in "
+        "`main` across three successive builds (#383 sync-secret audit, then #379 `semantic-layer "
+        "reference-data`, then #388 its changelog backfill) before the `v0.55.0` tag was cut, so anyone "
+        "who installed an interim 0.55.0 build did not receive the `reference-data` commands via "
+        "`kbagent update`: the auto-update check compares version numbers only (`_is_up_to_date` -> "
+        "`Version(local) >= Version(latest)`), so `0.55.0 >= 0.55.0` reads as already-up-to-date and "
+        "skips the reinstall even though the `v0.55.0` tag points at a newer commit. Bumping to 0.56.0 "
+        "gives auto-update a strictly-greater `/releases/latest` target, so the `reference-data` "
+        "sub-app (#379) and the rest of the 0.55.0 changes reach every user on the next `kbagent "
+        "update`. No behaviour change beyond the version string; the reference-data feature entry stays "
+        "recorded under 0.55.0 (the release it first shipped in) and its `since v0.55.0` doc tags "
+        "remain correct.",
+    ],
     "0.55.0": [
         "New: `kbagent semantic-layer reference-data` (alias `kbagent sl reference-data`) -- a CRUD "
         "surface for the metastore `semantic-reference-data` type, a per-dimension member store that "
