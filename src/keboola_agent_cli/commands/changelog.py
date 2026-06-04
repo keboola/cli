@@ -6,18 +6,20 @@ Thin CLI layer: reads changelog data and formats output.
 from __future__ import annotations
 
 import re
+from functools import partial
 
 import typer
 from rich.console import Console
 from rich.text import Text
 
-from ..changelog import DEFAULT_CHANGELOG_LIMIT, get_changelog
+from ..changelog import DEFAULT_CHANGELOG_LIMIT, get_changelog, headline
 from ._helpers import get_formatter
 
 # Map each known prefix word to a Rich style.  Order does not matter; the
 # regex below recognises the prefix regardless of trailing decorations like
 # ``(#274)`` or `` (sec-20 follow-up)``.
 _PREFIX_STYLES: dict[str, str] = {
+    "breaking": "bold red",
     "new": "bold green",
     "fix": "bold yellow",
     "change": "bold blue",
@@ -38,7 +40,7 @@ _PREFIX_STYLES: dict[str, str] = {
 # alternation is anchored to the longest match first so "Plugin docs" wins
 # over "Plugin".  Case-insensitive; we look up the style by lowercase key.
 _PREFIX_RE = re.compile(
-    r"^(Plugin docs|Review fixes|Observability|Security|Closed|Tests|"
+    r"^(Plugin docs|Review fixes|Observability|Breaking|Security|Closed|Tests|"
     r"Internal|Change|Note|Fix|New|UX|E2E|Why)"
     r"(\s*\([^)]*\))?"  # optional "(#274)" or "(sec-20 follow-up)" decoration
     r":\s+",
@@ -79,39 +81,56 @@ def _styled_note(note: str) -> Text:
     return text
 
 
-def _format_changelog_human(console: Console, data: dict) -> None:
-    """Render the changelog as a styled, word-wrapped bullet list."""
+def _print_bullet(console: Console, styled: Text, body_width: int) -> None:
+    """Word-wrap a styled bullet and print it with a manual gutter.
+
+    Bullet glyph on the first line, two-space indent on continuations.  This
+    preserves per-span styling without the right-side padding Table cells emit.
+    """
+    for j, line in enumerate(styled.wrap(console, body_width)):
+        # rstrip in place -- Rich keeps the word-break space at the end of each
+        # wrapped row, which shows up as trailing whitespace on copy/paste.
+        line.rstrip()
+        # The gutter is a styleless Text so the body keeps its own spans; dim
+        # applies only to the bullet glyph, not to everything that follows.
+        row = Text()
+        row.append("  • " if j == 0 else "    ", style="dim" if j == 0 else None)
+        row.append_text(line)
+        console.print(row)
+
+
+def _format_changelog_human(console: Console, data: dict, *, full: bool) -> None:
+    """Render the changelog.
+
+    Default (``full=False``): one headline bullet per version -- the first
+    note's first sentence, plus a dim ``(+N more)`` when a version carries
+    extra notes.  ``full=True``: every note, word-wrapped in full.
+    """
     # Body width = terminal width minus the 4-char bullet gutter.  Floor at
     # 40 to stay readable on pathologically narrow terminals and to handle
     # Console.width == 0 when stdout is piped to /dev/null.
     body_width = max(40, console.width - 4)
     entries = list(data["entries"].items())
+    has_hidden_detail = False
     for i, (version, notes) in enumerate(entries):
         console.print(f"v{version}", style="bold cyan")
-        for note in notes:
-            styled = _styled_note(note)
-            # Word-wrap the styled Text into a list of Text lines, then
-            # render each with a manual gutter: bullet on line 0, two-space
-            # indent on continuations.  This preserves spans without the
-            # right-side padding that Table cells emit.
-            lines = styled.wrap(console, body_width)
-            for j, line in enumerate(lines):
-                # rstrip the wrapped line in place -- Rich preserves the
-                # word-break space at the end of each wrapped row, which
-                # shows up as trailing whitespace on copy/paste.
-                line.rstrip()
-                # Build the gutter as a styleless Text so the body line
-                # keeps its own per-span styling.  Dim is applied only to
-                # the bullet glyph itself, not to everything that follows.
-                row = Text()
-                if j == 0:
-                    row.append("  • ", style="dim")
-                else:
-                    row.append("    ")
-                row.append_text(line)
-                console.print(row)
+        if full:
+            for note in notes:
+                _print_bullet(console, _styled_note(note), body_width)
+        else:
+            head = headline(notes[0])
+            styled = _styled_note(head)
+            extra = len(notes) - 1
+            if extra > 0:
+                styled.append(f"  (+{extra} more)", style="dim")
+            if extra > 0 or head != notes[0].strip():
+                has_hidden_detail = True
+            _print_bullet(console, styled, body_width)
         if i < len(entries) - 1:
             console.print("")
+    if not full and has_hidden_detail:
+        console.print("")
+        console.print("Run with --full (-v) to see complete notes.", style="dim")
 
 
 def changelog_command(
@@ -124,8 +143,17 @@ def changelog_command(
         min=1,
         max=100,
     ),
+    full: bool = typer.Option(
+        False,
+        "--full",
+        "-v",
+        help="Show complete notes for each version (default: one-line summary).",
+    ),
 ) -> None:
     """Show recent changelog (what changed in each version).
+
+    By default each version is summarised as a single headline; pass --full
+    (-v) for the complete notes.
 
     After auto-update, kbagent automatically prints "What's new" for the
     new version.  To see changes for a specific version manually, set
@@ -135,4 +163,6 @@ def changelog_command(
     """
     formatter = get_formatter(ctx)
     entries = get_changelog(limit)
-    formatter.output({"entries": entries}, _format_changelog_human)
+    # Bind ``full`` via partial so the JSON payload stays ``{"entries": ...}``
+    # (the flag is a presentation concern, not data).
+    formatter.output({"entries": entries}, partial(_format_changelog_human, full=full))

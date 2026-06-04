@@ -1265,8 +1265,9 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     KBAGENT_INCLUDE_PRERELEASE=1 in env to make every update in the session
     treat betas as installable without re-typing --beta.
 
-  kbagent changelog [--limit N]
-    Show recent changelog (what changed in each version). Default: last 5 versions.
+  kbagent changelog [--limit N] [--full]
+    Show recent changelog (what changed in each version). Default: last 5
+    versions, one-line summary each; --full (-v) expands every note.
 
   kbagent permissions list [--category read|write|destructive|admin]
     List all operations with risk categories and current allowed/denied status.

@@ -1,10 +1,26 @@
 """Changelog data for kbagent releases.
 
-Maintained manually: one-line summaries per version.
 Run ``make changelog`` to scaffold new entries from GitHub releases.
+
+Authoring contract (keep entries scannable -- ``kbagent changelog`` shows a
+one-line summary per version by default):
+
+* One *logical* change per bullet -- split a release into several entries
+  instead of cramming everything into one paragraph.
+* Start each bullet with a recognised prefix so the renderer can colour it and
+  ``headline()`` can summarise it: ``BREAKING:``, ``New:``, ``Fix:``,
+  ``Change:``, ``Note:``, ``Security:``, ``UX:`` ... (see
+  ``commands/changelog.py:_PREFIX_STYLES``). The prefix may carry a ``(#274)``
+  decoration.
+* Lead with a self-contained first sentence -- that sentence becomes the
+  default summary; everything after it is detail shown only under ``--full``.
 """
 
 from __future__ import annotations
+
+import re
+
+from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
@@ -12,56 +28,58 @@ CHANGELOG: dict[str, list[str]] = {
         "BREAKING (flow / conditional flows): the `flow` command group now targets "
         "conditional flows (`keboola.flow`) ONLY; `keboola.orchestrator` support is "
         "dropped. `--component-id` is removed from every `flow` subcommand and from "
-        "the `/flows` REST surface (FlowCreate/FlowUpdate/FlowSchedule models + query "
-        "params). `flow new`/`flow update` validate the body against the live "
-        "conditional-flow JSON Schema (Draft7), fetched at runtime from the stack's "
-        "component registry (AI Service `configurationSchema` for `keboola.flow` -- "
-        "never bundled/vendored), plus semantic checks -- phases use "
-        "`next[].goto` transitions (a phase id or `null` to end) with optional "
-        "`condition` objects (operator/function/phase/task/variable/const/array); "
-        "tasks are typed (`job`/`notification`/`variable`); **IDs are strings, not "
-        "integers**; a phase with conditional transitions must end with a default "
-        "(condition-less) transition; every phase needs >=1 enabled task; "
-        "operator/function operand-arity is enforced. Invalid bodies are rejected "
-        "with `INVALID_FLOW_DEFINITION` (replaces `INVALID_FLOW_DAG`, which is "
-        "removed from `ErrorCode`). When the schema fetch fails (network, "
-        "KeboolaApiError, or empty/missing schema) the write is NOT blocked: "
-        "structural validation is skipped, the semantic checks still run (the "
-        "Storage API does not validate flow configs server-side), and a "
-        "`structural schema validation skipped: <reason>` warning is surfaced. "
-        "`flow validate --file @flow.yaml|- [--project ALIAS]` validates a "
-        "definition: with `--project` it fetches the live schema for full "
-        "structural + semantic validation (fetch failure degrades to semantic-only "
-        "+ a note); without `--project` it runs semantic-only and notes that "
-        "structural schema validation was skipped (no schema source). Exit 0 valid "
-        "/ exit 2 errors; `--json` lists `{valid, errors, warnings, notes}`. "
-        "`flow schema --full --project ALIAS` fetches and dumps the live JSON "
-        "Schema from the stack (`--full` without `--project` errors -- the schema "
-        "is no longer bundled); plain `flow schema` still prints the offline YAML "
-        "template, conditional-flow shaped. `flow detail` human rendering is "
-        "rewritten for conditional flows (per-phase transitions, task-type badges, "
-        "retry); JSON output is the raw body, unchanged. `flow list` no longer lists "
-        "legacy orchestrator configs -- it counts them and reports "
-        "`legacy_orchestrator_count` (+ a warning) so a 'disappeared' flow is "
-        "explained; the `Component` column is dropped (every row is keboola.flow). "
-        "Unreachable phases are reported as warnings (forward BFS from the first "
-        "phase), never blocking a write; `goto` loops are legal (no cycle detection). "
-        "New module `services/flow_validation.py` (pure: structural validation "
-        "takes an explicit optional `schema` parameter, semantic checks always run; "
-        "no network, no bundled schema). `config new` flow scaffold now emits a "
-        "conditional-flow skeleton (string ids, `phases`/`tasks`, a `job` task) and "
-        "defaults to `keboola.flow`; dead `ORCHESTRATOR_COMPONENTS` removed from "
-        "`sync/config_format.py`. New permission `flow.validate` (read). Docs/agent "
-        "surfaces synced: CLAUDE.md, AGENT_CONTEXT, keboola-expert.md, SKILL.md, "
-        "commands-reference.md, flow-workflow.md (full rewrite), gotchas.md "
-        "(string-ids, dropped orchestrator, removed --component-id, "
-        "INVALID_FLOW_DEFINITION rename; old default-component gotcha marked "
-        "resolved). Execute a conditional flow with "
-        "`kbagent job run --component-id keboola.flow --config-id ID`. Tests: "
+        "the `/flows` REST surface (FlowCreate/FlowUpdate/FlowSchedule models + "
+        "query params). Conditional flows use **string IDs (not integers)**, "
+        "`phases` with `next[].goto` transitions (a phase id or `null` to end) and "
+        "optional `condition` objects "
+        "(operator/function/phase/task/variable/const/array), and typed tasks "
+        "(`job`/`notification`/`variable`). Execute one with "
+        "`kbagent job run --component-id keboola.flow --config-id ID`.",
+        "Change (flow validation): `flow new`/`flow update` now validate the body "
+        "against the live conditional-flow JSON Schema (Draft7) plus semantic "
+        "checks. The schema is fetched at runtime from the stack's component "
+        "registry (AI Service `configurationSchema` for `keboola.flow` -- never "
+        "bundled/vendored). Semantic checks: a phase with conditional transitions "
+        "must end with a default (condition-less) transition; every phase needs "
+        ">=1 enabled task; operator/function operand-arity is enforced; unreachable "
+        "phases are reported as warnings (forward BFS from the first phase), and "
+        "`goto` loops are legal (no cycle detection). Invalid bodies are rejected "
+        "with `INVALID_FLOW_DEFINITION` (replaces `INVALID_FLOW_DAG`, removed from "
+        "`ErrorCode`). When the schema "
+        "fetch fails (network, KeboolaApiError, or empty/missing schema) the write "
+        "is NOT blocked: structural validation is skipped, the semantic checks "
+        "still run (the Storage API does not validate flow configs server-side), "
+        "and a `structural schema validation skipped: <reason>` warning is "
+        "surfaced.",
+        "New: `flow validate --file @flow.yaml|- [--project ALIAS]` validates a "
+        "definition without writing it. With `--project` it fetches the live schema "
+        "for full structural + semantic validation (fetch failure degrades to "
+        "semantic-only + a note); without `--project` it runs semantic-only and "
+        "notes that structural schema validation was skipped (no schema source). "
+        "Exit 0 valid / exit 2 on errors; `--json` lists "
+        "`{valid, errors, warnings, notes}`. New permission `flow.validate` (read).",
+        "Change (flow output): `flow schema --full --project ALIAS` fetches and "
+        "dumps the live JSON Schema from the stack (`--full` without `--project` "
+        "errors -- the schema is no longer bundled); plain `flow schema` still "
+        "prints the offline, conditional-flow-shaped YAML template. `flow detail` "
+        "human rendering is rewritten for conditional flows (per-phase transitions, "
+        "task-type badges, retry); JSON output is the raw body, unchanged. "
+        "`flow list` no longer lists legacy orchestrator configs -- it counts them "
+        "and reports `legacy_orchestrator_count` (+ a warning) so a 'disappeared' "
+        "flow is explained, and the `Component` column is dropped (every row is "
+        "`keboola.flow`).",
+        "Internal: new pure module `services/flow_validation.py` (structural "
+        "validation takes an explicit optional `schema` parameter, semantic checks "
+        "always run; no network, no bundled schema); `config new` flow scaffold now "
+        "emits a conditional-flow skeleton (string ids, `phases`/`tasks`, a `job` "
+        "task) and defaults to `keboola.flow`; dead `ORCHESTRATOR_COMPONENTS` "
+        "removed from `sync/config_format.py`. Docs/agent surfaces synced: "
+        "CLAUDE.md, AGENT_CONTEXT, keboola-expert.md, SKILL.md, "
+        "commands-reference.md, flow-workflow.md (full rewrite), gotchas.md. Tests: "
         "`tests/test_flow_validation.py` (new), `tests/test_flow_service.py` + "
         "`tests/test_flow_cli.py` rewritten, `tests/test_e2e.py` flow round-trip "
         "uses a CF payload + `flow validate` and skips cleanly on "
-        "conditional_flows=false.",
+        "`conditional_flows=false`.",
     ],
     "0.56.0": [
         "Maintenance re-release -- no code changes since 0.55.0. The `0.55.0` version number lived in "
@@ -801,15 +819,69 @@ def get_version_notes(version: str) -> list[str] | None:
     return CHANGELOG.get(version)
 
 
+# Abbreviations whose trailing period must NOT be read as a sentence end when
+# extracting a headline (otherwise "e.g. a Chart" splits after "e.g").
+_HEADLINE_ABBREVIATIONS = frozenset({"e.g", "i.e", "vs", "etc", "cf", "no", "al", "inc"})
+
+# A sentence boundary is a period (or other terminator) followed by whitespace.
+_SENTENCE_BOUNDARY = re.compile(r"[.!?]\s")
+
+# The final alphabetic token (incl. internal dots) immediately before a period,
+# used to test it against the abbreviation list -- "(e.g" -> "e.g".
+_TRAILING_TOKEN = re.compile(r"[A-Za-z][A-Za-z.]*$")
+
+
+def _truncate_headline(text: str, max_chars: int) -> str:
+    """Cut *text* to at most *max_chars* on a word boundary, adding an ellipsis.
+
+    A dangling unbalanced backtick (from cutting mid-code-span) is dropped so
+    the renderer does not mistake the rest of the line for inline code.
+    """
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars].rsplit(" ", 1)[0].rstrip(" ,;:-")
+    if cut.count("`") % 2:
+        cut = cut.rsplit("`", 1)[0].rstrip()
+    return f"{cut} …"
+
+
+def headline(note: str, max_chars: int = CHANGELOG_HEADLINE_MAX_CHARS) -> str:
+    """Return a one-line summary of a changelog *note*.
+
+    The headline is the note's first sentence, capped at *max_chars*. Sentence
+    detection skips periods inside version numbers (``0.57.0``) and common
+    abbreviations (``e.g.``) so the summary is a complete thought, not a
+    fragment.
+    """
+    first = note
+    for match in _SENTENCE_BOUNDARY.finditer(note):
+        dot = match.start()
+        before = note[dot - 1] if dot > 0 else ""
+        # Only a *period* after a digit is suspect (a version number like
+        # 0.57.0); a digit before "!" or "?" -- e.g. "exit code 5!" -- is a
+        # genuine sentence end and must not be skipped.
+        if note[dot] == "." and before.isdigit():
+            continue
+        token_match = _TRAILING_TOKEN.search(note[:dot])
+        token = token_match.group(0).rstrip(".").lower() if token_match else ""
+        if token in _HEADLINE_ABBREVIATIONS:
+            continue
+        first = note[: dot + 1]
+        break
+    return _truncate_headline(first, max_chars)
+
+
 def format_whats_new(old_version: str, new_version: str) -> str:
     """Format a brief 'What's new' message for display after auto-update.
 
-    Shows entries for the new version only (not intermediate versions).
+    Shows a one-line headline per entry for the new version only (not
+    intermediate versions); run ``kbagent changelog --full`` for the detail.
     """
     notes = get_version_notes(new_version)
     if not notes:
         return ""
     lines = [f"  What's new in v{new_version}:"]
     for note in notes:
-        lines.append(f"    - {note}")
+        lines.append(f"    - {headline(note)}")
     return "\n".join(lines) + "\n"

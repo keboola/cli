@@ -565,6 +565,7 @@ kbagent update [--beta]
 # `--beta` (or env `KBAGENT_INCLUDE_PRERELEASE=1`) opts into pre-release versions
 # (PEP 440 betas/rc, e.g. 0.43.0b1). Default (no flag) is stable-only -- auto-update
 # startup hook never silently lands on a beta.
-kbagent changelog [--limit N]
+kbagent changelog [--limit N] [--full]
+# Default shows a one-line summary (first sentence) per version; --full / -v expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]
 ```

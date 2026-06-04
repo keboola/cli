@@ -532,7 +532,7 @@ manual safety net for the silent-drift risks summarized in the
 > below for the workflow.
 
 1. **Edit `pyproject.toml`** -- bump `version = "X.Y.Z"`. Single source of truth; everything else derives from it.
-2. **Add a changelog entry** to `src/keboola_agent_cli/changelog.py` -- one entry per release, no exceptions. CI fails (`make changelog-check`) if this is missing.
+2. **Add a changelog entry** to `src/keboola_agent_cli/changelog.py` -- one entry per release, no exceptions. CI fails (`make changelog-check`) if this is missing. Author it as the file's docstring describes: **one logical change per bullet** (split the release into several list items rather than one mega-paragraph), each starting with a recognised prefix (`BREAKING:`, `New:`, `Fix:`, `Change:`, `Note:`, `Security:`, ...) and leading with a self-contained first sentence. `kbagent changelog` shows only that first sentence per version by default (the rest is revealed by `--full`), so a buried headline or a single wall-of-text bullet reads as an unscannable blob.
 3. **Run `make version-sync`** -- propagates the new version to `plugins/kbagent/.claude-plugin/plugin.json`. The pre-commit hook does this automatically on `git commit`, but running it explicitly lets you eyeball the diff.
 4. **Run `make skill-gen`** -- regenerates the decision table in `SKILL.md`. Idempotent if no commands changed since the previous release.
 5. **Manually review `plugins/kbagent/agents/keboola-expert.md`**:
