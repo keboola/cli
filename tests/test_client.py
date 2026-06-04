@@ -3010,6 +3010,71 @@ class TestExtractQueryJobError:
         extract = self._import()
         assert extract({"status": "failed"}).startswith("Query execution failed (no error details")
 
+    def test_unwraps_bigquery_serialized_error_object(self) -> None:
+        """BigQuery surfaces failures as a serialized object string; the helper
+        extracts the inner Message so the user's red error box reads like
+        Snowflake plain text instead of leaking the wrapper.
+
+        Pinned against the real shape from project 9621 (connection.keboola.com):
+        ``{Location: "query"; Message: "Syntax error: ..."; Reason: "invalidQuery"}``.
+        """
+        extract = self._import()
+        job = {
+            "status": "failed",
+            "statements": [
+                {
+                    "status": "failed",
+                    "error": (
+                        '{Location: "query"; Message: "Syntax error: SELECT list '
+                        'must not be empty at [1:8]"; Reason: "invalidQuery"}'
+                    ),
+                }
+            ],
+        }
+        msg = extract(job)
+        assert msg == "Syntax error: SELECT list must not be empty at [1:8]"
+        assert "Location" not in msg
+        assert "Reason" not in msg
+
+
+class TestUnwrapBigQueryError:
+    """Tests for _unwrap_bigquery_error -- pulls the inner ``Message: "..."`` out
+    of a serialized BigQuery Query-Service error; Snowflake plain text passes
+    through untouched. Added in v0.58.0 alongside BigQuery query support.
+    """
+
+    def _import(self):
+        from keboola_agent_cli.client import _unwrap_bigquery_error
+
+        return _unwrap_bigquery_error
+
+    def test_extracts_inner_message(self) -> None:
+        unwrap = self._import()
+        raw = (
+            '{Location: ""; Message: "Not found: Table sapi-9621:WORKSPACE_1.t was '
+            'not found in location US"; Reason: "notFound"}'
+        )
+        assert (
+            unwrap(raw) == "Not found: Table sapi-9621:WORKSPACE_1.t was not found in location US"
+        )
+
+    def test_snowflake_plain_text_passes_through(self) -> None:
+        """No ``Message: "..."`` wrapper -> returned verbatim."""
+        unwrap = self._import()
+        raw = (
+            "SQL compilation error:\nFunction DATE_TRUNC does not support VARCHAR(10) argument type"
+        )
+        assert unwrap(raw) == raw
+
+    def test_handles_escaped_quotes_in_message(self) -> None:
+        unwrap = self._import()
+        raw = '{Message: "Unrecognized name: \\"weird\\" column"; Reason: "invalidQuery"}'
+        assert unwrap(raw) == 'Unrecognized name: "weird" column'
+
+    def test_empty_string_passes_through(self) -> None:
+        unwrap = self._import()
+        assert unwrap("") == ""
+
 
 class TestWaitForQueueJob:
     """Tests for wait_for_queue_job -- strategy dispatch, deadline, failure."""

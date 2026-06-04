@@ -9,6 +9,7 @@ Inherits shared retry/error logic from BaseHttpClient.
 
 import json
 import logging
+import re
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -2743,6 +2744,25 @@ class KeboolaClient(BaseHttpClient):
         )
 
 
+# The Query Service surfaces BigQuery errors as a serialized object string, e.g.
+#   {Location: "query"; Message: "Syntax error: Unexpected identifier ..."; Reason: "invalidQuery"}
+# Pull out the human-readable `Message: "..."` part so a BigQuery failure reads
+# like Snowflake's plain text instead of leaking the wrapper into the user's red
+# error box. Mirrors keboola-mcp-server's `_BigQueryWorkspace._format_error_message`.
+_BQ_ERROR_MESSAGE_RE = re.compile(r'Message:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _unwrap_bigquery_error(message: str) -> str:
+    """Extract the inner message from a serialized BigQuery Query-Service error.
+
+    Snowflake errors are plain strings with no ``Message: "..."`` wrapper, so
+    they pass through unchanged. Only the BigQuery object shape is rewritten.
+    """
+    if message and (match := _BQ_ERROR_MESSAGE_RE.search(message)):
+        return match.group(1).replace('\\"', '"')
+    return message
+
+
 def _extract_query_job_error(job: dict[str, Any]) -> str:
     """Pull the most useful warehouse error message out of a failed Query Service job.
 
@@ -2772,14 +2792,19 @@ def _extract_query_job_error(job: dict[str, Any]) -> str:
 
     def _as_text(err: Any) -> str:
         if isinstance(err, str):
-            return err.strip()
-        if isinstance(err, dict):
+            raw = err.strip()
+        elif isinstance(err, dict):
+            raw = ""
             for key in ("message", "error", "detail"):
                 val = err.get(key)
                 if isinstance(val, str) and val.strip():
-                    return val.strip()
-            return ""
-        return str(err).strip() if err is not None else ""
+                    raw = val.strip()
+                    break
+        else:
+            raw = str(err).strip() if err is not None else ""
+        # BigQuery wraps the real message in a serialized object; Snowflake plain
+        # text passes through untouched.
+        return _unwrap_bigquery_error(raw)
 
     statement_errors: list[str] = []
     for i, stmt in enumerate(job.get("statements") or []):

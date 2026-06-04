@@ -368,6 +368,11 @@ KILLABLE_JOB_STATUSES: frozenset[str] = frozenset({"created", "waiting", "proces
 #   default (legacy 2016 ws):  FAIL ('JWT token is invalid')
 #
 # Extend ONLY after empirical confirmation across at least one non-AWS stack.
+#
+# This whitelist is SNOWFLAKE-SCOPED. BigQuery compatibility lives in its own
+# set below because the `default` loginType means opposite things per backend
+# (see BIGQUERY_WORKSPACE_LOGIN_TYPE). Compatibility is therefore keyed by
+# (backend, loginType) -- see `_classify_qs_compatibility`.
 SNOWFLAKE_WORKSPACE_LOGIN_TYPE: str = "snowflake-person-keypair"
 QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES: frozenset[str] = frozenset(
     {
@@ -375,6 +380,22 @@ QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES: frozenset[str] = frozenset(
         "snowflake-person-sso",
         SNOWFLAKE_WORKSPACE_LOGIN_TYPE,
     }
+)
+
+# --- BigQuery Query Service compatibility (since v0.58.0) ---
+# BigQuery workspaces carry a single `default` loginType -- the sandbox API does
+# not expose Snowflake-style variants for BigQuery. The Query Service accepts it:
+# verified 2026-06-04 against project 9621 on connection.keboola.com, where a
+# `SELECT` against a read-only `default` BigQuery workspace returns rows.
+#
+# CRITICAL: `default` is on the BigQuery whitelist but deliberately OFF the
+# Snowflake one above. Snowflake ALSO mints a `default` loginType (legacy 2016
+# workspaces) which the Query Service REJECTS ('JWT token is invalid'). Keying
+# compatibility on loginType alone would wrongly green-light those legacy
+# Snowflake workspaces, so `_classify_qs_compatibility` dispatches on backend.
+BIGQUERY_WORKSPACE_LOGIN_TYPE: str = "default"
+QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES_BIGQUERY: frozenset[str] = frozenset(
+    {BIGQUERY_WORKSPACE_LOGIN_TYPE}
 )
 
 # --- Permission Exit Code ---

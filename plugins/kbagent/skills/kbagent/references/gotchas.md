@@ -260,7 +260,10 @@ plus a derived `qs_compatible: bool`.
 }
 ```
 
-**Compatibility whitelist (`constants.QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES`):**
+**Compatibility is keyed by (backend, loginType) -- since v0.58.0.** The same
+`default` string means opposite things per backend, so there are two whitelists.
+
+Snowflake (`constants.QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES`):
 
 - `snowflake-service-keypair` -- confirmed PASS
 - `snowflake-person-sso` -- confirmed PASS
@@ -268,8 +271,18 @@ plus a derived `qs_compatible: bool`.
 - `snowflake-legacy-service` -- explicitly OFF the list (works on
   `connection.keboola.com` but FAILED on GCP us-east4 stack in the
   original #304 incident -- keep it off until cross-stack confirmation)
-- `default` (legacy 2016 workspaces) -- confirmed FAIL
+- `default` on Snowflake (legacy 2016 workspaces) -- confirmed FAIL
   (`JWT token is invalid`)
+
+BigQuery (`constants.QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES_BIGQUERY`):
+
+- `default` on BigQuery -- confirmed PASS (since v0.58.0). Every BigQuery
+  workspace carries loginType `default` (the sandbox API exposes no
+  Snowflake-style variants for BigQuery), and the Query Service runs SELECTs
+  against it -- verified live against project 9621 on `connection.keboola.com`.
+  Before v0.58.0, kbagent's whitelist was Snowflake-only, so BigQuery
+  workspaces were mislabeled `qs_compatible: false` and hidden by
+  `workspace list --qs-compatible`, even though `workspace query` worked.
 
 `qs_compatible: false` does NOT mean "broken"; it means "not on the
 confirmed-good whitelist". For an unknown loginType, `workspace list`

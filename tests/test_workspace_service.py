@@ -258,8 +258,13 @@ class TestAutoDetectBackend:
         assert call_kwargs["login_type"] == "snowflake-person-keypair"
         assert call_kwargs["public_key"].startswith("-----BEGIN PUBLIC KEY-----")
 
-    def test_create_workspace_bigquery_keeps_default_login_type(self, tmp_config_dir: Path) -> None:
-        """BigQuery sandbox workspaces omit loginType so Storage uses its default."""
+    def test_create_workspace_bigquery_requests_default_login_type(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """BigQuery sandbox workspaces request loginType ``default`` -- the only
+        BigQuery loginType and the one the Query Service accepts (since v0.58.0,
+        matching keboola-mcp-server). No key pair: BigQuery uses service-account
+        credentials, not RSA keys."""
         mock_client = MagicMock()
         mock_client.verify_token.return_value = SAMPLE_TOKEN_VERIFY_BIGQUERY
         mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
@@ -286,7 +291,7 @@ class TestAutoDetectBackend:
             component_id="keboola.sandboxes",
             config_id="cfg-1",
             backend="bigquery",
-            login_type=None,
+            login_type="default",
             public_key=None,
         )
 
@@ -349,7 +354,7 @@ class TestAutoDetectBackend:
             component_id="keboola.sandboxes",
             config_id="cfg-1",
             backend="bigquery",
-            login_type=None,
+            login_type="default",
             public_key=None,
         )
 
@@ -416,7 +421,7 @@ class TestAutoDetectBackend:
             component_id="keboola.snowflake-transformation",
             config_id="456",
             backend="bigquery",
-            login_type=None,
+            login_type="default",
             public_key=None,
         )
 
@@ -1678,3 +1683,84 @@ class TestIssue304GetWorkspaceEnrichment:
         assert result["qs_compatible"] is True
         assert result["component_id"] == "keboola.sandboxes"
         assert result["config_id"] == "cfg-42"
+
+
+class TestBigQueryQueryServiceSupport:
+    """BigQuery Query-Service compatibility added in v0.58.0.
+
+    Verified live against project 9621 on connection.keboola.com: BigQuery
+    workspaces carry loginType ``default`` and the Query Service runs SELECTs
+    against them. The fix makes qs_compatibility backend-aware so BigQuery's
+    ``default`` is whitelisted while Snowflake's legacy ``default`` stays off.
+    """
+
+    def test_classify_bigquery_default_is_compatible(self) -> None:
+        from keboola_agent_cli.services.workspace_service import _classify_qs_compatibility
+
+        assert _classify_qs_compatibility("default", "bigquery") is True
+        # Backend match is case-insensitive.
+        assert _classify_qs_compatibility("default", "BigQuery") is True
+
+    def test_classify_snowflake_default_stays_incompatible(self) -> None:
+        """Regression guard: Snowflake legacy ``default`` must NOT inherit the
+        BigQuery whitelist -- it is rejected with 'JWT token is invalid'."""
+        from keboola_agent_cli.services.workspace_service import _classify_qs_compatibility
+
+        assert _classify_qs_compatibility("default", "snowflake") is False
+
+    def test_classify_bigquery_rejects_snowflake_login_types(self) -> None:
+        """Backends do not share login types: a Snowflake loginType is not on
+        the BigQuery whitelist."""
+        from keboola_agent_cli.services.workspace_service import _classify_qs_compatibility
+
+        assert _classify_qs_compatibility("snowflake-person-sso", "bigquery") is False
+
+    def test_login_type_for_bigquery_backend_is_default(self) -> None:
+        from keboola_agent_cli.services.workspace_service import (
+            _workspace_login_type_for_backend,
+        )
+
+        assert _workspace_login_type_for_backend("bigquery") == "default"
+        assert _workspace_login_type_for_backend("BigQuery") == "default"
+
+    def test_login_type_for_snowflake_and_unknown_backend(self) -> None:
+        from keboola_agent_cli.services.workspace_service import (
+            _workspace_login_type_for_backend,
+        )
+
+        assert _workspace_login_type_for_backend("snowflake") == "snowflake-person-keypair"
+        assert _workspace_login_type_for_backend("exasol") is None
+
+    def test_list_marks_bigquery_default_workspace_compatible(self, tmp_config_dir: Path) -> None:
+        """End-to-end through the service: a BigQuery ``default`` RO workspace
+        is qs_compatible (mirrors the real project-9621 shape)."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 1, "isDefault": True}]
+        mock_client.list_workspaces.return_value = [
+            {
+                "id": 7,
+                "name": "bq-ro",
+                "connection": {
+                    "backend": "bigquery",
+                    "schema": "WORKSPACE_7",
+                    "user": '{"type":"service_account","project_id":"sapi-9621"}',
+                    "loginType": "default",
+                },
+                "readOnlyStorageAccess": True,
+                "component": "keboola.sandboxes",
+                "configurationId": "cfg-7",
+            },
+        ]
+        mock_client.list_component_configs.return_value = []
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.list_workspaces(aliases=["prod"], qs_compatible_only=True)
+
+        ids = [w["id"] for w in result["workspaces"]]
+        assert ids == [7]
+        assert result["workspaces"][0]["qs_compatible"] is True
