@@ -1,4 +1,4 @@
-"""Flow + flow-schedule endpoints."""
+"""Flow + flow-schedule endpoints (conditional flows / keboola.flow only)."""
 
 from __future__ import annotations
 
@@ -11,12 +11,9 @@ from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/flows", tags=["flows"])
 
-DEFAULT_FLOW_COMPONENT = "keboola.flow"
-
 
 class FlowCreate(BaseModel):
     name: str
-    component_id: str = DEFAULT_FLOW_COMPONENT
     description: str = ""
     phases: list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None
@@ -24,7 +21,6 @@ class FlowCreate(BaseModel):
 
 
 class FlowUpdate(BaseModel):
-    component_id: str = DEFAULT_FLOW_COMPONENT
     name: str | None = None
     description: str | None = None
     phases: list[dict[str, Any]] | None = None
@@ -33,7 +29,6 @@ class FlowUpdate(BaseModel):
 
 
 class FlowSchedule(BaseModel):
-    component_id: str = DEFAULT_FLOW_COMPONENT
     cron_tab: str
     timezone: str = "UTC"
     enabled: bool = True
@@ -58,14 +53,11 @@ def list_flows(
 def detail(
     project: str,
     config_id: str,
-    component_id: str = DEFAULT_FLOW_COMPONENT,
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Fetch a single flow configuration. Mirrors `kbagent flow detail`."""
-    return registry.flow.get_flow_detail(
-        alias=project, component_id=component_id, config_id=config_id, branch_id=branch_id
-    )
+    return registry.flow.get_flow_detail(alias=project, config_id=config_id, branch_id=branch_id)
 
 
 @router.post("/{project}", summary="Create a new flow")
@@ -75,7 +67,6 @@ def create(
     """Create a new flow configuration. Mirrors `kbagent flow new`."""
     return registry.flow.create_flow(
         alias=project,
-        component_id=body.component_id,
         name=body.name,
         description=body.description,
         phases=body.phases,
@@ -94,7 +85,6 @@ def update(
     """Update name, description, or phases/tasks of a flow. Mirrors `kbagent flow update`."""
     return registry.flow.update_flow(
         alias=project,
-        component_id=body.component_id,
         config_id=config_id,
         name=body.name,
         description=body.description,
@@ -108,27 +98,23 @@ def update(
 def delete(
     project: str,
     config_id: str,
-    component_id: str = DEFAULT_FLOW_COMPONENT,
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Delete a flow configuration. Mirrors `kbagent flow delete`."""
-    return registry.flow.delete_flow(
-        alias=project, component_id=component_id, config_id=config_id, branch_id=branch_id
-    )
+    return registry.flow.delete_flow(alias=project, config_id=config_id, branch_id=branch_id)
 
 
 @router.get("/{project}/{config_id}/schedules", summary="List schedules for a flow")
 def list_schedules(
     project: str,
     config_id: str,
-    component_id: str = DEFAULT_FLOW_COMPONENT,
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List cron schedules attached to a flow."""
     return registry.flow.list_flow_schedules(
-        alias=project, component_id=component_id, config_id=config_id, branch_id=branch_id
+        alias=project, config_id=config_id, branch_id=branch_id
     )
 
 
@@ -142,7 +128,6 @@ def set_schedule(
     """Attach or update a cron schedule on a flow. Mirrors `kbagent flow schedule`."""
     return registry.flow.set_flow_schedule(
         alias=project,
-        component_id=body.component_id,
         config_id=config_id,
         cron_tab=body.cron_tab,
         timezone=body.timezone,
@@ -156,11 +141,10 @@ def set_schedule(
 def remove_schedule(
     project: str,
     config_id: str,
-    component_id: str = DEFAULT_FLOW_COMPONENT,
     branch_id: int | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Remove the cron schedule from a flow. Mirrors `kbagent flow schedule-remove`."""
     return registry.flow.remove_flow_schedule(
-        alias=project, component_id=component_id, config_id=config_id, branch_id=branch_id
+        alias=project, config_id=config_id, branch_id=branch_id
     )

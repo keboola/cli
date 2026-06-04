@@ -83,7 +83,7 @@ a critical failure.
 
 | User intent | First choice | Fallback | NEVER |
 |---|---|---|---|
-| Update flow (rename, description, phases) | `kbagent flow update` (partial, no `--file`) | `--file` after fetching current phases, merging locally, passing full YAML | `tool call update_flow` (strips `behavior.onError` pre-MCP v1.60); partial `--file` that drops fields |
+| Author / edit a conditional flow (keboola.flow) | `kbagent flow validate --file @flow.yaml --project ALIAS` (fetches live schema; loop until clean) then `kbagent flow new`/`flow update --file` | fetch `flow detail`, merge phases/tasks locally, re-validate, push | `--component-id` (removed 0.56.0); integer ids (ids are STRINGS); `dependsOn` (use `next[].goto` + conditions); `keboola.orchestrator` (dropped 0.56.0); assuming `flow schema --full` works offline (now needs `--project`) |
 | Schedule flow | `kbagent flow schedule --cron ... [--timezone]` | `tool call create_flow_schedule` | raw REST to `/storage/configurations/keboola.scheduler` |
 | Create Snowflake transformation | `kbagent config new --component-id keboola.snowflake-transformation --name N --project P --push --no-files` (0.33.0+; one-shot, no scaffold, body defaults to `{}` and validation auto-skips for empty shell -- then `config update --set ...` to fill in script) **or** `kbagent config new --component-id keboola.snowflake-transformation --project P --output-dir D` + `config update --set ...` (scaffold-then-patch) | `tool call create_sql_transformation` (lower schema, avoids the MCP `create_config` Snowflake refusal) | `tool call create_config` (refuses keboola.snowflake-transformation) -- note: `config new --push` does NOT inherit this refusal because it wraps the raw Storage API directly |
 | Update SQL transformation body (script[]) | `kbagent config update --project P --component-id keboola.snowflake-transformation --config-id K --configuration @body.json` (0.28.0+ auto-normalizes string `script` to array; SQL gets statement-level split, Python/R gets `[script]` wrap; envelope's `normalizations: [...]` records every change. 0.31.0+ also re-splits multi-statement LIST elements -- closes the #274 ODBC `statement count 2 vs desired 1` crash that survives the 0.28.0 string fix) | -- | `tool call update_sql_transformation` -- still vulnerable to BOTH the #245 string-vs-array AND #274 list-element runtime crashes because it pushes raw to Storage API; raw `PUT /v2/storage/components/.../configs/...` -- same trap |
@@ -161,9 +161,20 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
 
 **Flow / config edits**
 
-- **Flow phase `behavior.onError`**: `flow update --file` is a **full-replace** --
-  omitting `behavior` on a phase silently drops it. Fetch `flow detail` first,
-  merge locally, then push. Integer-vs-string phase IDs are irrelevant to this.
+- **Conditional flows only (since 0.56.0)**: `flow` targets `keboola.flow`;
+  `keboola.orchestrator` is dropped and `--component-id` is removed from every
+  `flow` subcommand. IDs are **strings**; phases use `next[].goto` (a phase id or
+  `null` to end) + optional `condition`; tasks are typed (`job`/`notification`/
+  `variable`). The old `dependsOn` template is invalid. `flow new`/`flow update`
+  validate against the **live** CF schema fetched at runtime from the stack
+  (AI Service `configurationSchema` for `keboola.flow`; NOT bundled) and reject
+  bad bodies with `INVALID_FLOW_DEFINITION`. If the schema fetch fails
+  (network/empty), the write is NOT blocked: structural validation is skipped,
+  semantic checks still run, and a `structural schema validation skipped`
+  warning is surfaced. `flow update --file` is still a **full-replace** of
+  phases+tasks -- fetch `flow detail` first, merge locally, run
+  `flow validate --file @merged.yaml --project ALIAS` (full schema) until clean,
+  then push.
 - **Snowflake transformation scaffolding**: MCP `create_config` REFUSES
   `keboola.snowflake-transformation`. Use `config new --push --no-files`
   (0.33.0+) or `config new --output-dir` then `config update`, or MCP
@@ -306,20 +317,28 @@ Do NOT proceed to step 4 without explicit go-ahead. Do NOT bolt a
 `job run` onto the end -- that is a SEPARATE turn with a SEPARATE
 confirmation.
 
-### 4.3 Flow structural edit
+### 4.3 Conditional-flow structural edit (keboola.flow)
 
 ```
-# 1. Fetch current full YAML
+# 1. Fetch current full body (phases use next[].goto + conditions; tasks are typed)
 kbagent --json flow detail --project P --flow-id F > /tmp/flow-current.json
 
-# 2. Build merged YAML locally (preserve behavior.onError, description, phases you're not touching)
+# 2. Build merged YAML locally (string ids; preserve description + phases/tasks
+#    you're not touching -- flow update --file is a FULL replace of phases+tasks)
 
-# 3. Dry-run is NOT supported by flow update; instead verify your merged YAML
-#    echoes the expected structure, then apply:
+# 3. Validate before pushing; loop until clean. Pass --project to fetch the
+#    LIVE schema from the stack for full structural + semantic validation
+#    (without --project only semantic checks run + a "skipped" note):
+kbagent --json flow validate --file @/tmp/flow-merged.yaml --project P
+
+# 4. Apply. flow update fetches the live schema and validates on write
+#    (INVALID_FLOW_DEFINITION on a bad body; a schema-fetch failure degrades to
+#    semantic-only + a warning -- it never blocks the write):
 kbagent --json flow update --project P --flow-id F --file @/tmp/flow-merged.yaml
 
-# 4. Fetch again and verify
+# 5. Fetch again and verify; execute the flow with:
 kbagent --json flow detail --project P --flow-id F
+kbagent --json job run --project P --component-id keboola.flow --config-id F --wait
 ```
 
 ### 4.4 Workspace-based SQL debugging
@@ -371,11 +390,25 @@ kbagent sync push --project dest
   → Look up the native `kbagent <cmd>` equivalent in §2. If it exists,
     switch to it; otherwise use the `kbagent serve` REST API.
 
-- `update_flow` returned success but verification shows
-  `behavior.onError = None` on phases that had it before:
-  → You likely used MCP `tool call update_flow` or `--file` without
-    merging. Re-fetch current detail, merge behavior back in, push via
-    `kbagent flow update --file` (native).
+- `flow new`/`flow update` failed with `INVALID_FLOW_DEFINITION`:
+  → The body failed schema/semantic validation. Run
+    `kbagent flow validate --file @flow.yaml --project ALIAS` to fetch the
+    live schema and see every error (string ids? `next[].goto` targets exist?
+    each phase has an enabled task? conditional transitions end with a
+    default?). Fix and re-push.
+
+- `flow new`/`flow update`/`flow validate` warns
+  `structural schema validation skipped: ...`:
+  → The live CF schema could not be fetched from the stack (network, or the
+    AI Service returned no `configurationSchema`). This is NOT an error: only
+    structural checks were skipped; semantic checks still ran. The write
+    proceeded. Re-run when the stack is reachable for full structural coverage.
+
+- `flow update` returned success but a phase/task you didn't touch
+  vanished:
+  → `flow update --file` is a FULL replace of phases+tasks. Re-fetch
+    `flow detail`, merge the missing items back in locally, run
+    `flow validate`, then push again.
 
 - `403 Forbidden` on a write:
   → Check: `kbagent permissions show`. If the active policy denies

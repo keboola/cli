@@ -40,7 +40,7 @@ _SQL_TRANSFORMATION_FRAGMENTS = (
 
 _PYTHON_TRANSFORMATION_FRAGMENT = "python-transformation"
 _CUSTOM_PYTHON_APP_ID = "kds-team.app-custom-python"
-_FLOW_COMPONENT_IDS = ("keboola.orchestrator", "keboola.flow")
+_FLOW_COMPONENT_IDS = ("keboola.flow",)
 
 
 def _detect_component_category(component_id: str) -> str:
@@ -289,36 +289,34 @@ def _build_pyproject_toml(component_id: str, name: str, packages: list[str] | No
     )
 
 
-def _build_flow_config_yml(name: str, component_id: str = "keboola.orchestrator") -> str:
-    """Generate flow/orchestrator configuration YAML."""
+def _build_flow_config_yml(name: str, component_id: str = "keboola.flow") -> str:
+    """Generate a conditional-flow (keboola.flow) configuration YAML skeleton.
+
+    IDs are strings; phases carry next[].goto transitions (a phase id or null)
+    and tasks are typed (job/notification/variable).
+    """
     lines = [
-        "version: 2",
         f'name: "{name}"',
         "description: |",
         "  TODO: describe this flow",
-        "",
-        "schedules:",
-        '  - name: "Daily run"',
-        '    cron: "0 6 * * *"',
-        "    timezone: Europe/Prague",
-        "    enabled: false",
-        "",
         "phases:",
-        '  - name: "Phase 1"',
-        "    tasks:",
-        '      - component: "keboola.ex-http"',
-        '        config: "extractor/keboola.ex-http/my-extractor"',
-        '  - name: "Phase 2"',
-        '    depends_on: ["Phase 1"]',
-        "    tasks:",
-        '      - component: "keboola.snowflake-transformation"',
-        '        config: "transformation/keboola.snowflake-transformation/my-transform"',
-        "",
-        "_keboola:",
-        f"  component_id: {component_id}",
-        "",
+        '  - id: "phase-1"',
+        '    name: "Phase 1"',
+        "    next:",
+        '      - id: "default"',
+        "        goto: null",
+        "tasks:",
+        '  - id: "task-1"',
+        '    name: "Task 1"',
+        '    phase: "phase-1"',
+        "    enabled: true",
+        "    task:",
+        "      type: job",
+        '      componentId: "keboola.ex-http"',
+        '      configId: "TODO"',
+        "      mode: run",
     ]
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 class ComponentService(BaseService):
@@ -647,7 +645,7 @@ class ComponentService(BaseService):
                 {
                     "path": "_config.yml",
                     "content": _build_flow_config_yml(config_name, detail.component_id),
-                    "description": "Flow/orchestrator configuration",
+                    "description": "Conditional flow (keboola.flow) configuration",
                 }
             )
             return files

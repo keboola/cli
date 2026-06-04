@@ -5167,28 +5167,82 @@ class TestE2EFlowOperations:
     def _run_ok(self, *args: str) -> dict[str, Any]:
         return _json_ok(self._run(*args))
 
-    def test_flow_crud_and_schedule(self, tmp_path: Path) -> None:
-        """Full lifecycle: schema → new → list → detail → update → schedule → schedule-remove → delete."""
+    @staticmethod
+    def _write_cf(tmp_path: Path, name: str = "cf.yaml") -> Path:
+        """Write a minimal valid conditional-flow (string ids, one job task)."""
+        body = (
+            "phases:\n"
+            '  - id: "p1"\n'
+            '    name: "P1"\n'
+            "    next:\n"
+            '      - id: "n"\n'
+            "        goto: null\n"
+            "tasks:\n"
+            '  - id: "t1"\n'
+            '    name: "T1"\n'
+            '    phase: "p1"\n'
+            "    enabled: true\n"
+            "    task:\n"
+            "      type: job\n"
+            '      componentId: "keboola.ex-http"\n'
+            '      configId: "1"\n'
+            "      mode: run\n"
+        )
+        path = tmp_path / name
+        path.write_text(body, encoding="utf-8")
+        return path
 
-        _step(1, "flow schema returns YAML template with phases key")
+    def test_flow_crud_and_schedule(self, tmp_path: Path) -> None:
+        """Full lifecycle: schema → validate → new → list → detail → update →
+        schedule → schedule-remove → delete (conditional flow)."""
+
+        _step(1, "flow schema returns the conditional-flow YAML template")
         result = self._run("flow", "schema")
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "phases" in data["data"]["schema"]
+        assert "goto" in data["data"]["schema"]
 
-        _step(2, "flow new -- create a keboola.flow config")
+        cf_file = self._write_cf(tmp_path)
+
+        _step(2, "flow validate (semantic-only, no --project) -- structural skipped note")
+        result = self._run("flow", "validate", "--file", f"@{cf_file}")
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)["data"]
+        assert payload["valid"] is True
+        assert any("structural schema validation skipped" in n for n in payload.get("notes", []))
+
+        _step(2.1, "flow validate --project -- fetch live schema, full validation")
+        result = self._run("flow", "validate", "--file", f"@{cf_file}", "--project", self.alias)
+        # Skip cleanly if the project has conditional flows disabled.
+        if result.exit_code != 0 and "conditional" in result.output.lower():
+            pytest.skip("Project reports conditional_flows=false; skipping CF E2E")
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"]["valid"] is True
+
+        _step(2.2, "flow schema --full --project -- live JSON Schema from the stack")
+        result = self._run("flow", "schema", "--full", "--project", self.alias)
+        assert result.exit_code == 0, result.output
+        full = json.loads(result.output)["data"]
+        assert full["format"] == "json-schema"
+        assert isinstance(full["schema"], dict) and full["schema"]
+
+        _step(3, "flow new -- create a keboola.flow config")
         result = self._run(
             "flow",
             "new",
             "--project",
             self.alias,
-            "--component-id",
-            "keboola.flow",
             "--name",
             f"{RUN_ID}-flow",
             "--description",
             "E2E flow test",
+            "--file",
+            f"@{cf_file}",
         )
+        # Skip cleanly if the project has conditional flows disabled.
+        if result.exit_code != 0 and "conditional" in result.output.lower():
+            pytest.skip("Project reports conditional_flows=false; skipping CF E2E")
         assert result.exit_code == 0, result.output
         created = json.loads(result.output)["data"]
         flow_id = created["id"]
@@ -5196,37 +5250,35 @@ class TestE2EFlowOperations:
         assert created["project_alias"] == self.alias
         self._created_flows.append(("keboola.flow", flow_id))
 
-        _step(3, "flow list -- flow appears in listing")
+        _step(4, "flow list -- flow appears in listing")
         result = self._run("flow", "list", "--project", self.alias)
         assert result.exit_code == 0
         listing = json.loads(result.output)["data"]
         ids = {f["config_id"] for f in listing["flows"]}
         assert flow_id in ids
+        assert "legacy_orchestrator_count" in listing
 
-        _step(4, "flow detail -- returns phase/task counts")
+        _step(5, "flow detail -- returns phase/task counts")
         result = self._run(
             "flow",
             "detail",
             "--project",
             self.alias,
-            "--component-id",
-            "keboola.flow",
             "--flow-id",
             flow_id,
         )
         assert result.exit_code == 0, result.output
         detail = json.loads(result.output)["data"]
         assert detail["id"] == flow_id
+        assert detail["component_id"] == "keboola.flow"
         assert "phase_count" in detail
 
-        _step(5, "flow update -- rename the flow")
+        _step(6, "flow update -- rename the flow")
         result = self._run(
             "flow",
             "update",
             "--project",
             self.alias,
-            "--component-id",
-            "keboola.flow",
             "--flow-id",
             flow_id,
             "--name",
@@ -5236,14 +5288,12 @@ class TestE2EFlowOperations:
         updated = json.loads(result.output)["data"]
         assert updated["id"] == flow_id
 
-        _step(6, "flow schedule -- attach a cron schedule")
+        _step(7, "flow schedule -- attach a cron schedule")
         result = self._run(
             "flow",
             "schedule",
             "--project",
             self.alias,
-            "--component-id",
-            "keboola.flow",
             "--flow-id",
             flow_id,
             "--cron",
@@ -5255,14 +5305,12 @@ class TestE2EFlowOperations:
         assert sched["config_id"] == flow_id
         assert sched["cron_tab"] == "0 6 * * *"
 
-        _step(7, "flow schedule-remove -- remove schedule, idempotent")
+        _step(8, "flow schedule-remove -- remove schedule, idempotent")
         result = self._run(
             "flow",
             "schedule-remove",
             "--project",
             self.alias,
-            "--component-id",
-            "keboola.flow",
             "--flow-id",
             flow_id,
             "--yes",
@@ -5277,8 +5325,6 @@ class TestE2EFlowOperations:
             "schedule-remove",
             "--project",
             self.alias,
-            "--component-id",
-            "keboola.flow",
             "--flow-id",
             flow_id,
             "--yes",
@@ -5286,14 +5332,12 @@ class TestE2EFlowOperations:
         assert result2.exit_code == 0
         assert json.loads(result2.output)["data"]["deleted_count"] == 0
 
-        _step(8, "flow delete -- delete the flow")
+        _step(9, "flow delete -- delete the flow")
         result = self._run(
             "flow",
             "delete",
             "--project",
             self.alias,
-            "--component-id",
-            "keboola.flow",
             "--flow-id",
             flow_id,
             "--yes",
@@ -5305,284 +5349,44 @@ class TestE2EFlowOperations:
         # Remove from cleanup list since we deleted it
         self._created_flows.remove(("keboola.flow", flow_id))
 
-    def test_flow_update_preserves_behavior_onerror(self, tmp_path: Path) -> None:
-        """Verify that ``kbagent flow update`` preserves ``behavior.onError``.
+    def test_flow_validation_rejects_invalid_definition(self, tmp_path: Path) -> None:
+        """flow new with a task referencing a missing phase must fail with
+        INVALID_FLOW_DEFINITION (semantic validation, which always runs --
+        independent of whether the live schema fetch succeeds)."""
+        bad = (
+            "phases:\n"
+            '  - id: "p1"\n'
+            '    name: "P1"\n'
+            "    next:\n"
+            '      - id: "n"\n'
+            "        goto: null\n"
+            "tasks:\n"
+            '  - id: "t1"\n'
+            '    name: "T1"\n'
+            '    phase: "ghost"\n'
+            "    enabled: true\n"
+            "    task:\n"
+            "      type: job\n"
+            '      componentId: "keboola.ex-http"\n'
+            '      configId: "1"\n'
+            "      mode: run\n"
+        )
+        bad_file = tmp_path / "bad.yaml"
+        bad_file.write_text(bad, encoding="utf-8")
 
-        If any assertion fails, the pilot agent prompt must route flow writes
-        through the ``kbagent serve`` REST API + direct API instead of
-        ``kbagent flow update`` as the first choice.
-
-        Covered scenarios:
-            A. Rename-only update (no ``--file``) must leave behavior intact.
-            B. ``--file`` update with explicit behavior must propagate the
-               supplied value (documented pass-through).
-            C. ``--file`` update where phases omit behavior documents the
-               actual server response (strip vs default-applied). Printed
-               diagnostically; not a hard assertion since the strip itself
-               is expected replace-semantics, not a bug.
-        """
-        import yaml as _yaml
-
-        initial_def = {
-            "phases": [
-                {
-                    "id": 1,
-                    "name": "Phase One",
-                    "dependsOn": [],
-                    "behavior": {"onError": "warning"},
-                },
-                {
-                    "id": 2,
-                    "name": "Phase Two",
-                    "dependsOn": [1],
-                    "behavior": {"onError": "stop"},
-                },
-            ],
-            "tasks": [
-                {
-                    "id": 1,
-                    "name": "Phase 1 task",
-                    "phase": 1,
-                    "enabled": True,
-                    "continueOnFailure": False,
-                    "task": {
-                        "mode": "run",
-                        "componentId": "keboola.ex-db-snowflake",
-                        "configId": "nonexistent-placeholder-1",
-                    },
-                },
-                {
-                    "id": 2,
-                    "name": "Phase 2 task",
-                    "phase": 2,
-                    "enabled": True,
-                    "continueOnFailure": False,
-                    "task": {
-                        "mode": "run",
-                        "componentId": "keboola.ex-db-snowflake",
-                        "configId": "nonexistent-placeholder-2",
-                    },
-                },
-            ],
-        }
-
-        initial_yaml = tmp_path / "flow_initial.yaml"
-        initial_yaml.write_text(_yaml.safe_dump(initial_def))
-
-        _step(1, "flow new -- create flow with behavior.onError on both phases")
         result = self._run(
             "flow",
             "new",
             "--project",
             self.alias,
-            "--component-id",
-            "keboola.flow",
             "--name",
-            f"{RUN_ID}-behavior-flow",
+            f"{RUN_ID}-invalid",
             "--file",
-            f"@{initial_yaml}",
+            f"@{bad_file}",
         )
-        assert result.exit_code == 0, result.output
-        created = json.loads(result.output)["data"]
-        flow_id = created["id"]
-        self._created_flows.append(("keboola.flow", flow_id))
-
-        _step(2, "verify behavior stored correctly on creation")
-        detail = self._run_ok(
-            "flow",
-            "detail",
-            "--project",
-            self.alias,
-            "--component-id",
-            "keboola.flow",
-            "--flow-id",
-            flow_id,
-        )
-        phases = detail["data"]["phases"]
-        assert len(phases) == 2, f"Expected 2 phases, got {len(phases)}"
-        assert phases[0].get("behavior", {}).get("onError") == "warning", (
-            f"Create did not store phases[0].behavior.onError correctly. "
-            f"Got: {phases[0].get('behavior')!r}"
-        )
-        assert phases[1].get("behavior", {}).get("onError") == "stop", (
-            f"Create did not store phases[1].behavior.onError correctly. "
-            f"Got: {phases[1].get('behavior')!r}"
-        )
-
-        # --- Scenario A: rename-only update, no --file -----------------
-        _step(3, "Scenario A -- rename only (no --file); behavior must survive")
-        result = self._run(
-            "flow",
-            "update",
-            "--project",
-            self.alias,
-            "--component-id",
-            "keboola.flow",
-            "--flow-id",
-            flow_id,
-            "--name",
-            f"{RUN_ID}-behavior-flow-renamed",
-        )
-        assert result.exit_code == 0, result.output
-        after_rename = self._run_ok(
-            "flow",
-            "detail",
-            "--project",
-            self.alias,
-            "--component-id",
-            "keboola.flow",
-            "--flow-id",
-            flow_id,
-        )
-        rphases = after_rename["data"]["phases"]
-        assert rphases[0].get("behavior", {}).get("onError") == "warning", (
-            "BLOCKER: rename-only flow update stripped "
-            f"phases[0].behavior.onError. Expected 'warning', got "
-            f"{rphases[0].get('behavior')!r}. Plan §6.6 tool matrix must be "
-            "revised -- 'kbagent flow update' is NOT safe for partial updates."
-        )
-        assert rphases[1].get("behavior", {}).get("onError") == "stop", (
-            "BLOCKER: rename-only flow update stripped "
-            f"phases[1].behavior.onError. Expected 'stop', got "
-            f"{rphases[1].get('behavior')!r}."
-        )
-
-        # --- Scenario B: --file with explicit (changed) behavior -------
-        _step(4, "Scenario B -- --file with explicit behavior; pass-through")
-        v2_def = {
-            "phases": [
-                {
-                    "id": 1,
-                    "name": "Phase One",
-                    "dependsOn": [],
-                    "behavior": {"onError": "stop"},  # flipped
-                },
-                {
-                    "id": 2,
-                    "name": "Phase Two",
-                    "dependsOn": [1],
-                    "behavior": {"onError": "warning"},  # flipped
-                },
-            ],
-            "tasks": initial_def["tasks"],
-        }
-        v2_yaml = tmp_path / "flow_v2.yaml"
-        v2_yaml.write_text(_yaml.safe_dump(v2_def))
-
-        result = self._run(
-            "flow",
-            "update",
-            "--project",
-            self.alias,
-            "--component-id",
-            "keboola.flow",
-            "--flow-id",
-            flow_id,
-            "--file",
-            f"@{v2_yaml}",
-        )
-        assert result.exit_code == 0, result.output
-        after_v2 = self._run_ok(
-            "flow",
-            "detail",
-            "--project",
-            self.alias,
-            "--component-id",
-            "keboola.flow",
-            "--flow-id",
-            flow_id,
-        )
-        v2phases = after_v2["data"]["phases"]
-        assert v2phases[0].get("behavior", {}).get("onError") == "stop", (
-            "--file with explicit behavior did not propagate: "
-            f"expected 'stop', got {v2phases[0].get('behavior')!r}"
-        )
-        assert v2phases[1].get("behavior", {}).get("onError") == "warning", (
-            "--file with explicit behavior did not propagate: "
-            f"expected 'warning', got {v2phases[1].get('behavior')!r}"
-        )
-
-        # --- Scenario C: --file WITHOUT behavior (document actual) -----
-        _step(5, "Scenario C -- --file without behavior; document server response")
-        v3_def = {
-            "phases": [
-                {"id": 1, "name": "Phase One", "dependsOn": []},
-                {"id": 2, "name": "Phase Two", "dependsOn": [1]},
-            ],
-            "tasks": initial_def["tasks"],
-        }
-        v3_yaml = tmp_path / "flow_v3.yaml"
-        v3_yaml.write_text(_yaml.safe_dump(v3_def))
-
-        result = self._run(
-            "flow",
-            "update",
-            "--project",
-            self.alias,
-            "--component-id",
-            "keboola.flow",
-            "--flow-id",
-            flow_id,
-            "--file",
-            f"@{v3_yaml}",
-        )
-        assert result.exit_code == 0, result.output
-        after_v3 = self._run_ok(
-            "flow",
-            "detail",
-            "--project",
-            self.alias,
-            "--component-id",
-            "keboola.flow",
-            "--flow-id",
-            flow_id,
-        )
-        v3phases = after_v3["data"]["phases"]
-        assert len(v3phases) == 2
-        # Diagnostic: capture what Keboola did with a behavior-less phase
-        # (either echoes empty dict, fills default, or omits the field entirely)
-        print(
-            f"\n  [DIAGNOSTIC] --file without behavior -> "
-            f"phases[0].behavior = {v3phases[0].get('behavior')!r}, "
-            f"phases[1].behavior = {v3phases[1].get('behavior')!r}"
-        )
-
-    def test_flow_dag_validation_rejects_cycle(self) -> None:
-        """flow new with a cyclic phase dependency must fail with INVALID_FLOW_DAG."""
-        cyclic_yaml = (
-            "phases:\n"
-            "  - id: 1\n    name: A\n    dependsOn: [2]\n"
-            "  - id: 2\n    name: B\n    dependsOn: [1]\n"
-            "tasks: []\n"
-        )
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
-        ) as f:
-            f.write(cyclic_yaml)
-            yaml_path = f.name
-
-        try:
-            result = self._run(
-                "flow",
-                "new",
-                "--project",
-                self.alias,
-                "--component-id",
-                "keboola.flow",
-                "--name",
-                f"{RUN_ID}-cyclic",
-                "--file",
-                f"@{yaml_path}",
-            )
-            assert result.exit_code != 0
-            out = json.loads(result.output)
-            assert out["error"]["code"] == "INVALID_FLOW_DAG"
-        finally:
-            import os as _os
-
-            _os.unlink(yaml_path)
+        assert result.exit_code != 0
+        out = json.loads(result.output)
+        assert out["error"]["code"] == "INVALID_FLOW_DEFINITION"
 
     def test_flow_list_no_project_returns_all(self) -> None:
         """flow list without --project returns flows from all registered projects."""
@@ -5591,26 +5395,29 @@ class TestE2EFlowOperations:
         data = json.loads(result.output)["data"]
         assert "flows" in data
         assert "errors" in data
+        assert "legacy_orchestrator_count" in data
 
-    def test_flow_list_with_schedules(self) -> None:
+    def test_flow_list_with_schedules(self, tmp_path: Path) -> None:
         """flow list --with-schedules enriches rows with schedule metadata.
 
         Creates a flow + schedule, verifies the enrichment appears on the
-        correct flow row (and is empty on other flows), then cleans up.
+        correct flow row, then cleans up.
         """
-        # Create a flow
+        cf_file = self._write_cf(tmp_path, name="cf-ws.yaml")
         result = self._run(
             "flow",
             "new",
             "--project",
             self.alias,
-            "--component-id",
-            "keboola.flow",
             "--name",
             f"{RUN_ID}-flow-ws",
             "--description",
             "E2E with-schedules test",
+            "--file",
+            f"@{cf_file}",
         )
+        if result.exit_code != 0 and "conditional" in result.output.lower():
+            pytest.skip("Project reports conditional_flows=false; skipping CF E2E")
         assert result.exit_code == 0, result.output
         flow_id = json.loads(result.output)["data"]["id"]
         self._created_flows.append(("keboola.flow", flow_id))
@@ -5621,8 +5428,6 @@ class TestE2EFlowOperations:
             "schedule",
             "--project",
             self.alias,
-            "--component-id",
-            "keboola.flow",
             "--flow-id",
             flow_id,
             "--cron",
@@ -5653,8 +5458,6 @@ class TestE2EFlowOperations:
                 "schedule-remove",
                 "--project",
                 self.alias,
-                "--component-id",
-                "keboola.flow",
                 "--flow-id",
                 flow_id,
                 "--yes",
@@ -5703,6 +5506,26 @@ class TestE2EScheduleOperations:
         assert result.exit_code == 0, f"project add failed: {result.output}"
 
         # Create a flow + schedule up-front so every test has data to work with.
+        cf_file = tmp_path / "sched-cf.yaml"
+        cf_file.write_text(
+            "phases:\n"
+            '  - id: "p1"\n'
+            '    name: "P1"\n'
+            "    next:\n"
+            '      - id: "n"\n'
+            "        goto: null\n"
+            "tasks:\n"
+            '  - id: "t1"\n'
+            '    name: "T1"\n'
+            '    phase: "p1"\n'
+            "    enabled: true\n"
+            "    task:\n"
+            "      type: job\n"
+            '      componentId: "keboola.ex-http"\n'
+            '      configId: "1"\n'
+            "      mode: run\n",
+            encoding="utf-8",
+        )
         flow_result = _invoke(
             self.config_dir,
             [
@@ -5711,14 +5534,16 @@ class TestE2EScheduleOperations:
                 "new",
                 "--project",
                 self.alias,
-                "--component-id",
-                "keboola.flow",
                 "--name",
                 f"{RUN_ID}-sched-flow",
                 "--description",
                 "E2E schedule discovery fixture",
+                "--file",
+                f"@{cf_file}",
             ],
         )
+        if flow_result.exit_code != 0 and "conditional" in flow_result.output.lower():
+            pytest.skip("Project reports conditional_flows=false; skipping schedule E2E")
         assert flow_result.exit_code == 0, flow_result.output
         self.flow_id = json.loads(flow_result.output)["data"]["id"]
         self._created_flows.append(("keboola.flow", self.flow_id))
@@ -5731,8 +5556,6 @@ class TestE2EScheduleOperations:
                 "schedule",
                 "--project",
                 self.alias,
-                "--component-id",
-                "keboola.flow",
                 "--flow-id",
                 self.flow_id,
                 "--cron",
@@ -5758,8 +5581,6 @@ class TestE2EScheduleOperations:
                     "schedule-remove",
                     "--project",
                     self.alias,
-                    "--component-id",
-                    "keboola.flow",
                     "--flow-id",
                     self.flow_id,
                     "--yes",

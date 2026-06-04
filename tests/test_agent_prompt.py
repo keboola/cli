@@ -110,8 +110,8 @@ class TestNonNegotiableRules:
 
 
 INLINE_GOTCHAS = [
-    # Flow phase behavior stripping (MCP strip + --file full-replace)
-    ("behavior.onError", "flow phase behavior preservation"),
+    # Conditional flows: validate-before-push + INVALID_FLOW_DEFINITION (since 0.56.0)
+    ("INVALID_FLOW_DEFINITION", "conditional-flow validation error code"),
     # Snowflake transformation scaffolding refusal by MCP create_config
     ("keboola.snowflake-transformation", "MCP create_config refuses this component"),
     # Primary keys on new output tables crash first run (nullable default)
@@ -143,8 +143,8 @@ class TestInlineGotchas:
 
 
 TOOL_MATRIX_ROWS = [
-    "kbagent flow update",
-    "tool call update_flow",
+    "kbagent flow validate",
+    "conditional flow",
     "kbagent config new --component-id keboola.snowflake-transformation",
     "kbagent job run",
     "kbagent config list",

@@ -1,7 +1,11 @@
-"""Flow (orchestrator + conditional flow) lifecycle service.
+"""Conditional flow (keboola.flow) lifecycle service.
 
-Provides CRUD for keboola.orchestrator and keboola.flow configurations,
-plus schedule bind/unbind via keboola.scheduler component configs.
+Provides CRUD for keboola.flow (Conditional Flow) configurations, plus
+schedule bind/unbind via keboola.scheduler component configs.
+
+keboola.orchestrator support was dropped in 0.56.0; this service targets the
+single component keboola.flow. Legacy orchestrator configs are still counted
+(not listed) so the CLI can warn users why a flow "disappeared".
 
 Flows are semantic sugar over the Storage API config layer -- no separate
 HTTP client is needed.  Schedules are stored as keboola.scheduler configs
@@ -12,16 +16,28 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
+from ..ai_client import AiServiceClient
+from ..config_store import ConfigStore
 from ..errors import ErrorCode, KeboolaApiError
-from ..models import ProjectConfig
-from .base import BaseService
+from ..models import ComponentDetail, ProjectConfig
+from .base import BaseService, ClientFactory
+from .flow_validation import find_unreachable_phases, validate_conditional_flow
 
 logger = logging.getLogger(__name__)
 
-FLOW_COMPONENT_IDS: tuple[str, ...] = ("keboola.orchestrator", "keboola.flow")
+FLOW_COMPONENT_ID = "keboola.flow"
+LEGACY_FLOW_COMPONENT_ID = "keboola.orchestrator"
 SCHEDULER_COMPONENT_ID = "keboola.scheduler"
+
+AiClientFactory = Callable[[str, str], AiServiceClient]
+
+
+def default_ai_client_factory(stack_url: str, token: str) -> AiServiceClient:
+    """Default factory: build an ``AiServiceClient`` for the given project."""
+    return AiServiceClient(stack_url=stack_url, token=token)
 
 
 # ---------------------------------------------------------------------------
@@ -42,58 +58,6 @@ def _parse_configuration(raw: Any) -> dict[str, Any]:
 def _count_phases_tasks(body: dict[str, Any]) -> tuple[int, int]:
     """Return (phase_count, task_count) from a flow configuration body."""
     return len(body.get("phases", [])), len(body.get("tasks", []))
-
-
-def _validate_dag(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) -> list[str]:
-    """Validate phase dependency DAG for cycles and bad references.
-
-    Uses Kahn's topological sort to detect cycles.  Returns a list of
-    human-readable error strings; empty list means valid.
-    """
-    errors: list[str] = []
-    phase_ids = {p.get("id") for p in phases if p.get("id") is not None}
-
-    # Check dependsOn references
-    for phase in phases:
-        for dep_id in phase.get("dependsOn", []):
-            if dep_id not in phase_ids:
-                errors.append(f"Phase '{phase.get('id')}' depends on unknown phase '{dep_id}'")
-
-    # Check task phase references
-    for task in tasks:
-        phase_ref = task.get("phase")
-        if phase_ref is not None and phase_ref not in phase_ids:
-            errors.append(f"Task '{task.get('id', '?')}' references unknown phase '{phase_ref}'")
-
-    if errors:
-        return errors
-
-    # Kahn's algorithm for cycle detection
-    in_degree: dict[Any, int] = {p.get("id"): 0 for p in phases if p.get("id") is not None}
-    adj: dict[Any, list[Any]] = {p.get("id"): [] for p in phases if p.get("id") is not None}
-    for phase in phases:
-        pid = phase.get("id")
-        if pid is None:
-            continue
-        for dep_id in phase.get("dependsOn", []):
-            if dep_id in adj:
-                adj[dep_id].append(pid)
-                in_degree[pid] += 1
-
-    queue = [pid for pid, deg in in_degree.items() if deg == 0]
-    visited = 0
-    while queue:
-        node = queue.pop(0)
-        visited += 1
-        for neighbor in adj.get(node, []):
-            in_degree[neighbor] -= 1
-            if in_degree[neighbor] == 0:
-                queue.append(neighbor)
-
-    if visited != len(phase_ids):
-        errors.append("Phase dependency graph contains a cycle")
-
-    return errors
 
 
 def _collect_schedules_by_parent(
@@ -150,11 +114,68 @@ def _collect_schedules_by_parent(
 
 
 class FlowService(BaseService):
-    """Business logic for flow (keboola.orchestrator + keboola.flow) CRUD.
+    """Business logic for conditional flow (keboola.flow) CRUD.
 
     All schedule operations use keboola.scheduler component configs --
     no separate Scheduler Service HTTP client required.
+
+    The structural conditional-flow JSON Schema is fetched at runtime from the
+    stack's component registry (AI Service ``configurationSchema`` for
+    ``keboola.flow``) via ``ai_client_factory`` -- it is never bundled.
     """
+
+    def __init__(
+        self,
+        config_store: ConfigStore,
+        client_factory: ClientFactory | None = None,
+        ai_client_factory: AiClientFactory | None = None,
+    ) -> None:
+        super().__init__(config_store, client_factory)
+        self._ai_client_factory = ai_client_factory or default_ai_client_factory
+
+    # ── schema fetch ─────────────────────────────────────────────────
+
+    def _fetch_flow_schema(
+        self, project: ProjectConfig
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Fetch the live keboola.flow JSON Schema from the AI Service.
+
+        Returns ``(schema, None)`` on success, or ``(None, reason)`` when the
+        schema cannot be obtained (network error, KeboolaApiError, malformed or
+        empty schema). A ``None`` schema must NOT block a write -- the caller
+        degrades to semantic-only validation and surfaces ``reason`` as a
+        warning.
+        """
+        ai_client = self._ai_client_factory(project.stack_url, project.token)
+        try:
+            raw = ai_client.get_component_detail(FLOW_COMPONENT_ID)
+        except KeboolaApiError as exc:
+            return None, exc.message
+        except Exception as exc:
+            return None, str(exc)
+        finally:
+            ai_client.close()
+
+        try:
+            detail = ComponentDetail(**raw)
+        except (TypeError, ValueError) as exc:
+            return None, f"component detail could not be parsed ({exc})"
+
+        schema = detail.configuration_schema
+        if not schema:
+            return None, "AI Service returned no configurationSchema for keboola.flow"
+        return schema, None
+
+    def fetch_flow_schema(self, alias: str) -> tuple[dict[str, Any] | None, str | None]:
+        """Public schema fetch for a project alias (used by ``flow validate
+        --project`` and ``flow schema --full --project``).
+
+        Returns ``(schema, None)`` on success or ``(None, reason)`` on any
+        failure -- the caller decides how to surface the reason.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        return self._fetch_flow_schema(project)
 
     # ── list ────────────────────────────────────────────────────────
 
@@ -164,7 +185,12 @@ class FlowService(BaseService):
         branch_id: int | None = None,
         with_schedules: bool = False,
     ) -> dict[str, Any]:
-        """List all flows across projects (both component IDs).
+        """List conditional flows (keboola.flow) across projects.
+
+        Only ``keboola.flow`` configs are returned. Legacy
+        ``keboola.orchestrator`` configs are counted (not listed) and surfaced
+        as ``legacy_orchestrator_count`` so the CLI can warn users why a flow
+        "disappeared" (orchestrator support was dropped in 0.56.0).
 
         When ``with_schedules`` is True, each flow row is enriched with a
         ``schedules`` list pulled from the same project's
@@ -179,10 +205,12 @@ class FlowService(BaseService):
 
         Returns:
             Dict with keys:
-                - "flows": list of flow dicts (project_alias, component_id,
-                  config_id, name, description, is_disabled, and
+                - "flows": list of keboola.flow dicts (project_alias,
+                  component_id, config_id, name, description, is_disabled, and
                   ``schedules`` when ``with_schedules`` is True)
                 - "errors": list of error dicts
+                - "legacy_orchestrator_count": total legacy orchestrator
+                  configs found across the queried projects (not listed)
         """
         projects = self.resolve_projects(aliases)
 
@@ -191,26 +219,39 @@ class FlowService(BaseService):
             effective_branch = branch_id or project.active_branch_id
             try:
                 flows: list[dict[str, Any]] = []
-                for comp_id in FLOW_COMPONENT_IDS:
-                    try:
-                        configs = client.list_component_configs(comp_id, branch_id=effective_branch)
-                    except KeboolaApiError as exc:
-                        # 404 = component not installed; skip gracefully
-                        if exc.error_code == "NOT_FOUND":
-                            continue
+                try:
+                    configs = client.list_component_configs(
+                        FLOW_COMPONENT_ID, branch_id=effective_branch
+                    )
+                except KeboolaApiError as exc:
+                    if exc.error_code == "NOT_FOUND":
+                        configs = []
+                    else:
                         raise
-                    for cfg in configs:
-                        flow_row: dict[str, Any] = {
-                            "project_alias": alias,
-                            "component_id": comp_id,
-                            "config_id": str(cfg.get("id", "")),
-                            "name": cfg.get("name", ""),
-                            "description": cfg.get("description", ""),
-                            "is_disabled": cfg.get("isDisabled", False),
-                        }
-                        if with_schedules:
-                            flow_row["schedules"] = []
-                        flows.append(flow_row)
+                for cfg in configs:
+                    flow_row: dict[str, Any] = {
+                        "project_alias": alias,
+                        "component_id": FLOW_COMPONENT_ID,
+                        "config_id": str(cfg.get("id", "")),
+                        "name": cfg.get("name", ""),
+                        "description": cfg.get("description", ""),
+                        "is_disabled": cfg.get("isDisabled", False),
+                    }
+                    if with_schedules:
+                        flow_row["schedules"] = []
+                    flows.append(flow_row)
+
+                # Count (do not list) legacy orchestrator configs so the CLI can warn.
+                try:
+                    legacy = client.list_component_configs(
+                        LEGACY_FLOW_COMPONENT_ID, branch_id=effective_branch
+                    )
+                    legacy_count = len(legacy)
+                except KeboolaApiError as exc:
+                    if exc.error_code == "NOT_FOUND":
+                        legacy_count = 0
+                    else:
+                        raise
 
                 # One extra list call per project, then a map-join in memory.
                 if with_schedules and flows:
@@ -219,7 +260,7 @@ class FlowService(BaseService):
                         key = (flow_row["component_id"], flow_row["config_id"])
                         flow_row["schedules"] = schedules_by_parent.get(key, [])
 
-                return (alias, flows, True)
+                return (alias, flows, legacy_count)
             except KeboolaApiError as exc:
                 return (
                     alias,
@@ -244,19 +285,24 @@ class FlowService(BaseService):
         successes, errors = self._run_parallel(projects, worker)
 
         all_flows: list[dict[str, Any]] = []
-        for _, flows, _ in successes:
+        legacy_total = 0
+        for _, flows, legacy_count in successes:
             all_flows.extend(flows)
-        all_flows.sort(key=lambda f: (f["project_alias"], f["component_id"], f["name"].lower()))
+            legacy_total += legacy_count
+        all_flows.sort(key=lambda f: (f["project_alias"], f["name"].lower()))
         errors.sort(key=lambda e: e.get("project_alias", ""))
 
-        return {"flows": all_flows, "errors": errors}
+        return {
+            "flows": all_flows,
+            "errors": errors,
+            "legacy_orchestrator_count": legacy_total,
+        }
 
     # ── detail ──────────────────────────────────────────────────────
 
     def get_flow_detail(
         self,
         alias: str,
-        component_id: str,
         config_id: str,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
@@ -272,7 +318,9 @@ class FlowService(BaseService):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            detail = client.get_config_detail(component_id, config_id, branch_id=effective_branch)
+            detail = client.get_config_detail(
+                FLOW_COMPONENT_ID, config_id, branch_id=effective_branch
+            )
         finally:
             client.close()
 
@@ -281,6 +329,7 @@ class FlowService(BaseService):
         tasks = body.get("tasks", [])
 
         detail["project_alias"] = alias
+        detail["component_id"] = FLOW_COMPONENT_ID
         detail["branch_id"] = effective_branch
         detail["phases"] = phases
         detail["tasks"] = tasks
@@ -293,51 +342,57 @@ class FlowService(BaseService):
     def create_flow(
         self,
         alias: str,
-        component_id: str,
         name: str,
         description: str = "",
         phases: list[dict[str, Any]] | None = None,
         tasks: list[dict[str, Any]] | None = None,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """Create a new flow configuration.
+        """Create a new conditional-flow (keboola.flow) configuration.
 
         Args:
             alias: Project alias.
-            component_id: 'keboola.flow' (default) or 'keboola.orchestrator'.
             name: Flow name.
             description: Optional description.
-            phases: Phase definitions (validated for DAG correctness).
-            tasks: Task definitions.
+            phases: Phase definitions (validated against the CF schema).
+            tasks: Task definitions (validated against the CF schema).
             branch_id: Dev branch override.
 
         Raises:
-            KeboolaApiError: On API failure or DAG validation error
-                (error_code='INVALID_FLOW_DAG').
+            KeboolaApiError: On API failure or definition validation error
+                (error_code='INVALID_FLOW_DEFINITION').
         """
         phases = phases or []
         tasks = tasks or []
-
-        if phases:
-            dag_errors = _validate_dag(phases, tasks)
-            if dag_errors:
-                raise KeboolaApiError(
-                    message=f"Flow DAG validation failed: {'; '.join(dag_errors)}",
-                    status_code=400,
-                    error_code=ErrorCode.INVALID_FLOW_DAG,
-                    retryable=False,
-                )
-
-        configuration: dict[str, Any] = {"phases": phases, "tasks": tasks}
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
         effective_branch = branch_id or project.active_branch_id
 
+        schema, schema_reason = self._fetch_flow_schema(project)
+        warnings: list[str] = []
+        if schema is None:
+            warnings.append(f"structural schema validation skipped: {schema_reason}")
+
+        definition_errors = validate_conditional_flow(phases, tasks, schema)
+        if definition_errors:
+            raise KeboolaApiError(
+                message="Flow definition is invalid: " + "; ".join(definition_errors),
+                status_code=400,
+                error_code=ErrorCode.INVALID_FLOW_DEFINITION,
+                retryable=False,
+            )
+        warnings.extend(
+            f"Phase '{pid}' is unreachable from the entry phase"
+            for pid in find_unreachable_phases(phases)
+        )
+
+        configuration: dict[str, Any] = {"phases": phases, "tasks": tasks}
+
         client = self._client_factory(project.stack_url, project.token)
         try:
             result = client.create_config(
-                component_id=component_id,
+                component_id=FLOW_COMPONENT_ID,
                 name=name,
                 configuration=configuration,
                 description=description,
@@ -350,6 +405,7 @@ class FlowService(BaseService):
         result["branch_id"] = effective_branch
         result["phase_count"] = len(phases)
         result["task_count"] = len(tasks)
+        result["warnings"] = warnings
         return result
 
     # ── update ──────────────────────────────────────────────────────
@@ -357,7 +413,6 @@ class FlowService(BaseService):
     def update_flow(
         self,
         alias: str,
-        component_id: str,
         config_id: str,
         name: str | None = None,
         description: str | None = None,
@@ -365,45 +420,56 @@ class FlowService(BaseService):
         tasks: list[dict[str, Any]] | None = None,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """Update an existing flow configuration.
+        """Update an existing conditional-flow (keboola.flow) configuration.
 
-        When both phases and tasks are provided, validates the DAG before writing.
-        When only one is provided, the other is fetched from the current config.
+        When phases and/or tasks are provided, validation runs on the merged
+        body (the unspecified side is fetched from the current config) so a
+        half-config is never validated.
 
         Raises:
-            KeboolaApiError: On API failure or DAG validation error.
+            KeboolaApiError: On API failure or definition validation error
+                (error_code='INVALID_FLOW_DEFINITION').
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
         effective_branch = branch_id or project.active_branch_id
 
+        warnings: list[str] = []
         client = self._client_factory(project.stack_url, project.token)
         try:
             configuration: dict[str, Any] | None = None
             if phases is not None or tasks is not None:
                 current = client.get_config_detail(
-                    component_id, config_id, branch_id=effective_branch
+                    FLOW_COMPONENT_ID, config_id, branch_id=effective_branch
                 )
                 current_body = _parse_configuration(current.get("configuration"))
                 merged_phases = phases if phases is not None else current_body.get("phases", [])
                 merged_tasks = tasks if tasks is not None else current_body.get("tasks", [])
 
-                if merged_phases:
-                    dag_errors = _validate_dag(merged_phases, merged_tasks)
-                    if dag_errors:
-                        raise KeboolaApiError(
-                            message=f"Flow DAG validation failed: {'; '.join(dag_errors)}",
-                            status_code=400,
-                            error_code=ErrorCode.INVALID_FLOW_DAG,
-                            retryable=False,
-                        )
+                schema, schema_reason = self._fetch_flow_schema(project)
+                if schema is None:
+                    warnings.append(f"structural schema validation skipped: {schema_reason}")
+
+                definition_errors = validate_conditional_flow(merged_phases, merged_tasks, schema)
+                if definition_errors:
+                    raise KeboolaApiError(
+                        message="Flow definition is invalid: " + "; ".join(definition_errors),
+                        status_code=400,
+                        error_code=ErrorCode.INVALID_FLOW_DEFINITION,
+                        retryable=False,
+                    )
+
+                warnings.extend(
+                    f"Phase '{pid}' is unreachable from the entry phase"
+                    for pid in find_unreachable_phases(merged_phases)
+                )
 
                 configuration = dict(current_body)
                 configuration["phases"] = merged_phases
                 configuration["tasks"] = merged_tasks
 
             result = client.update_config(
-                component_id=component_id,
+                component_id=FLOW_COMPONENT_ID,
                 config_id=config_id,
                 name=name,
                 description=description,
@@ -416,6 +482,7 @@ class FlowService(BaseService):
 
         result["project_alias"] = alias
         result["branch_id"] = effective_branch
+        result["warnings"] = warnings
         return result
 
     # ── delete ──────────────────────────────────────────────────────
@@ -423,11 +490,10 @@ class FlowService(BaseService):
     def delete_flow(
         self,
         alias: str,
-        component_id: str,
         config_id: str,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """Delete a flow configuration.
+        """Delete a conditional-flow (keboola.flow) configuration.
 
         Does NOT automatically remove associated keboola.scheduler configs.
         Use remove_flow_schedule() first if needed.
@@ -439,7 +505,7 @@ class FlowService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             client.delete_config(
-                component_id=component_id,
+                component_id=FLOW_COMPONENT_ID,
                 config_id=config_id,
                 branch_id=effective_branch,
             )
@@ -449,7 +515,7 @@ class FlowService(BaseService):
         return {
             "status": "deleted",
             "project_alias": alias,
-            "component_id": component_id,
+            "component_id": FLOW_COMPONENT_ID,
             "config_id": config_id,
             "branch_id": effective_branch,
         }
@@ -459,14 +525,13 @@ class FlowService(BaseService):
     def list_flow_schedules(
         self,
         alias: str,
-        component_id: str,
         config_id: str,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
         """List keboola.scheduler configs that target this flow.
 
         Fetches all keboola.scheduler configs and filters by
-        target.componentId + target.configurationId.
+        target.componentId == keboola.flow + target.configurationId.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -490,7 +555,7 @@ class FlowService(BaseService):
         for sched in all_sched:
             body = _parse_configuration(sched.get("configuration"))
             target = body.get("target") or {}
-            if target.get("componentId") == component_id and str(
+            if target.get("componentId") == FLOW_COMPONENT_ID and str(
                 target.get("configurationId", "")
             ) == str(config_id):
                 sched_info = body.get("schedule") or {}
@@ -506,7 +571,7 @@ class FlowService(BaseService):
 
         return {
             "project_alias": alias,
-            "component_id": component_id,
+            "component_id": FLOW_COMPONENT_ID,
             "config_id": config_id,
             "schedules": schedules,
         }
@@ -514,7 +579,6 @@ class FlowService(BaseService):
     def set_flow_schedule(
         self,
         alias: str,
-        component_id: str,
         config_id: str,
         cron_tab: str,
         timezone: str = "UTC",
@@ -529,11 +593,10 @@ class FlowService(BaseService):
         duplicate schedules when called repeatedly.
 
         The schedule is stored as a keboola.scheduler configuration whose
-        ``target`` points at the flow component + config.
+        ``target`` points at the keboola.flow component + config.
 
         Args:
             alias: Project alias.
-            component_id: Flow component ID.
             config_id: Flow configuration ID.
             cron_tab: Cron expression (e.g. '0 6 * * *').
             timezone: IANA timezone (default 'UTC').
@@ -550,7 +613,7 @@ class FlowService(BaseService):
             if not schedule_name:
                 try:
                     detail = client.get_config_detail(
-                        component_id, config_id, branch_id=effective_branch
+                        FLOW_COMPONENT_ID, config_id, branch_id=effective_branch
                     )
                     schedule_name = f"{detail.get('name', config_id)} (Schedule)"
                 except KeboolaApiError:
@@ -564,7 +627,7 @@ class FlowService(BaseService):
                 },
                 "target": {
                     "mode": "run",
-                    "componentId": component_id,
+                    "componentId": FLOW_COMPONENT_ID,
                     "configurationId": config_id,
                 },
             }
@@ -584,7 +647,7 @@ class FlowService(BaseService):
             for sched in existing:
                 body = _parse_configuration(sched.get("configuration"))
                 target = body.get("target") or {}
-                if target.get("componentId") == component_id and str(
+                if target.get("componentId") == FLOW_COMPONENT_ID and str(
                     target.get("configurationId", "")
                 ) == str(config_id):
                     existing_id = str(sched.get("id", ""))
@@ -615,7 +678,7 @@ class FlowService(BaseService):
             "project_alias": alias,
             "schedule_id": str(result.get("id", existing_id or "")),
             "schedule_name": schedule_name,
-            "component_id": component_id,
+            "component_id": FLOW_COMPONENT_ID,
             "config_id": config_id,
             "cron_tab": cron_tab,
             "timezone": timezone,
@@ -626,7 +689,6 @@ class FlowService(BaseService):
     def remove_flow_schedule(
         self,
         alias: str,
-        component_id: str,
         config_id: str,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
@@ -655,7 +717,7 @@ class FlowService(BaseService):
             for sched in all_sched:
                 body = _parse_configuration(sched.get("configuration"))
                 target = body.get("target") or {}
-                if target.get("componentId") == component_id and str(
+                if target.get("componentId") == FLOW_COMPONENT_ID and str(
                     target.get("configurationId", "")
                 ) == str(config_id):
                     sched_id = str(sched.get("id", ""))
@@ -680,7 +742,7 @@ class FlowService(BaseService):
         return {
             "status": "removed",
             "project_alias": alias,
-            "component_id": component_id,
+            "component_id": FLOW_COMPONENT_ID,
             "config_id": config_id,
             "deleted_schedule_ids": deleted,
             "deleted_count": len(deleted),

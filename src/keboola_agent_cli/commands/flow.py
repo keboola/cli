@@ -27,61 +27,93 @@ from ._helpers import (
 
 logger = logging.getLogger(__name__)
 
-flow_app = typer.Typer(help="Manage flows (keboola.orchestrator + keboola.flow)")
+flow_app = typer.Typer(help="Manage conditional flows (keboola.flow)")
 
-_FLOW_COMPONENT_CHOICES = ["keboola.orchestrator", "keboola.flow"]
-
-# YAML/JSON schema snippet shown by 'flow schema'
+# YAML template shown by 'flow schema' (keboola.flow / Conditional Flow).
 #
-# Tasks use the nested ``task: {mode, componentId, configId}`` form that matches
-# the keboola-as-code convention. The API also accepts the flat form
-# (``componentId``/``configId`` at task root) for backward compatibility, but
-# new flows should use the nested form shown below.
+# IDs are STRINGS. goto is a phase id or null (= end the flow). A phase with
+# conditional transitions must end with a default (condition-less) transition.
 _FLOW_SCHEMA = """\
-# kbagent flow schema -- keboola.flow configuration format
+# kbagent flow schema -- keboola.flow (Conditional Flow) configuration format
 #
-# Create with: kbagent flow new --project ALIAS --name "My Flow" [--file flow.yaml]
-# Update with: kbagent flow update --project ALIAS --flow-id ID --file flow.yaml
-
-name: "My Flow"
-description: "Optional description"
+# Create with: kbagent flow new --project ALIAS --name "My Flow" --file @flow.yaml
+# Update with: kbagent flow update --project ALIAS --flow-id ID --file @flow.yaml
+# Validate offline: kbagent flow validate --file @flow.yaml
+# Full JSON schema: kbagent flow schema --full
+#
+# IDs are STRINGS. goto is a phase id or null (= end the flow).
 
 phases:
-  - id: 1
-    name: "Phase 1 - Extract"
-    dependsOn: []           # IDs of phases that must complete first
-  - id: 2
-    name: "Phase 2 - Transform"
-    dependsOn: [1]
+  - id: "extract"
+    name: "Extract"
+    next:
+      # Conditional transition: if any task in 'extract' failed, go to 'notify'.
+      - id: "on-failure"
+        goto: "notify"
+        condition:
+          type: operator
+          operator: ANY_TASKS_IN_PHASE
+          phase: "extract"
+          operands: []
+      # Default transition (NO condition) -- MUST be last.
+      - id: "default"
+        goto: "transform"
+  - id: "transform"
+    name: "Transform"
+    retry:
+      strategy: linear
+      strategyParams:
+        delaySeconds: 60
+      retryOn: ["error"]
+    next:
+      - id: "done"
+        goto: null
+  - id: "notify"
+    name: "Notify on failure"
 
 tasks:
-  - id: 1
-    name: "Extract Data"
-    phase: 1               # phase.id this task belongs to
+  - id: "task-extract"
+    name: "Run HTTP extractor"
+    phase: "extract"
     enabled: true
-    continueOnFailure: false
     task:
-      mode: run
+      type: job
       componentId: "keboola.ex-http"
       configId: "123456789"
-  - id: 2
-    name: "Run Transformation"
-    phase: 2
-    enabled: true
-    continueOnFailure: false
-    task:
       mode: run
+      retry:
+        strategy: linear
+        strategyParams:
+          delaySeconds: 30
+        retryOn: ["error"]
+  - id: "task-transform"
+    name: "Run transformation"
+    phase: "transform"
+    enabled: true
+    task:
+      type: job
       componentId: "keboola.snowflake-transformation"
       configId: "987654321"
-
-# Notes:
-#  - dependsOn: IDs form a directed acyclic graph (kbagent validates this)
-#  - task.configId values must be string IDs of existing configs in the project
-#  - task.mode defaults to "run" (the only supported value today)
-#  - For keboola.orchestrator (legacy), phases are referenced by name (string),
-#    not ID (integer); use keboola.flow for new flows
-#  - The flat shape (componentId/configId at task root) is still accepted by
-#    the API but is deprecated in the schema; prefer the nested task: form
+      mode: run
+  - id: "task-notify"
+    name: "Email the team"
+    phase: "notify"
+    enabled: true
+    task:
+      type: notification
+      title: "Flow failed"
+      message: "The extract phase reported a failure."
+      recipients:
+        - channel: email
+          address: "team@example.com"
+  - id: "task-setvar"
+    name: "Set a flow variable"
+    phase: "extract"
+    enabled: true
+    task:
+      type: variable
+      name: "run_date"
+      value: "2026-01-01"
 """
 
 
@@ -113,7 +145,10 @@ def flow_list(
         "(one extra API call per project, NOT per flow).",
     ),
 ) -> None:
-    """List all flows (keboola.orchestrator + keboola.flow) across projects.
+    """List conditional flows (keboola.flow) across projects.
+
+    Legacy keboola.orchestrator flows are NOT listed (orchestrator support was
+    dropped in 0.56.0); a count of any that exist is shown as a warning.
 
     With ``--with-schedules`` each row includes a ``schedules`` list of
     ``{schedule_id, cron, timezone, enabled}`` entries. Flows without
@@ -159,7 +194,7 @@ def _format_flows_table(
     if not flows:
         formatter.console.print("[dim]No flows found.[/dim]")
     else:
-        columns = ["Project", "Component", "Config ID", "Name", "Disabled"]
+        columns = ["Project", "Config ID", "Name", "Disabled"]
         if with_schedules:
             columns.append("Schedules")
         tbl = Table(
@@ -171,7 +206,6 @@ def _format_flows_table(
             disabled = "[red]yes[/red]" if f.get("is_disabled") else "[dim]no[/dim]"
             row = [
                 escape(f.get("project_alias", "")),
-                escape(f.get("component_id", "")),
                 escape(f.get("config_id", "")),
                 escape(f.get("name", "")),
                 disabled,
@@ -196,6 +230,13 @@ def _format_flows_table(
             f"Project '{err.get('project_alias', '?')}': {err.get('message', 'error')}"
         )
 
+    legacy = result.get("legacy_orchestrator_count", 0)
+    if legacy:
+        formatter.warning(
+            f"{legacy} legacy keboola.orchestrator flow(s) are not shown "
+            f"(orchestrator support was dropped in 0.56.0; migrate to keboola.flow)."
+        )
+
 
 # ---------------------------------------------------------------------------
 # flow detail
@@ -207,15 +248,9 @@ def flow_detail(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
-    component_id: str = typer.Option(
-        "keboola.orchestrator",
-        "--component-id",
-        help="Flow component ID (default: keboola.orchestrator). "
-        "Use --component-id keboola.flow for flows listed with component_id=keboola.flow.",
-    ),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
 ) -> None:
-    """Show detailed flow information including phases and tasks."""
+    """Show detailed conditional-flow information including phases and tasks."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
     config_store = ctx.obj["config_store"]
@@ -224,7 +259,6 @@ def flow_detail(
     try:
         result = service.get_flow_detail(
             alias=project,
-            component_id=component_id,
             config_id=flow_id,
             branch_id=effective_branch,
         )
@@ -241,10 +275,26 @@ def flow_detail(
         _format_flow_detail(formatter, result)
 
 
+def _summarize_condition(condition: dict[str, Any] | None) -> str:
+    """One-line human summary of a transition condition."""
+    if not condition:
+        return "default"
+    ctype = condition.get("type")
+    if ctype == "operator":
+        op = condition.get("operator", "?")
+        phase = condition.get("phase")
+        return f"{op}({phase})" if phase else f"{op}(...)"
+    if ctype == "function":
+        return f"{condition.get('function', '?')}(...)"
+    if ctype in ("const", "constant"):
+        return f"const={condition.get('value')!r}"
+    return str(ctype)
+
+
 def _format_flow_detail(formatter: Any, result: dict[str, Any]) -> None:
     formatter.console.print(
         f"\n[bold]{escape(result.get('name', ''))}[/bold]"
-        f"  [dim]({escape(result.get('component_id', ''))} / {escape(str(result.get('id', '')))})[/dim]"
+        f"  [dim](keboola.flow / {escape(str(result.get('id', '')))})[/dim]"
     )
     if result.get("description"):
         formatter.console.print(f"[dim]{escape(result['description'])}[/dim]")
@@ -253,7 +303,6 @@ def _format_flow_detail(formatter: Any, result: dict[str, Any]) -> None:
 
     phases = result.get("phases", [])
     tasks = result.get("tasks", [])
-
     if not phases and not tasks:
         formatter.console.print("\n[dim]No phases or tasks defined.[/dim]")
         return
@@ -262,33 +311,45 @@ def _format_flow_detail(formatter: Any, result: dict[str, Any]) -> None:
         f"\n[bold]Phases[/bold] ({len(phases)})  [bold]Tasks[/bold] ({len(tasks)})"
     )
 
-    # Group tasks by phase
     tasks_by_phase: dict[Any, list[dict[str, Any]]] = {}
     for task in tasks:
-        phase_key = task.get("phase")
-        tasks_by_phase.setdefault(phase_key, []).append(task)
+        tasks_by_phase.setdefault(str(task.get("phase")), []).append(task)
+
+    type_colors = {"job": "green", "notification": "yellow", "variable": "magenta"}
 
     for phase in phases:
-        pid = phase.get("id")
-        deps = phase.get("dependsOn", [])
-        dep_str = f" ← {deps}" if deps else ""
+        pid = str(phase.get("id"))
+        retry = " [dim](retry)[/dim]" if phase.get("retry") else ""
         formatter.console.print(
-            f"\n  [cyan bold]Phase {escape(str(pid))}: {escape(phase.get('name', ''))}[/cyan bold]"
-            f"[dim]{escape(dep_str)}[/dim]"
+            f"\n  [cyan bold]Phase {escape(pid)}: {escape(phase.get('name', ''))}[/cyan bold]{retry}"
         )
+        for transition in phase.get("next", []):
+            goto = transition.get("goto")
+            target = "END" if goto is None else str(goto)
+            summary = _summarize_condition(transition.get("condition"))
+            formatter.console.print(f"      [dim]→ {escape(target)} \\[{escape(summary)}][/dim]")
         for task in tasks_by_phase.get(pid, []):
             t_info = task.get("task") or {}
-            comp = t_info.get("componentId", task.get("componentId", ""))
-            cfg = t_info.get("configId", task.get("configId", ""))
+            ttype = t_info.get("type", "?")
+            color = type_colors.get(ttype, "white")
+            badge = f"[{color}]{escape(ttype)}[/{color}]"
+            detail_str = ""
+            if ttype == "job":
+                detail_str = (
+                    f" {escape(str(t_info.get('componentId', '')))}"
+                    f"/{escape(str(t_info.get('configId', '')))}"
+                )
+            elif ttype == "variable":
+                detail_str = f" {escape(str(t_info.get('name', '')))}"
+            t_retry = " [dim](retry)[/dim]" if t_info.get("retry") else ""
             enabled = "" if task.get("enabled", True) else " [dim](disabled)[/dim]"
             formatter.console.print(
-                f"    [{escape(str(task.get('id', '?')))}] {escape(task.get('name', ''))}"
-                f"  [dim]{escape(comp)}/{escape(str(cfg))}[/dim]{enabled}"
+                f"    \\[{escape(str(task.get('id', '?')))}] {badge} "
+                f"{escape(task.get('name', ''))}[dim]{detail_str}[/dim]{enabled}{t_retry}"
             )
 
-    # Orphan tasks (phase not found in phases list)
-    orphan_phase_keys = set(tasks_by_phase.keys()) - {p.get("id") for p in phases}
-    for key in sorted(str(k) for k in orphan_phase_keys):
+    orphan_keys = set(tasks_by_phase.keys()) - {str(p.get("id")) for p in phases}
+    for key in sorted(orphan_keys):
         formatter.console.print(f"\n  [yellow]Phase '{key}' (not in phases list)[/yellow]")
         for task in tasks_by_phase.get(key, []):
             formatter.console.print(f"    {escape(task.get('name', str(task)))}")
@@ -300,14 +361,71 @@ def _format_flow_detail(formatter: Any, result: dict[str, Any]) -> None:
 
 
 @flow_app.command("schema")
-def flow_schema(ctx: typer.Context) -> None:
-    """Print the YAML format expected by 'flow new' and 'flow update'."""
+def flow_schema(
+    ctx: typer.Context,
+    full: bool = typer.Option(
+        False,
+        "--full",
+        help="Dump the live JSON Schema fetched from the stack (requires --project).",
+    ),
+    project: str | None = typer.Option(
+        None,
+        "--project",
+        help="Project alias -- required for --full (the schema is served by the stack).",
+    ),
+) -> None:
+    """Print the conditional-flow YAML template, or --full for the live JSON Schema.
+
+    The plain template is offline. ``--full`` fetches the real keboola.flow
+    JSON Schema from the stack's component registry, so it needs ``--project``.
+    """
     formatter = get_formatter(ctx)
+    if full:
+        if not project:
+            formatter.error(
+                message=(
+                    "--full requires --project: the conditional-flow JSON Schema is "
+                    "served by the stack's component registry, not bundled. "
+                    "Run e.g. 'kbagent flow schema --full --project ALIAS'."
+                ),
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
+            raise typer.Exit(code=2)
+
+        service = get_service(ctx, "flow_service")
+        try:
+            schema, reason = service.fetch_flow_schema(project)
+        except ConfigError as exc:
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+            raise typer.Exit(code=5) from None
+        except KeboolaApiError as exc:
+            formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+            raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+        if schema is None:
+            formatter.error(
+                message=f"Could not fetch the conditional-flow schema: {reason}",
+                error_code=ErrorCode.NOT_FOUND,
+            )
+            raise typer.Exit(code=4)
+
+        if formatter.json_mode:
+            formatter.output({"format": "json-schema", "schema": schema})
+        else:
+            import json as _json
+
+            from rich.syntax import Syntax
+
+            formatter.console.print(
+                Syntax(_json.dumps(schema, indent=2), "json", theme="monokai", line_numbers=False)
+            )
+        return
+
     if formatter.json_mode:
         formatter.output(
             {
                 "format": "yaml",
-                "description": "keboola.flow configuration schema",
+                "description": "keboola.flow (Conditional Flow) configuration schema",
                 "schema": _FLOW_SCHEMA,
             }
         )
@@ -315,6 +433,92 @@ def flow_schema(ctx: typer.Context) -> None:
         from rich.syntax import Syntax
 
         formatter.console.print(Syntax(_FLOW_SCHEMA, "yaml", theme="monokai", line_numbers=False))
+
+
+# ---------------------------------------------------------------------------
+# flow validate
+# ---------------------------------------------------------------------------
+
+
+@flow_app.command("validate")
+def flow_validate(
+    ctx: typer.Context,
+    file: str = typer.Option(
+        ...,
+        "--file",
+        help="YAML/JSON flow definition to validate (@file, -, or inline).",
+    ),
+    project: str | None = typer.Option(
+        None,
+        "--project",
+        help=(
+            "Project alias -- fetch the live JSON Schema from the stack for full "
+            "structural + semantic validation. Without it, only semantic checks run."
+        ),
+    ),
+) -> None:
+    """Validate a conditional-flow definition (schema + semantic checks).
+
+    With ``--project`` the live keboola.flow JSON Schema is fetched from the
+    stack and structural validation runs alongside the semantic checks; a fetch
+    failure degrades gracefully (semantic-only + a warning). Without
+    ``--project`` only the semantic checks run and a note records that
+    structural schema validation was skipped (no schema source).
+
+    Exit 0 when valid (warnings still printed), exit 2 when there are errors.
+    """
+    formatter = get_formatter(ctx)
+    from ..services.flow_validation import find_unreachable_phases, validate_conditional_flow
+
+    try:
+        flow_def = _load_flow_yaml(file)
+    except (OSError, yaml.YAMLError, ValueError) as exc:
+        formatter.error(
+            message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR
+        )
+        raise typer.Exit(code=2) from None
+
+    phases = flow_def.get("phases", [])
+    tasks = flow_def.get("tasks", [])
+
+    schema: dict[str, Any] | None = None
+    notes: list[str] = []
+    if project:
+        service = get_service(ctx, "flow_service")
+        try:
+            schema, reason = service.fetch_flow_schema(project)
+        except ConfigError as exc:
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+            raise typer.Exit(code=5) from None
+        if schema is None:
+            notes.append(f"structural schema validation skipped: {reason}")
+    else:
+        notes.append(
+            "structural schema validation skipped: no schema source "
+            "(pass --project ALIAS to fetch the live schema from the stack)"
+        )
+
+    errors = validate_conditional_flow(phases, tasks, schema)
+    warnings = [
+        f"Phase '{pid}' is unreachable from the entry phase"
+        for pid in find_unreachable_phases(phases)
+    ]
+    valid = not errors
+
+    if formatter.json_mode:
+        formatter.output({"valid": valid, "errors": errors, "warnings": warnings, "notes": notes})
+    else:
+        for note in notes:
+            formatter.console.print(f"[dim]note: {escape(note)}[/dim]")
+        for w in warnings:
+            formatter.warning(w)
+        if valid:
+            formatter.success("Flow definition is valid.")
+        else:
+            for e in errors:
+                formatter.console.print(f"[red]✗[/red] {escape(e)}")
+    if not valid:
+        raise typer.Exit(code=2)
 
 
 # ---------------------------------------------------------------------------
@@ -350,11 +554,6 @@ def flow_new(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     name: str = typer.Option(..., "--name", help="Flow name"),
-    component_id: str = typer.Option(
-        "keboola.flow",
-        "--component-id",
-        help="Component ID (default: keboola.flow)",
-    ),
     description: str = typer.Option("", "--description", help="Optional description"),
     file: str | None = typer.Option(
         None,
@@ -364,13 +563,10 @@ def flow_new(
     ),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
 ) -> None:
-    """Create a new flow configuration.
+    """Create a new conditional-flow (keboola.flow) configuration.
 
     \b
     Examples:
-      # Empty skeleton
-      kbagent flow new --project prod --name "Daily ETL"
-
       # From a YAML file
       kbagent flow new --project prod --name "Daily ETL" --file @flow.yaml
 
@@ -397,7 +593,6 @@ def flow_new(
     try:
         result = service.create_flow(
             alias=project,
-            component_id=component_id,
             name=name,
             description=description,
             phases=phases,
@@ -417,8 +612,10 @@ def flow_new(
         branch_info = f" (branch {result.get('branch_id')})" if result.get("branch_id") else ""
         formatter.success(
             f"Created flow '{escape(result.get('name', name))}' "
-            f"[{escape(component_id)}/{escape(str(result.get('id', '')))}]{branch_info}"
+            f"[keboola.flow/{escape(str(result.get('id', '')))}]{branch_info}"
         )
+        for warning in result.get("warnings", []):
+            formatter.warning(warning)
 
 
 # ---------------------------------------------------------------------------
@@ -431,11 +628,6 @@ def flow_update(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
-    component_id: str = typer.Option(
-        "keboola.orchestrator",
-        "--component-id",
-        help="Flow component ID (default: keboola.orchestrator)",
-    ),
     name: str | None = typer.Option(None, "--name", help="New flow name"),
     description: str | None = typer.Option(None, "--description", help="New description"),
     file: str | None = typer.Option(
@@ -482,7 +674,6 @@ def flow_update(
     try:
         result = service.update_flow(
             alias=project,
-            component_id=component_id,
             config_id=flow_id,
             name=name,
             description=description,
@@ -503,8 +694,10 @@ def flow_update(
         branch_info = f" (branch {result.get('branch_id')})" if result.get("branch_id") else ""
         formatter.success(
             f"Updated flow '{escape(result.get('name', flow_id))}' "
-            f"[{escape(component_id)}/{escape(flow_id)}]{branch_info}"
+            f"[keboola.flow/{escape(flow_id)}]{branch_info}"
         )
+        for warning in result.get("warnings", []):
+            formatter.warning(warning)
 
 
 # ---------------------------------------------------------------------------
@@ -517,11 +710,6 @@ def flow_delete(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
-    component_id: str = typer.Option(
-        "keboola.orchestrator",
-        "--component-id",
-        help="Flow component ID (default: keboola.orchestrator)",
-    ),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
     dry_run: bool = typer.Option(
         False,
@@ -530,7 +718,7 @@ def flow_delete(
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
-    """Delete a flow configuration.
+    """Delete a conditional-flow (keboola.flow) configuration.
 
     Note: associated keboola.scheduler configs are NOT automatically removed.
     Run 'flow schedule-remove' first if you want to clean up schedules.
@@ -542,7 +730,7 @@ def flow_delete(
         result = {
             "would_delete": {
                 "project_alias": project,
-                "component_id": component_id,
+                "component_id": "keboola.flow",
                 "config_id": flow_id,
                 "branch_id": branch,
             },
@@ -551,14 +739,13 @@ def flow_delete(
             formatter.output(result)
         else:
             formatter.console.print(
-                f"[bold blue]Would delete:[/bold blue] flow "
-                f"{escape(component_id)}/{escape(flow_id)}"
+                f"[bold blue]Would delete:[/bold blue] flow keboola.flow/{escape(flow_id)}"
                 + (f" (branch {branch})" if branch else "")
             )
         return
 
     if not yes and not formatter.json_mode:
-        confirmed = typer.confirm(f"Delete flow {component_id}/{flow_id}?")
+        confirmed = typer.confirm(f"Delete flow keboola.flow/{flow_id}?")
         if not confirmed:
             formatter.console.print("[yellow]Aborted.[/yellow]")
             raise typer.Exit(code=0)
@@ -566,7 +753,6 @@ def flow_delete(
     try:
         result = service.delete_flow(
             alias=project,
-            component_id=component_id,
             config_id=flow_id,
             branch_id=branch,
         )
@@ -580,7 +766,7 @@ def flow_delete(
     if formatter.json_mode:
         formatter.output(result)
     else:
-        formatter.success(f"Deleted flow {escape(component_id)}/{escape(flow_id)}")
+        formatter.success(f"Deleted flow keboola.flow/{escape(flow_id)}")
 
 
 # ---------------------------------------------------------------------------
@@ -593,11 +779,6 @@ def flow_schedule(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
-    component_id: str = typer.Option(
-        "keboola.orchestrator",
-        "--component-id",
-        help="Flow component ID (default: keboola.orchestrator)",
-    ),
     cron: str = typer.Option(..., "--cron", help="Cron expression (e.g. '0 6 * * *')"),
     timezone: str = typer.Option("UTC", "--timezone", help="IANA timezone (default: UTC)"),
     enabled: bool = typer.Option(True, "--enabled/--disabled", help="Enable the schedule"),
@@ -626,7 +807,6 @@ def flow_schedule(
     try:
         result = service.set_flow_schedule(
             alias=project,
-            component_id=component_id,
             config_id=flow_id,
             cron_tab=cron,
             timezone=timezone,
@@ -672,11 +852,6 @@ def flow_schedule_remove(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
-    component_id: str = typer.Option(
-        "keboola.orchestrator",
-        "--component-id",
-        help="Flow component ID (default: keboola.orchestrator)",
-    ),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
     dry_run: bool = typer.Option(
         False,
@@ -696,7 +871,6 @@ def flow_schedule_remove(
         try:
             sched_result = service.list_flow_schedules(
                 alias=project,
-                component_id=component_id,
                 config_id=flow_id,
                 branch_id=branch,
             )
@@ -711,7 +885,7 @@ def flow_schedule_remove(
         payload = {
             "would_delete": {
                 "project_alias": project,
-                "component_id": component_id,
+                "component_id": "keboola.flow",
                 "config_id": flow_id,
                 "branch_id": branch,
                 "schedules": schedules,
@@ -726,7 +900,7 @@ def flow_schedule_remove(
             else:
                 formatter.console.print(
                     f"[bold blue]Would remove {len(schedules)} schedule(s) "
-                    f"from flow[/bold blue] {escape(component_id)}/{escape(flow_id)}:"
+                    f"from flow[/bold blue] keboola.flow/{escape(flow_id)}:"
                 )
                 _print_schedule_list(formatter, schedules)
         return
@@ -736,7 +910,6 @@ def flow_schedule_remove(
         try:
             sched_result = service.list_flow_schedules(
                 alias=project,
-                component_id=component_id,
                 config_id=flow_id,
                 branch_id=branch,
             )
@@ -757,7 +930,6 @@ def flow_schedule_remove(
     try:
         result = service.remove_flow_schedule(
             alias=project,
-            component_id=component_id,
             config_id=flow_id,
             branch_id=branch,
         )

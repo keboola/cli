@@ -1,7 +1,4 @@
-"""Unit tests for FlowService.
-
-Tests business logic in isolation using mocked KeboolaClient.
-"""
+"""Unit tests for FlowService (conditional flows only)."""
 
 from __future__ import annotations
 
@@ -9,12 +6,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.services.flow_service import (
+    FLOW_COMPONENT_ID,
     FlowService,
     _count_phases_tasks,
     _parse_configuration,
-    _validate_dag,
 )
 
 # ---------------------------------------------------------------------------
@@ -35,11 +32,76 @@ def _mock_config_store(projects: dict) -> MagicMock:
     return cs
 
 
-def _make_flow_service(mock_client: MagicMock, projects: dict | None = None) -> FlowService:
+# A minimal keboola.flow configurationSchema for tests -- enough to exercise the
+# structural-validation path without touching the network.
+_FLOW_SCHEMA: dict = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "required": ["phases", "tasks"],
+    "properties": {
+        "phases": {"type": "array"},
+        "tasks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string", "enum": ["job", "notification", "variable"]}
+                        },
+                    }
+                },
+            },
+        },
+    },
+}
+
+
+def _make_ai_client(schema: dict | None = _FLOW_SCHEMA, raise_exc: Exception | None = None):
+    """Build a mock AiServiceClient returning a keboola.flow component detail."""
+    ai = MagicMock()
+    if raise_exc is not None:
+        ai.get_component_detail.side_effect = raise_exc
+    else:
+        ai.get_component_detail.return_value = {
+            "componentId": FLOW_COMPONENT_ID,
+            "componentName": "Conditional Flow",
+            "componentType": "other",
+            "configurationSchema": schema or {},
+        }
+    return ai
+
+
+def _make_flow_service(
+    mock_client: MagicMock,
+    projects: dict | None = None,
+    ai_client: MagicMock | None = None,
+) -> FlowService:
     if projects is None:
         projects = {"prod": {"url": "https://connection.keboola.com", "token": "tok"}}
     cs = _mock_config_store(projects)
-    return FlowService(config_store=cs, client_factory=lambda url, tok: mock_client)
+    ai = ai_client if ai_client is not None else _make_ai_client()
+    return FlowService(
+        config_store=cs,
+        client_factory=lambda url, token: mock_client,
+        ai_client_factory=lambda url, token: ai,
+    )
+
+
+def _valid_body():
+    phases = [
+        {"id": "p1", "name": "P1", "next": [{"id": "n", "goto": None}]},
+    ]
+    tasks = [
+        {
+            "id": "t1",
+            "name": "T1",
+            "phase": "p1",
+            "task": {"type": "job", "componentId": "c", "configId": "1", "mode": "run"},
+        },
+    ]
+    return phases, tasks
 
 
 # ---------------------------------------------------------------------------
@@ -64,454 +126,306 @@ class TestParseConfiguration:
 
 class TestCountPhasesTasks:
     def test_counts(self):
-        body = {"phases": [{"id": 1}, {"id": 2}], "tasks": [{"id": 1}]}
+        body = {"phases": [{"id": "a"}, {"id": "b"}], "tasks": [{"id": "1"}]}
         assert _count_phases_tasks(body) == (2, 1)
 
     def test_empty(self):
         assert _count_phases_tasks({}) == (0, 0)
 
 
-class TestValidateDag:
-    def test_valid_linear(self):
-        phases = [
-            {"id": 1, "dependsOn": []},
-            {"id": 2, "dependsOn": [1]},
-        ]
-        tasks = [{"id": 1, "phase": 1}, {"id": 2, "phase": 2}]
-        assert _validate_dag(phases, tasks) == []
-
-    def test_empty_phases(self):
-        assert _validate_dag([], []) == []
-
-    def test_unknown_phase_dependency(self):
-        phases = [{"id": 1, "dependsOn": [99]}]
-        errors = _validate_dag(phases, [])
-        assert any("unknown phase" in e for e in errors)
-
-    def test_task_references_unknown_phase(self):
-        phases = [{"id": 1, "dependsOn": []}]
-        tasks = [{"id": 1, "phase": 99}]
-        errors = _validate_dag(phases, tasks)
-        assert any("unknown phase" in e for e in errors)
-
-    def test_cycle_detected(self):
-        phases = [
-            {"id": 1, "dependsOn": [2]},
-            {"id": 2, "dependsOn": [1]},
-        ]
-        errors = _validate_dag(phases, [])
-        assert any("cycle" in e for e in errors)
-
-    def test_diamond_dag_valid(self):
-        phases = [
-            {"id": 1, "dependsOn": []},
-            {"id": 2, "dependsOn": [1]},
-            {"id": 3, "dependsOn": [1]},
-            {"id": 4, "dependsOn": [2, 3]},
-        ]
-        assert _validate_dag(phases, []) == []
-
-
 # ---------------------------------------------------------------------------
-# FlowService.list_flows
+# Component constant
 # ---------------------------------------------------------------------------
 
 
-class TestListFlows:
-    def test_aggregates_both_component_ids(self):
-        client = MagicMock()
-        client.list_component_configs.side_effect = lambda comp_id, branch_id=None: (
-            [{"id": "1", "name": "Orch Flow", "description": "", "isDisabled": False}]
-            if comp_id == "keboola.orchestrator"
-            else [{"id": "2", "name": "Flow Config", "description": "", "isDisabled": False}]
-        )
-        service = _make_flow_service(client)
-        result = service.list_flows(aliases=["prod"])
-
-        assert result["errors"] == []
-        ids = {f["config_id"] for f in result["flows"]}
-        assert ids == {"1", "2"}
-        components = {f["component_id"] for f in result["flows"]}
-        assert components == {"keboola.orchestrator", "keboola.flow"}
-
-    def test_404_on_component_skipped_gracefully(self):
-        client = MagicMock()
-        client.list_component_configs.side_effect = KeboolaApiError(
-            message="Not found", status_code=404, error_code="NOT_FOUND", retryable=False
-        )
-        service = _make_flow_service(client)
-        result = service.list_flows(aliases=["prod"])
-        # Both components 404'd but it's graceful: empty list, no errors
-        assert result["flows"] == []
-        assert result["errors"] == []
-
-    def test_api_error_captured_in_errors(self):
-        client = MagicMock()
-        client.list_component_configs.side_effect = KeboolaApiError(
-            message="Auth fail", status_code=401, error_code="INVALID_TOKEN", retryable=False
-        )
-        service = _make_flow_service(client)
-        result = service.list_flows(aliases=["prod"])
-        assert result["errors"]
-        assert result["errors"][0]["error_code"] == "INVALID_TOKEN"
-
-    def test_sorted_by_project_component_name(self):
-        client = MagicMock()
-        client.list_component_configs.return_value = [
-            {"id": "1", "name": "Zebra", "description": "", "isDisabled": False},
-            {"id": "2", "name": "Alpha", "description": "", "isDisabled": False},
-        ]
-        service = _make_flow_service(client)
-        result = service.list_flows(aliases=["prod"])
-        names = [f["name"] for f in result["flows"]]
-        # Should appear for both components sorted by name within each component
-        assert names.index("Alpha") < names.index("Zebra") or (
-            # Or sorted across component types — just ensure the list is non-empty
-            len(names) > 0
-        )
-
-    def test_client_closed(self):
-        client = MagicMock()
-        client.list_component_configs.return_value = []
-        service = _make_flow_service(client)
-        service.list_flows(aliases=["prod"])
-        client.close.assert_called()
+def test_component_id_constant():
+    assert FLOW_COMPONENT_ID == "keboola.flow"
 
 
 # ---------------------------------------------------------------------------
-# FlowService.get_flow_detail
+# create_flow
 # ---------------------------------------------------------------------------
 
 
-class TestGetFlowDetail:
-    def test_returns_phases_and_tasks(self):
-        client = MagicMock()
-        client.get_config_detail.return_value = {
-            "id": "123",
-            "name": "My Flow",
-            "description": "",
+def test_create_flow_rejects_invalid_definition():
+    client = MagicMock()
+    svc = _make_flow_service(client)
+    # task references a phase that does not exist -> semantic error
+    phases = [{"id": "p1", "name": "P1", "next": [{"id": "n", "goto": None}]}]
+    tasks = [
+        {
+            "id": "t1",
+            "name": "T1",
+            "phase": "ghost",
+            "task": {"type": "job", "componentId": "c", "configId": "1", "mode": "run"},
+        }
+    ]
+    with pytest.raises(KeboolaApiError) as exc:
+        svc.create_flow(alias="prod", name="F", phases=phases, tasks=tasks)
+    assert exc.value.error_code == ErrorCode.INVALID_FLOW_DEFINITION
+
+
+def test_create_flow_uses_keboola_flow_component():
+    client = MagicMock()
+    client.create_config.return_value = {"id": "999", "name": "F"}
+    svc = _make_flow_service(client)
+    phases, tasks = _valid_body()
+    result = svc.create_flow(alias="prod", name="F", phases=phases, tasks=tasks)
+    assert client.create_config.call_args.kwargs["component_id"] == "keboola.flow"
+    assert result["id"] == "999"
+
+
+def test_create_flow_attaches_unreachable_warnings():
+    client = MagicMock()
+    client.create_config.return_value = {"id": "999", "name": "F"}
+    svc = _make_flow_service(client)
+    phases = [
+        {"id": "p1", "name": "P1", "next": [{"id": "n", "goto": None}]},
+        {"id": "island", "name": "Island"},  # unreachable
+    ]
+    tasks = [
+        {
+            "id": "t1",
+            "name": "T1",
+            "phase": "p1",
+            "task": {"type": "job", "componentId": "c", "configId": "1", "mode": "run"},
+        },
+        {
+            "id": "t2",
+            "name": "T2",
+            "phase": "island",
+            "task": {"type": "job", "componentId": "c", "configId": "2", "mode": "run"},
+        },
+    ]
+    result = svc.create_flow(alias="prod", name="F", phases=phases, tasks=tasks)
+    assert any("island" in w for w in result["warnings"])
+
+
+def test_create_flow_full_validation_rejects_bad_structure():
+    # Live schema present -> structural validation catches the bad task type.
+    client = MagicMock()
+    client.create_config.return_value = {"id": "999", "name": "F"}
+    svc = _make_flow_service(client)
+    phases = [{"id": "p1", "name": "P1", "next": [{"id": "n", "goto": None}]}]
+    tasks = [
+        {
+            "id": "t1",
+            "name": "T1",
+            "phase": "p1",
+            "task": {"type": "nonsense", "componentId": "c", "configId": "1", "mode": "run"},
+        }
+    ]
+    with pytest.raises(KeboolaApiError) as exc:
+        svc.create_flow(alias="prod", name="F", phases=phases, tasks=tasks)
+    assert exc.value.error_code == ErrorCode.INVALID_FLOW_DEFINITION
+    client.create_config.assert_not_called()
+
+
+def test_create_flow_schema_fetch_failure_degrades_to_semantic_only():
+    # AI Service raises -> structural validation skipped, semantic checks run,
+    # write proceeds with a warning. The bad task type slips through (no schema).
+    client = MagicMock()
+    client.create_config.return_value = {"id": "999", "name": "F"}
+    ai = _make_ai_client(
+        raise_exc=KeboolaApiError("boom", status_code=500, error_code="NETWORK_ERROR")
+    )
+    svc = _make_flow_service(client, ai_client=ai)
+    phases = [{"id": "p1", "name": "P1", "next": [{"id": "n", "goto": None}]}]
+    tasks = [
+        {
+            "id": "t1",
+            "name": "T1",
+            "phase": "p1",
+            "task": {"type": "nonsense", "componentId": "c", "configId": "1", "mode": "run"},
+        }
+    ]
+    result = svc.create_flow(alias="prod", name="F", phases=phases, tasks=tasks)
+    assert result["id"] == "999"
+    assert any("structural schema validation skipped" in w for w in result["warnings"])
+
+
+def test_create_flow_empty_schema_degrades_to_semantic_only():
+    client = MagicMock()
+    client.create_config.return_value = {"id": "999", "name": "F"}
+    ai = _make_ai_client(schema={})  # empty configurationSchema
+    svc = _make_flow_service(client, ai_client=ai)
+    phases, tasks = _valid_body()
+    result = svc.create_flow(alias="prod", name="F", phases=phases, tasks=tasks)
+    assert result["id"] == "999"
+    assert any("structural schema validation skipped" in w for w in result["warnings"])
+
+
+def test_create_flow_fetch_failure_still_rejects_semantic_errors():
+    # Even without a schema, a semantic error must still reject the write.
+    client = MagicMock()
+    ai = _make_ai_client(raise_exc=RuntimeError("network down"))
+    svc = _make_flow_service(client, ai_client=ai)
+    phases = [{"id": "p1", "name": "P1", "next": [{"id": "n", "goto": None}]}]
+    tasks = [
+        {
+            "id": "t1",
+            "name": "T1",
+            "phase": "ghost",  # semantic error
+            "task": {"type": "job", "componentId": "c", "configId": "1", "mode": "run"},
+        }
+    ]
+    with pytest.raises(KeboolaApiError) as exc:
+        svc.create_flow(alias="prod", name="F", phases=phases, tasks=tasks)
+    assert exc.value.error_code == ErrorCode.INVALID_FLOW_DEFINITION
+
+
+def test_fetch_flow_schema_success():
+    svc = _make_flow_service(MagicMock())
+    schema, reason = svc.fetch_flow_schema("prod")
+    assert reason is None
+    assert schema and schema["required"] == ["phases", "tasks"]
+
+
+def test_fetch_flow_schema_empty_returns_reason():
+    svc = _make_flow_service(MagicMock(), ai_client=_make_ai_client(schema={}))
+    schema, reason = svc.fetch_flow_schema("prod")
+    assert schema is None
+    assert reason and "configurationSchema" in reason
+
+
+def test_fetch_flow_schema_error_returns_reason():
+    ai = _make_ai_client(raise_exc=KeboolaApiError("nope", status_code=404, error_code="NOT_FOUND"))
+    svc = _make_flow_service(MagicMock(), ai_client=ai)
+    schema, reason = svc.fetch_flow_schema("prod")
+    assert schema is None
+    assert reason == "nope"
+
+
+# ---------------------------------------------------------------------------
+# update_flow (merge-aware validation)
+# ---------------------------------------------------------------------------
+
+
+def test_update_flow_validates_merged_body():
+    client = MagicMock()
+    # Current remote body has valid phases; update supplies only tasks that break it.
+    client.get_config_detail.return_value = {
+        "configuration": {
+            "phases": [{"id": "p1", "name": "P1", "next": [{"id": "n", "goto": None}]}],
+            "tasks": [],
+        }
+    }
+    svc = _make_flow_service(client)
+    bad_tasks = [
+        {
+            "id": "t1",
+            "name": "T1",
+            "phase": "ghost",
+            "task": {"type": "job", "componentId": "c", "configId": "1", "mode": "run"},
+        }
+    ]
+    with pytest.raises(KeboolaApiError) as exc:
+        svc.update_flow(alias="prod", config_id="5", tasks=bad_tasks)
+    assert exc.value.error_code == ErrorCode.INVALID_FLOW_DEFINITION
+
+
+def test_update_flow_uses_keboola_flow_component():
+    client = MagicMock()
+    client.update_config.return_value = {"id": "5", "name": "renamed"}
+    svc = _make_flow_service(client)
+    result = svc.update_flow(alias="prod", config_id="5", name="renamed")
+    assert client.update_config.call_args.kwargs["component_id"] == "keboola.flow"
+    assert result["id"] == "5"
+
+
+# ---------------------------------------------------------------------------
+# list_flows
+# ---------------------------------------------------------------------------
+
+
+def test_list_flows_reports_legacy_orchestrator_count():
+    client = MagicMock()
+
+    def list_configs(component_id, branch_id=None):
+        if component_id == "keboola.flow":
+            return [{"id": "1", "name": "CF"}]
+        if component_id == "keboola.orchestrator":
+            return [{"id": "9", "name": "Old"}, {"id": "10", "name": "Old2"}]
+        return []
+
+    client.list_component_configs.side_effect = list_configs
+    svc = _make_flow_service(client)
+    result = svc.list_flows(aliases=["prod"])
+    assert result["legacy_orchestrator_count"] == 2
+    assert all(f["component_id"] == "keboola.flow" for f in result["flows"])
+
+
+def test_list_flows_legacy_count_zero_when_orchestrator_404():
+    client = MagicMock()
+
+    def list_configs(component_id, branch_id=None):
+        if component_id == "keboola.flow":
+            return [{"id": "1", "name": "CF"}]
+        raise KeboolaApiError(message="nope", status_code=404, error_code="NOT_FOUND")
+
+    client.list_component_configs.side_effect = list_configs
+    svc = _make_flow_service(client)
+    result = svc.list_flows(aliases=["prod"])
+    assert result["legacy_orchestrator_count"] == 0
+    assert len(result["flows"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# delete_flow / detail
+# ---------------------------------------------------------------------------
+
+
+def test_delete_flow_uses_keboola_flow_component():
+    client = MagicMock()
+    svc = _make_flow_service(client)
+    result = svc.delete_flow(alias="prod", config_id="5")
+    assert client.delete_config.call_args.kwargs["component_id"] == "keboola.flow"
+    assert result["component_id"] == "keboola.flow"
+
+
+def test_get_flow_detail_uses_keboola_flow_component():
+    client = MagicMock()
+    client.get_config_detail.return_value = {
+        "id": "5",
+        "name": "CF",
+        "configuration": {"phases": [{"id": "p1"}], "tasks": []},
+    }
+    svc = _make_flow_service(client)
+    result = svc.get_flow_detail(alias="prod", config_id="5")
+    assert client.get_config_detail.call_args[0][0] == "keboola.flow"
+    assert result["component_id"] == "keboola.flow"
+    assert result["phase_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# schedules
+# ---------------------------------------------------------------------------
+
+
+def test_set_flow_schedule_targets_keboola_flow():
+    client = MagicMock()
+    client.get_config_detail.return_value = {"name": "CF"}
+    client.list_component_configs.return_value = []
+    client.create_config.return_value = {"id": "77"}
+    svc = _make_flow_service(client)
+    result = svc.set_flow_schedule(alias="prod", config_id="5", cron_tab="0 6 * * *")
+    # scheduler config created with target.componentId == keboola.flow
+    cfg = client.create_config.call_args.kwargs["configuration"]
+    assert cfg["target"]["componentId"] == "keboola.flow"
+    assert result["component_id"] == "keboola.flow"
+
+
+def test_remove_flow_schedule_filters_keboola_flow():
+    client = MagicMock()
+    client.list_component_configs.return_value = [
+        {
+            "id": "77",
             "configuration": {
-                "phases": [{"id": 1, "name": "Phase 1", "dependsOn": []}],
-                "tasks": [{"id": 1, "name": "Task 1", "phase": 1}],
+                "target": {"componentId": "keboola.flow", "configurationId": "5"},
             },
         }
-        service = _make_flow_service(client)
-        result = service.get_flow_detail("prod", "keboola.orchestrator", "123")
-        assert result["phase_count"] == 1
-        assert result["task_count"] == 1
-        assert result["project_alias"] == "prod"
-
-    def test_configuration_as_json_string(self):
-        import json
-
-        client = MagicMock()
-        client.get_config_detail.return_value = {
-            "id": "123",
-            "name": "My Flow",
-            "configuration": json.dumps({"phases": [{"id": 1}], "tasks": []}),
-        }
-        service = _make_flow_service(client)
-        result = service.get_flow_detail("prod", "keboola.orchestrator", "123")
-        assert result["phase_count"] == 1
-
-    def test_empty_configuration(self):
-        client = MagicMock()
-        client.get_config_detail.return_value = {"id": "1", "name": "F", "configuration": {}}
-        service = _make_flow_service(client)
-        result = service.get_flow_detail("prod", "keboola.orchestrator", "1")
-        assert result["phase_count"] == 0
-        assert result["task_count"] == 0
-
-
-# ---------------------------------------------------------------------------
-# FlowService.create_flow
-# ---------------------------------------------------------------------------
-
-
-class TestCreateFlow:
-    def test_create_success(self):
-        client = MagicMock()
-        client.create_config.return_value = {"id": "new-id", "name": "My Flow"}
-        service = _make_flow_service(client)
-        result = service.create_flow("prod", "keboola.flow", "My Flow")
-        assert result["id"] == "new-id"
-        assert result["project_alias"] == "prod"
-        assert result["phase_count"] == 0
-        assert result["task_count"] == 0
-        client.create_config.assert_called_once()
-
-    def test_invalid_dag_raises(self):
-        client = MagicMock()
-        service = _make_flow_service(client)
-        phases = [{"id": 1, "dependsOn": [99]}]
-        with pytest.raises(KeboolaApiError) as exc_info:
-            service.create_flow("prod", "keboola.flow", "Bad", phases=phases, tasks=[])
-        assert exc_info.value.error_code == "INVALID_FLOW_DAG"
-        client.create_config.assert_not_called()
-
-    def test_configuration_body_contains_phases_tasks(self):
-        client = MagicMock()
-        client.create_config.return_value = {"id": "1", "name": "F"}
-        phases = [{"id": 1, "dependsOn": []}]
-        tasks = [{"id": 1, "phase": 1}]
-        service = _make_flow_service(client)
-        service.create_flow("prod", "keboola.flow", "F", phases=phases, tasks=tasks)
-        call_kwargs = client.create_config.call_args
-        assert call_kwargs.kwargs["configuration"]["phases"] == phases
-        assert call_kwargs.kwargs["configuration"]["tasks"] == tasks
-
-
-# ---------------------------------------------------------------------------
-# FlowService.update_flow
-# ---------------------------------------------------------------------------
-
-
-class TestUpdateFlow:
-    def test_update_name_only(self):
-        client = MagicMock()
-        client.update_config.return_value = {"id": "1", "name": "New Name"}
-        service = _make_flow_service(client)
-        result = service.update_flow("prod", "keboola.orchestrator", "1", name="New Name")
-        assert result["id"] == "1"
-        client.get_config_detail.assert_not_called()
-
-    def test_update_phases_fetches_current(self):
-        client = MagicMock()
-        client.get_config_detail.return_value = {
-            "configuration": {"phases": [], "tasks": []},
-        }
-        client.update_config.return_value = {"id": "1", "name": "F"}
-        phases = [{"id": 1, "dependsOn": []}]
-        service = _make_flow_service(client)
-        service.update_flow("prod", "keboola.orchestrator", "1", phases=phases)
-        client.get_config_detail.assert_called_once()
-
-    def test_invalid_dag_on_update_raises(self):
-        client = MagicMock()
-        client.get_config_detail.return_value = {"configuration": {"phases": [], "tasks": []}}
-        phases = [{"id": 1, "dependsOn": [99]}]
-        service = _make_flow_service(client)
-        with pytest.raises(KeboolaApiError) as exc_info:
-            service.update_flow("prod", "keboola.orchestrator", "1", phases=phases, tasks=[])
-        assert exc_info.value.error_code == "INVALID_FLOW_DAG"
-
-
-# ---------------------------------------------------------------------------
-# FlowService.delete_flow
-# ---------------------------------------------------------------------------
-
-
-class TestDeleteFlow:
-    def test_delete_success(self):
-        client = MagicMock()
-        service = _make_flow_service(client)
-        result = service.delete_flow("prod", "keboola.orchestrator", "123")
-        assert result["status"] == "deleted"
-        assert result["config_id"] == "123"
-        client.delete_config.assert_called_once_with(
-            component_id="keboola.orchestrator",
-            config_id="123",
-            branch_id=None,
-        )
-
-
-# ---------------------------------------------------------------------------
-# FlowService.list_flow_schedules
-# ---------------------------------------------------------------------------
-
-
-class TestListFlowSchedules:
-    def test_filters_by_target(self):
-
-        matching = {
-            "id": "sched-1",
-            "name": "Daily",
-            "configuration": {
-                "schedule": {"cronTab": "0 6 * * *", "timezone": "UTC", "state": "enabled"},
-                "target": {"componentId": "keboola.orchestrator", "configurationId": "flow-1"},
-            },
-        }
-        other = {
-            "id": "sched-2",
-            "name": "Other",
-            "configuration": {
-                "schedule": {"cronTab": "0 * * * *", "timezone": "UTC", "state": "enabled"},
-                "target": {"componentId": "keboola.orchestrator", "configurationId": "other-flow"},
-            },
-        }
-        client = MagicMock()
-        client.list_component_configs.return_value = [matching, other]
-        service = _make_flow_service(client)
-        result = service.list_flow_schedules("prod", "keboola.orchestrator", "flow-1")
-        assert len(result["schedules"]) == 1
-        assert result["schedules"][0]["schedule_id"] == "sched-1"
-
-    def test_no_schedules_returns_empty(self):
-        client = MagicMock()
-        client.list_component_configs.return_value = []
-        service = _make_flow_service(client)
-        result = service.list_flow_schedules("prod", "keboola.orchestrator", "flow-1")
-        assert result["schedules"] == []
-
-    def test_404_on_scheduler_component_returns_empty(self):
-        client = MagicMock()
-        client.list_component_configs.side_effect = KeboolaApiError(
-            message="Not found", status_code=404, error_code="NOT_FOUND", retryable=False
-        )
-        service = _make_flow_service(client)
-        result = service.list_flow_schedules("prod", "keboola.orchestrator", "flow-1")
-        assert result["schedules"] == []
-
-
-# ---------------------------------------------------------------------------
-# FlowService.set_flow_schedule
-# ---------------------------------------------------------------------------
-
-
-class TestSetFlowSchedule:
-    def test_creates_scheduler_config_when_none_exists(self):
-        client = MagicMock()
-        client.get_config_detail.return_value = {"name": "My Flow"}
-        client.list_component_configs.return_value = []  # no existing schedules
-        client.create_config.return_value = {"id": "sched-new"}
-        service = _make_flow_service(client)
-        result = service.set_flow_schedule(
-            "prod", "keboola.orchestrator", "flow-1", cron_tab="0 6 * * *"
-        )
-        assert result["status"] == "created"
-        assert result["schedule_id"] == "sched-new"
-
-        # Verify body shape
-        call_kwargs = client.create_config.call_args.kwargs
-        assert call_kwargs["component_id"] == "keboola.scheduler"
-        cfg = call_kwargs["configuration"]
-        assert cfg["schedule"]["cronTab"] == "0 6 * * *"
-        assert cfg["target"]["componentId"] == "keboola.orchestrator"
-        assert cfg["target"]["configurationId"] == "flow-1"
-
-    def test_updates_existing_schedule_upsert(self):
-        existing_sched = {
-            "id": "sched-old",
-            "configuration": {
-                "schedule": {"cronTab": "0 1 * * *", "timezone": "UTC", "state": "enabled"},
-                "target": {"componentId": "keboola.orchestrator", "configurationId": "flow-1"},
-            },
-        }
-        client = MagicMock()
-        client.get_config_detail.return_value = {"name": "My Flow"}
-        client.list_component_configs.return_value = [existing_sched]
-        client.update_config.return_value = {"id": "sched-old"}
-        service = _make_flow_service(client)
-        result = service.set_flow_schedule(
-            "prod", "keboola.orchestrator", "flow-1", cron_tab="0 6 * * *"
-        )
-        assert result["status"] == "updated"
-        assert result["schedule_id"] == "sched-old"
-        client.create_config.assert_not_called()
-        call_kwargs = client.update_config.call_args.kwargs
-        assert call_kwargs["config_id"] == "sched-old"
-        assert call_kwargs["configuration"]["schedule"]["cronTab"] == "0 6 * * *"
-
-    def test_enabled_state_in_body(self):
-        client = MagicMock()
-        client.get_config_detail.return_value = {"name": "F"}
-        client.list_component_configs.return_value = []
-        client.create_config.return_value = {"id": "s1"}
-        service = _make_flow_service(client)
-        service.set_flow_schedule("prod", "keboola.orchestrator", "1", "0 * * * *", enabled=False)
-        cfg = client.create_config.call_args.kwargs["configuration"]
-        assert cfg["schedule"]["state"] == "disabled"
-
-    def test_non_404_error_on_list_schedules_propagates(self):
-        client = MagicMock()
-        client.get_config_detail.return_value = {"name": "F"}
-        client.list_component_configs.side_effect = KeboolaApiError(
-            message="Forbidden", status_code=403, error_code="INVALID_TOKEN", retryable=False
-        )
-        service = _make_flow_service(client)
-        with pytest.raises(KeboolaApiError) as exc_info:
-            service.set_flow_schedule("prod", "keboola.orchestrator", "1", "0 * * * *")
-        assert exc_info.value.error_code == "INVALID_TOKEN"
-        client.create_config.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# FlowService.remove_flow_schedule
-# ---------------------------------------------------------------------------
-
-
-class TestRemoveFlowSchedule:
-    def test_removes_matching_schedules(self):
-        matching = {
-            "id": "sched-1",
-            "configuration": {
-                "target": {"componentId": "keboola.orchestrator", "configurationId": "flow-1"}
-            },
-        }
-        other = {
-            "id": "sched-2",
-            "configuration": {
-                "target": {"componentId": "keboola.orchestrator", "configurationId": "other"}
-            },
-        }
-        client = MagicMock()
-        client.list_component_configs.return_value = [matching, other]
-        service = _make_flow_service(client)
-        result = service.remove_flow_schedule("prod", "keboola.orchestrator", "flow-1")
-        assert result["deleted_count"] == 1
-        assert "sched-1" in result["deleted_schedule_ids"]
-        client.delete_config.assert_called_once_with("keboola.scheduler", "sched-1", branch_id=None)
-
-    def test_no_schedules_is_idempotent(self):
-        client = MagicMock()
-        client.list_component_configs.return_value = []
-        service = _make_flow_service(client)
-        result = service.remove_flow_schedule("prod", "keboola.orchestrator", "flow-1")
-        assert result["deleted_count"] == 0
-        assert result["deleted_schedule_ids"] == []
-        client.delete_config.assert_not_called()
-
-    def test_partial_delete_failure_returns_successes(self):
-        sched1 = {
-            "id": "sched-a",
-            "configuration": {
-                "target": {"componentId": "keboola.orchestrator", "configurationId": "flow-1"}
-            },
-        }
-        sched2 = {
-            "id": "sched-b",
-            "configuration": {
-                "target": {"componentId": "keboola.orchestrator", "configurationId": "flow-1"}
-            },
-        }
-        client = MagicMock()
-        client.list_component_configs.return_value = [sched1, sched2]
-        # first delete succeeds, second raises
-        client.delete_config.side_effect = [
-            None,
-            KeboolaApiError(
-                message="Server error", status_code=500, error_code="INTERNAL", retryable=True
-            ),
-        ]
-        service = _make_flow_service(client)
-        result = service.remove_flow_schedule("prod", "keboola.orchestrator", "flow-1")
-        # Partial success: first was deleted, second failed but is not re-raised when some succeeded
-        assert result["deleted_count"] == 1
-        assert "sched-a" in result["deleted_schedule_ids"]
-
-    def test_all_deletes_fail_raises(self):
-        sched1 = {
-            "id": "sched-x",
-            "configuration": {
-                "target": {"componentId": "keboola.orchestrator", "configurationId": "flow-1"}
-            },
-        }
-        client = MagicMock()
-        client.list_component_configs.return_value = [sched1]
-        client.delete_config.side_effect = KeboolaApiError(
-            message="Forbidden", status_code=403, error_code="INVALID_TOKEN", retryable=False
-        )
-        service = _make_flow_service(client)
-        with pytest.raises(KeboolaApiError) as exc_info:
-            service.remove_flow_schedule("prod", "keboola.orchestrator", "flow-1")
-        assert exc_info.value.error_code == "SCHEDULE_DELETE_FAILED"
+    ]
+    svc = _make_flow_service(client)
+    result = svc.remove_flow_schedule(alias="prod", config_id="5")
+    assert result["deleted_count"] == 1
+    assert result["component_id"] == "keboola.flow"

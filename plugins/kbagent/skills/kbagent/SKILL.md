@@ -229,12 +229,13 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Check whether the configured token can use Kai (master token + AI Agent Chat) | `kbagent kai preflight` |
 | Fetch the full message history of a single Kai chat | `kbagent kai chat-detail --chat-id CHAT-ID` |
 | List recent Kai chat sessions | `kbagent kai history` |
-| List all flows (keboola.orchestrator + keboola.flow) across projects | `kbagent flow list` |
-| Show detailed flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |
-| Print the YAML format expected by 'flow new' and 'flow update' | `kbagent flow schema` |
-| Create a new flow configuration | `kbagent flow new --project PROJECT --name NAME` |
+| List conditional flows (keboola.flow) across projects | `kbagent flow list` |
+| Show detailed conditional-flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |
+| Print the conditional-flow YAML template, or --full for the live JSON Schema | `kbagent flow schema` |
+| Validate a conditional-flow definition (schema + semantic checks) | `kbagent flow validate --file FILE` |
+| Create a new conditional-flow (keboola.flow) configuration | `kbagent flow new --project PROJECT --name NAME` |
 | Update a flow's name, description, or phases/tasks | `kbagent flow update --project PROJECT --flow-id FLOW-ID` |
-| Delete a flow configuration | `kbagent flow delete --project PROJECT --flow-id FLOW-ID` |
+| Delete a conditional-flow (keboola.flow) configuration | `kbagent flow delete --project PROJECT --flow-id FLOW-ID` |
 | Bind a cron schedule to a flow (upsert: creates or updates) | `kbagent flow schedule --project PROJECT --flow-id FLOW-ID --cron CRON` |
 | Remove all schedules bound to a flow (deletes keboola.scheduler configs) | `kbagent flow schedule-remove --project PROJECT --flow-id FLOW-ID` |
 | List cron schedules (keboola.scheduler configs) across projects | `kbagent schedule list` |
