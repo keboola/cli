@@ -215,7 +215,30 @@ grep -E '^\+\s*print\(' /tmp/kbagent-pr-<pr_number>.diff | grep -E 'src/keboola_
 
 # Token in any new logged output (should use mask_token)
 grep -E '^\+' /tmp/kbagent-pr-<pr_number>.diff | grep -E '(token|TOKEN|api_key|password)' | grep -vE 'mask_token|test_token|TEST_TOKEN|#\s|"""|"[a-z]+_token"|\.token\b'
+
+# NEW tuple[...] return annotations (CONTRIBUTING.md: semantically-distinct
+# multi-value returns must use a @dataclass, never a bare tuple). The final
+# `-v` drops variadic `tuple[X, ...]` (homogeneous collections, not a finding).
+grep -E '^\+' /tmp/kbagent-pr-<pr_number>.diff | grep -E '-> ?tuple\[' | grep -vE 'tuple\[[^],]+, ?\.\.\.\]'
 ```
+
+**Judging tuple returns** (the grep finds candidates; you apply the semantics).
+Only `-> tuple[...]` annotations **added in this diff** matter -- the ~63
+pre-existing ones are explicitly grandfathered by CONTRIBUTING.md and must NOT
+be flagged. Of the newly-added ones:
+
+- Variadic `tuple[X, ...]` and parallel-worker callbacks
+  (`def worker(...) -> tuple[Any, ...]`) -- OK, skip.
+- The `BaseService` parallel-result shape
+  `tuple[str, list[...], bool] | tuple[str, dict[str, str]]` -- OK, established
+  convention for per-project fan-out (don't flag a new service that follows it).
+- A heterogeneous 2+ element tuple of semantically-distinct values
+  (e.g. `tuple[dict | None, str | None]` = a schema **plus** a failure reason)
+  -- **NON-BLOCKING**: recommend a small frozen `@dataclass`. Name the function
+  and the two values it conflates so the author can see the field names it
+  would gain. This is the exact class of finding CI does not catch (the
+  `error_code` check is deterministic; "semantically distinct" is not), so it
+  is squarely the reviewer's job.
 
 ### Step 3.9 — Security & token discipline
 
