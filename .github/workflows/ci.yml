@@ -77,11 +77,13 @@ jobs:
       - name: Command-sync silent-drift check
         # Verifies every CLI command is registered in permissions.py
         # OPERATION_REGISTRY and documented across the agent-facing surfaces
-        # (AGENT_CONTEXT, CLAUDE.md, commands-reference.md), and that every
-        # gotcha carries a `(since vX.Y.Z)` tag. None of these have any other
-        # CI coverage (see CONTRIBUTING.md "Plugin synchronization map") --
-        # forgetting one ships an AI agent that recommends commands the
-        # installed kbagent version does not have.
+        # (AGENT_CONTEXT, CLAUDE.md, commands-reference.md), with no dead
+        # registry keys. None of these have any other CI coverage (see
+        # CONTRIBUTING.md "Plugin synchronization map") -- forgetting one
+        # ships an AI agent that recommends commands the installed kbagent
+        # version does not have. (gotchas.md (since vX.Y.Z) tags and the
+        # server/routers REST mirror need judgement, so they're left to
+        # /kbagent:review, not gated here.)
         run: uv run python scripts/check_command_sync.py
 
       - name: Error-code enum check

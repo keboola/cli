@@ -26,10 +26,15 @@ Granularity (calibrated against the live tree for zero false positives):
 Hidden commands/aliases (e.g. the `sl` alias for `semantic-layer`) are skipped
 along with their subtree: they are not part of the public documented surface.
 
-NOT checked here: gotchas.md `(since vX.Y.Z)` tags. Whether a heading is a new
-version-specific gotcha (needs the tag) or a version-independent structural
-section (must not have it) requires judgement -- that belongs to the LLM PR
-reviewer (/kbagent:review), not a deterministic gate.
+NOT checked here (both need judgement, so they are left to /kbagent:review,
+not gated deterministically):
+  - gotchas.md `(since vX.Y.Z)` tags. Whether a heading is a new
+    version-specific gotcha (needs the tag) or a version-independent
+    structural section (must not have it) requires judgement.
+  - server/routers/<group>.py REST mirror. CONTRIBUTING.md requires a 1:1
+    route for every non-terminal command, but "is this command terminal-only?"
+    (interactive prompt / Rich-only output / kbagent-infra) is a judgement
+    call, so it is not gated here.
 
 Usage (run from repo root):
     python scripts/check_command_sync.py          # exit 1 if any drift found
