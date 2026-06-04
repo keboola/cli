@@ -1895,8 +1895,14 @@ class TestFullE2E:
         assert detail["workspace_id"] == workspace_id
 
     def _test_workspace_password(self, workspace_id: int) -> None:
-        """Reset workspace password and verify a new password is returned."""
-        data = self._run_ok(
+        """Reset workspace password and verify a new password is returned.
+
+        Keypair-auth workspaces (Snowflake ``person-keypair`` login) have no
+        password, so the API rejects the reset with HTTP 400 "Reset password is
+        not supported for login type ...". That is an environment property of
+        the project, not a failure -- skip cleanly when it happens.
+        """
+        result = self._run(
             "workspace",
             "password",
             "--project",
@@ -1904,6 +1910,10 @@ class TestFullE2E:
             "--workspace-id",
             str(workspace_id),
         )
+        if result.exit_code != 0 and "not supported for login type" in result.output:
+            print(f"  {_DIM}skip: keypair-auth workspace has no password to reset{_RESET}")
+            return
+        data = _json_ok(result)
         assert data["data"]["password"]  # non-empty password
 
     def _test_workspace_load(self, workspace_id: int, table_id: str) -> None:
@@ -7393,7 +7403,9 @@ class TestE2EStorageSwapTables:
         assert result.exit_code == 5, result.output
         payload = json.loads(result.output)
         assert payload["status"] == "error"
-        assert "dev branch" in payload["error"]["message"]
+        # Wording corrected in #373 (swap works on any branch, incl. production);
+        # match the stable part of the message, not the old "dev branch" phrasing.
+        assert "requires a branch" in payload["error"]["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -11307,7 +11319,7 @@ class TestE2EConfigSecretEncryption:
             "--no-validate",
             "--configuration",
             '{"parameters":{"#password":"e2e-canary-create"}}',
-        )
+        )["data"]
         config_id = str(created["id"])
         self._created.append((self.COMPONENT, config_id))
 
@@ -11353,7 +11365,7 @@ class TestE2EConfigSecretEncryption:
             "--no-validate",
             "--configuration",
             '{"parameters":{"user":"probe"}}',
-        )
+        )["data"]
         config_id = str(created["id"])
         self._created.append((self.COMPONENT, config_id))
 
@@ -11370,6 +11382,6 @@ class TestE2EConfigSecretEncryption:
             "--configuration",
             '{"parameters":{"#password":"e2e-canary-dryrun"}}',
             "--dry-run",
-        )
+        )["data"]
         new_pw = data["new_configuration"]["parameters"]["#password"]
         assert new_pw == "e2e-canary-dryrun", f"dry-run encrypted the diff: {new_pw!r}"

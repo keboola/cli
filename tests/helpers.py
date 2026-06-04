@@ -28,7 +28,13 @@ def metastore_scope_available(url: str, token: str) -> bool:
             mc.list_items(SEMANTIC_TYPES[0])  # ty: ignore[invalid-argument-type]  # probe; str vs SemanticType Literal
         return True
     except KeboolaApiError as exc:
-        if exc.status_code == 502 or "scope" in (exc.message or "").lower():
+        # Skip cleanly when the scope is genuinely unavailable (502 / "scope")
+        # OR the metastore host is simply unreachable (network / DNS -- e.g. a
+        # malformed or accidentally doubled stack URL). Both mean "no usable
+        # metastore here"; raising would turn one preflight failure into a wall
+        # of errors across every dependent test.
+        msg = (exc.message or "").lower()
+        if exc.status_code == 502 or "scope" in msg or "cannot connect" in msg:
             return False
         raise
 
