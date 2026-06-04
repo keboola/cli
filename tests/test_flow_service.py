@@ -276,24 +276,24 @@ def test_create_flow_fetch_failure_still_rejects_semantic_errors():
 
 def test_fetch_flow_schema_success():
     svc = _make_flow_service(MagicMock())
-    schema, reason = svc.fetch_flow_schema("prod")
-    assert reason is None
-    assert schema and schema["required"] == ["phases", "tasks"]
+    fetch = svc.fetch_flow_schema("prod")
+    assert fetch.reason is None
+    assert fetch.schema and fetch.schema["required"] == ["phases", "tasks"]
 
 
 def test_fetch_flow_schema_empty_returns_reason():
     svc = _make_flow_service(MagicMock(), ai_client=_make_ai_client(schema={}))
-    schema, reason = svc.fetch_flow_schema("prod")
-    assert schema is None
-    assert reason and "configurationSchema" in reason
+    fetch = svc.fetch_flow_schema("prod")
+    assert fetch.schema is None
+    assert fetch.reason and "configurationSchema" in fetch.reason
 
 
 def test_fetch_flow_schema_error_returns_reason():
     ai = _make_ai_client(raise_exc=KeboolaApiError("nope", status_code=404, error_code="NOT_FOUND"))
     svc = _make_flow_service(MagicMock(), ai_client=ai)
-    schema, reason = svc.fetch_flow_schema("prod")
-    assert schema is None
-    assert reason == "nope"
+    fetch = svc.fetch_flow_schema("prod")
+    assert fetch.schema is None
+    assert fetch.reason == "nope"
 
 
 # ---------------------------------------------------------------------------

@@ -35,6 +35,7 @@ from fastapi.testclient import TestClient
 
 from keboola_agent_cli.server import create_app
 from keboola_agent_cli.server.dependencies import ServiceRegistry, get_manage_token, get_registry
+from keboola_agent_cli.services.flow_service import FlowSchemaFetch
 
 AUTH = {"Authorization": "Bearer test-token"}
 PROJECT = "my-proj"
@@ -668,9 +669,8 @@ def test_flows_validate_without_project_is_semantic_only(tmp_path: Path) -> None
 def test_flows_validate_with_project_fetches_live_schema(tmp_path: Path) -> None:
     """`project` in body -> fetch_flow_schema(alias) is called and schema is applied."""
     flow_svc = MagicMock()
-    flow_svc.fetch_flow_schema.return_value = (
-        {"type": "object", "required": ["phases", "tasks"]},
-        None,
+    flow_svc.fetch_flow_schema.return_value = FlowSchemaFetch(
+        schema={"type": "object", "required": ["phases", "tasks"]}, reason=None
     )
     registry = _mock_registry(flow=flow_svc)
     app = _make_app_with_registry(tmp_path, registry)
@@ -692,7 +692,9 @@ def test_flows_validate_with_project_fetches_live_schema(tmp_path: Path) -> None
 def test_flows_validate_schema_fetch_failure_degrades(tmp_path: Path) -> None:
     """Fetch failure -> semantic-only validation + skip reason in notes, never 5xx."""
     flow_svc = MagicMock()
-    flow_svc.fetch_flow_schema.return_value = (None, "AI Service unreachable")
+    flow_svc.fetch_flow_schema.return_value = FlowSchemaFetch(
+        schema=None, reason="AI Service unreachable"
+    )
     registry = _mock_registry(flow=flow_svc)
     app = _make_app_with_registry(tmp_path, registry)
 
@@ -734,7 +736,9 @@ def test_flows_get_schema_returns_live_schema(tmp_path: Path) -> None:
     GET /flows/{project}/{config_id} (which would call get_flow_detail).
     """
     flow_svc = MagicMock()
-    flow_svc.fetch_flow_schema.return_value = ({"type": "object"}, None)
+    flow_svc.fetch_flow_schema.return_value = FlowSchemaFetch(
+        schema={"type": "object"}, reason=None
+    )
     registry = _mock_registry(flow=flow_svc)
     app = _make_app_with_registry(tmp_path, registry)
 
@@ -750,7 +754,9 @@ def test_flows_get_schema_returns_live_schema(tmp_path: Path) -> None:
 def test_flows_get_schema_fetch_failure_is_502(tmp_path: Path) -> None:
     """Schema unavailable -> 502 with the reason (REST has no degrade path to offer)."""
     flow_svc = MagicMock()
-    flow_svc.fetch_flow_schema.return_value = (None, "no configurationSchema")
+    flow_svc.fetch_flow_schema.return_value = FlowSchemaFetch(
+        schema=None, reason="no configurationSchema"
+    )
     registry = _mock_registry(flow=flow_svc)
     app = _make_app_with_registry(tmp_path, registry)
 
@@ -759,3 +765,51 @@ def test_flows_get_schema_fetch_failure_is_502(tmp_path: Path) -> None:
 
     assert res.status_code == 502, res.text
     assert "no configurationSchema" in res.text
+
+
+def test_flows_create_drops_component_id(tmp_path: Path) -> None:
+    """POST /flows/{project} calls create_flow WITHOUT component_id.
+
+    Orchestrator support is dropped: FlowCreate has no component_id field, so
+    even a client that still sends one has it silently dropped (Pydantic
+    extra='ignore') and the service is never asked to target a component.
+    """
+    flow_svc = MagicMock()
+    flow_svc.create_flow.return_value = {"id": "999", "name": "My Flow"}
+    registry = _mock_registry(flow=flow_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/flows/{PROJECT}",
+            headers=AUTH,
+            json={
+                "name": "My Flow",
+                "phases": _CF_PHASES,
+                "tasks": _CF_TASKS,
+                "component_id": "keboola.orchestrator",  # legacy field -> dropped
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    flow_svc.create_flow.assert_called_once()
+    assert "component_id" not in flow_svc.create_flow.call_args.kwargs
+
+
+def test_flows_update_drops_component_id(tmp_path: Path) -> None:
+    """PATCH /flows/{project}/{config_id} calls update_flow WITHOUT component_id."""
+    flow_svc = MagicMock()
+    flow_svc.update_flow.return_value = {"id": "999", "name": "Renamed"}
+    registry = _mock_registry(flow=flow_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.patch(
+            f"/flows/{PROJECT}/999",
+            headers=AUTH,
+            json={"name": "Renamed", "component_id": "keboola.orchestrator"},
+        )
+
+    assert res.status_code == 200, res.text
+    flow_svc.update_flow.assert_called_once()
+    assert "component_id" not in flow_svc.update_flow.call_args.kwargs

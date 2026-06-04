@@ -397,7 +397,7 @@ def flow_schema(
 
         service = get_service(ctx, "flow_service")
         try:
-            schema, reason = service.fetch_flow_schema(project)
+            fetch = service.fetch_flow_schema(project)
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
@@ -405,6 +405,7 @@ def flow_schema(
             formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+        schema, reason = fetch.schema, fetch.reason
         if schema is None:
             formatter.error(
                 message=f"Could not fetch the conditional-flow schema: {reason}",
@@ -482,12 +483,13 @@ def flow_validate(
     if project:
         service = get_service(ctx, "flow_service")
         try:
-            schema, reason = service.fetch_flow_schema(project)
+            fetch = service.fetch_flow_schema(project)
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
+        schema = fetch.schema
         if schema is None:
-            notes.append(f"structural schema validation skipped: {reason}")
+            notes.append(f"structural schema validation skipped: {fetch.reason}")
     else:
         notes.append(
             "structural schema validation skipped: no schema source "

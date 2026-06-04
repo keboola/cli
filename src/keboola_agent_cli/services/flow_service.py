@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from ..ai_client import AiServiceClient
@@ -33,6 +34,20 @@ LEGACY_FLOW_COMPONENT_ID = "keboola.orchestrator"
 SCHEDULER_COMPONENT_ID = "keboola.scheduler"
 
 AiClientFactory = Callable[[str, str], AiServiceClient]
+
+
+@dataclass(frozen=True)
+class FlowSchemaFetch:
+    """Outcome of fetching the live keboola.flow JSON Schema from the stack.
+
+    ``schema`` holds the JSON Schema dict on success and is ``None`` when it
+    could not be obtained; ``reason`` explains the failure (``None`` on
+    success). A ``None`` schema must NOT block a write -- callers degrade to
+    semantic-only validation and surface ``reason`` as a warning.
+    """
+
+    schema: dict[str, Any] | None
+    reason: str | None
 
 
 def default_ai_client_factory(stack_url: str, token: str) -> AiServiceClient:
@@ -135,47 +150,50 @@ class FlowService(BaseService):
 
     # ── schema fetch ─────────────────────────────────────────────────
 
-    def _fetch_flow_schema(
-        self, project: ProjectConfig
-    ) -> tuple[dict[str, Any] | None, str | None]:
+    def _fetch_flow_schema(self, project: ProjectConfig) -> FlowSchemaFetch:
         """Fetch the live keboola.flow JSON Schema from the AI Service.
 
-        Returns ``(schema, None)`` on success, or ``(None, reason)`` when the
-        schema cannot be obtained (network error, KeboolaApiError, malformed or
-        empty schema). A ``None`` schema must NOT block a write -- the caller
-        degrades to semantic-only validation and surfaces ``reason`` as a
-        warning.
+        Returns a ``FlowSchemaFetch`` with ``schema`` set on success, or
+        ``schema=None`` + a ``reason`` when the schema cannot be obtained
+        (network error, KeboolaApiError, malformed or empty schema). A ``None``
+        schema must NOT block a write -- the caller degrades to semantic-only
+        validation and surfaces ``reason`` as a warning.
         """
         ai_client = self._ai_client_factory(project.stack_url, project.token)
         try:
             raw = ai_client.get_component_detail(FLOW_COMPONENT_ID)
         except KeboolaApiError as exc:
-            return None, exc.message
+            return FlowSchemaFetch(schema=None, reason=exc.message)
         except Exception as exc:
             # Intentionally broad: ANY schema-fetch failure must degrade to
             # semantic-only validation, never block the write. Narrowing to
             # OSError-style transport errors would miss httpx exceptions
             # (httpx.HTTPError does not subclass OSError) and re-raise them.
-            return None, str(exc)
+            return FlowSchemaFetch(schema=None, reason=str(exc))
         finally:
             ai_client.close()
 
         try:
             detail = ComponentDetail(**raw)
         except (TypeError, ValueError) as exc:
-            return None, f"component detail could not be parsed ({exc})"
+            return FlowSchemaFetch(
+                schema=None, reason=f"component detail could not be parsed ({exc})"
+            )
 
         schema = detail.configuration_schema
         if not schema:
-            return None, "AI Service returned no configurationSchema for keboola.flow"
-        return schema, None
+            return FlowSchemaFetch(
+                schema=None, reason="AI Service returned no configurationSchema for keboola.flow"
+            )
+        return FlowSchemaFetch(schema=schema, reason=None)
 
-    def fetch_flow_schema(self, alias: str) -> tuple[dict[str, Any] | None, str | None]:
+    def fetch_flow_schema(self, alias: str) -> FlowSchemaFetch:
         """Public schema fetch for a project alias (used by ``flow validate
         --project`` and ``flow schema --full --project``).
 
-        Returns ``(schema, None)`` on success or ``(None, reason)`` on any
-        failure -- the caller decides how to surface the reason.
+        Returns a ``FlowSchemaFetch`` (``schema`` set on success, or
+        ``schema=None`` + ``reason`` on any failure) -- the caller decides how
+        to surface the reason.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -373,12 +391,12 @@ class FlowService(BaseService):
         project = projects[alias]
         effective_branch = branch_id or project.active_branch_id
 
-        schema, schema_reason = self._fetch_flow_schema(project)
+        fetch = self._fetch_flow_schema(project)
         warnings: list[str] = []
-        if schema is None:
-            warnings.append(f"structural schema validation skipped: {schema_reason}")
+        if fetch.schema is None:
+            warnings.append(f"structural schema validation skipped: {fetch.reason}")
 
-        definition_errors = validate_conditional_flow(phases, tasks, schema)
+        definition_errors = validate_conditional_flow(phases, tasks, fetch.schema)
         if definition_errors:
             raise KeboolaApiError(
                 message="Flow definition is invalid: " + "; ".join(definition_errors),
@@ -450,11 +468,13 @@ class FlowService(BaseService):
                 merged_phases = phases if phases is not None else current_body.get("phases", [])
                 merged_tasks = tasks if tasks is not None else current_body.get("tasks", [])
 
-                schema, schema_reason = self._fetch_flow_schema(project)
-                if schema is None:
-                    warnings.append(f"structural schema validation skipped: {schema_reason}")
+                fetch = self._fetch_flow_schema(project)
+                if fetch.schema is None:
+                    warnings.append(f"structural schema validation skipped: {fetch.reason}")
 
-                definition_errors = validate_conditional_flow(merged_phases, merged_tasks, schema)
+                definition_errors = validate_conditional_flow(
+                    merged_phases, merged_tasks, fetch.schema
+                )
                 if definition_errors:
                     raise KeboolaApiError(
                         message="Flow definition is invalid: " + "; ".join(definition_errors),

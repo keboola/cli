@@ -61,9 +61,10 @@ def validate(
     schema: dict[str, Any] | None = None
     notes: list[str] = []
     if body.project:
-        schema, reason = registry.flow.fetch_flow_schema(body.project)
+        fetch = registry.flow.fetch_flow_schema(body.project)
+        schema = fetch.schema
         if schema is None:
-            notes.append(f"structural schema validation skipped: {reason}")
+            notes.append(f"structural schema validation skipped: {fetch.reason}")
     else:
         notes.append(
             "structural schema validation skipped: no schema source "
@@ -80,13 +81,13 @@ def validate(
 @router.get("/{project}/schema", summary="Fetch the live conditional-flow JSON Schema")
 def get_schema(project: str, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
     """Dump the keboola.flow JSON Schema served by the stack. Mirrors `kbagent flow schema --full`."""
-    schema, reason = registry.flow.fetch_flow_schema(project)
-    if schema is None:
+    fetch = registry.flow.fetch_flow_schema(project)
+    if fetch.schema is None:
         raise HTTPException(
             status_code=502,
-            detail=f"Could not fetch the conditional-flow schema: {reason}",
+            detail=f"Could not fetch the conditional-flow schema: {fetch.reason}",
         )
-    return {"format": "json-schema", "schema": schema}
+    return {"format": "json-schema", "schema": fetch.schema}
 
 
 @router.get("", summary="List flows across projects")

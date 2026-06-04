@@ -18,6 +18,7 @@ from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.services.flow_service import FlowSchemaFetch
 
 runner = CliRunner()
 TEST_TOKEN = "999-token-abc"
@@ -280,7 +281,7 @@ class TestFlowSchema:
     def test_schema_full_with_project_dumps_live_schema(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path, {"prod": {}})
         mock_flow = MagicMock()
-        mock_flow.fetch_flow_schema.return_value = (_LIVE_SCHEMA, None)
+        mock_flow.fetch_flow_schema.return_value = FlowSchemaFetch(schema=_LIVE_SCHEMA, reason=None)
         result = _invoke(store, mock_flow, ["flow", "schema", "--full", "--project", "prod"])
         assert result.exit_code == 0
         assert "$schema" in result.output or "draft-07" in result.output
@@ -289,7 +290,7 @@ class TestFlowSchema:
     def test_schema_full_with_project_json_mode(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path, {"prod": {}})
         mock_flow = MagicMock()
-        mock_flow.fetch_flow_schema.return_value = (_LIVE_SCHEMA, None)
+        mock_flow.fetch_flow_schema.return_value = FlowSchemaFetch(schema=_LIVE_SCHEMA, reason=None)
         result = _invoke(
             store, mock_flow, ["--json", "flow", "schema", "--full", "--project", "prod"]
         )
@@ -300,7 +301,9 @@ class TestFlowSchema:
     def test_schema_full_fetch_failure_errors(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path, {"prod": {}})
         mock_flow = MagicMock()
-        mock_flow.fetch_flow_schema.return_value = (None, "network down")
+        mock_flow.fetch_flow_schema.return_value = FlowSchemaFetch(
+            schema=None, reason="network down"
+        )
         result = _invoke(store, mock_flow, ["flow", "schema", "--full", "--project", "prod"])
         assert result.exit_code == 4
         assert "network down" in result.output
@@ -378,7 +381,7 @@ class TestFlowValidate:
         # Live schema fetched -> bad task type caught structurally (exit 2).
         store = _setup_config(tmp_path, {"prod": {}})
         mock_flow = MagicMock()
-        mock_flow.fetch_flow_schema.return_value = (_LIVE_SCHEMA, None)
+        mock_flow.fetch_flow_schema.return_value = FlowSchemaFetch(schema=_LIVE_SCHEMA, reason=None)
         bad = _VALID_FLOW_YAML.replace("type: job", "type: nonsense")
         f = tmp_path / "bad.yaml"
         f.write_text(bad)
@@ -394,7 +397,9 @@ class TestFlowValidate:
         # Schema fetch fails -> semantic-only, valid flow still passes + a note.
         store = _setup_config(tmp_path, {"prod": {}})
         mock_flow = MagicMock()
-        mock_flow.fetch_flow_schema.return_value = (None, "network down")
+        mock_flow.fetch_flow_schema.return_value = FlowSchemaFetch(
+            schema=None, reason="network down"
+        )
         f = tmp_path / "flow.yaml"
         f.write_text(_VALID_FLOW_YAML)
         result = _invoke(

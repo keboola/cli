@@ -140,6 +140,25 @@ def test_structural_error_not_reported_without_schema():
     assert errors == []
 
 
+def test_structural_error_integer_id_with_schema():
+    # IDs must be strings (the schema declares "id": {"type": "string"}). An
+    # integer id is a structural violation -- caught only when the live schema
+    # is supplied. Uses a task id (never referenced elsewhere) so the failure
+    # is purely structural, not a knock-on semantic missing-phase error.
+    tasks = _valid_tasks()
+    tasks[0]["id"] = 1  # integer instead of "task-1"
+    errors = validate_conditional_flow(_valid_phases(), tasks, _SCHEMA)
+    assert errors  # rejected: non-string id flagged structurally
+
+
+def test_integer_id_not_flagged_structurally_without_schema():
+    # Same integer id, but no schema => structural check is skipped. Semantic
+    # checks coerce ids to str, so a non-referenced integer id raises nothing.
+    tasks = _valid_tasks()
+    tasks[0]["id"] = 1
+    assert validate_conditional_flow(_valid_phases(), tasks, None) == []
+
+
 # ── semantic checks (always run, schema or not) ───────────────────────────
 
 
