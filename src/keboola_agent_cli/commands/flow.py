@@ -19,6 +19,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..services.flow_validation import find_unreachable_phases, validate_conditional_flow
 from ._helpers import (
     check_cli_permission,
     get_formatter,
@@ -464,7 +465,6 @@ def flow_validate(
     Exit 0 when valid (warnings still printed), exit 2 when there are errors.
     """
     formatter = get_formatter(ctx)
-    from ..services.flow_validation import find_unreachable_phases, validate_conditional_flow
 
     try:
         flow_def = _load_flow_yaml(file)
