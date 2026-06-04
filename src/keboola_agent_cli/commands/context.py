@@ -564,37 +564,52 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
     Per-user features (GET/POST/DELETE /manage/users/{{email}}/features).
 
-### Flows (Orchestrator + Conditional)
+### Flows (Conditional Flows -- keboola.flow only; orchestrator dropped in 0.57.0)
 
   kbagent flow list [--project NAME] [--branch ID] [--with-schedules]
-    List all flows (keboola.orchestrator + keboola.flow) across projects.
+    List conditional flows (keboola.flow) across projects. Legacy keboola.orchestrator
+    flows are NOT listed; their count is surfaced as legacy_orchestrator_count + a warning.
     --with-schedules enriches each row with {{schedule_id, cron, timezone, enabled}}
     entries from keboola.scheduler (one extra API call per project, NOT per flow).
 
-  kbagent flow detail --project NAME --flow-id ID [--component-id keboola.orchestrator|keboola.flow] [--branch ID]
-    Show phases, tasks, and full configuration. --component-id defaults to keboola.orchestrator.
+  kbagent flow detail --project NAME --flow-id ID [--branch ID]
+    Show phases, transitions (next[].goto + conditions), typed tasks, and full configuration.
 
-  kbagent flow schema
-    Print the YAML format accepted by 'flow new' and 'flow update'.
+  kbagent flow schema [--full --project NAME]
+    Plain: print the offline conditional-flow YAML template. --full fetches and dumps the
+    live JSON Schema from the stack (AI Service configurationSchema for keboola.flow) and
+    REQUIRES --project (the schema is no longer bundled).
 
-  kbagent flow new --project NAME --name "Name" [--component-id keboola.orchestrator|keboola.flow] [--description D] [--file YAML|@file|-] [--branch ID]
-    Create a new flow. --component-id defaults to keboola.flow (newer format).
-    --file accepts YAML with 'phases' and 'tasks' keys. DAG is validated (acyclic, refs exist).
+  kbagent flow validate --file YAML|@file|- [--project NAME]
+    With --project: fetch the live schema from the stack -> full structural + semantic
+    validation (fetch failure degrades to semantic-only + a note). Without --project:
+    semantic-only validation + a note that structural validation was skipped (no schema
+    source). Exit 0 valid, exit 2 on errors. --json adds {{valid, errors, warnings, notes}}.
 
-  kbagent flow update --project NAME --flow-id ID [--component-id ID] [--name N] [--description D] [--file YAML] [--branch ID]
+  kbagent flow new --project NAME --name "Name" [--description D] [--file YAML|@file|-] [--branch ID]
+    Create a new conditional flow. --file accepts YAML with 'phases' and 'tasks' keys.
+    Validated against the LIVE conditional-flow schema fetched from the stack
+    (INVALID_FLOW_DEFINITION on failure). A schema-fetch failure does NOT block the write:
+    structural check skipped, semantic checks still run, a warning is surfaced.
+    IDs are STRINGS; phases use next[].goto (a phase id or null); tasks are typed
+    (job/notification/variable). Execute with: job run --component-id keboola.flow --config-id ID.
+
+  kbagent flow update --project NAME --flow-id ID [--name N] [--description D] [--file YAML] [--branch ID]
     Update a flow's name, description, or phases/tasks. --file replaces both phases and tasks.
-    Omitting --file leaves the flow body unchanged. DAG re-validated on write.
+    Omitting --file leaves the flow body unchanged. Validated against the live conditional-flow
+    schema on write (merge-aware; INVALID_FLOW_DEFINITION on failure; schema-fetch failure ->
+    semantic-only + warning).
 
-  kbagent flow delete --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]
+  kbagent flow delete --project NAME --flow-id ID [--branch ID] [--yes]
     Delete a flow. Does NOT remove associated keboola.scheduler configs.
     Run 'flow schedule-remove' first if you want to clean up schedules.
 
-  kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--component-id ID] [--timezone TZ] [--enabled/--disabled] [--name NAME] [--branch ID]
+  kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--timezone TZ] [--enabled/--disabled] [--name NAME] [--branch ID]
     Upsert a cron schedule: updates the existing keboola.scheduler config if one exists, creates one
     otherwise. Calling twice with a new cron replaces the old schedule — no duplicates created.
     Schedules are stored as Storage API configs, not a separate scheduler service.
 
-  kbagent flow schedule-remove --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]
+  kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
     Remove all schedules bound to this flow (deletes all matching keboola.scheduler configs).
     Idempotent: safe to run when no schedules exist.
 

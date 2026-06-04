@@ -534,13 +534,24 @@ kbagent kai chat-detail --chat-id ID [--project NAME]
 kbagent kai history [--project NAME] [--limit N]
 
 kbagent flow list [--project NAME] [--branch ID] [--with-schedules]
-kbagent flow detail --project NAME --flow-id ID [--component-id keboola.orchestrator|keboola.flow] [--branch ID]
-kbagent flow schema
-kbagent flow new --project NAME --name NAME [--component-id keboola.orchestrator|keboola.flow] [--description D] [--file @path.yaml|-|JSON] [--branch ID]
-kbagent flow update --project NAME --flow-id ID [--component-id ID] [--name N] [--description D] [--file @path.yaml|-|JSON] [--branch ID]
-kbagent flow delete --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]
-kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--component-id ID] [--timezone TZ] [--disabled] [--branch ID]
-kbagent flow schedule-remove --project NAME --flow-id ID [--component-id ID] [--branch ID] [--yes]
+kbagent flow detail --project NAME --flow-id ID [--branch ID]
+kbagent flow schema [--full --project NAME]
+kbagent flow validate --file @flow.yaml|- [--project NAME]
+kbagent flow new --project NAME --name NAME [--description D] [--file @path.yaml|-|JSON] [--branch ID]
+kbagent flow update --project NAME --flow-id ID [--name N] [--description D] [--file @path.yaml|-|JSON] [--branch ID]
+kbagent flow delete --project NAME --flow-id ID [--branch ID] [--yes]
+kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--timezone TZ] [--disabled] [--branch ID]
+kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
+# Flows are conditional flows (keboola.flow). keboola.orchestrator is NOT supported (dropped 0.57.0).
+# IDs are strings; phases use next[].goto + conditions; tasks are typed (job/notification/variable).
+# flow new/update validate against the live CF schema fetched from the stack (AI Service
+#   configurationSchema for keboola.flow; NOT bundled) -> INVALID_FLOW_DEFINITION on failure.
+#   Schema-fetch failure (network/empty) does NOT block the write: structural check skipped,
+#   semantic checks still run, a "structural schema validation skipped" warning is surfaced.
+# flow validate: with --project fetches the live schema (full validation; fetch failure ->
+#   semantic-only + note); without --project runs semantic-only + a note. flow schema --full
+#   requires --project (fetches live schema); plain flow schema is the offline YAML template.
+# Execute a flow with: kbagent job run --project NAME --component-id keboola.flow --config-id ID
 
 kbagent schedule list [--project NAME ...] [--enabled-only] [--branch ID]
 kbagent schedule detail --project NAME --schedule-id ID [--branch ID]

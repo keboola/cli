@@ -266,7 +266,7 @@ major bump).
 | 500 | `INTERNAL_ERROR`, `UNKNOWN_ERROR` | Bug in the server. File an issue. |
 
 Domain-specific codes (`DATA_APP_*`, `KAI_*`, `JOB_TIMEOUT_TERMINATED`,
-`INVALID_FLOW_DAG`, …) appear alongside the generic ones when the failure
+`INVALID_FLOW_DEFINITION`, …) appear alongside the generic ones when the failure
 is specific to a feature area. Treat them as informational refinement —
 the HTTP status is the contract.
 

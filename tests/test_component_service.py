@@ -90,8 +90,8 @@ CUSTOM_PYTHON_APP_RESPONSE: dict[str, Any] = {
 }
 
 FLOW_RESPONSE: dict[str, Any] = {
-    "componentId": "keboola.orchestrator",
-    "componentName": "Orchestrator",
+    "componentId": "keboola.flow",
+    "componentName": "Conditional Flow",
     "componentType": "other",
     "componentCategories": [],
     "componentFlags": [],
@@ -463,11 +463,11 @@ class TestGenerateScaffold:
         assert 'requires-python = ">=3.11"' in toml_file["content"]
 
     def test_scaffold_flow(self, tmp_config_dir: Path) -> None:
-        """Flow/orchestrator generates flow _config.yml with phases."""
+        """keboola.flow generates a conditional-flow _config.yml with phases + tasks."""
         mock_ai = _make_ai_client(detail_response=FLOW_RESPONSE)
         service = _make_service(tmp_config_dir, ai_client=mock_ai)
 
-        result = service.generate_scaffold(alias="prod", component_id="keboola.orchestrator")
+        result = service.generate_scaffold(alias="prod", component_id="keboola.flow")
 
         files = result["files"]
         assert len(files) == 1, "Flow should produce exactly 1 file"
@@ -475,13 +475,15 @@ class TestGenerateScaffold:
 
         content = files[0]["content"]
         assert "phases:" in content, "Flow config must contain phases section"
-        assert "schedules:" in content, "Flow config must contain schedules section"
-        assert "depends_on:" in content, "Flow config must contain dependencies"
+        assert "tasks:" in content, "Flow config must contain tasks section"
+        assert "goto:" in content, "Flow config must use goto transitions"
+        assert "dependsOn" not in content, "Conditional flows do not use dependsOn"
 
-        # Verify it's valid YAML
+        # Verify it's valid YAML with string ids
         parsed = yaml.safe_load(content)
-        assert parsed["version"] == 2
-        assert len(parsed["phases"]) == 2
+        assert parsed["phases"][0]["id"] == "phase-1"
+        assert parsed["tasks"][0]["phase"] == "phase-1"
+        assert parsed["tasks"][0]["task"]["type"] == "job"
 
     def test_scaffold_with_secrets(self, tmp_config_dir: Path) -> None:
         """Parameters with #password are masked to SECRET_PLACEHOLDER."""
@@ -607,7 +609,7 @@ class TestDetectComponentCategory:
             ("keboola.bigquery-transformation", "sql_transformation"),
             ("keboola.python-transformation-v2", "python_transformation"),
             ("kds-team.app-custom-python", "custom_python"),
-            ("keboola.orchestrator", "flow"),
+            ("keboola.orchestrator", "generic"),
             ("keboola.flow", "flow"),
             ("keboola.ex-http", "generic"),
             ("keboola.ex-db-snowflake", "generic"),

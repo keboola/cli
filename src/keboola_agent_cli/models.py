@@ -273,6 +273,15 @@ class ComponentDetail(BaseModel):
     long_description: str = Field(default="", alias="longDescription")
     documentation: str = Field(default="")
     documentation_url: str = Field(default="", alias="documentationUrl")
+
+    @field_validator(
+        "description", "long_description", "documentation", "documentation_url", mode="before"
+    )
+    @classmethod
+    def _none_to_empty_string(cls, value: Any) -> Any:
+        """AI Service returns explicit null for missing docs (e.g. keboola.flow)."""
+        return "" if value is None else value
+
     configuration_schema: dict[str, Any] = Field(default_factory=dict, alias="configurationSchema")
     configuration_row_schema: dict[str, Any] = Field(
         default_factory=dict, alias="configurationRowSchema"

@@ -695,24 +695,24 @@ class TestFlowListWithSchedulesEnrichment:
         client = MagicMock()
 
         def side_effect(component_id: str, branch_id=None):
-            if component_id == "keboola.orchestrator":
+            if component_id == "keboola.flow":
                 return [
                     {
-                        "id": "orchestrator-1",
+                        "id": "flow-1",
                         "name": "Daily ETL",
                         "description": "",
                         "isDisabled": False,
                     }
                 ]
-            if component_id == "keboola.flow":
+            if component_id == "keboola.orchestrator":
                 return []
             if component_id == SCHEDULER_COMPONENT_ID:
                 return [
                     _scheduler_cfg(
                         config_id="sc1",
                         name="Schedule",
-                        target_component="keboola.orchestrator",
-                        target_config_id="orchestrator-1",
+                        target_component="keboola.flow",
+                        target_config_id="flow-1",
                         state="enabled",
                     )
                 ]
@@ -736,8 +736,8 @@ class TestFlowListWithSchedulesEnrichment:
         client = MagicMock()
 
         def side_effect(component_id: str, branch_id=None):
-            if component_id == "keboola.orchestrator":
-                return [{"id": "o1", "name": "Flow", "description": "", "isDisabled": False}]
+            if component_id == "keboola.flow":
+                return [{"id": "f1", "name": "Flow", "description": "", "isDisabled": False}]
             return []
 
         client.list_component_configs.side_effect = side_effect

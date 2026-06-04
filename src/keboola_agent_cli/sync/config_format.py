@@ -66,9 +66,6 @@ COMPONENT_TYPE_MAP: dict[str, str] = {
     "other": "other",
 }
 
-# Orchestrator-like components that have special handling
-ORCHESTRATOR_COMPONENTS: set[str] = {"keboola.orchestrator", "keboola.flow"}
-
 # Row-bearing components whose `configuration` top-level keys do NOT fit the
 # standard `parameters` / `storage` / `processors` shape. For these, the
 # non-standard keys (e.g. `values` for variables, `code_content` for shared-code)
