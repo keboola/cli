@@ -25,35 +25,34 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.58.0": [
-        "BigQuery support for `kbagent workspace query` (the Query Service backend now runs BigQuery, "
-        "as keboola-mcp-server already uses). The query *execution* path was always backend-agnostic -- "
-        "`POST /api/v1/branches/{b}/workspaces/{w}/queries` plus the CSV export are identical for "
-        "Snowflake and BigQuery -- so a `SELECT` against a BigQuery workspace already returned rows. The "
-        "gaps were classification and error legibility, fixed here (verified live against project 9621 / "
-        "e2e-bigquery on connection.keboola.com). (1) `qs_compatible` is now keyed by (backend, "
-        "loginType), not loginType alone. BigQuery workspaces carry loginType `default`, which IS "
-        "Query-Service-compatible, but `default` was OFF the Snowflake-only whitelist, so `workspace "
-        "list`/`detail` reported every BigQuery workspace as `qs_compatible: false` and `workspace list "
-        "--qs-compatible` hid them all -- misleading data-app developers into thinking BigQuery can't run "
-        "Query-Service SELECTs. New `QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES_BIGQUERY` whitelist ({`default`}) "
-        "is kept deliberately separate from the Snowflake set because Snowflake ALSO mints a `default` "
-        "loginType (legacy 2016 workspaces) that the Query Service REJECTS ('JWT token is invalid') -- so "
-        "the same string means compatible for BigQuery and incompatible for Snowflake. (2) `workspace "
-        "create` on a BigQuery project now requests loginType `default` explicitly (the only BigQuery "
-        "loginType; matches keboola-mcp-server) instead of omitting it and relying on the backend default. "
-        "(3) BigQuery query errors are unwrapped: the Query Service serializes a failed BigQuery statement "
-        'as `{Location: "query"; Message: "Syntax error: ..."; Reason: "invalidQuery"}`; the new '
-        "`_unwrap_bigquery_error` extracts the inner `Message` so the red error box reads like Snowflake "
-        "plain text (Snowflake errors have no wrapper and pass through untouched). Layers: backend-aware "
-        "`_classify_qs_compatibility(login_type, backend)` + `_workspace_login_type_for_backend` "
-        "(`services/workspace_service.py`); `_unwrap_bigquery_error` + `_BQ_ERROR_MESSAGE_RE` "
-        "(`client.py`); two new constants (`constants.py`). Tests: "
-        "`test_workspace_service.py::TestBigQueryQueryServiceSupport` (backend-aware classification, "
-        "Snowflake-default regression guard, BigQuery login-type, qs-compatible filter) + updated "
-        "`TestAutoDetectBackend` BigQuery create asserts; `test_client.py::TestUnwrapBigQueryError` + a "
-        "BigQuery case in `TestExtractQueryJobError`; `test_e2e.py` workspace query is now backend-aware "
-        "(BigQuery back-tick vs Snowflake double-quote identifier quoting) and `detail` asserts "
-        "login_type/qs_compatible.",
+        "New: `kbagent workspace query` runs SQL against BigQuery workspaces, not just Snowflake. "
+        "The Query Service path was always backend-agnostic (`POST "
+        "/api/v1/branches/{b}/workspaces/{w}/queries` + CSV export are identical for both backends), so "
+        "this was a classification + error-legibility fix rather than a new execution path -- verified "
+        "live against project 9621 (e2e-bigquery) on connection.keboola.com, including a real-data "
+        "`workspace load` + `query` round-trip. Mind the dialect: Snowflake quotes identifiers with "
+        '`"..."`, BigQuery with backticks `` `...` ``.',
+        "Fix: BigQuery workspaces are no longer mislabeled `qs_compatible: false`. `qs_compatible` is now "
+        "keyed by (backend, loginType): BigQuery's `default` loginType is whitelisted via the new "
+        "`QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES_BIGQUERY`, kept separate from the Snowflake whitelist "
+        "because Snowflake's own legacy `default` is rejected by the Query Service ('JWT token is "
+        "invalid') -- the same string means compatible for BigQuery and incompatible for Snowflake. "
+        "Pre-0.58.0 every BigQuery workspace was wrongly hidden by `workspace list --qs-compatible` and "
+        "shown incompatible in `workspace detail`, even though queries ran fine.",
+        "Change: `workspace create` on a BigQuery project now requests loginType `default` explicitly. "
+        "It is the only BigQuery loginType and matches keboola-mcp-server, rather than omitting it and "
+        "relying on the backend default; Snowflake key-pair creation is unchanged.",
+        "Fix: BigQuery query errors now read as plain text instead of a serialized wrapper. The Query "
+        'Service returns a failed BigQuery statement as `{Location: ...; Message: "..."; Reason: ...}`; '
+        "the new `_unwrap_bigquery_error` (`client.py`) extracts the inner `Message` so the error box "
+        "matches Snowflake's plain text (Snowflake errors have no wrapper and pass through untouched). "
+        "Tests: `TestBigQueryQueryServiceSupport`, `TestUnwrapBigQueryError`, a BigQuery case in "
+        "`TestExtractQueryJobError`, and a backend-aware `test_e2e.py` workspace query.",
+        "New (#401): `kbagent changelog` now shows a one-line summary per version by default, with "
+        "`--full` / `-v` to expand every note. Entries follow an authoring contract -- one logical change "
+        "per prefixed bullet (`New:`/`Fix:`/`Change:`/...), leading with a self-contained first sentence "
+        "-- so the default view and the post-update 'What's new' banner stay scannable instead of "
+        "rendering a wall of text.",
     ],
     "0.57.0": [
         "BREAKING (flow / conditional flows): the `flow` command group now targets "
