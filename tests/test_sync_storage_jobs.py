@@ -1315,9 +1315,16 @@ class TestPullJobsFallback:
 
         result = svc.pull(alias="prod", project_root=project_root, job_limit=10)
 
-        # Should NOT use grouped-jobs, SHOULD use list_jobs per config
+        # Should NOT use grouped-jobs, SHOULD use list_jobs per config.
+        # NOTE: _fetch_jobs_per_config calls the mock from a ThreadPoolExecutor
+        # and MagicMock.call_count increments are NOT thread-safe (lost updates
+        # under concurrency -- flaked in CI under coverage tracing). call_args_list
+        # uses list.append, which IS atomic under the GIL, so assert on that.
         pull_client.list_jobs_grouped.assert_not_called()
-        assert pull_client.list_jobs.call_count == 200
+        calls = pull_client.list_jobs.call_args_list
+        assert len(calls) == 200
+        distinct_pairs = {(c.kwargs["component_id"], c.kwargs["config_id"]) for c in calls}
+        assert len(distinct_pairs) == 200, "each config must be fetched exactly once"
         assert result["jobs_written"] == 200
 
     def test_boundary_exact_limit(self, tmp_config_dir: Path, tmp_path: Path) -> None:
@@ -1366,4 +1373,6 @@ class TestPullJobsFallback:
         svc.pull(alias="prod", project_root=project_root, job_limit=5)
 
         pull_client.list_jobs_grouped.assert_not_called()
-        assert pull_client.list_jobs.call_count == 101
+        # call_args_list, not call_count: see the thread-safety note in
+        # test_falls_back_to_per_config_when_limit_insufficient.
+        assert len(pull_client.list_jobs.call_args_list) == 101
