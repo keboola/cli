@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-mcp install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-file lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
+.PHONY: help install install-mcp install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-file test-cov lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes command-sync-check check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -44,6 +44,9 @@ test-e2e-stream: ## Run Data Streams OTLP E2E (E2E_API_TOKEN + E2E_URL required;
 
 test-file: ## Run a specific test file (FILE=tests/test_cli.py)
 	uv run pytest $(FILE) -v
+
+test-cov: ## Run the unit suite with a coverage report (informational; no threshold gate)
+	uv run pytest tests/ -v -m "not integration" --cov --cov-report=term-missing
 
 lint: ## Run ruff linter
 	uv run ruff check src/ tests/ scripts/
@@ -98,12 +101,15 @@ changelog-check: ## Check all releases have changelog entries
 check-error-codes: ## Reject raw error_code string literals in source (use ErrorCode enum)
 	uv run python scripts/check_error_codes.py
 
+command-sync-check: ## Verify every CLI command is registered + documented (silent-drift gate)
+	uv run python scripts/check_command_sync.py
+
 hooks: ## Install git pre-commit hook (lint + format on staged files)
 	cp scripts/pre-commit .git/hooks/pre-commit
 	chmod +x .git/hooks/pre-commit
 	@echo "Pre-commit hook installed."
 
-check: lint format-check skill-check version-check changelog-check check-error-codes test ## Run all checks (lint + format + skill + version + changelog + error-codes + test)
+check: lint format-check typecheck skill-check version-check command-sync-check changelog-check check-error-codes test ## Run all checks (lint + format + typecheck + skill + version + command-sync + changelog + error-codes + test)
 
 clean: ## Remove build artifacts and caches
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

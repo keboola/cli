@@ -7,6 +7,18 @@ on:
     branches: [main]
 
 jobs:
+  # ────────────────────────────────────────────────────────────────────────
+  # Static analysis + silent-drift gates. These are deterministic and
+  # interpreter-independent, so they run ONCE on the baseline interpreter
+  # rather than across the test matrix. This job is the CI mirror of the
+  # non-test half of `make check` (lint, format, ty, skill, version,
+  # command-sync, error-codes).
+  #
+  # `changelog-check` is deliberately NOT here: it shells out to `gh release
+  # list` (GitHub auth + network) and audits whether published GitHub
+  # *releases* have changelog entries -- a release-time concern, not a per-PR
+  # one. It stays in local `make check`.
+  # ────────────────────────────────────────────────────────────────────────
   check:
     runs-on: ubuntu-latest
     steps:
@@ -27,12 +39,6 @@ jobs:
       - name: Install dependencies
         # `--extra server` pulls in fastapi/uvicorn/sse-starlette/python-multipart/
         # croniter so the test suite can import `keboola_agent_cli.server.*`.
-        # The server module is `[project.optional-dependencies]` because the
-        # core CLI works without it, but every test that touches the FastAPI
-        # app (test_agent_runner, test_pricing, test_run_broadcaster,
-        # test_agents_store_events, test_serve_ui, test_server_smoke) requires
-        # it. Without this flag those tests fail at collection time with
-        # `ModuleNotFoundError: No module named 'fastapi'`.
         run: uv sync --extra server
 
       - name: Lint
@@ -40,6 +46,15 @@ jobs:
 
       - name: Format check
         run: uv run ruff format . --check
+
+      - name: Type check (ty)
+        # Static type checker (Astral `ty`). Fails the build on any `error[...]`;
+        # the downgraded `unresolved-import` warning (see [tool.ty.rules] in
+        # pyproject.toml) does NOT block. Previously `ty` ran ONLY in the local
+        # pre-commit hook against staged files, so type errors silently
+        # accumulated in files no commit happened to touch. Gating it here keeps
+        # the whole tree type-clean, not just the diff.
+        run: uv run ty check
 
       - name: SKILL.md freshness check
         run: |
@@ -59,8 +74,60 @@ jobs:
             exit 1
           fi
 
-      - name: Tests
-        run: uv run pytest tests/ -v -m "not integration"
+      - name: Command-sync silent-drift check
+        # Verifies every CLI command is registered in permissions.py
+        # OPERATION_REGISTRY and documented across the agent-facing surfaces
+        # (AGENT_CONTEXT, CLAUDE.md, commands-reference.md), with no dead
+        # registry keys. None of these have any other CI coverage (see
+        # CONTRIBUTING.md "Plugin synchronization map") -- forgetting one
+        # ships an AI agent that recommends commands the installed kbagent
+        # version does not have. (gotchas.md (since vX.Y.Z) tags and the
+        # server/routers REST mirror need judgement, so they're left to
+        # /kbagent:review, not gated here.)
+        run: uv run python scripts/check_command_sync.py
+
+      - name: Error-code enum check
+        # Rejects raw error_code="LITERAL" string literals (must use ErrorCode).
+        run: uv run python scripts/check_error_codes.py
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Test suite across every supported interpreter. pyproject declares
+  # `requires-python = ">=3.12"`, so the matrix is 3.12 + 3.13 (3.10/3.11 are
+  # intentionally out of scope). `integration` tests are deselected; `e2e`
+  # tests self-skip without credentials (the dedicated e2e.yml workflow runs
+  # them nightly against a real project). Coverage is INFORMATIONAL: the
+  # term-missing report is printed for visibility but NO --cov-fail-under
+  # threshold is enforced, so it never blocks a merge.
+  # ────────────────────────────────────────────────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't cancel 3.12 just because 3.13 tripped (or vice versa) -- we want
+      # to see which interpreters pass on a given PR, not just the first failure.
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    env:
+      # Pin uv's interpreter to the matrix version for BOTH `sync` and `run`,
+      # so the suite is actually exercised on each interpreter instead of
+      # whatever uv would resolve from requires-python on its own.
+      UV_PYTHON: ${{ matrix.python-version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.11.16"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --extra server
+
+      - name: Tests (with coverage report)
+        run: uv run pytest tests/ -v -m "not integration" --cov --cov-report=term-missing
 
   # Real wheel build on Windows -- the only place the issue #320 fixes can be
   # verified end-to-end without a Windows developer machine. GitHub provides
