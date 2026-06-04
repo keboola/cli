@@ -9,6 +9,43 @@ from __future__ import annotations
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.55.0": [
+        "New: `kbagent semantic-layer reference-data` (alias `kbagent sl reference-data`) -- a CRUD "
+        "surface for the metastore `semantic-reference-data` type, a per-dimension member store that "
+        "holds an entire dimension (e.g. a Chart of Accounts: the account list plus all attributes) as "
+        "ONE record, with the members in a `members[]` array, in the semantic layer instead of a "
+        "hardcoded Storage table. Pairs with keboola/go-monorepo#533 (the metastore JSON-Schema side); "
+        "this is the kbagent client. Four leaves: `list --project P [--model M]` -> dimension summaries "
+        "(id, dimension_name, model_uuid, dataset_id, member_count) [read]; `get --project P (--id ID | "
+        "--dimension D)` -> one record with all members, resolved by record UUID or by the "
+        "project-unique dimension name (passing both, or neither, is a usage error, exit 2) [read]; "
+        "`set --project P [--model M] --dimension D --members-file PATH ('-' = stdin) [--dataset-id T] "
+        "[--description X]` -> create-or-replace from a JSON array of member objects, idempotent on the "
+        "dimension: an existing record is replaced in place via the metastore's revisioned `PUT` "
+        "(meta.revision++, history preserved), otherwise a new record is POSTed [write]; "
+        "`delete --project P --id ID [--yes]` -> server-side soft-delete; non-TTY without --yes refuses "
+        "(exit 2) [destructive]. The dimension name is unique per project per type, so the "
+        "create-or-replace lookup is project-wide by dimension (not model-scoped): `set` stays "
+        "idempotent regardless of `--model`, and the resolved model is stored on the record rather than "
+        "used as the key. Deliberately self-contained: reference-data is NOT AI-generated (its members "
+        "come from DIM_COA, not the build heuristic), so it is kept OUT of `build` / `export` / `diff` / "
+        "cascade / `PUSH_ORDER` -- zero blast radius on the existing model flows; deleting a model does "
+        "not cascade-delete its reference-data records. New `MetastoreClient.put_item` (revisioned PUT "
+        "envelope, distinct from the DELETE+POST the `edit` ops use) and `semantic-reference-data` "
+        "registered in `SemanticType` / `SEMANTIC_TYPES`. New layers: "
+        "`services/_semantic_layer_reference_data.py` (run_list/get/set/delete helpers, extracted to "
+        "keep `semantic_layer_service.py` under the file-size ceiling) with thin delegators on "
+        "`SemanticLayerService`; `commands/_semantic_layer_reference_data.py` (Typer sub-app -- the "
+        "first to mix read/write/destructive permission classes under one group, enforced per leaf via "
+        "`check_cli_permission`); and a 1:1 `kbagent serve` REST surface (GET /reference-data, GET "
+        "/reference-data/{id}, PUT /reference-data, DELETE /reference-data/{id}). Permission registry: "
+        "list/get = read, set = write, delete = destructive. Docs: AGENT_CONTEXT, CLAUDE.md command "
+        "list, commands-reference.md, gotchas.md (since v0.55.0), SKILL.md (triggers + regenerated "
+        "table). Tests: service CRUD + create-vs-replace + cross-model idempotency + members-not-list "
+        "validation + NOT_FOUND + id-vs-dimension resolution + permission-registry asserts; CLI "
+        "list/get/set/delete + bad-JSON exit-2 + non-TTY --yes gate; `metastore_client` TestPutItem "
+        "(httpx_mock); serve-router parity; E2E (`tests/test_e2e.py` CLI lifecycle + "
+        "`tests/test_server_semantic_layer_routes_e2e.py` HTTP-route hops) run live against project "
+        "1143. Closes keboola/cli#379.",
         "Audit (`sync status` + `doctor` flag plaintext `#`-secrets in synced configs): a follow-up to the #378 fix, which was forward-looking only (it could not retroactively encrypt secrets written by older versions). `sync status` now scans every *in-sync* config/row in the working tree and, when a `#`-prefixed value is still plaintext on disk (i.e. it passed through the sync baseline unencrypted -- the remote holds it in plaintext), surfaces a `plaintext_secret_warnings` block (human) / array (`--json`) with the location and key paths (never the secret values). `doctor` gets a matching `sync_secrets` check that runs when the current directory is a sync working tree (`.keboola/manifest.json`), reporting `warn` with the affected configs or `pass`/`skip`. Detection reuses `_encryption.collect_secrets` via the new `find_plaintext_secret_keys` helper, so it counts only genuinely-unencrypted values (already-`KBC::` values are ignored). Pending local edits (file hash != manifest `pull_hash`) are deliberately NOT flagged -- a `sync push` on >=0.54.0 encrypts those on write, so warning about them would be noise. Read-only, filesystem + manifest only, no API. The warning text points at the real remediation: re-push on >=0.54.0 to encrypt AND rotate the credential, because config version history keeps the old plaintext. Tests: `tests/test_sync_plaintext_audit.py`.",
         'Removal: the `--hint client|service` global flag and its entire `hints/` code-generation subsystem are gone. Deprecated since 0.45.0 in favour of the `kbagent serve` REST API (which covers every command, not just the ~45 that had hint definitions), the flag now no longer exists -- passing `--hint` errors as an unknown option. Deleted: `src/keboola_agent_cli/hints/` (registry, renderer, models, and all 21 `definitions/*.py`), the `should_hint`/`emit_hint`/`_resolve_hint_stack_url` helpers in `commands/_helpers.py`, the `if should_hint(ctx): emit_hint(...)` guard at the head of every command, the `--hint` option + `hint_mode` plumbing in `cli.py`, `docs/hint-mode.md`, `plugins/kbagent/skills/kbagent/references/programming-with-cli.md`, and `tests/test_hints.py` (plus all `--hint` test classes across `test_cli.py`, `test_data_app_cli.py`, `test_data_app_secrets_cli.py`, `test_member_cli.py`, `test_e2e_lineage_deep.py`). Docs/agent surfaces scrubbed: `AGENT_CONTEXT` (`kbagent context`), `SKILL.md`, `keboola-expert.md`, `kbagent-pr-reviewer.md`, `gotchas.md`, `commands-reference.md`, `storage-types-workflow.md`, `README.md`, `CONTRIBUTING.md`, `docs/TUTORIAL.md`, and `CLAUDE.md`. Migration: run `kbagent serve` and call the equivalent REST endpoint instead of generating a one-off Python snippet. Unrelated "hint" surfaces are untouched: `--no-hint-next` (data-app secrets), `--role-hint` (dev-portal), and error-message hints. Historical changelog entries that mention `--hint` are left as-is -- they record what shipped in those releases.',
     ],
