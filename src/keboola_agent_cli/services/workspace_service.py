@@ -12,7 +12,12 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from ..constants import QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES, SNOWFLAKE_WORKSPACE_LOGIN_TYPE
+from ..constants import (
+    BIGQUERY_WORKSPACE_LOGIN_TYPE,
+    QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES,
+    QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES_BIGQUERY,
+    SNOWFLAKE_WORKSPACE_LOGIN_TYPE,
+)
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
@@ -28,22 +33,37 @@ class SnowflakeWorkspaceKeyPair:
     public_pem: str
 
 
-def _classify_qs_compatibility(login_type: str) -> bool:
-    """Map a Storage API workspace ``connection.loginType`` to Query-Service compat.
+def _classify_qs_compatibility(login_type: str, backend: str) -> bool:
+    """Map a workspace ``(loginType, backend)`` pair to Query-Service compat.
+
+    Compatibility is keyed by BOTH backend and loginType because the same
+    ``default`` string means opposite things per backend: a BigQuery workspace's
+    ``default`` loginType IS Query-Service-compatible (verified against project
+    9621 on connection.keboola.com), whereas a Snowflake legacy ``default``
+    workspace is NOT ('JWT token is invalid'). See the two whitelists in
+    ``constants`` for the empirical rationale.
 
     Conservative whitelist semantics: returns True only for ``loginType``s
     confirmed to work with POST /v2/storage/branch/{ID}/workspaces/{WS}/query.
-    See ``constants.QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES`` for the rationale
-    behind why ``snowflake-legacy-service`` (issue #304) stays off the list
-    even though it works on some stacks.
+    Unknown backends fall through to the Snowflake whitelist (false negatives
+    over false positives).
     """
+    if backend.lower() == "bigquery":
+        return login_type in QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES_BIGQUERY
     return login_type in QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES
 
 
 def _workspace_login_type_for_backend(backend: str) -> str | None:
     """Return the loginType kbagent should request for newly created workspaces."""
-    if backend.lower() == "snowflake":
+    normalized = backend.lower()
+    if normalized == "snowflake":
         return SNOWFLAKE_WORKSPACE_LOGIN_TYPE
+    if normalized == "bigquery":
+        # BigQuery's Query-Service-compatible loginType. Omitting it lets the
+        # backend default to the same value, but requesting it explicitly keeps
+        # parity with keboola-mcp-server and is robust to a server-side change
+        # of the implicit default.
+        return BIGQUERY_WORKSPACE_LOGIN_TYPE
     return None
 
 
@@ -478,12 +498,13 @@ class WorkspaceService(BaseService):
                     config_id = ws.get("configurationId") or ""
                     component_id = ws.get("component") or ""
                     login_type = connection.get("loginType", "") or ""
+                    backend = connection.get("backend", "") or ""
                     read_only = bool(ws.get("readOnlyStorageAccess", False))
                     entry = {
                         "project_alias": alias,
                         "id": ws.get("id"),
                         "name": config_names.get(str(config_id), ws.get("name", "")),
-                        "backend": connection.get("backend", ""),
+                        "backend": backend,
                         "host": connection.get("host", ""),
                         "database": connection.get("database", ""),
                         "warehouse": connection.get("warehouse", ""),
@@ -494,7 +515,7 @@ class WorkspaceService(BaseService):
                         "config_id": config_id,
                         "login_type": login_type,
                         "read_only": read_only,
-                        "qs_compatible": _classify_qs_compatibility(login_type),
+                        "qs_compatible": _classify_qs_compatibility(login_type, backend),
                     }
                     if orphaned_only:
                         if _is_orphaned_workspace(entry, config_names):
@@ -647,10 +668,11 @@ class WorkspaceService(BaseService):
 
         connection = ws_data.get("connection", {})
         login_type = connection.get("loginType", "") or ""
+        backend = connection.get("backend", "") or ""
         return {
             "project_alias": alias,
             "workspace_id": ws_data.get("id"),
-            "backend": connection.get("backend", ""),
+            "backend": backend,
             "host": connection.get("host", ""),
             "warehouse": connection.get("warehouse", ""),
             "database": connection.get("database", ""),
@@ -659,7 +681,7 @@ class WorkspaceService(BaseService):
             "created": ws_data.get("created", ""),
             "login_type": login_type,
             "read_only": bool(ws_data.get("readOnlyStorageAccess", False)),
-            "qs_compatible": _classify_qs_compatibility(login_type),
+            "qs_compatible": _classify_qs_compatibility(login_type, backend),
             "component_id": ws_data.get("component", "") or "",
             "config_id": ws_data.get("configurationId", "") or "",
         }

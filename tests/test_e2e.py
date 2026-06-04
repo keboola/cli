@@ -1893,6 +1893,9 @@ class TestFullE2E:
         )
         detail = data["data"]
         assert detail["workspace_id"] == workspace_id
+        # Issue #304 / BigQuery support: detail surfaces login_type + qs_compatible.
+        assert "login_type" in detail
+        assert "qs_compatible" in detail
 
     def _test_workspace_password(self, workspace_id: int) -> None:
         """Reset workspace password and verify a new password is returned.
@@ -1931,10 +1934,25 @@ class TestFullE2E:
         assert data["status"] == "ok"
 
     def _test_workspace_query(self, workspace_id: int, table_id: str) -> None:
-        """Run a SQL query in the workspace and verify result."""
+        """Run a SQL query in the workspace and verify result.
+
+        Identifier quoting is backend-specific: Snowflake uses double quotes,
+        BigQuery uses back-ticks. Running this E2E against the BigQuery project
+        (e2e-bigquery, #379+) with Snowflake quoting would fail because BigQuery
+        reads ``"name"`` as a string literal, not an identifier.
+        """
         # Table name in workspace is the last segment of table_id
         ws_table_name = table_id.rsplit(".", 1)[-1]
-        sql = f'SELECT COUNT(*) AS cnt FROM "{ws_table_name}"'
+        detail = self._run_ok(
+            "workspace",
+            "detail",
+            "--project",
+            self.alias,
+            "--workspace-id",
+            str(workspace_id),
+        )["data"]
+        quote = "`" if detail.get("backend") == "bigquery" else '"'
+        sql = f"SELECT COUNT(*) AS cnt FROM {quote}{ws_table_name}{quote}"
         data = self._run_ok(
             "workspace",
             "query",
