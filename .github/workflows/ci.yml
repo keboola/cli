@@ -12,7 +12,12 @@ jobs:
   # interpreter-independent, so they run ONCE on the baseline interpreter
   # rather than across the test matrix. This job is the CI mirror of the
   # non-test half of `make check` (lint, format, ty, skill, version,
-  # command-sync, changelog, error-codes).
+  # command-sync, error-codes).
+  #
+  # `changelog-check` is deliberately NOT here: it shells out to `gh release
+  # list` (GitHub auth + network) and audits whether published GitHub
+  # *releases* have changelog entries -- a release-time concern, not a per-PR
+  # one. It stays in local `make check`.
   # ────────────────────────────────────────────────────────────────────────
   check:
     runs-on: ubuntu-latest
@@ -78,10 +83,6 @@ jobs:
         # forgetting one ships an AI agent that recommends commands the
         # installed kbagent version does not have.
         run: uv run python scripts/check_command_sync.py
-
-      - name: Changelog completeness check
-        # Every GitHub release must have a changelog.py entry.
-        run: uv run python scripts/generate_changelog.py --check
 
       - name: Error-code enum check
         # Rejects raw error_code="LITERAL" string literals (must use ErrorCode).

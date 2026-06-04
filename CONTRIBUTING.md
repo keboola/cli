@@ -647,9 +647,10 @@ Two GitHub Actions workflows guard the repo:
 
 - **`check` job** (one run, Python 3.12): the static half of `make check` --
   lint, format, `ty` type-check, SKILL.md freshness, version consistency, the
-  command-sync silent-drift gate, changelog completeness, and the error-code
-  enum check. These are deterministic and interpreter-independent, so they do
-  not fan out across the matrix.
+  command-sync silent-drift gate, and the error-code enum check. These are
+  deterministic and interpreter-independent, so they do not fan out across the
+  matrix. (`changelog-check` stays local-only: it needs `gh` auth and audits
+  published releases, a release-time concern -- not a per-PR gate.)
 - **`test` job** (matrix: Python 3.12 + 3.13): the unit/CLI suite
   (`-m "not integration"`; `e2e` self-skips without credentials). Coverage is
   printed (`--cov ... --cov-report=term-missing`) but **informational** --
