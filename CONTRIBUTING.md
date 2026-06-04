@@ -657,7 +657,12 @@ Two GitHub Actions workflows guard the repo:
   there is no `--cov-fail-under` threshold, so coverage never blocks a merge.
 - **`build-windows` job**: real `uv build` wheel checks (issue #320).
 
-`make check` mirrors the `check` + `test` jobs locally; run it before pushing.
+`make check` runs the same gates as the `check` + `test` CI jobs locally and is
+slightly *stricter*: its `test` target uses `-m "not e2e"`, so it also runs the
+`integration` tests that CI's `test` job deselects (`-m "not integration"`).
+Those integration tests skip or pass without credentials -- they never fail
+offline -- so a green `make check` implies CI's narrower selection passes too.
+Run it before pushing.
 
 **Command-sync silent-drift gate** (`scripts/check_command_sync.py`): treats the
 live Typer command tree as the single source of truth and fails if any command
