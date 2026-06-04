@@ -60,6 +60,8 @@ description: >
   DIM_METRIC_THRESHOLD, dangling metric FK, orphaned constraint,
   phantom field, AGG on STRING, SUM on PCT, deep validate,
   sl, kbagent sl, semantic layer wizard, sl-build, sl-add, sl-edit,
+  reference data, semantic-layer reference-data, chart of accounts, COA,
+  dimension members, account list, dimension data, member list,
   developer portal, dev-portal, apps-api, register component, vendor app,
   portal property, ui-options, encryption portal, defaultBucket portal,
   app icon, configurationSchema portal, publish component, deprecate component,
@@ -296,6 +298,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Remove a constraint | `kbagent semantic-layer remove constraint --project PROJECT --name NAME` |
 | Remove a relationship. | `kbagent semantic-layer remove relationship --project PROJECT --name NAME` |
 | Remove a glossary term. | `kbagent semantic-layer remove glossary --project PROJECT --term TERM` |
+| List reference-data records (dimension summaries; use ``get`` for members) | `kbagent semantic-layer reference-data list --project PROJECT` |
+| Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent semantic-layer reference-data get --project PROJECT` |
+| Create or replace a reference-data record (keyed by dimension) | `kbagent semantic-layer reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
+| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent semantic-layer reference-data delete --project PROJECT --id ID-` |
 | Encrypt the project's storage token for transformation `user_properties` | `kbagent sl token --project PROJECT --component-id COMPONENT-ID` |
 | Build a semantic-layer model from a list of storage tables (non-interactive) | `kbagent sl build --project PROJECT` |
 | Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent sl promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
@@ -324,6 +330,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Remove a constraint | `kbagent sl remove constraint --project PROJECT --name NAME` |
 | Remove a relationship. | `kbagent sl remove relationship --project PROJECT --name NAME` |
 | Remove a glossary term. | `kbagent sl remove glossary --project PROJECT --term TERM` |
+| List reference-data records (dimension summaries; use ``get`` for members) | `kbagent sl reference-data list --project PROJECT` |
+| Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent sl reference-data get --project PROJECT` |
+| Create or replace a reference-data record (keyed by dimension) | `kbagent sl reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
+| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent sl reference-data delete --project PROJECT --id ID-` |
 | GET an endpoint on the running kbagent serve | `kbagent http get <PATH>` |
 | POST to an endpoint on the running kbagent serve | `kbagent http post <PATH>` |
 | PATCH an endpoint on the running kbagent serve | `kbagent http patch <PATH>` |

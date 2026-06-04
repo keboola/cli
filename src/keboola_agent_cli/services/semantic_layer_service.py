@@ -25,6 +25,7 @@ from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..metastore_client import MetastoreClient, SemanticType
 from ..models import ProjectConfig
+from . import _semantic_layer_reference_data as _refdata
 from ._semantic_layer_cascade import cascade_delete_model as _cascade_delete_model_impl
 from ._semantic_layer_crud import REMOVE_KINDS as _REMOVE_KINDS_HELPER
 from ._semantic_layer_crud import code_metric as _code_metric_helper
@@ -828,6 +829,70 @@ class SemanticLayerService(BaseService):
             if definition:
                 data["definition"] = definition
             return client.post_item("semantic-glossary", name=term, data=data)
+
+    # ------------------------------------------------------------------
+    # Reference data — dimension-member records (e.g. a Chart of Accounts).
+    # Thin delegators; logic lives in :mod:`._semantic_layer_reference_data`.
+    # ------------------------------------------------------------------
+
+    def list_reference_data(
+        self,
+        alias: str,
+        model_name_or_uuid: str | None = None,
+    ) -> dict[str, Any]:
+        """List reference-data records (optionally scoped to one model)."""
+        return _refdata.run_list(
+            lambda: self._new_metastore_client(self._resolve_one_project(alias)),
+            alias,
+            model_name_or_uuid,
+        )
+
+    def get_reference_data(
+        self,
+        alias: str,
+        *,
+        record_id: str | None = None,
+        dimension: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch one reference-data record by ``record_id`` or by ``dimension``.
+
+        ``dimension`` is the project-unique key, so no model is needed.
+        """
+        return _refdata.run_get(
+            lambda: self._new_metastore_client(self._resolve_one_project(alias)),
+            alias,
+            record_id=record_id,
+            dimension=dimension,
+        )
+
+    def set_reference_data(
+        self,
+        alias: str,
+        model_name_or_uuid: str | None,
+        *,
+        dimension: str,
+        members: list[dict[str, Any]],
+        dataset_id: str | None = None,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or replace (by model + dimension) a reference-data record."""
+        return _refdata.run_set(
+            lambda: self._new_metastore_client(self._resolve_one_project(alias)),
+            alias,
+            model_name_or_uuid,
+            dimension=dimension,
+            members=members,
+            dataset_id=dataset_id,
+            description=description,
+        )
+
+    def delete_reference_data(self, alias: str, record_id: str) -> dict[str, Any]:
+        """Delete a reference-data record by UUID (server-side soft-delete)."""
+        return _refdata.run_delete(
+            lambda: self._new_metastore_client(self._resolve_one_project(alias)),
+            alias,
+            record_id,
+        )
 
     # ------------------------------------------------------------------
     # Phase 4 — edit (DELETE-then-POST with rollback + rename cascade)

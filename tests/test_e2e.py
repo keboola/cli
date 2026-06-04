@@ -9765,6 +9765,128 @@ class TestE2ESemanticLayerLifecycle:
             except _ApiError as exc:
                 print(f"  WARN: residue scan failed: {exc}")
 
+    def test_semantic_layer_reference_data_roundtrip(self) -> None:
+        """Exercise `reference-data` set (create) → list → get → set (replace) → delete."""
+        from keboola_agent_cli.metastore_client import MetastoreClient
+
+        tag = f"kbagent_e2e_{int(time.time())}"
+        model_name = tag
+        dimension = f"{tag}_coa"
+        model_id: str | None = None
+        record_id: str | None = None
+
+        def _direct_delete(item_type: str, item_id: str) -> None:
+            with MetastoreClient(stack_url=self.url, token=self.token) as mc:
+                mc.delete_item(item_type, item_id)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+
+        try:
+            _step(1, "model create")
+            model_id = self._run_ok(
+                "semantic-layer", "model", "create", "--project", self.alias, "--name", model_name
+            )["data"]["model"]["id"]
+            assert model_id
+
+            members_file = self.work_dir / "coa.json"
+            members_file.write_text(
+                json.dumps(
+                    [
+                        {"account_code": "4011", "account_name": "Revenue", "is_leaf": 1},
+                        {
+                            "account_code": "ISR99999",
+                            "account_name": "Revenue Rollup",
+                            "is_leaf": 0,
+                        },
+                    ]
+                )
+            )
+
+            _step(2, "reference-data set (create)")
+            created = self._run_ok(
+                "semantic-layer",
+                "reference-data",
+                "set",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--dimension",
+                dimension,
+                "--members-file",
+                str(members_file),
+                "--dataset-id",
+                "out.c-syn.DIM_COA",
+            )["data"]
+            assert created["action"] == "created"
+            assert created["member_count"] == 2
+            record_id = created["id"]
+            assert record_id
+
+            _step(3, "reference-data list (dimension present)")
+            listed = self._run_ok(
+                "semantic-layer", "reference-data", "list", "--project", self.alias
+            )["data"]
+            assert dimension in {r["dimension_name"] for r in listed["reference_data"]}
+
+            _step(4, "reference-data get --id (members intact)")
+            got = self._run_ok(
+                "semantic-layer",
+                "reference-data",
+                "get",
+                "--project",
+                self.alias,
+                "--id",
+                record_id,
+            )["data"]
+            assert {m["account_code"] for m in got["members"]} == {"4011", "ISR99999"}
+
+            _step(5, "reference-data set (replace -> revision++)")
+            members_file.write_text(
+                json.dumps([{"account_code": "4011", "account_name": "Revenue (EU)", "is_leaf": 1}])
+            )
+            replaced = self._run_ok(
+                "semantic-layer",
+                "reference-data",
+                "set",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--dimension",
+                dimension,
+                "--members-file",
+                str(members_file),
+            )["data"]
+            assert replaced["action"] == "updated"
+            assert replaced["id"] == record_id
+            assert replaced["member_count"] == 1
+
+            _step(6, "reference-data delete")
+            removed = self._run_ok(
+                "semantic-layer",
+                "reference-data",
+                "delete",
+                "--project",
+                self.alias,
+                "--id",
+                record_id,
+                "--yes",
+            )["data"]
+            assert removed["removed"]["id"] == record_id
+            record_id = None
+
+        finally:
+            print("\n--- REFERENCE-DATA CLEANUP ---")
+            if record_id is not None:
+                try:
+                    _direct_delete("semantic-reference-data", record_id)
+                except Exception as exc:
+                    print(f"  WARN: failed to delete reference-data: {exc}")
+            if model_id is not None:
+                try:
+                    _direct_delete("semantic-model", model_id)
+                except Exception as exc:
+                    print(f"  WARN: failed to delete semantic-model {model_id}: {exc}")
+
     def test_semantic_layer_delete_cascade(self) -> None:
         """Regression test for #306 — cascade-delete frees up per-project dataset names.
 

@@ -38,6 +38,7 @@ SemanticType = Literal[
     "semantic-relationship",
     "semantic-constraint",
     "semantic-glossary",
+    "semantic-reference-data",
 ]
 
 
@@ -48,6 +49,7 @@ SEMANTIC_TYPES: tuple[str, ...] = (
     "semantic-relationship",
     "semantic-constraint",
     "semantic-glossary",
+    "semantic-reference-data",
 )
 
 
@@ -169,6 +171,38 @@ class MetastoreClient(BaseHttpClient):
                     retryable=False,
                 ) from exc
             raise
+        body = response.json()
+        return body.get("data", body) if isinstance(body, dict) else body
+
+    def put_item(
+        self,
+        item_type: SemanticType,
+        item_id: str,
+        name: str,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Replace an item in place via ``PUT`` (revisioned update).
+
+        Unlike the DELETE+POST pattern the higher-level ``edit`` operations
+        use, ``PUT`` updates the record in place and increments
+        ``meta.revision`` server-side, preserving the metastore's revision
+        history. ``data`` is the inner ``attributes`` payload; the outer
+        envelope is added here (identical shape to :meth:`post_item`).
+
+        Raises :class:`KeboolaApiError` with ``error_code=NOT_FOUND`` on 404.
+        """
+        envelope = {
+            "name": name,
+            "data": data,
+            "branch": _ENVELOPE_BRANCH,
+            "schemaVersion": _ENVELOPE_SCHEMA_VERSION,
+            "scope": _ENVELOPE_SCOPE,
+        }
+        response = self._do_request(
+            "PUT",
+            f"/api/v1/repository/{item_type}/{item_id}",
+            json=envelope,
+        )
         body = response.json()
         return body.get("data", body) if isinstance(body, dict) else body
 

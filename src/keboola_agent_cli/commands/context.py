@@ -925,6 +925,20 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Three-way diff: project<->project, project<->file, file<->file. Output
     groups changes per entity type: added, removed, changed (with diff_keys).
 
+  kbagent semantic-layer reference-data list|get|set|delete ... (since 0.55.0)
+    Dimension-member records (semantic-reference-data): one record per
+    dimension holding the full member list in a members[] array (e.g. a
+    Chart of Accounts). Deliberately OUTSIDE build/export/diff/cascade.
+    list --project P [--model M] -> dimension summaries (id, dimension,
+    member_count). get --project P (--id ID | --dimension D) ->
+    one record + all members (dimension is project-unique, so no model
+    needed). set --project P [--model M] --dimension D
+    --members-file PATH ('-' = stdin) [--dataset-id T] [--description X] ->
+    create-or-replace, idempotent on dimension (project-wide lookup): an
+    existing record is replaced in place via PUT (revision++), else POST.
+    delete --project P --id ID [--yes]. Member keys mirror the DIM_COA
+    columns (account_code, account_name, parent_code, is_leaf, ...).
+
   kbagent semantic-layer add metric|dataset|relationship|constraint|glossary ...
     Add one entity. Dataset auto-derives `fqn` from --table-id; --deep-fields
     fetches the storage schema and synthesises role-classified fields

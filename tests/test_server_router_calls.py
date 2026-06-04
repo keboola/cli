@@ -552,3 +552,72 @@ def test_dev_portal_list_no_identity_no_default_is_400(tmp_path: Path) -> None:
 
     assert res.status_code == 400, res.text
     dp_svc.list_apps.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# semantic_layer.py  reference-data routes -> SemanticLayerService parity
+# ---------------------------------------------------------------------------
+
+
+def test_reference_data_list_route(tmp_path: Path) -> None:
+    """GET /semantic-layer/reference-data -> list_reference_data(alias=, model_name_or_uuid=)."""
+    sl = MagicMock()
+    sl.list_reference_data.return_value = {"project": PROJECT, "reference_data": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl))
+    resp = TestClient(app).get(
+        "/semantic-layer/reference-data",
+        params={"project": PROJECT, "model": "m"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 200, resp.text
+    sl.list_reference_data.assert_called_once_with(alias=PROJECT, model_name_or_uuid="m")
+
+
+def test_reference_data_get_route(tmp_path: Path) -> None:
+    """GET /semantic-layer/reference-data/{id} -> get_reference_data(alias=, record_id=)."""
+    sl = MagicMock()
+    sl.get_reference_data.return_value = {"id": "r1", "members": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl))
+    resp = TestClient(app).get(
+        "/semantic-layer/reference-data/r1", params={"project": PROJECT}, headers=AUTH
+    )
+    assert resp.status_code == 200, resp.text
+    sl.get_reference_data.assert_called_once_with(alias=PROJECT, record_id="r1")
+
+
+def test_reference_data_set_route(tmp_path: Path) -> None:
+    """PUT /semantic-layer/reference-data -> set_reference_data(...) with all kwargs."""
+    sl = MagicMock()
+    sl.set_reference_data.return_value = {"id": "r1", "action": "created"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl))
+    resp = TestClient(app).put(
+        "/semantic-layer/reference-data",
+        json={
+            "project": PROJECT,
+            "dimension": "chart_of_accounts",
+            "members": [{"account_code": "4011"}],
+            "dataset_id": "in.c-f.DIM_COA",
+        },
+        headers=AUTH,
+    )
+    assert resp.status_code == 200, resp.text
+    sl.set_reference_data.assert_called_once_with(
+        alias=PROJECT,
+        model_name_or_uuid=None,
+        dimension="chart_of_accounts",
+        members=[{"account_code": "4011"}],
+        dataset_id="in.c-f.DIM_COA",
+        description=None,
+    )
+
+
+def test_reference_data_delete_route(tmp_path: Path) -> None:
+    """DELETE /semantic-layer/reference-data/{id} -> delete_reference_data(alias=, record_id=)."""
+    sl = MagicMock()
+    sl.delete_reference_data.return_value = {"removed": {"id": "r1"}}
+    app = _make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl))
+    resp = TestClient(app).delete(
+        "/semantic-layer/reference-data/r1", params={"project": PROJECT}, headers=AUTH
+    )
+    assert resp.status_code == 200, resp.text
+    sl.delete_reference_data.assert_called_once_with(alias=PROJECT, record_id="r1")

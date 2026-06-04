@@ -1806,3 +1806,204 @@ class TestGetContext:
         assert result.exit_code == 0
         assert "users" in result.output
         assert "dataset" in result.output
+
+
+# ---------------------------------------------------------------------------
+# semantic-layer reference-data (list / get / set / delete)
+# ---------------------------------------------------------------------------
+
+
+class TestReferenceDataList:
+    def test_json_success(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.list_reference_data.return_value = {
+            "project": "prod",
+            "reference_data": [
+                {
+                    "id": "r1",
+                    "dimension_name": "chart_of_accounts",
+                    "model_uuid": "U",
+                    "dataset_id": "in.c-f.DIM_COA",
+                    "member_count": 3,
+                }
+            ],
+        }
+        result = _invoke(
+            ["--json", "semantic-layer", "reference-data", "list", "--project", "prod"],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        assert body["data"]["reference_data"][0]["dimension_name"] == "chart_of_accounts"
+        mock.list_reference_data.assert_called_once()
+
+
+class TestReferenceDataGet:
+    def test_by_id(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.get_reference_data.return_value = {
+            "project": "prod",
+            "id": "r1",
+            "dimension_name": "chart_of_accounts",
+            "model_uuid": "U",
+            "member_count": 1,
+            "revision": 2,
+            "members": [{"account_code": "4011", "account_name": "Revenue"}],
+        }
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "reference-data",
+                "get",
+                "--project",
+                "prod",
+                "--id",
+                "r1",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        assert body["data"]["members"][0]["account_code"] == "4011"
+        _, kwargs = mock.get_reference_data.call_args
+        assert kwargs["record_id"] == "r1"
+
+    def test_id_and_dimension_together_exits_2(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "reference-data",
+                "get",
+                "--project",
+                "prod",
+                "--id",
+                "r1",
+                "--dimension",
+                "chart_of_accounts",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 2, result.output
+        mock.get_reference_data.assert_not_called()
+
+    def test_neither_id_nor_dimension_exits_2(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        result = _invoke(
+            ["--json", "semantic-layer", "reference-data", "get", "--project", "prod"],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 2, result.output
+        mock.get_reference_data.assert_not_called()
+
+
+class TestReferenceDataSet:
+    def test_set_from_file(self, store: ConfigStore, tmp_path: Path) -> None:
+        members_file = tmp_path / "coa.json"
+        members_file.write_text(json.dumps([{"account_code": "4011", "account_name": "Revenue"}]))
+        mock = MagicMock()
+        mock.set_reference_data.return_value = {
+            "project": "prod",
+            "id": "r1",
+            "dimension_name": "chart_of_accounts",
+            "member_count": 1,
+            "action": "created",
+        }
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "reference-data",
+                "set",
+                "--project",
+                "prod",
+                "--dimension",
+                "chart_of_accounts",
+                "--members-file",
+                str(members_file),
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        assert body["data"]["action"] == "created"
+        _, kwargs = mock.set_reference_data.call_args
+        assert kwargs["dimension"] == "chart_of_accounts"
+        assert kwargs["members"] == [{"account_code": "4011", "account_name": "Revenue"}]
+
+    def test_set_bad_json_exits_2(self, store: ConfigStore, tmp_path: Path) -> None:
+        members_file = tmp_path / "coa.json"
+        members_file.write_text("{not valid json")
+        mock = MagicMock()
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "reference-data",
+                "set",
+                "--project",
+                "prod",
+                "--dimension",
+                "chart_of_accounts",
+                "--members-file",
+                str(members_file),
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 2, result.output
+        mock.set_reference_data.assert_not_called()
+
+
+class TestReferenceDataDelete:
+    def test_delete_requires_yes_non_tty(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "reference-data",
+                "delete",
+                "--project",
+                "prod",
+                "--id",
+                "r1",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 2, result.output
+        mock.delete_reference_data.assert_not_called()
+
+    def test_delete_with_yes(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.delete_reference_data.return_value = {
+            "project": "prod",
+            "removed": {"id": "r1", "dimension_name": "chart_of_accounts"},
+        }
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "reference-data",
+                "delete",
+                "--project",
+                "prod",
+                "--id",
+                "r1",
+                "--yes",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        assert body["data"]["removed"]["id"] == "r1"
+        mock.delete_reference_data.assert_called_once()

@@ -246,8 +246,66 @@ class TestDeleteItem:
         assert excinfo.value.error_code == ErrorCode.NOT_FOUND
 
 
+class TestPutItem:
+    """put_item wraps the same envelope as post_item but targets PUT /{type}/{id}."""
+
+    def test_put_envelope_and_url(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            method="PUT",
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-reference-data/rec-1",
+            json={
+                "data": {
+                    "type": "semantic-reference-data",
+                    "id": "rec-1",
+                    "attributes": {"dimensionName": "chart_of_accounts"},
+                    "meta": {"revision": 2},
+                }
+            },
+            status_code=200,
+        )
+        client = MetastoreClient(stack_url=STACK_URL_US, token=TOKEN)
+        try:
+            stored = client.put_item(
+                "semantic-reference-data",
+                "rec-1",
+                name="chart_of_accounts",
+                data={"modelUUID": "u", "dimensionName": "chart_of_accounts", "members": []},
+            )
+        finally:
+            client.close()
+        assert stored["id"] == "rec-1"
+        assert stored["meta"]["revision"] == 2
+
+        request = httpx_mock.get_requests()[0]
+        assert request.method == "PUT"
+        body = json.loads(request.content)
+        assert body["name"] == "chart_of_accounts"
+        assert body["branch"] == "main"
+        assert body["schemaVersion"] == "1.0.0"
+        assert body["scope"] == "project"
+        assert body["data"]["dimensionName"] == "chart_of_accounts"
+        assert body["data"]["members"] == []
+
+    def test_put_404(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            method="PUT",
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-reference-data/missing",
+            status_code=404,
+            json={"error": "not found"},
+        )
+        client = MetastoreClient(stack_url=STACK_URL_US, token=TOKEN)
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.put_item(
+                    "semantic-reference-data", "missing", name="d", data={"members": []}
+                )
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.NOT_FOUND
+
+
 class TestSemanticTypes:
-    """Sanity-check the SEMANTIC_TYPES tuple has the six expected slugs."""
+    """Sanity-check the SEMANTIC_TYPES tuple has the expected slugs."""
 
     def test_semantic_types_complete(self) -> None:
         assert set(SEMANTIC_TYPES) == {
@@ -257,4 +315,5 @@ class TestSemanticTypes:
             "semantic-relationship",
             "semantic-constraint",
             "semantic-glossary",
+            "semantic-reference-data",
         }

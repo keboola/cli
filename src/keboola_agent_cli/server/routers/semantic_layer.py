@@ -1,4 +1,4 @@
-"""Semantic-layer endpoints — 14 routes covering 26 CLI subcommands.
+"""Semantic-layer endpoints — 18 routes covering 30 CLI subcommands.
 
 Mirrors the per-subcommand surface of
 :class:`keboola_agent_cli.services.semantic_layer_service.SemanticLayerService`.
@@ -193,6 +193,17 @@ class BuildRequest(BaseModel):
 class TokenEncryptRequest(BaseModel):
     project: str
     component_id: str
+
+
+class RefDataSet(BaseModel):
+    """Create-or-replace body for ``PUT /reference-data`` (idempotent on dimension)."""
+
+    project: str
+    model: str | None = None
+    dimension: str
+    members: list[dict[str, Any]]
+    dataset_id: str | None = None
+    description: str | None = None
 
 
 # ── Routes (14 declarations, in the order from the plan) ────────────
@@ -585,6 +596,54 @@ def token_encrypt(
 ) -> dict[str, Any]:
     """Encrypt the project's storage token for transformation ``user_properties``."""
     return registry.semantic_layer.encrypt_token(alias=body.project, component_id=body.component_id)
+
+
+# ── reference-data (dimension-member records, e.g. a Chart of Accounts) ──
+
+
+@router.get("/reference-data", summary="List reference-data records")
+def list_reference_data(
+    project: str,
+    model: str | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """List dimension-member records (summaries; use the by-id route for members)."""
+    return registry.semantic_layer.list_reference_data(alias=project, model_name_or_uuid=model)
+
+
+@router.get("/reference-data/{record_id}", summary="Get one reference-data record")
+def get_reference_data(
+    record_id: str,
+    project: str,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Fetch one record (all members) by UUID."""
+    return registry.semantic_layer.get_reference_data(alias=project, record_id=record_id)
+
+
+@router.put("/reference-data", summary="Create or replace a reference-data record")
+def set_reference_data(
+    body: RefDataSet, registry: ServiceRegistry = Depends(get_registry)
+) -> dict[str, Any]:
+    """Create or replace (by model + dimension) a record. Idempotent; PUT semantics."""
+    return registry.semantic_layer.set_reference_data(
+        alias=body.project,
+        model_name_or_uuid=body.model,
+        dimension=body.dimension,
+        members=body.members,
+        dataset_id=body.dataset_id,
+        description=body.description,
+    )
+
+
+@router.delete("/reference-data/{record_id}", summary="Delete a reference-data record")
+def delete_reference_data(
+    record_id: str,
+    project: str,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Delete a record by UUID (``--yes`` implicit on REST; server-side soft-delete)."""
+    return registry.semantic_layer.delete_reference_data(alias=project, record_id=record_id)
 
 
 # Re-export the closed set of kinds for tests / docs.

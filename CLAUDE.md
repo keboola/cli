@@ -491,6 +491,10 @@ kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,.
 kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes]
 kbagent semantic-layer build --project P [--model M] --tables T,T,... [--name N] [--dry-run] [--keep-on-failure] [--output PATH]
 kbagent semantic-layer token --encrypt --project P --component-id C
+kbagent semantic-layer reference-data list --project P [--model M]
+kbagent semantic-layer reference-data get --project P (--id ID | --dimension D)
+kbagent semantic-layer reference-data set --project P [--model M] --dimension D --members-file PATH [--dataset-id T] [--description X]
+kbagent semantic-layer reference-data delete --project P --id ID [--yes]
 # Alias: `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
 
 kbagent http get PATH [--timeout SECONDS]

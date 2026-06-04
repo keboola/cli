@@ -22,6 +22,7 @@ from ._helpers import (
 )
 from ._semantic_layer_crud import add_app, edit_app, remove_app
 from ._semantic_layer_helpers import _handle_service_call
+from ._semantic_layer_reference_data import reference_data_app
 
 semantic_layer_app = typer.Typer(
     name="semantic-layer",
@@ -138,6 +139,7 @@ def model_create(
 semantic_layer_app.add_typer(add_app, name="add")
 semantic_layer_app.add_typer(edit_app, name="edit")
 semantic_layer_app.add_typer(remove_app, name="remove")
+semantic_layer_app.add_typer(reference_data_app, name="reference-data")
 
 
 @model_app.command("delete")
