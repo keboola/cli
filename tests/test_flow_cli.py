@@ -90,7 +90,7 @@ class TestFlowList:
         }
         result = _invoke(store, mock_flow, ["flow", "list", "--project", "prod"])
         assert result.exit_code == 0, result.output
-        assert "3 legacy" in result.output and "orchestrator" in result.output
+        assert "3 legacy" in result.output and "Conditional Flows" in result.output
 
     def test_list_empty(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})

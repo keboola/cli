@@ -236,8 +236,8 @@ def _format_flows_table(
     legacy = result.get("legacy_orchestrator_count", 0)
     if legacy:
         formatter.warning(
-            f"{legacy} legacy keboola.orchestrator flow(s) are not shown "
-            f"(orchestrator support was dropped in 0.56.0; migrate to keboola.flow)."
+            f"{legacy} legacy flow(s) are not shown "
+            f"(Legacy Flows were dropped in 0.56.0; migrate them to Conditional Flows)."
         )
 
 
