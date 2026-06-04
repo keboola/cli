@@ -162,7 +162,7 @@ class TestSyncStatusWarning:
     def test_status_surfaces_plaintext_warnings(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "cfg"
         store = setup_single_project(config_dir)
-        svc = SyncService(config_store=store, client_factory=lambda url, token: None)
+        svc = SyncService(config_store=store, client_factory=lambda url, token: MagicMock())
 
         project_root = tmp_path / "project"
         _build_tree(project_root, parameters={"#password": "plain"}, in_sync=True)

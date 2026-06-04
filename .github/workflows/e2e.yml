@@ -1,0 +1,71 @@
+name: E2E
+
+# End-to-end tests against a REAL Keboola project. These create and delete
+# live resources (buckets, tables, workspaces, data apps), so they run on a
+# schedule + on demand -- NOT on every PR -- against a dedicated throwaway
+# project, never production. The fast, mocked unit/CLI suite in ci.yml is the
+# per-PR gate; this workflow is the periodic "does main still work against the
+# real API" confidence check.
+#
+# Setup (one-time, by a maintainer):
+#   1. Create a DEDICATED throwaway Keboola project (its data will be churned).
+#   2. Repo Settings > Secrets and variables > Actions > New repository secret:
+#        E2E_API_TOKEN = <storage API token for that project>
+#        E2E_URL       = connection.<region>.keboola.com  (the stack host)
+#   3. (Optional) trigger a manual run from the Actions tab to verify wiring.
+# Without those secrets the workflow still succeeds, but emits a warning and
+# skips the suite (see the credentials guard below). See CONTRIBUTING.md
+# "E2E tests in CI" for details.
+
+on:
+  schedule:
+    # 03:17 UTC daily. Off-the-hour on purpose: GitHub delays cron jobs
+    # scheduled on exact hours because everyone piles onto :00.
+    - cron: "17 3 * * *"
+  workflow_dispatch: {}
+
+# Serialize runs: the suite mutates a single shared project, so a scheduled
+# run overlapping a manual one would step on each other's resources.
+concurrency:
+  group: e2e
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.11.16"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --extra server
+
+      - name: Check E2E credentials are configured
+        id: creds
+        env:
+          E2E_API_TOKEN: ${{ secrets.E2E_API_TOKEN }}
+        run: |
+          if [ -z "$E2E_API_TOKEN" ]; then
+            echo "::warning::E2E_API_TOKEN secret is not configured -- skipping the E2E run. See CONTRIBUTING.md 'E2E tests in CI'."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run E2E suite
+        if: steps.creds.outputs.configured == 'true'
+        env:
+          E2E_API_TOKEN: ${{ secrets.E2E_API_TOKEN }}
+          E2E_URL: ${{ secrets.E2E_URL }}
+        run: make test-e2e

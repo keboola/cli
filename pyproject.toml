@@ -104,6 +104,7 @@ known-first-party = ["keboola_agent_cli"]
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-cov>=5",
     "pytest-httpx>=0.30",
     "pytest-asyncio>=0.23",
     "ruff>=0.8",
@@ -122,3 +123,11 @@ extra-paths = ["tests"]
 
 [tool.ty.rules]
 unresolved-import = "warn"
+
+[tool.coverage.run]
+# Coverage is INFORMATIONAL only -- CI prints a term-missing report but does
+# NOT enforce a --cov-fail-under threshold. See `make test-cov` and the `test`
+# job in .github/workflows/ci.yml. Branch coverage gives a truer picture of
+# the dual-output (JSON vs Rich) and error-path branches that dominate this CLI.
+source = ["keboola_agent_cli"]
+branch = true

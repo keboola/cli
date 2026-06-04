@@ -625,13 +625,65 @@ foot-gun.
 ## Running CI Locally
 
 ```bash
-make check          # Full CI: lint + format check + all tests
-make lint           # Just ruff linter
-make format         # Auto-format code
-make test           # Just tests
-make skill-gen      # Regenerate SKILL.md from CLI command metadata
+make check              # CI parity: lint + format + typecheck + skill + version + command-sync + changelog + error-codes + test
+make lint               # Just the ruff linter
+make format             # Auto-format code
+make typecheck          # Static type check (Astral `ty`)
+make test               # Just the test suite (no coverage)
+make test-cov           # Test suite + informational coverage report (term-missing)
+make command-sync-check # Verify every CLI command is registered + documented
+make skill-gen          # Regenerate SKILL.md from CLI command metadata
 ```
 
 Always run `make check` before pushing. The PR won't pass CI if lint or tests fail.
 
 **SKILL.md freshness check**: CI verifies that `plugins/kbagent/skills/kbagent/SKILL.md` matches the auto-generated output from `make skill-gen`. If you added, removed, or renamed any CLI command, run `make skill-gen` and commit the result. Manual edits to the decision table will be overwritten and will cause CI to fail.
+
+## CI workflows
+
+Two GitHub Actions workflows guard the repo:
+
+### `.github/workflows/ci.yml` -- per-PR gate (push + pull_request to main)
+
+- **`check` job** (one run, Python 3.12): the static half of `make check` --
+  lint, format, `ty` type-check, SKILL.md freshness, version consistency, the
+  command-sync silent-drift gate, changelog completeness, and the error-code
+  enum check. These are deterministic and interpreter-independent, so they do
+  not fan out across the matrix.
+- **`test` job** (matrix: Python 3.12 + 3.13): the unit/CLI suite
+  (`-m "not integration"`; `e2e` self-skips without credentials). Coverage is
+  printed (`--cov ... --cov-report=term-missing`) but **informational** --
+  there is no `--cov-fail-under` threshold, so coverage never blocks a merge.
+- **`build-windows` job**: real `uv build` wheel checks (issue #320).
+
+`make check` mirrors the `check` + `test` jobs locally; run it before pushing.
+
+**Command-sync silent-drift gate** (`scripts/check_command_sync.py`): treats the
+live Typer command tree as the single source of truth and fails if any command
+is missing from `permissions.py` `OPERATION_REGISTRY`, `CLAUDE.md`
+`## All CLI Commands`, `commands/context.py` `AGENT_CONTEXT`, or
+`commands-reference.md`. It also flags dead `OPERATION_REGISTRY` keys (renamed /
+removed commands). This is the deterministic half of the "Plugin synchronization
+map" -- the judgement half (is a behaviour change worth a new gotcha? is the
+`(since vX.Y.Z)` tag right?) is left to `/kbagent:review`.
+
+### `.github/workflows/e2e.yml` -- nightly + on-demand (NOT per-PR)
+
+The end-to-end suite hits a real Keboola API and mutates live resources, so it
+is **not** wired into the PR gate (too slow, too flaky, and it would churn a
+real project on every push). Instead it runs **nightly** (cron `17 3 * * *`
+UTC) and **on demand** via the Actions tab (`workflow_dispatch`).
+
+**One-time setup (maintainer):**
+
+1. Create a **dedicated throwaway** Keboola project -- the suite creates and
+   deletes buckets, tables, workspaces, and data apps, so never point it at a
+   project whose data you care about.
+2. Add two repository secrets (Settings > Secrets and variables > Actions):
+   - `E2E_API_TOKEN` -- a Storage API token for that project,
+   - `E2E_URL` -- the stack host, e.g. `connection.<region>.keboola.com`.
+3. Optionally trigger a manual run from the Actions tab to verify the wiring.
+
+If the secrets are absent the workflow still **succeeds** (green) but emits a
+warning and skips the suite -- so a fork or an unconfigured repo never sees a
+spurious red E2E failure. Fork PRs never receive secrets, by design.

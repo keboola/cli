@@ -20,6 +20,7 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `project description-set --project NAME [--text STR | --file PATH | --stdin]` -- set the dashboard project description (markdown). Pass exactly one of `--text`, `--file`, or `--stdin`. Writes to `KBC.projectDescription` on the default branch -- always the main branch, regardless of any active dev branch
 - `project use ALIAS` -- pin `ALIAS` as the persistent default project. Stored as `default_project` in config.json. Overridden at runtime by `KBAGENT_PROJECT=ALIAS` (env, beats pin) and by `--project ALIAS` (CLI flag, beats both)
 - `project current` -- print the effective default project and its source (`env` / `pin` / `none`). Reports both the env override AND the persisted pin so misconfigurations are visible. Returns `{"alias": null, "source": "none"}` when neither is set
+- `project info --project NAME` -- show detailed project metadata
 
 ## Project Members & Invitations (since v0.29.0)
 
@@ -38,6 +39,14 @@ All seven commands authenticate via `KBC_MANAGE_API_TOKEN` (Manage API), not the
 - `--deny-destructive` -- block only destructive operations (delete-table, delete-bucket, terminate-job, etc.) for this invocation. Pure-write ops like create-table stay allowed. Use this when you want to keep build-up capabilities but lock out tear-downs
 - `--allow-env-manage-token` -- opt in to reading `KBC_MANAGE_API_TOKEN` from env (default-deny since v0.29.0). Without it the env var is ignored and an interactive hidden prompt is required for `org setup` / `project refresh` / `data-app password`. Closes the AI-exfiltration risk where any subprocess inherits the manage token via env. Session-only; not persisted; no env-var equivalent (intentional, would re-create the hole). REPL forwards this flag to nested invocations the same way it forwards the deny-* flags
 - All three flags compose: `kbagent --deny-writes --deny-destructive --allow-env-manage-token ...` is the safest CI-friendly invocation
+
+## Permissions (session firewall commands)
+The `permissions` subcommands persist a write/destructive policy to config.json (the `--deny-*` flags above are the one-shot form). The engine guards against agent mistakes; it is not a sandbox.
+- `permissions list [--category read|write|destructive|admin]` -- list all operations with their risk category and current allowed/denied status
+- `permissions show` -- show the current active permission policy
+- `permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]` -- set the permission policy (firewall rules); patterns like `cli:write`, `cli:destructive`, `tool:write`
+- `permissions reset` -- remove all permission restrictions
+- `permissions check OPERATION` -- check if a specific operation is allowed (e.g. `permissions check storage.delete-table`)
 
 ## Organization
 - `org setup --org-id ID --url URL [--dry-run] [--yes]` -- bulk-onboard all projects from an org (org admin; manage token via interactive prompt by default, or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.29.0+)
@@ -132,6 +141,14 @@ Uses the per-project Storage token (no manage token). Control plane = `stream.<r
 - `lineage info -l FILE` -- show graph contents: projects, tables, most connected nodes
 - `lineage server -l FILE [--port N]` -- interactive lineage browser in web browser
 - `sharing edges [--project NAME]` -- cross-project data flow edges via bucket sharing
+
+## Sharing (Cross-Project)
+Bucket sharing + linking across projects in the same organization. `sharing edges` (above, under Data Lineage) visualises the resulting data-flow graph.
+- `sharing list [--project NAME]` -- list shared buckets available for linking
+- `sharing share --project ALIAS --bucket-id ID --type TYPE [--target-project-ids IDs] [--target-users EMAILS]` -- enable sharing on a bucket
+- `sharing unshare --project ALIAS --bucket-id ID` -- disable sharing on a bucket
+- `sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME]` -- link a shared bucket into a project
+- `sharing unlink --project ALIAS --bucket-id ID` -- remove a linked bucket from a project
 
 ## Development Branches
 - `branch list [--project NAME]` -- list dev branches
