@@ -65,6 +65,12 @@ class TestHeadline:
         note = "Holds a dimension (e.g. a Chart of Accounts) as one record. More."
         assert headline(note) == "Holds a dimension (e.g. a Chart of Accounts) as one record."
 
+    def test_digit_guard_is_period_only(self) -> None:
+        # The digit guard targets version-number periods only -- a digit before
+        # "!" or "?" is a genuine sentence end and must still split.
+        assert headline("Exit code 5! Details follow.") == "Exit code 5!"
+        assert headline("Ready in v2? Yes, fully ready.") == "Ready in v2?"
+
     def test_long_first_sentence_truncated_on_word_boundary(self) -> None:
         note = "Word " * 100  # no terminator, far over the cap
         out = headline(note)

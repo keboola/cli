@@ -35,16 +35,17 @@ CHANGELOG: dict[str, list[str]] = {
         "(operator/function/phase/task/variable/const/array), and typed tasks "
         "(`job`/`notification`/`variable`). Execute one with "
         "`kbagent job run --component-id keboola.flow --config-id ID`.",
-        "Change (flow validation): `flow new`/`flow update` validate the body "
-        "against the live conditional-flow JSON Schema (Draft7), fetched at runtime "
-        "from the stack's component registry (AI Service `configurationSchema` for "
-        "`keboola.flow` -- never bundled/vendored), plus semantic checks: a phase "
-        "with conditional transitions must end with a default (condition-less) "
-        "transition; every phase needs >=1 enabled task; operator/function "
-        "operand-arity is enforced; unreachable phases are reported as warnings "
-        "(forward BFS from the first phase), and `goto` loops are legal (no cycle "
-        "detection). Invalid bodies are rejected with `INVALID_FLOW_DEFINITION` "
-        "(replaces `INVALID_FLOW_DAG`, removed from `ErrorCode`). When the schema "
+        "Change (flow validation): `flow new`/`flow update` now validate the body "
+        "against the live conditional-flow JSON Schema (Draft7) plus semantic "
+        "checks. The schema is fetched at runtime from the stack's component "
+        "registry (AI Service `configurationSchema` for `keboola.flow` -- never "
+        "bundled/vendored). Semantic checks: a phase with conditional transitions "
+        "must end with a default (condition-less) transition; every phase needs "
+        ">=1 enabled task; operator/function operand-arity is enforced; unreachable "
+        "phases are reported as warnings (forward BFS from the first phase), and "
+        "`goto` loops are legal (no cycle detection). Invalid bodies are rejected "
+        "with `INVALID_FLOW_DEFINITION` (replaces `INVALID_FLOW_DAG`, removed from "
+        "`ErrorCode`). When the schema "
         "fetch fails (network, KeboolaApiError, or empty/missing schema) the write "
         "is NOT blocked: structural validation is skipped, the semantic checks "
         "still run (the Storage API does not validate flow configs server-side), "
@@ -857,8 +858,11 @@ def headline(note: str, max_chars: int = CHANGELOG_HEADLINE_MAX_CHARS) -> str:
     for match in _SENTENCE_BOUNDARY.finditer(note):
         dot = match.start()
         before = note[dot - 1] if dot > 0 else ""
-        if before.isdigit():
-            continue  # part of a version number like 0.57.0
+        # Only a *period* after a digit is suspect (a version number like
+        # 0.57.0); a digit before "!" or "?" -- e.g. "exit code 5!" -- is a
+        # genuine sentence end and must not be skipped.
+        if note[dot] == "." and before.isdigit():
+            continue
         token_match = _TRAILING_TOKEN.search(note[:dot])
         token = token_match.group(0).rstrip(".").lower() if token_match else ""
         if token in _HEADLINE_ABBREVIATIONS:
