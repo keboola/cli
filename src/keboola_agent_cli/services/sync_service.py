@@ -57,7 +57,11 @@ from ..sync.manifest import (
     save_manifest,
 )
 from ..sync.naming import config_path, config_row_path, sanitize_name
-from ._encryption import apply_encrypted_to_local, encrypt_secrets_in_config
+from ._encryption import (
+    apply_encrypted_to_local,
+    encrypt_secrets_in_config,
+    find_plaintext_secret_keys,
+)
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
@@ -161,6 +165,97 @@ def _ensure_within_branch(
             f"'{branch_resolved}'. This indicates a malformed API response "
             f"or a regression in path sanitization."
         )
+
+
+def scan_synced_plaintext_secrets(
+    project_root: Path, manifest: Manifest | None = None
+) -> list[dict[str, Any]]:
+    """Find in-sync configs/rows whose local files still hold plaintext #-secrets.
+
+    Regression guard for issue #378. A config that is *in sync* with the remote
+    (local file hash == manifest ``pull_hash``) but whose ``#``-prefixed values
+    are NOT ``KBC::``-encrypted means the remote is holding that secret in
+    plaintext -- the value passed through the sync baseline unencrypted (written
+    by a pre-0.54.0 ``config``/``sync`` path, or pulled from an already-leaked
+    remote). Pending local edits (hash != ``pull_hash``) are deliberately
+    skipped: there a ``sync push`` on >=0.54.0 encrypts on write, so flagging
+    them would be noise.
+
+    Read-only -- filesystem + manifest only, no API client. Returns one entry
+    per affected config/row with the secret *key paths* (never the values).
+
+    Args:
+        project_root: Root of the sync working tree.
+        manifest: Already-loaded manifest to reuse (callers like
+            :meth:`SyncService.status` load it themselves). Loaded from
+            *project_root* when ``None``.
+
+    Raises:
+        FileNotFoundError: if *manifest* is ``None`` and *project_root* has no
+            ``.keboola/manifest.json``.
+    """
+    if manifest is None:
+        manifest = load_manifest(project_root)
+    warnings: list[dict[str, Any]] = []
+
+    def _branch_path(branch_id: int | None) -> str:
+        if branch_id is not None:
+            for b in manifest.branches:
+                if b.id == branch_id:
+                    return b.path
+        return manifest.branches[0].path if manifest.branches else "main"
+
+    def _read_yaml(path: Path) -> dict[str, Any] | None:
+        if not path.exists():
+            return None
+        try:
+            parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _in_sync(path: Path, pull_hash: str) -> bool:
+        if not pull_hash or not path.exists():
+            return False
+        return hashlib.sha256(path.read_bytes()).hexdigest() == pull_hash
+
+    for cfg in manifest.configurations:
+        config_dir = project_root / _branch_path(cfg.branch_id) / cfg.path
+        config_file = config_dir / CONFIG_FILENAME
+        data = _read_yaml(config_file)
+        if data is not None and _in_sync(config_file, cfg.metadata.get("pull_hash", "")):
+            _name, _desc, configuration = local_config_to_api(data)
+            keys = find_plaintext_secret_keys(configuration)
+            if keys:
+                warnings.append(
+                    {
+                        "component_id": cfg.component_id,
+                        "config_id": cfg.id,
+                        "path": str(cfg.path),
+                        "scope": "config",
+                        "secret_keys": keys,
+                    }
+                )
+
+        for row in cfg.rows:
+            row_file = config_dir / row.path / CONFIG_FILENAME
+            row_data = _read_yaml(row_file)
+            if row_data is not None and _in_sync(row_file, row.metadata.get("pull_hash", "")):
+                _name, _desc, row_cfg = local_row_to_api(row_data, cfg.component_id)
+                row_keys = find_plaintext_secret_keys(row_cfg)
+                if row_keys:
+                    warnings.append(
+                        {
+                            "component_id": cfg.component_id,
+                            "config_id": cfg.id,
+                            "row_id": row.id,
+                            "path": f"{cfg.path}/{row.path}",
+                            "scope": "row",
+                            "secret_keys": row_keys,
+                        }
+                    )
+
+    return warnings
 
 
 class SyncService(BaseService):
@@ -983,7 +1078,9 @@ class SyncService(BaseService):
             project_root: Root directory of the sync working tree.
 
         Returns:
-            Dict with lists of modified/added/deleted configs and count of unchanged.
+            Dict with lists of modified/added/deleted configs, count of
+            unchanged, and ``plaintext_secret_warnings`` -- in-sync configs/rows
+            whose ``#``-secrets are still plaintext on the remote (issue #378).
         """
         manifest = load_manifest(project_root)
 
@@ -1040,12 +1137,22 @@ class SyncService(BaseService):
         # Scan for added configs (local files without manifest entry)
         added = self._find_untracked_configs(project_root, manifest)
 
+        # Flag in-sync configs whose secrets are still plaintext (issue #378).
+        # Best-effort: a file race during the scan must not crash `sync status`
+        # (mirrors the doctor sync_secrets check's defensive guard).
+        try:
+            plaintext_secret_warnings = scan_synced_plaintext_secrets(project_root, manifest)
+        except Exception:
+            logger.warning("Plaintext-secret scan failed; skipping", exc_info=True)
+            plaintext_secret_warnings = []
+
         return {
             "modified": modified,
             "added": added,
             "deleted": deleted,
             "unchanged": unchanged,
             "total_tracked": len(manifest.configurations),
+            "plaintext_secret_warnings": plaintext_secret_warnings,
         }
 
     # ------------------------------------------------------------------

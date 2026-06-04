@@ -199,3 +199,19 @@ def encrypt_secrets_in_config(
             ) from exc
 
     return configuration
+
+
+def find_plaintext_secret_keys(configuration: dict[str, Any]) -> list[str]:
+    """Return the flattened paths of *unencrypted* ``#``-prefixed secrets.
+
+    Reuses :func:`collect_secrets`, which already skips values that are already
+    ``KBC::``-encrypted, so a non-empty result means the config carries secrets
+    in plaintext. Only the key *paths* are returned (e.g. ``#parameters.#password``)
+    -- never the plaintext values -- so callers can warn about a leak without
+    copying the secret into logs or output. Used by the sync/doctor audit that
+    flags configs which passed through the sync baseline still in plaintext
+    (issue #378).
+    """
+    secrets: dict[str, str] = {}
+    collect_secrets(configuration, "", secrets)
+    return sorted(secrets)

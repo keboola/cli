@@ -615,32 +615,46 @@ def sync_status(
         added = result["added"]
         deleted = result["deleted"]
         unchanged = result["unchanged"]
+        secret_warnings = result.get("plaintext_secret_warnings", [])
 
         if not modified and not added and not deleted:
             formatter.console.print(
                 f"[green]No changes detected.[/green] ({unchanged} configurations tracked)"
             )
-            return
+        else:
+            if modified:
+                formatter.console.print(f"\n[yellow]Modified ({len(modified)}):[/yellow]")
+                for m in modified:
+                    formatter.console.print(f"  M {m['path']}")
 
-        if modified:
-            formatter.console.print(f"\n[yellow]Modified ({len(modified)}):[/yellow]")
-            for m in modified:
-                formatter.console.print(f"  M {m['path']}")
+            if added:
+                formatter.console.print(f"\n[green]Added ({len(added)}):[/green]")
+                for a in added:
+                    formatter.console.print(f"  A {a['path']}")
 
-        if added:
-            formatter.console.print(f"\n[green]Added ({len(added)}):[/green]")
-            for a in added:
-                formatter.console.print(f"  A {a['path']}")
+            if deleted:
+                formatter.console.print(f"\n[red]Deleted ({len(deleted)}):[/red]")
+                for d in deleted:
+                    formatter.console.print(f"  D {d['path']}")
 
-        if deleted:
-            formatter.console.print(f"\n[red]Deleted ({len(deleted)}):[/red]")
-            for d in deleted:
-                formatter.console.print(f"  D {d['path']}")
+            formatter.console.print(
+                f"\n{len(modified)} modified, {len(added)} added, "
+                f"{len(deleted)} deleted, {unchanged} unchanged"
+            )
 
-        formatter.console.print(
-            f"\n{len(modified)} modified, {len(added)} added, "
-            f"{len(deleted)} deleted, {unchanged} unchanged"
-        )
+        # Plaintext secret warning -- independent of local change state (issue #378).
+        if secret_warnings:
+            formatter.console.print(
+                f"\n[bold red]PLAINTEXT SECRETS in {len(secret_warnings)} synced "
+                f"config(s)[/bold red] (issue #378) -- in sync with the remote but NOT encrypted:"
+            )
+            for w in secret_warnings:
+                keys = ", ".join(w["secret_keys"])
+                formatter.console.print(f"  [red]![/red] {w['path']}  ({keys})")
+            formatter.console.print(
+                "[dim]  Re-push on kbagent >=0.54.0 to encrypt, then ROTATE the credential "
+                "-- config version history keeps the old plaintext.[/dim]"
+            )
 
 
 @sync_app.command("diff")
