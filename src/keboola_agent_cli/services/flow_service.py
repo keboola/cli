@@ -70,11 +70,6 @@ def _parse_configuration(raw: Any) -> dict[str, Any]:
     return raw or {}
 
 
-def _count_phases_tasks(body: dict[str, Any]) -> tuple[int, int]:
-    """Return (phase_count, task_count) from a flow configuration body."""
-    return len(body.get("phases", [])), len(body.get("tasks", []))
-
-
 def _collect_schedules_by_parent(
     client: Any, branch_id: int | None
 ) -> dict[tuple[str, str], list[dict[str, Any]]]:

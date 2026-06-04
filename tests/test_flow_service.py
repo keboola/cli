@@ -10,7 +10,6 @@ from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.services.flow_service import (
     FLOW_COMPONENT_ID,
     FlowService,
-    _count_phases_tasks,
     _parse_configuration,
 )
 
@@ -122,15 +121,6 @@ class TestParseConfiguration:
 
     def test_none_returns_empty(self):
         assert _parse_configuration(None) == {}
-
-
-class TestCountPhasesTasks:
-    def test_counts(self):
-        body = {"phases": [{"id": "a"}, {"id": "b"}], "tasks": [{"id": "1"}]}
-        assert _count_phases_tasks(body) == (2, 1)
-
-    def test_empty(self):
-        assert _count_phases_tasks({}) == (0, 0)
 
 
 # ---------------------------------------------------------------------------
