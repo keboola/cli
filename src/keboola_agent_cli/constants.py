@@ -330,6 +330,13 @@ KAI_REQUEST_TIMEOUT: float = 300.0  # 5 min for non-streaming requests
 KAI_STREAM_TIMEOUT: float = 600.0  # 10 min for SSE streaming responses
 SECRET_PLACEHOLDER: str = "<YOUR_SECRET>"
 
+# --- Changelog rendering ---
+# `kbagent changelog` shows a one-line summary per version by default (--full
+# expands). A summary is the note's first sentence, capped at this many chars
+# (cut on a word boundary) so a verbose release note collapses to a scannable
+# headline instead of a wall of text.
+CHANGELOG_HEADLINE_MAX_CHARS: int = 160
+
 # --- Job Run ---
 DEFAULT_JOB_RUN_TIMEOUT: float = 300.0  # 5 min default for --wait polling
 
