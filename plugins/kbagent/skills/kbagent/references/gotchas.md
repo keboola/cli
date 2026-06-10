@@ -1618,6 +1618,25 @@ kbagent looks for configuration in this order:
 
 Use `kbagent init` to create a local `.kbagent/` workspace for per-directory isolation.
 
+## `init --project` filters the copy; it does NOT select an existing project (since v0.59.0)
+
+`--project ALIAS` means something different on `init` than on every other
+command. Everywhere else `--project` *selects an existing* project to act on;
+on `init` it names which project(s) to **copy out of the global config** into
+the new local workspace. Non-obvious rules:
+
+- **It is repeatable and implies `--from-global`.** `kbagent init --project foo`
+  is enough -- you do not also pass `--from-global` (there is nowhere else to
+  copy from). `--project a --project b` copies exactly those two.
+- **Unknown alias fails fast** with `CONFIG_ERROR` (exit 5) and lists the
+  available global aliases; no workspace is created.
+- **`default_project` repoints** to the first selected alias if the global
+  default falls outside the selection.
+- **Omitting `--project` copies all global projects** (unchanged behaviour).
+
+Use it to seed a focused single-project workspace without re-entering a Storage
+API token already stored globally.
+
 ## `KBAGENT_PROJECT` environment variable
 
 Lets callers override the default project for one shell/session without editing

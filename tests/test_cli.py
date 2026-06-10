@@ -8402,6 +8402,215 @@ class TestInit:
         warning_msg = mock_warning.call_args[0][0]
         assert "Local workspace has no projects but global config has 1" in warning_msg
 
+    @staticmethod
+    def _seed_global_with_three(global_dir: Path) -> None:
+        """Populate a global config with prod (default), marketing, erp."""
+        from keboola_agent_cli.config_store import ConfigStore
+        from keboola_agent_cli.models import ProjectConfig
+
+        global_store = ConfigStore(config_dir=global_dir, source="global")
+        for alias, project_id in (("prod", 1), ("marketing", 2), ("erp", 3)):
+            global_store.add_project(
+                alias,
+                ProjectConfig(
+                    stack_url="https://connection.keboola.com",
+                    token=f"901-55555-fakeTestTokenDoNotUse{project_id}",
+                    project_name=alias.title(),
+                    project_id=project_id,
+                ),
+            )
+
+    def test_init_from_global_filter_single(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--project copies only the named project and excludes the rest (#404)."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+
+        global_dir = tmp_path / "global-config"
+        global_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.resolve_config_dir") as mock_resolve:
+            mock_resolve.return_value = (global_dir, "global")
+            self._seed_global_with_three(global_dir)
+
+            result = runner.invoke(
+                app, ["--json", "init", "--from-global", "--project", "marketing"]
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["data"]["projects_copied"] == 1
+
+        local_config = ConfigStore(config_dir=tmp_path / ".kbagent").load()
+        assert set(local_config.projects) == {"marketing"}
+        # Global default (prod) fell outside the selection -> repointed to marketing.
+        assert local_config.default_project == "marketing"
+
+    def test_init_from_global_filter_multiple(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Multiple --project flags copy exactly the named projects (#404)."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+
+        global_dir = tmp_path / "global-config"
+        global_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.resolve_config_dir") as mock_resolve:
+            mock_resolve.return_value = (global_dir, "global")
+            self._seed_global_with_three(global_dir)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "init",
+                    "--from-global",
+                    "--project",
+                    "prod",
+                    "--project",
+                    "erp",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["data"]["projects_copied"] == 2
+
+        local_config = ConfigStore(config_dir=tmp_path / ".kbagent").load()
+        assert set(local_config.projects) == {"prod", "erp"}
+        # prod is still in the selection, so the global default is preserved.
+        assert local_config.default_project == "prod"
+
+    def test_init_project_flag_implies_from_global(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--project without --from-global still copies the named project (#404)."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+
+        global_dir = tmp_path / "global-config"
+        global_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.resolve_config_dir") as mock_resolve:
+            mock_resolve.return_value = (global_dir, "global")
+            self._seed_global_with_three(global_dir)
+
+            result = runner.invoke(app, ["--json", "init", "--project", "erp"])
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["data"]["projects_copied"] == 1
+
+        local_config = ConfigStore(config_dir=tmp_path / ".kbagent").load()
+        assert set(local_config.projects) == {"erp"}
+
+    def test_init_from_global_invalid_alias(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unknown alias fails with a clear error listing available aliases (#404)."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+
+        global_dir = tmp_path / "global-config"
+        global_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.resolve_config_dir") as mock_resolve:
+            mock_resolve.return_value = (global_dir, "global")
+            self._seed_global_with_three(global_dir)
+
+            result = runner.invoke(app, ["--json", "init", "--from-global", "--project", "nope"])
+
+        assert result.exit_code == 5, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["error"]["code"] == "CONFIG_ERROR"
+        message = output["error"]["message"]
+        assert "nope" in message
+        # The error lists the available aliases so the user can correct the typo.
+        assert "erp" in message
+        assert "marketing" in message
+        assert "prod" in message
+
+        # No workspace should have been created on failure.
+        assert not (tmp_path / ".kbagent" / "config.json").is_file()
+
+    def test_init_from_global_no_filter_copies_all(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--from-global without --project preserves copy-all behaviour (#404)."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+
+        global_dir = tmp_path / "global-config"
+        global_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.resolve_config_dir") as mock_resolve:
+            mock_resolve.return_value = (global_dir, "global")
+            self._seed_global_with_three(global_dir)
+
+            result = runner.invoke(app, ["--json", "init", "--from-global"])
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["data"]["projects_copied"] == 3
+
+        local_config = ConfigStore(config_dir=tmp_path / ".kbagent").load()
+        assert set(local_config.projects) == {"prod", "marketing", "erp"}
+
+    def test_init_from_global_rejects_non_global_source(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--from-global from a non-global active config fails with CONFIG_ERROR.
+
+        Guards the drive-by fix: the error used to pass message/error_code as
+        swapped positional args, so the machine-readable code would have been
+        the long prose string instead of "CONFIG_ERROR".
+        """
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+
+        non_global_dir = tmp_path / "explicit-config"
+        non_global_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.resolve_config_dir") as mock_resolve:
+            # Active config resolved from a --config-dir-style override (not global).
+            mock_resolve.return_value = (non_global_dir, "local")
+            result = runner.invoke(app, ["--json", "init", "--from-global"])
+
+        assert result.exit_code == 5, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["error"]["code"] == "CONFIG_ERROR"
+        assert "not the global config" in output["error"]["message"]
+
+    def test_init_from_global_rejects_ephemeral_env_project(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--project __env__ fails clearly instead of copying a project that
+        save() would strip (env-synthesized projects live only in memory).
+        """
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+        # Activate env-mode so load() injects the ephemeral __env__ project.
+        monkeypatch.setenv("KBAGENT_PROJECT_FROM_ENV", "1")
+        monkeypatch.setenv("KBC_TOKEN", "901-55555-fakeTestTokenDoNotUseEnv")
+        monkeypatch.setenv("KBC_STORAGE_API_URL", "https://connection.keboola.com")
+
+        global_dir = tmp_path / "global-config"
+        global_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.resolve_config_dir") as mock_resolve:
+            mock_resolve.return_value = (global_dir, "global")
+            result = runner.invoke(app, ["--json", "init", "--from-global", "--project", "__env__"])
+
+        assert result.exit_code == 5, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["error"]["code"] == "CONFIG_ERROR"
+        assert "__env__" in output["error"]["message"]
+        assert "memory" in output["error"]["message"]
+        # No half-built workspace left behind on rejection.
+        assert not (tmp_path / ".kbagent" / "config.json").is_file()
+
 
 # ---------------------------------------------------------------------------
 # project refresh tests

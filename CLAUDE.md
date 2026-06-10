@@ -561,7 +561,8 @@ kbagent schedule detail --project NAME --schedule-id ID [--branch ID]
 kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--project NAME ...] [--branch ID]
 
 kbagent context
-kbagent init [--from-global]
+kbagent init [--from-global] [--project ALIAS ...]
+# `--project ALIAS` (repeatable) copies only the named project(s) from the global config and implies --from-global.
 kbagent doctor [--fix]
 kbagent version [--beta]
 kbagent update [--beta]

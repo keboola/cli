@@ -682,6 +682,36 @@ class TestFullE2E:
         assert data["data"]["created"] is True
         assert "path" in data["data"]
 
+        # init --from-global --project ALIAS copies only the named project (#404).
+        # Seed the "global" config (init_config_dir, source=global) with the E2E
+        # project, then init a fresh sub-dir copying only that one alias.
+        _json_ok(
+            _invoke(
+                init_config_dir,
+                [
+                    "project",
+                    "add",
+                    "--project",
+                    self.alias,
+                    "--url",
+                    self.url,
+                    "--token",
+                    self.token,
+                ],
+            )
+        )
+        filter_dir = self.work_dir / "init_filter_test"
+        filter_dir.mkdir()
+        with patch("keboola_agent_cli.commands.init.Path.cwd", return_value=filter_dir):
+            result = _invoke(
+                init_config_dir,
+                ["--json", "init", "--from-global", "--project", self.alias],
+            )
+        data = _json_ok(result)
+        assert data["data"]["projects_copied"] == 1
+        local_cfg = json.loads((filter_dir / ".kbagent" / "config.json").read_text())
+        assert self.alias in local_cfg["projects"]
+
     def _test_project_add(self) -> None:
         """Add a project and verify the response."""
         data = self._run_ok(

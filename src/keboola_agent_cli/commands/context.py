@@ -1220,8 +1220,10 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
 ### Utility Commands
 
-  kbagent init [--from-global]
-    Create local .kbagent/ workspace. --from-global copies existing projects.
+  kbagent init [--from-global] [--project ALIAS ...]
+    Create local .kbagent/ workspace. --from-global copies existing projects;
+    --project ALIAS (repeatable) copies only the named project(s) and implies
+    --from-global.
 
   kbagent context
     Show this reference text.

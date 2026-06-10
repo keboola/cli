@@ -38,6 +38,14 @@ CHANGELOG: dict[str, list[str]] = {
         "uncapped) when you need every row -- e.g. piping `workspace query --full --json` for a bulk "
         "extract. The `kbagent serve` `/workspaces/{p}/{w}/query` REST endpoint defaults to `full=True` "
         "to preserve the web UI's complete-CSV download until the frontend learns to paginate.",
+        "New (#404): `kbagent init --from-global --project ALIAS` copies only the named project(s) "
+        "from the global config into the new local workspace instead of all of them. The flag is "
+        "repeatable (`--project a --project b`) and implies `--from-global`, so `kbagent init "
+        "--project kosik-test` is enough to seed a focused single-project workspace without "
+        "re-entering a Storage API token you already have globally. An unknown alias fails fast "
+        "(`CONFIG_ERROR`, exit 5) with the list of available aliases; if the global default project "
+        "falls outside the selection, `default_project` is repointed to the first selected alias. "
+        "Omitting `--project` preserves the existing copy-all behaviour.",
     ],
     "0.58.0": [
         "New: `kbagent workspace query` runs SQL against BigQuery workspaces, not just Snowflake. "
