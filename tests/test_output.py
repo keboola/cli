@@ -17,6 +17,7 @@ from keboola_agent_cli.output import (
     format_job_detail,
     format_jobs_table,
     format_lineage_table,
+    format_query_results,
     format_tool_result,
     format_tools_table,
 )
@@ -989,3 +990,87 @@ class TestFormatDoctorPanel:
         assert "WARN" in output
         assert "1 failed" in output
         assert "1 warnings" in output
+
+
+class TestFormatQueryResults:
+    """Tests for format_query_results -- structured table vs. CSV fallback."""
+
+    def _console(self) -> Console:
+        return Console(file=StringIO(), no_color=True, force_terminal=False, width=200)
+
+    def test_renders_structured_columns_and_rows_as_table(self) -> None:
+        """The fast-path payload (columns+rows) renders as a Rich table."""
+        console = self._console()
+        data = {
+            "project_alias": "prod",
+            "workspace_id": 42,
+            "status": "completed",
+            "statements": [
+                {
+                    "statement_id": "stmt-1",
+                    "status": "completed",
+                    "rows_affected": 2,
+                    "columns": [{"name": "id"}, {"name": "name"}],
+                    "rows": [[1, "alice"], [2, None]],
+                    "row_count": 2,
+                    "total_rows": 2,
+                    "truncated": False,
+                    "csv_data": "id,name\n1,alice\n2,\n",
+                }
+            ],
+        }
+        format_query_results(console, data)
+        output = cast(StringIO, console.file).getvalue()
+        assert "id" in output
+        assert "name" in output
+        assert "alice" in output
+        # No truncation hint when truncated is False.
+        assert "Use --full" not in output
+
+    def test_shows_truncation_hint(self) -> None:
+        """When the warehouse has more rows than fetched, hint at --full."""
+        console = self._console()
+        data = {
+            "project_alias": "prod",
+            "workspace_id": 42,
+            "status": "completed",
+            "statements": [
+                {
+                    "statement_id": "stmt-1",
+                    "status": "completed",
+                    "rows_affected": 100,
+                    "columns": [{"name": "id"}],
+                    "rows": [[1], [2]],
+                    "row_count": 2,
+                    "total_rows": 100,
+                    "truncated": True,
+                    "csv_data": "id\n1\n2\n",
+                }
+            ],
+        }
+        format_query_results(console, data)
+        output = cast(StringIO, console.file).getvalue()
+        assert "of 100" in output
+        assert "--full" in output
+
+    def test_falls_back_to_csv_preview_for_full_export(self) -> None:
+        """The --full export path carries only csv_data (no structured columns)."""
+        console = self._console()
+        data = {
+            "project_alias": "prod",
+            "workspace_id": 42,
+            "status": "completed",
+            "statements": [
+                {
+                    "statement_id": "stmt-1",
+                    "status": "completed",
+                    "rows_affected": 2,
+                    "csv_data": "id,name\n1,alice\n2,bob\n",
+                }
+            ],
+        }
+        format_query_results(console, data)
+        output = cast(StringIO, console.file).getvalue()
+        assert "Results:" in output
+        assert "id,name" in output
+        assert "alice" in output

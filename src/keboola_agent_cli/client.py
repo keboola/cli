@@ -35,6 +35,7 @@ from .constants import (
     OAUTH_PATH,
     QUERY_JOB_MAX_WAIT,
     QUERY_JOB_POLL_INTERVAL,
+    QUERY_RESULTS_PAGE_SIZE,
     STORAGE_JOB_MAX_WAIT,
     STORAGE_JOB_POLL_INTERVAL,
     VALID_POLL_STRATEGIES,
@@ -2696,6 +2697,43 @@ class KeboolaClient(BaseHttpClient):
             params={"fileType": file_type},
         )
         return response.text
+
+    def get_query_results(
+        self,
+        query_job_id: str,
+        statement_id: str,
+        offset: int = 0,
+        page_size: int = QUERY_RESULTS_PAGE_SIZE,
+    ) -> dict[str, Any]:
+        """Fetch a page of inline statement results from the Query Service.
+
+        Unlike :meth:`export_query_results`, which materializes a CSV file via the
+        warehouse UNLOAD path (slow), this reads the already-computed result set
+        inline as JSON -- much faster for interactive queries. The endpoint is
+        paginated; ``offset``/``page_size`` walk the result set.
+
+        Args:
+            query_job_id: The query job ID.
+            statement_id: The statement ID within the job.
+            offset: Row offset to start from (for pagination).
+            page_size: Maximum rows to return in this page.
+
+        Returns:
+            Raw QueryResult dict, e.g.::
+
+                {
+                    "status": "completed",
+                    "columns": [{"name": "id", "type": "INTEGER", "nullable": false}],
+                    "data": [[1, "a"], [2, "b"]],
+                    "numberOfRows": 2,
+                }
+        """
+        response = self._query_request(
+            "GET",
+            f"/api/v1/queries/{query_job_id}/{statement_id}/results",
+            params={"offset": offset, "pageSize": page_size},
+        )
+        return response.json()
 
     def get_query_history(
         self,

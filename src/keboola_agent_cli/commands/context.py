@@ -698,8 +698,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [...] [--preserve]
     Load storage tables into workspace. --preserve keeps existing tables.
 
-  kbagent workspace query --project ALIAS --workspace-id ID --sql "SQL" [--file F] [--transactional]
+  kbagent workspace query --project ALIAS --workspace-id ID --sql "SQL" [--file F] [--transactional] [--full] [--limit N]
     Execute SQL via Query Service. No Snowflake credentials needed.
+    Default reads results inline (fast JSON columns+rows), capped at --limit (default 500).
+    --full uses the complete CSV export instead (slower, uncapped).
 
   kbagent workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]
     Create workspace from transformation config. Loads input tables automatically.

@@ -20,6 +20,9 @@ kbagent --json workspace from-transformation \
 
 ```bash
 # Step 2: Run the original SQL to reproduce the error
+# Default (0.59.0+): results come back inline as JSON columns+rows (fast),
+# capped at --limit rows (default 500). Add --full for the complete CSV export
+# (slower, uncapped) when you need every row.
 kbagent --json workspace query \
   --project ALIAS \
   --workspace-id WS_ID \
@@ -93,6 +96,58 @@ kbagent --json workspace query \
   --workspace-id WS_ID \
   --file query.sql
 ```
+
+## Fast inline results vs `--full` -- mind the result-set volume (since v0.59.0)
+
+`workspace query` has two ways to retrieve results. **Pick based on how many rows
+you actually need**, not by habit.
+
+**Default (fast, inline):** reads the result set straight from the Query Service
+as JSON via `GET /api/v1/queries/{job}/{stmt}/results`. No file is produced. Each
+statement comes back with structured `columns` + `rows` (plus `row_count`,
+`total_rows`, `truncated`) and a synthesized `csv_data` for back-compat.
+
+- **Paginated / capped** at `--limit` rows (default 500). When the warehouse has
+  more rows than were fetched, the statement is flagged `truncated: true` (with
+  `total_rows` = the real count) and the CLI prints
+  `Showing first N of TOTAL rows. Use --full for the complete result set.`
+- This is the right default for **inspection, row counts, sampling, schema
+  checks, and iterating on a fix** -- exactly the workspace-debugging loop.
+
+**`--full` (complete CSV export, slower):** materializes the *entire* result set
+as a CSV file through the warehouse UNLOAD path
+(`GET .../export?fileType=csv`), then downloads it. Uncapped -- you get every
+row -- but it pays a file-export round-trip (warehouse -> object storage ->
+download) on every call. Under `--full` the statement carries only `csv_data`
+(no structured `columns`/`rows`).
+
+```bash
+# Fast: first 500 rows inline (default). Add --limit to widen/narrow the page.
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID \
+  --sql 'SELECT * FROM "in.c-main"."events"' --limit 1000
+
+# Complete: every row via CSV export (slower -- use only when you need them all).
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID \
+  --sql 'SELECT * FROM "in.c-main"."events"' --full
+```
+
+**Decision guide:**
+
+- **Just looking / counting / sampling?** Use the default. Faster, and the
+  `truncated` flag tells you whether there is more.
+- **Need a complete extract?** Use `--full` -- but **think about the volume
+  first**. `--full` pulls the whole result set into a single CSV string in
+  memory; a `SELECT *` over millions of rows is slow and memory-hungry. Narrow
+  the query (`SELECT` only the columns you need, add a `WHERE`/`LIMIT`) before
+  reaching for `--full`.
+- **Bulk-exporting an actual Storage table** (not an arbitrary query)? Prefer
+  `storage unload-table` / `storage download-table` -- they stream sliced files
+  and are built for volume, whereas `workspace query --full` is for ad-hoc SQL.
+
+**API floor:** the `/results` endpoint requires `100 <= pageSize <= 100000`.
+kbagent always requests a valid page size and trims to `--limit` locally, so a
+small `--limit` (e.g. `--limit 5`) works fine -- it does not shrink the wire
+`pageSize` below the API minimum.
 
 ## Shared/linked buckets -- different database/dataset
 

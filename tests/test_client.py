@@ -2911,6 +2911,53 @@ class TestIterPollIntervals:
         assert seq == [STORAGE_JOB_POLL_INTERVAL] * 5
 
 
+class TestGetQueryResults:
+    """Tests for KeboolaClient.get_query_results -- the fast inline /results path.
+
+    Hits ``GET query.<stack>/api/v1/queries/{job}/{stmt}/results`` and returns the
+    raw QueryResult dict (columns + data) without materializing a CSV file.
+    """
+
+    def test_fetches_inline_results_with_default_pagination(self, httpx_mock) -> None:
+        payload = {
+            "status": "completed",
+            "columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
+            "data": [[1], [2]],
+            "numberOfRows": 2,
+        }
+        httpx_mock.add_response(
+            url=(
+                "https://query.keboola.com/api/v1/queries/qj-1/stmt-1/results?offset=0&pageSize=500"
+            ),
+            json=payload,
+            status_code=200,
+        )
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        )
+        result = client.get_query_results("qj-1", "stmt-1")
+        assert result == payload
+        client.close()
+
+    def test_passes_explicit_offset_and_page_size(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=(
+                "https://query.keboola.com/api/v1/queries/qj-1/stmt-2/results"
+                "?offset=500&pageSize=200"
+            ),
+            json={"status": "completed", "columns": [], "data": [], "numberOfRows": 0},
+            status_code=200,
+        )
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        )
+        result = client.get_query_results("qj-1", "stmt-2", offset=500, page_size=200)
+        assert result["numberOfRows"] == 0
+        client.close()
+
+
 class TestExtractQueryJobError:
     """Tests for _extract_query_job_error -- pulls the real warehouse error
     out of a failed Query Service job payload.

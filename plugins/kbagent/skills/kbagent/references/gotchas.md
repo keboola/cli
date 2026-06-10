@@ -289,6 +289,37 @@ confirmed-good whitelist". For an unknown loginType, `workspace list`
 renders it as `?` (yellow) in the QS column so callers know the policy
 is uncertain rather than confirmed-bad.
 
+## `workspace query`: fast inline results vs `--full` CSV export (since v0.59.0)
+
+By default `workspace query` now reads the result set inline via the Query
+Service `GET /api/v1/queries/{job}/{stmt}/results` endpoint (JSON `columns` +
+`rows`) instead of materializing a CSV file through the warehouse UNLOAD path
+(`.../export?fileType=csv`). The inline path skips the file round-trip, so
+interactive queries are markedly faster.
+
+- The inline path is **paginated**: it fetches at most `--limit` rows (default
+  500), walking `offset` in pages. When the warehouse has more rows than
+  fetched, the statement is marked `truncated: true` (with `total_rows` =
+  the full count) and the CLI prints `Showing first N of TOTAL rows. Use --full`.
+- The `/results` endpoint enforces **`100 <= pageSize <= 100000`** (a smaller
+  `pageSize` 400s with `Invalid pageSize parameter, must be between 100 and
+  100000`). kbagent therefore requests a fixed valid page size and trims the
+  result to `--limit` locally -- `pageSize` is NOT derived from `--limit`, so a
+  `--limit 5` still works (fetches one valid page, returns 5).
+- Each statement carries structured `columns`, `rows`, `row_count`,
+  `total_rows`, `truncated`, **and** a synthesized `csv_data` string. Parsers
+  that read `csv_data` (the pre-0.59.0 shape) keep working unchanged.
+  VARIANT/ARRAY/OBJECT (Snowflake) and STRUCT/ARRAY (BigQuery) cells are
+  emitted in `csv_data` as compact JSON (`{"k":"v"}`) to match the warehouse
+  CSV export, not Python `repr`.
+- `--full` opts back into the complete CSV export -- slower (warehouse UNLOAD),
+  but **uncapped**. Use it when you need every row, e.g. a bulk extract
+  (`workspace query --full --json`). Under `--full` the statement carries only
+  `csv_data` (no structured `columns`/`rows`).
+- The `kbagent serve` `/workspaces/{p}/{w}/query` REST endpoint defaults to
+  `full=True` so the web UI's "Download CSV" stays complete; REST clients can
+  pass `full=false` (+ `limit`) in the JSON body to opt into the fast path.
+
 ## Snowflake `workspace create` returns `private_key`, not password (since v0.47.1)
 
 Headless `workspace create` on Snowflake requests

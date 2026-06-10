@@ -5,6 +5,9 @@ and high-level from-transformation workflow. Provides multi-project list and
 single-project operations.
 """
 
+import csv
+import io
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -14,6 +17,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from ..constants import (
     BIGQUERY_WORKSPACE_LOGIN_TYPE,
+    QUERY_RESULTS_DEFAULT_LIMIT,
+    QUERY_RESULTS_PAGE_SIZE,
     QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES,
     QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES_BIGQUERY,
     SNOWFLAKE_WORKSPACE_LOGIN_TYPE,
@@ -149,6 +154,107 @@ def _is_orphaned_workspace(ws: dict[str, Any], config_names: dict[str, str]) -> 
         return False
     # config_names keys are sandbox config IDs; absence means orphan
     return not config_id or config_id not in config_names
+
+
+@dataclass(frozen=True)
+class InlineQueryResult:
+    """One statement's result fetched via the fast inline `/results` path."""
+
+    columns: list[dict[str, Any]]  # [{"name", "type", "nullable"}]
+    rows: list[list[Any]]  # row values, row-major; capped at the requested limit
+    total_rows: int | None  # numberOfRows reported by the warehouse (full count)
+    truncated: bool  # True when the warehouse has more rows than we fetched
+
+
+def _csv_cell(value: Any) -> Any:
+    """Coerce one `/results` JSON cell to its CSV representation.
+
+    ``None`` -> empty field (matches the warehouse CSV export). VARIANT/ARRAY/
+    OBJECT (Snowflake) and STRUCT/ARRAY (BigQuery) columns arrive as native
+    Python ``dict``/``list``; ``csv.writer`` would otherwise emit their Python
+    ``repr`` (``{'k': 'v'}``), so we serialize them as compact JSON
+    (``{"k":"v"}``) to match the warehouse's CSV serialization. Scalars pass
+    through and are stringified by ``csv.writer``.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    return value
+
+
+def _rows_to_csv(columns: list[dict[str, Any]], rows: list[list[Any]]) -> str:
+    """Render structured columns+rows as an RFC-4180 CSV string.
+
+    Synthesized so the inline `/results` payload stays drop-in compatible with
+    consumers that still read ``csv_data`` (CLI preview, web UI table + export
+    buttons, REST). ``csv.writer`` handles quoting/escaping.
+    """
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow([col.get("name", "") for col in columns])
+    for row in rows:
+        writer.writerow([_csv_cell(value) for value in row])
+    return buffer.getvalue()
+
+
+def _collect_inline_results(
+    client: Any,
+    query_job_id: str,
+    statement_id: str,
+    limit: int,
+) -> InlineQueryResult:
+    """Page through `GET .../results`, accumulating up to ``limit`` rows.
+
+    The endpoint enforces ``100 <= pageSize <= 100000``, so we always request a
+    fixed, valid ``QUERY_RESULTS_PAGE_SIZE`` page and cap the accumulated rows at
+    ``limit`` locally -- deriving ``pageSize`` from a small ``--limit`` (e.g. 5)
+    would trip the API's minimum with a 400. A ``limit`` larger than one page is
+    satisfied by walking ``offset``; we stop once the limit is reached (marking
+    the result truncated) or when the warehouse runs out of rows.
+    """
+    collected: list[list[Any]] = []
+    columns: list[dict[str, Any]] = []
+    total_rows: int | None = None
+    offset = 0
+    exhausted = False
+    while len(collected) < limit:
+        payload = client.get_query_results(
+            query_job_id, statement_id, offset=offset, page_size=QUERY_RESULTS_PAGE_SIZE
+        )
+        if not columns:
+            columns = payload.get("columns", []) or []
+        if total_rows is None:
+            total_rows = payload.get("numberOfRows")
+        page_rows = payload.get("data", []) or []
+        collected.extend(page_rows)
+        # Last page: the warehouse returned fewer rows than a full page.
+        if len(page_rows) < QUERY_RESULTS_PAGE_SIZE:
+            exhausted = True
+            break
+        offset += len(page_rows)
+        # Reached the reported total on a page boundary: stop without spending a
+        # round-trip on the empty next page (e.g. total == a multiple of the
+        # page size, limit larger than total).
+        if total_rows is not None and offset >= total_rows:
+            exhausted = True
+            break
+
+    rows = collected[:limit]
+    if total_rows is not None:
+        truncated = total_rows > len(rows)
+    else:
+        # The Query Service normally reports numberOfRows, but if it omits the
+        # count we fall back to *how* the loop ended: stopping at the limit cap
+        # without exhausting a full last page means there may be more rows. Bias
+        # toward over-warning ("use --full") when the true count is unknown.
+        truncated = not exhausted and len(collected) >= limit
+    return InlineQueryResult(
+        columns=columns,
+        rows=rows,
+        total_rows=total_rows,
+        truncated=truncated,
+    )
 
 
 class WorkspaceService(BaseService):
@@ -822,17 +928,32 @@ class WorkspaceService(BaseService):
         workspace_id: int,
         sql: str,
         transactional: bool = False,
+        full: bool = False,
+        limit: int = QUERY_RESULTS_DEFAULT_LIMIT,
     ) -> dict[str, Any]:
         """Execute SQL query in a workspace via Query Service.
 
-        Submits the query, polls until complete, and exports CSV results
-        for each statement.
+        Submits the query, polls until complete, and fetches results for each
+        statement. Two retrieval paths:
+
+        * Default (``full=False``): the fast inline ``GET .../results`` path.
+          Reads the already-computed result set as JSON (no warehouse UNLOAD /
+          CSV-file materialization), paginated up to ``limit`` rows. Each
+          statement carries structured ``columns`` + ``rows`` and a synthesized
+          ``csv_data`` (drop-in for the legacy CSV-string consumers).
+        * ``full=True``: the legacy ``GET .../export?fileType=csv`` path, which
+          materializes the *complete* result set as a CSV file. Slower, but not
+          capped at ``limit`` -- use it when you need every row.
 
         Args:
             alias: Project alias.
             workspace_id: Workspace ID.
             sql: SQL statement(s) to execute.
             transactional: Whether to wrap in a transaction.
+            full: Fetch the complete result set via the CSV export path instead
+                of the fast inline path.
+            limit: Max rows to fetch via the fast inline path (ignored when
+                ``full`` is True).
 
         Returns:
             Dict with query results.
@@ -856,7 +977,7 @@ class WorkspaceService(BaseService):
             # Wait for completion
             completed_job = client.wait_for_query_job(query_job_id)
 
-            # Export results for each statement
+            # Fetch results for each statement
             results: list[dict[str, Any]] = []
             statements = completed_job.get("statements", [])
             for stmt in statements:
@@ -869,13 +990,11 @@ class WorkspaceService(BaseService):
                     "rows_affected": num_rows,
                 }
 
-                # Try to export results if there are rows
+                # Only statements that produced a result set carry rows.
                 if status == "completed" and num_rows > 0:
-                    try:
-                        csv_data = client.export_query_results(query_job_id, stmt_id)
-                        result_entry["csv_data"] = csv_data
-                    except KeboolaApiError:
-                        logger.debug("Could not export results for statement %s", stmt_id)
+                    self._attach_statement_results(
+                        result_entry, client, query_job_id, stmt_id, full=full, limit=limit
+                    )
 
                 results.append(result_entry)
 
@@ -890,6 +1009,38 @@ class WorkspaceService(BaseService):
             }
         finally:
             client.close()
+
+    @staticmethod
+    def _attach_statement_results(
+        result_entry: dict[str, Any],
+        client: Any,
+        query_job_id: str,
+        stmt_id: str,
+        *,
+        full: bool,
+        limit: int,
+    ) -> None:
+        """Populate a statement's result entry, fast inline path or full export.
+
+        Failures are swallowed (debug-logged): a result-fetch error must not
+        sink an otherwise-successful query -- the statement still reports its
+        status and row count, just without the data payload.
+        """
+        try:
+            if full:
+                result_entry["csv_data"] = client.export_query_results(query_job_id, stmt_id)
+                return
+            inline = _collect_inline_results(client, query_job_id, stmt_id, limit)
+            result_entry["columns"] = inline.columns
+            result_entry["rows"] = inline.rows
+            result_entry["row_count"] = len(inline.rows)
+            result_entry["total_rows"] = inline.total_rows
+            result_entry["truncated"] = inline.truncated
+            # Synthesize csv_data so legacy consumers (web UI table/export, CLI
+            # preview) keep working without a format change.
+            result_entry["csv_data"] = _rows_to_csv(inline.columns, inline.rows)
+        except KeboolaApiError:
+            logger.debug("Could not fetch results for statement %s", stmt_id)
 
     def create_from_transformation(
         self,

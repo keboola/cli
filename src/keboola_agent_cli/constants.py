@@ -414,6 +414,19 @@ VALID_STATUSES: list[str] = ["processing", "terminated", "cancelled", "success",
 # --- Query Service ---
 QUERY_JOB_POLL_INTERVAL: float = 1.0  # seconds between polls for query job status
 QUERY_JOB_MAX_WAIT: float = 120.0  # max seconds to wait for a query job
+# Fast inline result path (GET .../results) -- reads the already-computed result
+# set as JSON instead of materializing a CSV file via the warehouse UNLOAD path
+# (GET .../export). The default path fetches at most QUERY_RESULTS_DEFAULT_LIMIT
+# rows, accumulated in pages of QUERY_RESULTS_PAGE_SIZE and trimmed to the limit.
+# The endpoint enforces 100 <= pageSize <= 100000, so QUERY_RESULTS_PAGE_SIZE is a
+# fixed valid page size -- it is NOT derived from --limit (a small limit would 400).
+# Two DISTINCT concepts that happen to share the value 500:
+#   DEFAULT_LIMIT = user-facing row cap (the --limit default; freely tunable).
+#   PAGE_SIZE     = API wire constraint -- rows per /results request, which the
+#                   endpoint requires to be within 100..100000. Independent of
+#                   --limit; the service pages by PAGE_SIZE and trims to --limit.
+QUERY_RESULTS_DEFAULT_LIMIT: int = 500  # default --limit for `workspace query` fast path
+QUERY_RESULTS_PAGE_SIZE: int = 500  # rows per /results page (API requires 100..100000)
 
 # --- Workspace Defaults ---
 DEFAULT_WORKSPACE_BACKEND: str = "snowflake"
