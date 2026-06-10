@@ -8583,6 +8583,34 @@ class TestInit:
         assert output["error"]["code"] == "CONFIG_ERROR"
         assert "not the global config" in output["error"]["message"]
 
+    def test_init_from_global_rejects_ephemeral_env_project(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--project __env__ fails clearly instead of copying a project that
+        save() would strip (env-synthesized projects live only in memory).
+        """
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+        # Activate env-mode so load() injects the ephemeral __env__ project.
+        monkeypatch.setenv("KBAGENT_PROJECT_FROM_ENV", "1")
+        monkeypatch.setenv("KBC_TOKEN", "901-55555-fakeTestTokenDoNotUseEnv")
+        monkeypatch.setenv("KBC_STORAGE_API_URL", "https://connection.keboola.com")
+
+        global_dir = tmp_path / "global-config"
+        global_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.resolve_config_dir") as mock_resolve:
+            mock_resolve.return_value = (global_dir, "global")
+            result = runner.invoke(app, ["--json", "init", "--from-global", "--project", "__env__"])
+
+        assert result.exit_code == 5, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["error"]["code"] == "CONFIG_ERROR"
+        assert "__env__" in output["error"]["message"]
+        assert "memory" in output["error"]["message"]
+        # No half-built workspace left behind on rejection.
+        assert not (tmp_path / ".kbagent" / "config.json").is_file()
+
 
 # ---------------------------------------------------------------------------
 # project refresh tests

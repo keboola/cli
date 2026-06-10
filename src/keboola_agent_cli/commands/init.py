@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 
 from ..config_store import ConfigStore
-from ..constants import LOCAL_CONFIG_DIR_NAME
+from ..constants import ENV_PROJECT_FROM_ENV, LOCAL_CONFIG_DIR_NAME
 from ..errors import ErrorCode
 from ..models import AppConfig, PermissionPolicy
 from ..output import OutputFormatter
@@ -179,11 +179,30 @@ def _filter_global_projects(
         )
         raise typer.Exit(code=5)
 
+    # Reject env-synthesized projects: a `__env__` project lives only in memory
+    # and is stripped on save, so copying it would report success and then
+    # silently vanish on the next load. Fail clearly instead -- mirrors
+    # `_reject_ephemeral_mutation` (issue #359).
+    ephemeral = [alias for alias in selected_aliases if config.projects[alias].ephemeral]
+    if ephemeral:
+        formatter.error(
+            message=(
+                "Cannot copy env-synthesized project(s) into a local workspace: "
+                f"{', '.join(ephemeral)}. They are derived from "
+                f"{ENV_PROJECT_FROM_ENV} and live only in memory, so they would be "
+                "stripped on save. Use 'project add' to persist a project instead."
+            ),
+            error_code=ErrorCode.CONFIG_ERROR,
+        )
+        raise typer.Exit(code=5)
+
     # Dedupe while preserving CLI order (dict keeps insertion order).
     filtered = {alias: config.projects[alias] for alias in selected_aliases}
     config.projects = filtered
     if config.default_project not in filtered:
-        config.default_project = next(iter(filtered))
+        # Match the codebase fallback convention (config_store uses the same
+        # 2-arg form); `filtered` is non-empty here, so "" is never returned.
+        config.default_project = next(iter(filtered), "")
     return config
 
 
