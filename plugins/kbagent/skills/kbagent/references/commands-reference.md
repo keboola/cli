@@ -3,7 +3,7 @@
 All commands support `--json` for structured output. Multi-project flags (`--project`) can be repeated.
 
 ## Setup & Info
-- `init [--from-global]` -- create local `.kbagent/` workspace in current directory
+- `init [--from-global] [--project ALIAS ...]` -- create local `.kbagent/` workspace in current directory; `--project ALIAS` (repeatable) copies only the named project(s) from the global config and implies `--from-global`
 - `doctor [--fix]` -- health check for CLI config and MCP server
 - `version [--beta]` -- show version info and dependency update status. `--beta` (since v0.42.0) reports the latest pre-release (beta / rc) instead of the latest stable. Env override: `KBAGENT_INCLUDE_PRERELEASE=1`
 - `update [--beta]` -- self-update to latest version. `--beta` (since v0.42.0) opts into pre-release versions (PEP 440 betas / rc, e.g. `0.43.0b1`). Default behaviour: GitHub's `/releases/latest` endpoint filters prereleases server-side, so the startup auto-update hook never silently lands on a beta. Resolver-level opt-in (`--prerelease=allow` for uv, `--pre` for pip) is added automatically when `--beta` is set
@@ -335,7 +335,7 @@ CLI parity for the `/agents` REST surface. Reads/writes `<config_dir>/agents.jso
 - `agent prompt-improve --goal "..." [--draft "..."] [--cli claude|codex|gemini] [--project ALIAS] [--extra-arg X ...] [--stream/--no-stream]` -- AI-polished single-shot prompt for an unattended agent task. The final `done` event's `data.prompt` carries the cleaned body ready to drop into `agent create --prompt ...`.
 
 ## Utility
-- `init [--from-global]` -- create local `.kbagent/` workspace (per-directory isolation)
+- `init [--from-global] [--project ALIAS ...]` -- create local `.kbagent/` workspace (per-directory isolation); `--project ALIAS` (repeatable) copies only the named project(s) and implies `--from-global`
 - `doctor [--fix]` -- health checks; `--fix` auto-installs MCP server binary. Includes a `sync_secrets` check (since 0.55.0): when run inside a sync working tree (`.keboola/manifest.json`), warns if any in-sync config holds plaintext `#`-secrets (#378); `skip` outside a sync tree
 - `version` -- show version and check for MCP server updates
 - `context` -- full usage instructions for AI agents

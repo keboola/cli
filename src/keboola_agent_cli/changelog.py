@@ -24,6 +24,16 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.60.0": [
+        "New (#404): `kbagent init --from-global --project ALIAS` copies only the named project(s) "
+        "from the global config into the new local workspace instead of all of them. The flag is "
+        "repeatable (`--project a --project b`) and implies `--from-global`, so `kbagent init "
+        "--project kosik-test` is enough to seed a focused single-project workspace without "
+        "re-entering a Storage API token you already have globally. An unknown alias fails fast "
+        "(`CONFIG_ERROR`, exit 5) with the list of available aliases; if the global default project "
+        "falls outside the selection, `default_project` is repointed to the first selected alias. "
+        "Omitting `--project` preserves the existing copy-all behaviour.",
+    ],
     "0.59.0": [
         "Faster: `kbagent workspace query` now reads results via the Query Service's inline "
         "`GET /api/v1/queries/{job}/{stmt}/results` endpoint by default instead of materializing a "

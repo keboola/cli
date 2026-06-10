@@ -11,6 +11,7 @@ from ..config_store import ConfigStore
 from ..constants import LOCAL_CONFIG_DIR_NAME
 from ..errors import ErrorCode
 from ..models import AppConfig, PermissionPolicy
+from ..output import OutputFormatter
 from ._helpers import get_formatter, get_service
 
 
@@ -20,6 +21,12 @@ def init_command(
         False,
         "--from-global",
         help="Copy projects from the global config into the new local workspace.",
+    ),
+    project: list[str] | None = typer.Option(
+        None,
+        "--project",
+        help="Copy only the named project(s) from the global config (repeatable). "
+        "Implies --from-global. Without it, all global projects are copied.",
     ),
     read_only: bool = typer.Option(
         False,
@@ -47,9 +54,12 @@ def init_command(
 
     # Check if global config has projects to offer
     global_store: ConfigStore = get_service(ctx, "config_store")
-    copy_from_global = from_global
+    selected_aliases = project or []
+    # An explicit --project filter implies --from-global: there is nowhere else
+    # to copy the named projects from, so opt into copying automatically.
+    copy_from_global = from_global or bool(selected_aliases)
 
-    if not from_global and global_store.source == "global":
+    if not copy_from_global and global_store.source == "global":
         try:
             global_config = global_store.load()
             project_count = len(global_config.projects)
@@ -71,12 +81,16 @@ def init_command(
     if copy_from_global:
         if global_store.source != "global":
             formatter.error(
-                "CONFIG_ERROR",
-                "Cannot use --from-global: active config is not the global config. "
-                "Run from a directory without an existing .kbagent/ workspace.",
+                message=(
+                    "Cannot use --from-global: active config is not the global config. "
+                    "Run from a directory without an existing .kbagent/ workspace."
+                ),
+                error_code=ErrorCode.CONFIG_ERROR,
             )
             raise typer.Exit(code=5)
         config = global_store.load()
+        if selected_aliases:
+            config = _filter_global_projects(config, selected_aliases, formatter)
 
     if read_only and len(config.projects) == 0:
         # Read-only locks the config (chmod 0400 + cli:write deny), so an empty
@@ -130,6 +144,47 @@ def init_command(
             "read_only": read_only,
         }
     )
+
+
+def _filter_global_projects(
+    config: AppConfig,
+    selected_aliases: list[str],
+    formatter: OutputFormatter,
+) -> AppConfig:
+    """Narrow a global config copy down to the named projects.
+
+    Validates that every requested alias exists, keeps only the selected
+    projects (deduplicated, preserving the order given on the CLI), and
+    repoints ``default_project`` if the global default fell outside the
+    selection. ``dev_portal_identities`` and ``permissions`` are not
+    project-scoped, so they are left untouched.
+
+    Args:
+        config: The freshly loaded global config (mutated in place).
+        selected_aliases: Aliases passed via repeated ``--project`` flags.
+        formatter: Output formatter for emitting the error on an unknown alias.
+
+    Raises:
+        typer.Exit: Exit code 5 if any requested alias is missing.
+    """
+    missing = [alias for alias in selected_aliases if alias not in config.projects]
+    if missing:
+        available = ", ".join(sorted(config.projects)) or "(none)"
+        formatter.error(
+            message=(
+                f"Unknown project alias(es): {', '.join(missing)}. "
+                f"Available in global config: {available}"
+            ),
+            error_code=ErrorCode.CONFIG_ERROR,
+        )
+        raise typer.Exit(code=5)
+
+    # Dedupe while preserving CLI order (dict keeps insertion order).
+    filtered = {alias: config.projects[alias] for alias in selected_aliases}
+    config.projects = filtered
+    if config.default_project not in filtered:
+        config.default_project = next(iter(filtered))
+    return config
 
 
 def _create_claude_settings(project_dir: Path, kbagent_dir: Path) -> None:

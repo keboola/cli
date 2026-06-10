@@ -112,9 +112,11 @@ project list), initialize a local workspace:
 
 ```bash
 cd /path/to/project
-kbagent init                # create empty .kbagent/ in current dir
+kbagent init                       # create empty .kbagent/ in current dir
 # or
-kbagent init --from-global  # copy global config into local .kbagent/
+kbagent init --from-global         # copy ALL global projects into local .kbagent/
+# or copy only specific project(s) (repeatable; implies --from-global):
+kbagent init --project kosik-test  # copy just one project, skip the token re-entry
 ```
 
 After that, kbagent automatically uses `.kbagent/` whenever you run from
