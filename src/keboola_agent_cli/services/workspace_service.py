@@ -233,6 +233,12 @@ def _collect_inline_results(
             exhausted = True
             break
         offset += len(page_rows)
+        # Reached the reported total on a page boundary: stop without spending a
+        # round-trip on the empty next page (e.g. total == a multiple of the
+        # page size, limit larger than total).
+        if total_rows is not None and offset >= total_rows:
+            exhausted = True
+            break
 
     rows = collected[:limit]
     if total_rows is not None:

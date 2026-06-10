@@ -1305,6 +1305,42 @@ class TestExecuteQuery:
         assert stmt["total_rows"] is None
         assert stmt["truncated"] is True  # full last page, capped at limit -> maybe more
 
+    def test_execute_query_stops_at_total_on_page_boundary(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When total_rows lands on a page boundary, do not spend a round-trip on
+        the empty next page (NIT-1)."""
+        monkeypatch.setattr(workspace_service_module, "QUERY_RESULTS_PAGE_SIZE", 2)
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
+        mock_client.submit_query.return_value = {"id": "qj-boundary"}
+        mock_client.wait_for_query_job.return_value = {
+            "status": "completed",
+            "statements": [{"id": "stmt-1", "status": "completed", "numberOfRows": 2}],
+        }
+        # A full page (== page_size) that already covers numberOfRows.
+        mock_client.get_query_results.return_value = {
+            "status": "completed",
+            "columns": [{"name": "id"}],
+            "data": [[1], [2]],
+            "numberOfRows": 2,
+        }
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        # limit (3) > total (2): without the early break this would make a 2nd
+        # call to discover the empty page.
+        result = svc.execute_query(alias="prod", workspace_id=42, sql="SELECT id FROM t", limit=3)
+
+        stmt = result["statements"][0]
+        assert stmt["row_count"] == 2
+        assert stmt["truncated"] is False
+        assert mock_client.get_query_results.call_count == 1  # no wasted round-trip
+
 
 class TestRowsToCsv:
     """Tests for the module-level _rows_to_csv / _csv_cell helpers."""
