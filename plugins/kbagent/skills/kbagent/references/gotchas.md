@@ -1618,7 +1618,7 @@ kbagent looks for configuration in this order:
 
 Use `kbagent init` to create a local `.kbagent/` workspace for per-directory isolation.
 
-## `init --project` filters the copy; it does NOT select an existing project (since v0.60.0)
+## `init --project` filters the copy; it does NOT select an existing project (since v0.59.0)
 
 `--project ALIAS` means something different on `init` than on every other
 command. Everywhere else `--project` *selects an existing* project to act on;
