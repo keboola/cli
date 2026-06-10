@@ -8414,7 +8414,7 @@ class TestInit:
                 alias,
                 ProjectConfig(
                     stack_url="https://connection.keboola.com",
-                    token=f"901-xxx-testtoken{project_id}",
+                    token=f"901-55555-fakeTestTokenDoNotUse{project_id}",
                     project_name=alias.title(),
                     project_id=project_id,
                 ),
@@ -8557,6 +8557,31 @@ class TestInit:
 
         local_config = ConfigStore(config_dir=tmp_path / ".kbagent").load()
         assert set(local_config.projects) == {"prod", "marketing", "erp"}
+
+    def test_init_from_global_rejects_non_global_source(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--from-global from a non-global active config fails with CONFIG_ERROR.
+
+        Guards the drive-by fix: the error used to pass message/error_code as
+        swapped positional args, so the machine-readable code would have been
+        the long prose string instead of "CONFIG_ERROR".
+        """
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+
+        non_global_dir = tmp_path / "explicit-config"
+        non_global_dir.mkdir()
+
+        with patch("keboola_agent_cli.cli.resolve_config_dir") as mock_resolve:
+            # Active config resolved from a --config-dir-style override (not global).
+            mock_resolve.return_value = (non_global_dir, "local")
+            result = runner.invoke(app, ["--json", "init", "--from-global"])
+
+        assert result.exit_code == 5, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["error"]["code"] == "CONFIG_ERROR"
+        assert "not the global config" in output["error"]["message"]
 
 
 # ---------------------------------------------------------------------------
