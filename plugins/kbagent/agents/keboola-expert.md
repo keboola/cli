@@ -100,7 +100,7 @@ a critical failure.
 | Promote typed rebuild back into the original name | `kbagent storage swap-tables --project P --table-id in.c-foo.data --target-table-id in.c-foo.data_change_log --branch <ID> --yes` (0.28.0+) -- async storage job (`tableSwap`); client polls to completion. Service refuses without a branch; any branch incl. prod | -- | renaming or deleting + re-uploading (loses history; downstream configs need to be rewritten) |
 | Re-seed a table without losing its schema / PK / dependents | `kbagent storage truncate-table --project P --table-id in.c-foo.data [--branch ID] [--dry-run] [--yes]` (0.32.0+) -- DELETE `/tables/{id}/rows?allowTruncate=1`; endpoint is uniformly async on every branch (returns a queued `tableRowsDelete` job; client polls via `_wait_for_storage_job`). Do NOT pass `async=true` -- the API rejects it. Batch via repeated `--table-id`. Returns `{truncated[], failed[], dry_run, project_alias}` with `truncated[]` entries carrying `{table_id, rows_before, rows_after, branch_id}`. Permission class: `destructive` | `tool call delete_table_rows` if the upstream MCP exposes it | drop + recreate the table (loses descriptions, PK, sharing edges, and breaks every downstream config reference); deleting rows via raw SQL in a workspace (bypasses the Storage API audit trail) |
 | Debug a failed job | `kbagent job detail --project P --job-id J --json` + `kbagent job run ... --log-tail-lines 200` | `kbagent workspace from-transformation` for SQL repro | "I think the issue is..." without reading logs |
-| Ad-hoc SQL / row-count / type audit | `kbagent workspace create` + `kbagent workspace load` + `kbagent workspace query --sql "..."` | `kbagent workspace from-transformation` for existing transform debugging; `workspace list --qs-compatible` (0.42.0+, #304) for data-app reuse | querying Keboola Storage directly via Snowflake credentials outside the workspace abstraction |
+| Ad-hoc SQL / row-count / type audit | `kbagent workspace create` + `kbagent workspace load` + `kbagent workspace query --sql "..."` (0.59.0+: results come back inline+fast but **capped at `--limit`, default 500** -- check `statements[].truncated`/`total_rows`, use `COUNT(*)` for counts, `--full` for the complete set) | `kbagent workspace from-transformation` for existing transform debugging; `workspace list --qs-compatible` (0.42.0+, #304) for data-app reuse | trusting a default `SELECT *` as the full result (it is truncated at 500); querying Storage via raw Snowflake credentials outside the workspace abstraction |
 | Inspect dev branch | `kbagent branch list --project P`, `kbagent branch use --project P --branch ID` | `tool call get_branch` | acting on `main` when a dev branch exists |
 | Audit project capabilities / features | `kbagent project info --project P` (0.30.0+) -- returns project ID, name, backend, enabled features, quota limits, and metrics | `tool call verify_token` (returns less structured info; no feature list) | inspecting the UI project settings manually |
 | Manage feature flags (stack catalogue / project / user) | `kbagent feature list\|project-show\|project-add\|project-remove\|user-show\|user-add\|user-remove --project P [--email E] [--feature NAME] [--dry-run] [--yes]` (0.48.0+) -- Manage API; needs a SUPER-ADMIN manage token (interactive prompt; `--allow-env-manage-token`+`KBC_MANAGE_API_TOKEN` for CI); `--project` resolves the stack URL (+project_id for `project-*`); add=admin, remove=destructive; add body is `{"feature":NAME}` | `kbagent project info` for a project's *enabled* features (read-only, no super-admin) | raw `/manage/...` calls; manage token via a CLI flag |
@@ -357,6 +357,13 @@ kbagent workspace delete --project P --workspace-id W
 
 Use this for TYPE AUDITS before planning retypes, ROW COUNT COMPARISONS
 between branches, and SQL DEBUGGING of failing transformations.
+
+(0.59.0+) `workspace query` returns results inline and fast, but **capped at
+`--limit` rows (default 500)**. For ROW COUNTS use `SELECT COUNT(*)` (one row,
+never truncated), NOT `len(rows)` of a `SELECT *`. For exact comparisons of a
+result set bigger than the cap, raise `--limit` or pass `--full` (complete CSV
+export, slower). Always check `statements[].truncated` / `total_rows` in `--json`
+before treating the rows as complete.
 
 ### 4.5 Cross-project migration (high-risk)
 

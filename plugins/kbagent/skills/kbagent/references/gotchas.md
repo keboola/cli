@@ -309,6 +309,9 @@ interactive queries are markedly faster.
 - Each statement carries structured `columns`, `rows`, `row_count`,
   `total_rows`, `truncated`, **and** a synthesized `csv_data` string. Parsers
   that read `csv_data` (the pre-0.59.0 shape) keep working unchanged.
+  VARIANT/ARRAY/OBJECT (Snowflake) and STRUCT/ARRAY (BigQuery) cells are
+  emitted in `csv_data` as compact JSON (`{"k":"v"}`) to match the warehouse
+  CSV export, not Python `repr`.
 - `--full` opts back into the complete CSV export -- slower (warehouse UNLOAD),
   but **uncapped**. Use it when you need every row, e.g. a bulk extract
   (`workspace query --full --json`). Under `--full` the statement carries only

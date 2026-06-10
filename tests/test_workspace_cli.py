@@ -1094,6 +1094,46 @@ class TestWorkspaceQuery:
         assert kwargs["full"] is True
         assert kwargs["limit"] == 2000
 
+    def test_workspace_query_rejects_non_positive_limit(self, tmp_path: Path) -> None:
+        """--limit 0 is rejected by Typer (min=1) before the service is called."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockWsService.return_value = mock_ws
+
+            result = runner.invoke(
+                app,
+                [
+                    "workspace",
+                    "query",
+                    "--project",
+                    "prod",
+                    "--workspace-id",
+                    "42",
+                    "--sql",
+                    "SELECT 1",
+                    "--limit",
+                    "0",
+                ],
+            )
+
+        assert result.exit_code == 2
+        mock_ws.execute_query.assert_not_called()
+
 
 class TestWorkspaceFromTransformation:
     """Tests for `kbagent workspace from-transformation` command."""

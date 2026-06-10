@@ -424,6 +424,7 @@ def workspace_query(
     limit: int = typer.Option(
         QUERY_RESULTS_DEFAULT_LIMIT,
         "--limit",
+        min=1,
         help="Max rows to fetch via the fast inline path (ignored with --full).",
     ),
 ) -> None:

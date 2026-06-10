@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ...constants import AI_SQL_HELPER_TIMEOUT, QUERY_RESULTS_DEFAULT_LIMIT
 from ..dependencies import ServiceRegistry, get_registry
@@ -36,7 +36,8 @@ class WorkspaceQuery(BaseModel):
     # complete result set. The fast inline path (full=False) is paginated, so a
     # REST client must opt in explicitly until the frontend learns to paginate.
     full: bool = True
-    limit: int = QUERY_RESULTS_DEFAULT_LIMIT
+    # ge=1: a zero/negative limit would otherwise silently yield an empty result.
+    limit: int = Field(default=QUERY_RESULTS_DEFAULT_LIMIT, ge=1)
 
 
 class FromTransformation(BaseModel):

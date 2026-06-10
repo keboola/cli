@@ -7,6 +7,7 @@ single-project operations.
 
 import csv
 import io
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -165,19 +166,35 @@ class InlineQueryResult:
     truncated: bool  # True when the warehouse has more rows than we fetched
 
 
+def _csv_cell(value: Any) -> Any:
+    """Coerce one `/results` JSON cell to its CSV representation.
+
+    ``None`` -> empty field (matches the warehouse CSV export). VARIANT/ARRAY/
+    OBJECT (Snowflake) and STRUCT/ARRAY (BigQuery) columns arrive as native
+    Python ``dict``/``list``; ``csv.writer`` would otherwise emit their Python
+    ``repr`` (``{'k': 'v'}``), so we serialize them as compact JSON
+    (``{"k":"v"}``) to match the warehouse's CSV serialization. Scalars pass
+    through and are stringified by ``csv.writer``.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    return value
+
+
 def _rows_to_csv(columns: list[dict[str, Any]], rows: list[list[Any]]) -> str:
     """Render structured columns+rows as an RFC-4180 CSV string.
 
     Synthesized so the inline `/results` payload stays drop-in compatible with
     consumers that still read ``csv_data`` (CLI preview, web UI table + export
-    buttons, REST). ``csv.writer`` handles quoting/escaping; ``None`` becomes an
-    empty field, matching the warehouse CSV export semantics.
+    buttons, REST). ``csv.writer`` handles quoting/escaping.
     """
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow([col.get("name", "") for col in columns])
     for row in rows:
-        writer.writerow(["" if value is None else value for value in row])
+        writer.writerow([_csv_cell(value) for value in row])
     return buffer.getvalue()
 
 
@@ -200,6 +217,7 @@ def _collect_inline_results(
     columns: list[dict[str, Any]] = []
     total_rows: int | None = None
     offset = 0
+    exhausted = False
     while len(collected) < limit:
         payload = client.get_query_results(
             query_job_id, statement_id, offset=offset, page_size=QUERY_RESULTS_PAGE_SIZE
@@ -212,11 +230,19 @@ def _collect_inline_results(
         collected.extend(page_rows)
         # Last page: the warehouse returned fewer rows than a full page.
         if len(page_rows) < QUERY_RESULTS_PAGE_SIZE:
+            exhausted = True
             break
         offset += len(page_rows)
 
     rows = collected[:limit]
-    truncated = total_rows is not None and total_rows > len(rows)
+    if total_rows is not None:
+        truncated = total_rows > len(rows)
+    else:
+        # The Query Service normally reports numberOfRows, but if it omits the
+        # count we fall back to *how* the loop ended: stopping at the limit cap
+        # without exhausting a full last page means there may be more rows. Bias
+        # toward over-warning ("use --full") when the true count is unknown.
+        truncated = not exhausted and len(collected) >= limit
     return InlineQueryResult(
         columns=columns,
         rows=rows,

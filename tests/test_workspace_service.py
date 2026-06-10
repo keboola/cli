@@ -1035,6 +1035,8 @@ class TestExecuteQuery:
         assert "rows" not in stmt
         mock_client.export_query_results.assert_called_once_with("qj-full", "stmt-1")
         mock_client.get_query_results.assert_not_called()
+        # close() twice: once in _resolve_branch_id, once in execute_query.
+        assert mock_client.close.call_count == 2
 
     def test_execute_query_inline_pagination(
         self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -1071,6 +1073,7 @@ class TestExecuteQuery:
         assert mock_client.get_query_results.call_count == 2
         mock_client.get_query_results.assert_any_call("qj-page", "stmt-1", offset=0, page_size=2)
         mock_client.get_query_results.assert_any_call("qj-page", "stmt-1", offset=2, page_size=2)
+        assert mock_client.close.call_count == 2
 
     def test_execute_query_small_limit_keeps_valid_page_size(self, tmp_config_dir: Path) -> None:
         """A small --limit must NOT shrink pageSize below the API floor (100..100000).
@@ -1115,6 +1118,7 @@ class TestExecuteQuery:
             page_size=workspace_service_module.QUERY_RESULTS_PAGE_SIZE,
         )
         assert workspace_service_module.QUERY_RESULTS_PAGE_SIZE >= 100
+        assert mock_client.close.call_count == 2
 
     def test_execute_query_with_active_branch(self, tmp_config_dir: Path) -> None:
         """execute_query uses active_branch_id when set."""
@@ -1233,6 +1237,7 @@ class TestExecuteQuery:
         assert stmt["rows_affected"] == 10
         assert "csv_data" not in stmt
         assert "rows" not in stmt
+        assert mock_client.close.call_count == 2
 
     def test_execute_query_full_export_fails_gracefully(self, tmp_config_dir: Path) -> None:
         """A failed CSV export (full=True) must not sink the whole query."""
@@ -1263,6 +1268,68 @@ class TestExecuteQuery:
         # Should still succeed, just without csv_data
         assert result["status"] == "completed"
         assert "csv_data" not in result["statements"][0]
+        assert mock_client.close.call_count == 2
+
+    def test_execute_query_truncated_when_number_of_rows_missing(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If the Query Service omits numberOfRows, fall back to how the loop ended.
+
+        Stopping at the --limit cap with a full last page (not exhausted) means
+        there may be more rows, so `truncated` must be True even without a count.
+        """
+        monkeypatch.setattr(workspace_service_module, "QUERY_RESULTS_PAGE_SIZE", 2)
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
+        mock_client.submit_query.return_value = {"id": "qj-nocount"}
+        mock_client.wait_for_query_job.return_value = {
+            "status": "completed",
+            "statements": [{"id": "stmt-1", "status": "completed", "numberOfRows": 2}],
+        }
+        # A full page (== page_size) with NO numberOfRows in the payload.
+        mock_client.get_query_results.return_value = {
+            "status": "completed",
+            "columns": [{"name": "id"}],
+            "data": [[1], [2]],
+        }
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.execute_query(alias="prod", workspace_id=42, sql="SELECT id FROM t", limit=2)
+
+        stmt = result["statements"][0]
+        assert stmt["total_rows"] is None
+        assert stmt["truncated"] is True  # full last page, capped at limit -> maybe more
+
+
+class TestRowsToCsv:
+    """Tests for the module-level _rows_to_csv / _csv_cell helpers."""
+
+    def test_none_becomes_empty_field(self) -> None:
+        csv_str = workspace_service_module._rows_to_csv(
+            [{"name": "a"}, {"name": "b"}], [["x", None]]
+        )
+        assert csv_str == "a,b\nx,\n"
+
+    def test_dict_and_list_cells_serialize_as_compact_json(self) -> None:
+        """VARIANT/ARRAY/OBJECT cells arrive as Python dict/list -- emit compact
+        JSON (``{"k":"v"}``), not Python repr (``{'k': 'v'}``), to match the
+        warehouse CSV export.
+        """
+        csv_str = workspace_service_module._rows_to_csv(
+            [{"name": "payload"}, {"name": "tags"}],
+            [[{"k": "v", "n": 1}, [1, 2, 3]]],
+        )
+        # csv.writer quotes fields containing commas.
+        assert '"{""k"":""v"",""n"":1}"' in csv_str
+        assert '"[1,2,3]"' in csv_str
+        # No Python-repr artifacts (single quotes / spaces after colon).
+        assert "'k'" not in csv_str
+        assert "{'" not in csv_str
 
 
 class TestCreateFromTransformation:
