@@ -10,6 +10,7 @@ import typer
 from rich.markup import escape
 
 from ..config_store import ConfigStore
+from ..constants import QUERY_RESULTS_DEFAULT_LIMIT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_query_results, format_workspaces_table
 from ._helpers import (
@@ -414,10 +415,24 @@ def workspace_query(
         "--transactional",
         help="Wrap query in a transaction",
     ),
+    full: bool = typer.Option(
+        False,
+        "--full",
+        help="Fetch the complete result set via CSV export (slower). "
+        "Default fetches a fast inline page capped by --limit.",
+    ),
+    limit: int = typer.Option(
+        QUERY_RESULTS_DEFAULT_LIMIT,
+        "--limit",
+        help="Max rows to fetch via the fast inline path (ignored with --full).",
+    ),
 ) -> None:
     """Execute SQL query in a workspace via Query Service.
 
     Provide SQL via --sql or --file (exactly one required).
+
+    By default kbagent reads results inline (fast). For a result set larger than
+    --limit, pass --full to export the complete CSV instead.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
@@ -450,6 +465,8 @@ def workspace_query(
             workspace_id=workspace_id,
             sql=effective_sql,
             transactional=transactional,
+            full=full,
+            limit=limit,
         )
         if formatter.json_mode:
             formatter.output(result)

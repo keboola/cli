@@ -24,6 +24,21 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.59.0": [
+        "Faster: `kbagent workspace query` now reads results via the Query Service's inline "
+        "`GET /api/v1/queries/{job}/{stmt}/results` endpoint by default instead of materializing a "
+        "CSV file through the warehouse UNLOAD path (`.../export?fileType=csv`). The inline path "
+        "returns the already-computed result set as JSON -- no file export round-trip -- so interactive "
+        "queries come back markedly faster. Each statement now carries structured `columns` + `rows` "
+        "(plus `row_count`, `total_rows`, `truncated`) alongside a synthesized `csv_data`, so the CLI "
+        "preview, web UI table, and any `--json` consumer keep working unchanged.",
+        "New: `--limit N` (default 500) caps how many rows the fast inline path fetches; it pages "
+        "through the result set by `offset` until the limit is reached, marking the result `truncated` "
+        "when the warehouse has more. `--full` opts back into the complete CSV export (slower, "
+        "uncapped) when you need every row -- e.g. piping `workspace query --full --json` for a bulk "
+        "extract. The `kbagent serve` `/workspaces/{p}/{w}/query` REST endpoint defaults to `full=True` "
+        "to preserve the web UI's complete-CSV download until the frontend learns to paginate.",
+    ],
     "0.58.0": [
         "New: `kbagent workspace query` runs SQL against BigQuery workspaces, not just Snowflake. "
         "The Query Service path was always backend-agnostic (`POST "

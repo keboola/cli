@@ -962,7 +962,10 @@ def format_workspaces_table(console: Console, data: dict[str, Any]) -> None:
 def format_query_results(console: Console, data: dict[str, Any]) -> None:
     """Render SQL query results.
 
-    Shows query status and CSV results for each statement.
+    Shows query status plus, per statement, a Rich table built from the
+    structured ``columns``/``rows`` returned by the fast inline path. Falls back
+    to a CSV preview when only ``csv_data`` is present (the ``--full`` export
+    path, which returns a CSV string without structured columns).
 
     Args:
         console: Rich Console instance.
@@ -972,32 +975,57 @@ def format_query_results(console: Console, data: dict[str, Any]) -> None:
     workspace_id = data.get("workspace_id", "")
     status = data.get("status", "unknown")
 
-    lines = [
-        f"[bold]Project:[/bold] {alias}",
-        f"[bold]Workspace:[/bold] {workspace_id}",
-        f"[bold]Status:[/bold] {status}",
-    ]
+    console.print(
+        Panel(
+            f"[bold]Project:[/bold] {alias}\n"
+            f"[bold]Workspace:[/bold] {workspace_id}\n"
+            f"[bold]Status:[/bold] {status}",
+            title=f"Query Results - Workspace {workspace_id}",
+            expand=False,
+        )
+    )
 
     statements = data.get("statements", [])
     for i, stmt in enumerate(statements):
-        lines.append(f"\n[bold]Statement {i + 1}:[/bold]")
-        lines.append(f"  Status: {stmt.get('status', 'unknown')}")
-        rows = stmt.get("rows_affected", 0)
-        lines.append(f"  Rows: {rows}")
+        console.print(
+            f"\n[bold]Statement {i + 1}:[/bold] "
+            f"{stmt.get('status', 'unknown')} ・ {stmt.get('rows_affected', 0)} rows"
+        )
+        _render_statement_result(console, stmt)
 
-        csv_data = stmt.get("csv_data", "")
-        if csv_data:
-            # Show first few lines of CSV
-            csv_lines = csv_data.strip().split("\n")
-            preview_count = min(len(csv_lines), 11)  # header + 10 rows
-            lines.append("  [bold]Results:[/bold]")
-            for csv_line in csv_lines[:preview_count]:
-                lines.append(f"    {csv_line}")
-            if len(csv_lines) > preview_count:
-                lines.append(f"    ... ({len(csv_lines) - preview_count} more rows)")
 
-    panel = Panel("\n".join(lines), title=f"Query Results - Workspace {workspace_id}", expand=False)
-    console.print(panel)
+def _render_statement_result(console: Console, stmt: dict[str, Any]) -> None:
+    """Render a single statement's result set (structured table or CSV preview)."""
+    columns = stmt.get("columns")
+    rows = stmt.get("rows")
+    if columns and rows is not None:
+        table = Table(show_lines=False)
+        for col in columns:
+            table.add_column(str(col.get("name", "")))
+        for row in rows:
+            table.add_row(*["" if value is None else str(value) for value in row])
+        console.print(table)
+        if stmt.get("truncated"):
+            total = stmt.get("total_rows")
+            shown = stmt.get("row_count", len(rows))
+            suffix = f" of {total}" if total is not None else ""
+            console.print(
+                f"  [dim]Showing first {shown}{suffix} rows. "
+                f"Use --full for the complete result set.[/dim]"
+            )
+        return
+
+    # Fallback: --full export path returns a CSV string with no structured columns.
+    csv_data = stmt.get("csv_data", "")
+    if not csv_data:
+        return
+    csv_lines = csv_data.strip().split("\n")
+    preview_count = min(len(csv_lines), 11)  # header + 10 rows
+    console.print("  [bold]Results:[/bold]")
+    for csv_line in csv_lines[:preview_count]:
+        console.print(f"    {csv_line}")
+    if len(csv_lines) > preview_count:
+        console.print(f"    ... ({len(csv_lines) - preview_count} more rows)")
 
 
 def format_search_results(console: Console, data: dict[str, Any]) -> None:

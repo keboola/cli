@@ -1953,6 +1953,7 @@ class TestFullE2E:
         )["data"]
         quote = "`" if detail.get("backend") == "bigquery" else '"'
         sql = f"SELECT COUNT(*) AS cnt FROM {quote}{ws_table_name}{quote}"
+        # Default (fast) path: reads inline /results -- structured columns+rows.
         data = self._run_ok(
             "workspace",
             "query",
@@ -1964,6 +1965,25 @@ class TestFullE2E:
             sql,
         )
         assert data["status"] == "ok"
+        stmt = data["data"]["statements"][0]
+        assert stmt["columns"], "fast inline path must return structured columns"
+        assert stmt["rows"], "fast inline path must return structured rows"
+        assert "csv_data" in stmt, "csv_data must stay populated for legacy consumers"
+
+        # Full (export) path: complete result set via the CSV export endpoint.
+        full_data = self._run_ok(
+            "workspace",
+            "query",
+            "--project",
+            self.alias,
+            "--workspace-id",
+            str(workspace_id),
+            "--sql",
+            sql,
+            "--full",
+        )
+        assert full_data["status"] == "ok"
+        assert "csv_data" in full_data["data"]["statements"][0]
 
     def _test_workspace_delete(self, workspace_id: int) -> None:
         """Delete the workspace."""

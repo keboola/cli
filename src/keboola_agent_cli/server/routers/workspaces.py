@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ...constants import AI_SQL_HELPER_TIMEOUT
+from ...constants import AI_SQL_HELPER_TIMEOUT, QUERY_RESULTS_DEFAULT_LIMIT
 from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
@@ -31,6 +31,12 @@ class WorkspaceLoad(BaseModel):
 class WorkspaceQuery(BaseModel):
     sql: str
     transactional: bool = False
+    # Default True preserves the current web-UI behavior: the Workspaces page
+    # renders csv_data and offers a "Download CSV" button that expects the
+    # complete result set. The fast inline path (full=False) is paginated, so a
+    # REST client must opt in explicitly until the frontend learns to paginate.
+    full: bool = True
+    limit: int = QUERY_RESULTS_DEFAULT_LIMIT
 
 
 class FromTransformation(BaseModel):
@@ -177,6 +183,8 @@ def query(
         workspace_id=workspace_id,
         sql=body.sql,
         transactional=body.transactional,
+        full=body.full,
+        limit=body.limit,
     )
 
 

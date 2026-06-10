@@ -14,6 +14,7 @@ from helpers import setup_single_project, setup_two_projects
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
+from keboola_agent_cli.services import workspace_service as workspace_service_module
 from keboola_agent_cli.services.workspace_service import WorkspaceService
 
 SAMPLE_TOKEN_VERIFY = TokenVerifyResponse(
@@ -931,7 +932,7 @@ class TestExecuteQuery:
     """Tests for WorkspaceService.execute_query()."""
 
     def test_execute_query_success(self, tmp_config_dir: Path) -> None:
-        """execute_query submits, polls, and exports CSV results."""
+        """Default path reads inline /results: structured columns+rows + csv_data."""
         mock_client = MagicMock()
         mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
         mock_client.submit_query.return_value = {"id": "qj-abc123"}
@@ -941,11 +942,19 @@ class TestExecuteQuery:
                 {
                     "id": "stmt-1",
                     "status": "completed",
-                    "resultRows": 5,
+                    "numberOfRows": 2,
                 },
             ],
         }
-        mock_client.export_query_results.return_value = "col1,col2\na,b\nc,d\n"
+        mock_client.get_query_results.return_value = {
+            "status": "completed",
+            "columns": [
+                {"name": "col1", "type": "VARCHAR", "nullable": True},
+                {"name": "col2", "type": "VARCHAR", "nullable": True},
+            ],
+            "data": [["a", "b"], ["c", "d"]],
+            "numberOfRows": 2,
+        }
 
         store = setup_single_project(tmp_config_dir)
         svc = WorkspaceService(
@@ -965,10 +974,29 @@ class TestExecuteQuery:
         assert result["query_job_id"] == "qj-abc123"
         assert result["status"] == "completed"
         assert len(result["statements"]) == 1
-        assert result["statements"][0]["statement_id"] == "stmt-1"
-        assert result["statements"][0]["status"] == "completed"
-        assert result["statements"][0]["rows_affected"] == 5
-        assert result["statements"][0]["csv_data"] == "col1,col2\na,b\nc,d\n"
+        stmt = result["statements"][0]
+        assert stmt["statement_id"] == "stmt-1"
+        assert stmt["status"] == "completed"
+        assert stmt["rows_affected"] == 2
+        assert stmt["columns"] == [
+            {"name": "col1", "type": "VARCHAR", "nullable": True},
+            {"name": "col2", "type": "VARCHAR", "nullable": True},
+        ]
+        assert stmt["rows"] == [["a", "b"], ["c", "d"]]
+        assert stmt["row_count"] == 2
+        assert stmt["total_rows"] == 2
+        assert stmt["truncated"] is False
+        # csv_data synthesized from columns+rows for legacy consumers.
+        assert stmt["csv_data"] == "col1,col2\na,b\nc,d\n"
+        # Default path uses the fast inline endpoint, not the CSV export.
+        # page_size = min(QUERY_RESULTS_PAGE_SIZE, limit) with the default limit.
+        mock_client.get_query_results.assert_called_once_with(
+            "qj-abc123",
+            "stmt-1",
+            offset=0,
+            page_size=workspace_service_module.QUERY_RESULTS_PAGE_SIZE,
+        )
+        mock_client.export_query_results.assert_not_called()
 
         mock_client.submit_query.assert_called_once_with(
             branch_id=100,
@@ -978,6 +1006,115 @@ class TestExecuteQuery:
         )
         # close() called twice: once in _resolve_branch_id, once in execute_query
         assert mock_client.close.call_count == 2
+
+    def test_execute_query_full_uses_csv_export(self, tmp_config_dir: Path) -> None:
+        """full=True takes the legacy CSV export path (complete result set)."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
+        mock_client.submit_query.return_value = {"id": "qj-full"}
+        mock_client.wait_for_query_job.return_value = {
+            "status": "completed",
+            "statements": [{"id": "stmt-1", "status": "completed", "numberOfRows": 5}],
+        }
+        mock_client.export_query_results.return_value = "col1,col2\na,b\nc,d\n"
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.execute_query(
+            alias="prod", workspace_id=42, sql="SELECT * FROM orders", full=True
+        )
+
+        stmt = result["statements"][0]
+        assert stmt["csv_data"] == "col1,col2\na,b\nc,d\n"
+        # Full export path carries no structured columns/rows.
+        assert "columns" not in stmt
+        assert "rows" not in stmt
+        mock_client.export_query_results.assert_called_once_with("qj-full", "stmt-1")
+        mock_client.get_query_results.assert_not_called()
+
+    def test_execute_query_inline_pagination(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A --limit larger than one page walks offset until the limit is reached."""
+        # Shrink the page size so a 4-row limit needs two /results calls.
+        monkeypatch.setattr(workspace_service_module, "QUERY_RESULTS_PAGE_SIZE", 2)
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
+        mock_client.submit_query.return_value = {"id": "qj-page"}
+        mock_client.wait_for_query_job.return_value = {
+            "status": "completed",
+            "statements": [{"id": "stmt-1", "status": "completed", "numberOfRows": 10}],
+        }
+        cols = [{"name": "id", "type": "INTEGER", "nullable": False}]
+        mock_client.get_query_results.side_effect = [
+            {"status": "completed", "columns": cols, "data": [[1], [2]], "numberOfRows": 10},
+            {"status": "completed", "columns": cols, "data": [[3], [4]], "numberOfRows": 10},
+        ]
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.execute_query(alias="prod", workspace_id=42, sql="SELECT id FROM big", limit=4)
+
+        stmt = result["statements"][0]
+        assert stmt["rows"] == [[1], [2], [3], [4]]
+        assert stmt["row_count"] == 4
+        assert stmt["total_rows"] == 10
+        assert stmt["truncated"] is True  # 4 fetched < 10 total
+        assert mock_client.get_query_results.call_count == 2
+        mock_client.get_query_results.assert_any_call("qj-page", "stmt-1", offset=0, page_size=2)
+        mock_client.get_query_results.assert_any_call("qj-page", "stmt-1", offset=2, page_size=2)
+
+    def test_execute_query_small_limit_keeps_valid_page_size(self, tmp_config_dir: Path) -> None:
+        """A small --limit must NOT shrink pageSize below the API floor (100..100000).
+
+        Regression: deriving pageSize from --limit (e.g. 5) made the Query Service
+        reject the /results call with 400 'Invalid pageSize parameter, must be
+        between 100 and 100000'. pageSize is now a fixed valid value; --limit only
+        trims the accumulated rows locally.
+        """
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
+        mock_client.submit_query.return_value = {"id": "qj-small"}
+        mock_client.wait_for_query_job.return_value = {
+            "status": "completed",
+            "statements": [{"id": "stmt-1", "status": "completed", "numberOfRows": 25}],
+        }
+        # One full page returns all 25 rows; the service must trim to --limit.
+        mock_client.get_query_results.return_value = {
+            "status": "completed",
+            "columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
+            "data": [[i] for i in range(25)],
+            "numberOfRows": 25,
+        }
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.execute_query(alias="prod", workspace_id=42, sql="SELECT id FROM t", limit=5)
+
+        stmt = result["statements"][0]
+        assert stmt["row_count"] == 5  # trimmed locally
+        assert stmt["total_rows"] == 25
+        assert stmt["truncated"] is True
+        # pageSize stays at the fixed valid value, NOT the small --limit.
+        mock_client.get_query_results.assert_called_once_with(
+            "qj-small",
+            "stmt-1",
+            offset=0,
+            page_size=workspace_service_module.QUERY_RESULTS_PAGE_SIZE,
+        )
+        assert workspace_service_module.QUERY_RESULTS_PAGE_SIZE >= 100
 
     def test_execute_query_with_active_branch(self, tmp_config_dir: Path) -> None:
         """execute_query uses active_branch_id when set."""
@@ -1063,22 +1200,48 @@ class TestExecuteQuery:
 
         assert result["statements"][0]["rows_affected"] == 0
         assert "csv_data" not in result["statements"][0]
+        mock_client.get_query_results.assert_not_called()
         mock_client.export_query_results.assert_not_called()
 
-    def test_execute_query_export_fails_gracefully(self, tmp_config_dir: Path) -> None:
-        """execute_query handles export failure gracefully (no csv_data in result)."""
+    def test_execute_query_inline_fetch_fails_gracefully(self, tmp_config_dir: Path) -> None:
+        """A failed inline /results fetch must not sink the whole query."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
+        mock_client.submit_query.return_value = {"id": "qj-fetch-fail"}
+        mock_client.wait_for_query_job.return_value = {
+            "status": "completed",
+            "statements": [{"id": "stmt-1", "status": "completed", "numberOfRows": 10}],
+        }
+        mock_client.get_query_results.side_effect = KeboolaApiError(
+            message="Results unavailable",
+            error_code="QUERY_JOB_FAILED",
+            status_code=500,
+            retryable=False,
+        )
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.execute_query(alias="prod", workspace_id=42, sql="SELECT * FROM big")
+
+        # Statement still reports status + row count, just without a data payload.
+        stmt = result["statements"][0]
+        assert result["status"] == "completed"
+        assert stmt["rows_affected"] == 10
+        assert "csv_data" not in stmt
+        assert "rows" not in stmt
+
+    def test_execute_query_full_export_fails_gracefully(self, tmp_config_dir: Path) -> None:
+        """A failed CSV export (full=True) must not sink the whole query."""
         mock_client = MagicMock()
         mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
         mock_client.submit_query.return_value = {"id": "qj-export-fail"}
         mock_client.wait_for_query_job.return_value = {
             "status": "completed",
-            "statements": [
-                {
-                    "id": "stmt-1",
-                    "status": "completed",
-                    "resultRows": 10,
-                },
-            ],
+            "statements": [{"id": "stmt-1", "status": "completed", "numberOfRows": 10}],
         }
         mock_client.export_query_results.side_effect = KeboolaApiError(
             message="Export unavailable",
@@ -1094,9 +1257,7 @@ class TestExecuteQuery:
         )
 
         result = svc.execute_query(
-            alias="prod",
-            workspace_id=42,
-            sql="SELECT * FROM big_table",
+            alias="prod", workspace_id=42, sql="SELECT * FROM big_table", full=True
         )
 
         # Should still succeed, just without csv_data

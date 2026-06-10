@@ -402,8 +402,11 @@ kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
 kbagent workspace delete --project ALIAS --workspace-id ID
 kbagent workspace password --project ALIAS --workspace-id ID
 kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [--tables ...] [--preserve]
-kbagent workspace query --project ALIAS --workspace-id ID --sql "SELECT ..." [--transactional]
+kbagent workspace query --project ALIAS --workspace-id ID --sql "SELECT ..." [--transactional] [--full] [--limit N]
 kbagent workspace query --project ALIAS --workspace-id ID --file query.sql
+# query: default reads results inline via Query Service `GET .../results` (fast, JSON columns+rows),
+#   capped at --limit rows (default 500); pass --full for the complete CSV export (slower, uncapped).
+#   Each statement carries structured columns+rows + a synthesized csv_data (back-compat) since 0.59.0.
 kbagent workspace gc [--project NAME ...] [--dry-run] [--yes]
 kbagent workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]
 
