@@ -24,6 +24,33 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.60.0": [
+        "New (#353): kbagent installs and self-updates from a prebuilt wheel attached to each "
+        "GitHub release instead of building from `git+` source. `uv tool install git+...` "
+        "recompiled the bundled React SPA via `npm ci` + `vite build` on every install -- the uv "
+        "cache never covered the npm step -- which took 2-4 minutes on WSL2 and tripped the "
+        "auto-update timeout. The universal `py3-none-any` wheel is now built once in CI "
+        "(`release.yml`, on `release: published`) and uploaded as a release asset; "
+        "`build_kbagent_upgrade_command` installs it via a PEP 508 direct reference "
+        "(`keboola-agent-cli[server] @ <wheel-url>`) when the asset exists, falling back to the "
+        "`git+` source build for older releases without one. Both the startup auto-update hook and "
+        "`kbagent update` benefit -- install/update drops from minutes to a seconds-long download.",
+        "New (#353): a `curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | "
+        "sh` bootstrap installer resolves the latest release and installs its prebuilt wheel -- no "
+        "source build, no `gh` CLI (just `curl` + `uv`), matching the pattern the install guide "
+        "already uses for uv and Claude Code. Set `KBAGENT_NO_SERVER=1` for a CLI-only install "
+        "without the `[server]` extras.",
+        "Fix (#353): the self-update subprocess timeout is no longer hardcoded at 120s in two "
+        "places (the startup hook and `kbagent update`). It is a single `UPDATE_TIMEOUT_SECONDS` "
+        "constant (raised to 300s) overridable via `KBAGENT_UPDATE_TIMEOUT` -- useful for the slow "
+        "`git+` fallback build on WSL.",
+        "Fix (#353): a slow update is no longer reported as a failure. The startup hook now "
+        "distinguishes a build TIMEOUT (the git+ build outran the timeout; it finishes on a later "
+        "run) from a genuine failure, printing 'still building' instead of 'Auto-update failed'. It "
+        "also skips the auto-update when the subcommand is `update` / `version` even behind global "
+        "flags (`kbagent --json update`), so the startup banner no longer disagrees with the "
+        "explicit command's JSON output.",
+    ],
     "0.59.0": [
         "Faster: `kbagent workspace query` now reads results via the Query Service's inline "
         "`GET /api/v1/queries/{job}/{stmt}/results` endpoint by default instead of materializing a "

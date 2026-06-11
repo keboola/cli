@@ -1339,6 +1339,9 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
                               but KBC_TOKEN / KBC_STORAGE_API_URL are missing.
      KBAGENT_MAX_PARALLEL_WORKERS  Max concurrent threads for multi-project ops (default 10, max 100)
      KBAGENT_AUTO_UPDATE      Set to "false" to disable automatic update on startup
+     KBAGENT_UPDATE_TIMEOUT   Integer seconds; overrides the 300s self-update subprocess timeout
+                              (raise for slow WSL git+ source builds). Since 0.60.0 install/update
+                              prefer a prebuilt wheel Release asset, so timeouts are rare.
      KBAGENT_UPDATED_FROM     Set to an older version to trigger "What's new" display on next run
      KBAGENT_MCP_TRANSPORT    MCP transport mode: "http" (default, persistent) or "stdio" (subprocess)
      KBAGENT_INCLUDE_PRERELEASE  Set to "1" (or "true"/"yes"/"on") to opt into pre-release versions for

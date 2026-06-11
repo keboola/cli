@@ -9,6 +9,7 @@ import pytest
 
 import keboola_agent_cli.auto_update as auto_update_module
 from keboola_agent_cli.auto_update import (
+    UpdateOutcome,
     _get_cache_path,
     _is_cache_fresh,
     _is_dev_install,
@@ -17,6 +18,7 @@ from keboola_agent_cli.auto_update import (
     _re_exec,
     _read_cache,
     _should_skip,
+    _top_level_subcommand_is_versioning,
     _write_cache,
     maybe_auto_update,
 )
@@ -26,6 +28,31 @@ from keboola_agent_cli.constants import ENV_AUTO_UPDATE, ENV_SKIP_UPDATE, MCP_UP
 # ---------------------------------------------------------------------------
 # _should_skip
 # ---------------------------------------------------------------------------
+class TestTopLevelSubcommandVersioning:
+    """_top_level_subcommand_is_versioning resolves the real subcommand (issue #353)."""
+
+    @pytest.mark.parametrize(
+        ("argv_tail", "expected"),
+        [
+            (["update"], True),
+            (["version"], True),
+            (["--json", "update"], True),  # Bug 3: subcommand sits after a global flag
+            (["-j", "version"], True),
+            (["--config-dir", "/tmp/x", "update"], True),  # value-taking global flag
+            (["--config-dir=/tmp/x", "update"], True),  # `--flag=value` form
+            (["config", "update"], False),  # nested -- must NOT skip (Devin finding)
+            (["flow", "update"], False),
+            (["agent", "update"], False),
+            (["config", "row-update"], False),
+            (["project", "list"], False),
+            ([], False),
+            (["--json"], False),
+        ],
+    )
+    def test_resolves_top_level_subcommand(self, argv_tail, expected):
+        assert _top_level_subcommand_is_versioning(argv_tail) is expected
+
+
 class TestShouldSkip:
     """Tests for the _should_skip() function."""
 
@@ -60,6 +87,20 @@ class TestShouldSkip:
     def test_skip_for_update_command(self, _mock):
         env = {k: v for k, v in os.environ.items() if k not in (ENV_SKIP_UPDATE, ENV_AUTO_UPDATE)}
         with patch.dict(os.environ, env, clear=True), patch("sys.argv", ["kbagent", "update"]):
+            assert _should_skip() is True
+
+    @patch("keboola_agent_cli.auto_update._is_dev_install", return_value=False)
+    def test_skip_for_update_after_global_flags(self, _mock):
+        """Bug 3 (issue #353): the subcommand can sit after global flags.
+
+        `kbagent --json update` has argv[1] == "--json"; the old argv[1]-only
+        check let the startup hook fire and disagree with the explicit command.
+        """
+        env = {k: v for k, v in os.environ.items() if k not in (ENV_SKIP_UPDATE, ENV_AUTO_UPDATE)}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("sys.argv", ["kbagent", "--json", "update"]),
+        ):
             assert _should_skip() is True
 
     @patch("keboola_agent_cli.auto_update._is_dev_install", return_value=False)
@@ -203,7 +244,7 @@ class TestPerformUpdate:
     def test_update_with_uv_success(self, mock_run, mock_which):
         mock_which.return_value = "/usr/local/bin/uv"
         mock_run.return_value = MagicMock(returncode=0)
-        assert _perform_update("2.0.0") is True
+        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
         # Verify uv was called
         call_args = mock_run.call_args
         assert "uv" in call_args[0][0][0]
@@ -213,7 +254,7 @@ class TestPerformUpdate:
     def test_update_with_uv_failure(self, mock_run, mock_which):
         mock_which.return_value = "/usr/local/bin/uv"
         mock_run.return_value = MagicMock(returncode=1, stderr="error")
-        assert _perform_update("2.0.0") is False
+        assert _perform_update("2.0.0") is UpdateOutcome.FAILED
 
     @patch("shutil.which")
     @patch("subprocess.run")
@@ -223,14 +264,14 @@ class TestPerformUpdate:
             None if cmd == "uv" else "/usr/bin/pip" if cmd == "pip" else None
         )
         mock_run.return_value = MagicMock(returncode=0)
-        assert _perform_update("2.0.0") is True
+        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
         call_args = mock_run.call_args
         assert "pip" in call_args[0][0][0]
 
     @patch("shutil.which")
     def test_update_no_tools(self, mock_which):
         mock_which.return_value = None
-        assert _perform_update("2.0.0") is False
+        assert _perform_update("2.0.0") is UpdateOutcome.FAILED
 
     @patch("shutil.which")
     @patch("subprocess.run")
@@ -239,7 +280,7 @@ class TestPerformUpdate:
 
         mock_which.return_value = "/usr/local/bin/uv"
         mock_run.side_effect = sp.TimeoutExpired(cmd="uv", timeout=120)
-        assert _perform_update("2.0.0") is False
+        assert _perform_update("2.0.0") is UpdateOutcome.TIMEOUT
 
     @patch(
         "keboola_agent_cli.services.version_service.has_server_extras",
@@ -260,7 +301,7 @@ class TestPerformUpdate:
         ``--force`` when ``fastapi`` is importable.
         """
         mock_run.return_value = MagicMock(returncode=0)
-        assert _perform_update("2.0.0") is True
+        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
         argv = mock_run.call_args[0][0]
         # uv tool install --force --with 'keboola-agent-cli[server]' git+...
         assert "--force" in argv
@@ -278,11 +319,50 @@ class TestPerformUpdate:
     def test_update_without_server_extras_uses_upgrade(self, mock_run, mock_which, mock_has_server):
         """No-extras install keeps the simpler ``--upgrade`` form."""
         mock_run.return_value = MagicMock(returncode=0)
-        assert _perform_update("2.0.0") is True
+        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
         argv = mock_run.call_args[0][0]
         assert "--upgrade" in argv
         assert "--with" not in argv
         assert "keboola-agent-cli[server]" not in argv
+
+
+class TestPerformUpdateWheel:
+    """_perform_update prefers the prebuilt-wheel Release asset (issue #353)."""
+
+    @patch("keboola_agent_cli.services.version_service.httpx.head")
+    @patch(
+        "keboola_agent_cli.services.version_service.has_server_extras",
+        return_value=False,
+    )
+    @patch("shutil.which", return_value="/usr/local/bin/uv")
+    @patch("subprocess.run")
+    def test_installs_wheel_when_asset_present(
+        self, mock_run, mock_which, mock_has_server, mock_head
+    ):
+        """A 200 HEAD on the asset -> install the prebuilt wheel, not git+."""
+        mock_head.return_value = MagicMock(status_code=200)
+        mock_run.return_value = MagicMock(returncode=0)
+
+        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+
+        argv = mock_run.call_args[0][0]
+        # PEP 508 direct ref to the versioned wheel, --force, and no git+ source.
+        assert "--force" in argv
+        assert any(part.endswith("keboola_agent_cli-2.0.0-py3-none-any.whl") for part in argv)
+        assert all("git+" not in part for part in argv)
+
+    @patch("keboola_agent_cli.services.version_service.httpx.head")
+    @patch("shutil.which", return_value="/usr/local/bin/uv")
+    @patch("subprocess.run")
+    def test_falls_back_to_git_when_no_asset(self, mock_run, mock_which, mock_head):
+        """A 404 HEAD (older release without an asset) -> git+ source build."""
+        mock_head.return_value = MagicMock(status_code=404)
+        mock_run.return_value = MagicMock(returncode=0)
+
+        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+
+        argv = mock_run.call_args[0][0]
+        assert any("git+" in part for part in argv)
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +498,7 @@ class TestMaybeAutoUpdate:
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
-    @patch("keboola_agent_cli.auto_update._perform_update", return_value=True)
+    @patch("keboola_agent_cli.auto_update._perform_update", return_value=UpdateOutcome.SUCCESS)
     @patch("keboola_agent_cli.auto_update._re_exec")
     @patch("keboola_agent_cli.auto_update.__version__", "1.0.0")
     def test_newer_available_updates_and_reexec(
@@ -438,7 +518,7 @@ class TestMaybeAutoUpdate:
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
-    @patch("keboola_agent_cli.auto_update._perform_update", return_value=False)
+    @patch("keboola_agent_cli.auto_update._perform_update", return_value=UpdateOutcome.FAILED)
     @patch("keboola_agent_cli.auto_update._re_exec")
     @patch("keboola_agent_cli.auto_update.__version__", "1.0.0")
     def test_update_failure_continues(
@@ -450,10 +530,46 @@ class TestMaybeAutoUpdate:
         mock_fetch,
         mock_cache,
     ):
-        """If _perform_update returns False, re-exec should NOT be called."""
+        """If _perform_update returns FAILED, re-exec should NOT be called."""
         maybe_auto_update()
         mock_update.assert_called_once()
         mock_reexec.assert_not_called()
+
+    @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
+    @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
+    @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
+    @patch(
+        "keboola_agent_cli.auto_update._perform_update",
+        return_value=UpdateOutcome.TIMEOUT,
+    )
+    @patch("keboola_agent_cli.auto_update._re_exec")
+    @patch("keboola_agent_cli.auto_update._maybe_update_mcp")
+    @patch("keboola_agent_cli.auto_update._detect_mcp_install_method", return_value="none")
+    @patch("keboola_agent_cli.auto_update._write_cache")
+    @patch("keboola_agent_cli.auto_update.__version__", "1.0.0")
+    def test_timeout_outcome_is_not_a_failure(
+        self,
+        mock_write,
+        mock_detect,
+        mock_mcp,
+        mock_reexec,
+        mock_perform,
+        mock_up_to_date,
+        mock_fetch,
+        mock_cache,
+        capsys,
+    ):
+        """A TIMEOUT must not re-exec nor print 'failed' (issue #353).
+
+        The banner should say the build is still running, not that it failed --
+        the wheel fast path makes timeouts rare, but when the git+ fallback runs
+        long the next invocation finishes it.
+        """
+        maybe_auto_update()
+        mock_reexec.assert_not_called()
+        err = capsys.readouterr().err
+        assert "still building" in err
+        assert "failed" not in err.lower()
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value=None)
@@ -704,7 +820,7 @@ class TestMaybeAutoUpdateMcpIntegration:
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
-    @patch("keboola_agent_cli.auto_update._perform_update", return_value=False)
+    @patch("keboola_agent_cli.auto_update._perform_update", return_value=UpdateOutcome.FAILED)
     @patch("keboola_agent_cli.auto_update._maybe_update_mcp")
     @patch("keboola_agent_cli.auto_update._detect_mcp_install_method", return_value="uv_tool")
     @patch("keboola_agent_cli.auto_update._write_cache")

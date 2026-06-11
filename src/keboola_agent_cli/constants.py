@@ -260,6 +260,12 @@ ENV_AUTO_UPDATE: str = "KBAGENT_AUTO_UPDATE"
 ENV_SKIP_UPDATE: str = "KBAGENT_SKIP_UPDATE"
 AUTO_UPDATE_CHECK_INTERVAL: int = 3600  # 1 hour TTL for version cache
 VERSION_CACHE_FILENAME: str = "version_cache.json"
+# Self-update subprocess timeout. Previously a hardcoded 120s in two places,
+# which falsely tripped on WSL where the git+ source build (npm/React SPA) runs
+# for minutes (issue #353). The prebuilt-wheel install is a seconds download, so
+# 300s is ample; KBAGENT_UPDATE_TIMEOUT raises it for the slow git+ fallback.
+UPDATE_TIMEOUT_SECONDS: int = 300
+ENV_UPDATE_TIMEOUT: str = "KBAGENT_UPDATE_TIMEOUT"
 
 # --- AI Service ---
 AI_SERVICE_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
