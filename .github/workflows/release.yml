@@ -32,13 +32,17 @@ permissions:
 jobs:
   build-and-upload:
     runs-on: ubuntu-latest
+    # Route the user-controllable tag through a job env var instead of inlining
+    # the GitHub expression into shell `run:` steps (Actions security hardening).
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
       # Check out the EXACT released commit, not the default branch. The wheel
       # version is derived from pyproject.toml at this ref, so it must match the
       # tag or the upload step's version guard below fails.
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ env.TAG }}
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -70,7 +74,7 @@ jobs:
         # is `keboola_agent_cli-<version>-py3-none-any.whl` under the `v<version>`
         # tag. A mismatch here means clients would build a 404 URL, so fail loud.
         run: |
-          tag="${{ github.event.release.tag_name || inputs.tag }}"
+          tag="$TAG"
           version="${tag#v}"
           expected="dist/keboola_agent_cli-${version}-py3-none-any.whl"
           if [ ! -f "$expected" ]; then
@@ -84,4 +88,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # --clobber makes a re-run idempotent (overwrites instead of erroring on
         # "asset already exists").
-        run: gh release upload "${{ github.event.release.tag_name || inputs.tag }}" dist/*.whl --clobber
+        run: gh release upload "$TAG" dist/*.whl --clobber

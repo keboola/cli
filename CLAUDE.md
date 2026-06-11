@@ -569,6 +569,10 @@ kbagent update [--beta]
 # `--beta` (or env `KBAGENT_INCLUDE_PRERELEASE=1`) opts into pre-release versions
 # (PEP 440 betas/rc, e.g. 0.43.0b1). Default (no flag) is stable-only -- auto-update
 # startup hook never silently lands on a beta.
+# Since 0.60.0 install + self-update prefer a prebuilt wheel Release asset (fast, no
+# source build; falls back to git+ when absent). Env `KBAGENT_UPDATE_TIMEOUT` (integer
+# seconds, default 300) raises the self-update subprocess timeout for the slow git+
+# fallback on WSL. Bootstrap install: `curl -LsSf .../main/install.sh | sh`.
 kbagent changelog [--limit N] [--full]
 # Default shows a one-line summary (first sentence) per version; --full / -v expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]

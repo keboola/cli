@@ -740,8 +740,15 @@ class VersionService:
         # latest_version advertised a beta tag -- silently landing on the
         # wrong version.
         kbagent_target_version = kbagent_latest if include_prerelease else None
+        # Mirror the _update_kbagent path (issue #353, NB-1): advertise the
+        # prebuilt-wheel install command when the asset exists, so a programmatic
+        # consumer copy-pasting `upgrade_command` from `kbagent version --json`
+        # gets the fast path too instead of a slow git+ source build.
+        kbagent_wheel_url = resolve_kbagent_wheel_url(kbagent_latest)
         kbagent_upgrade_cmd = build_kbagent_upgrade_command(
-            prerelease=include_prerelease, target_version=kbagent_target_version
+            prerelease=include_prerelease,
+            target_version=kbagent_target_version,
+            wheel_url=kbagent_wheel_url,
         )
         kbagent_upgrade_str = (
             " ".join(kbagent_upgrade_cmd)

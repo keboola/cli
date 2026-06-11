@@ -20,6 +20,7 @@ from keboola_agent_cli.services.version_service import (
     _uv_tool_list_get_mcp_version,
     _uv_tool_list_has_mcp,
     build_kbagent_upgrade_command,
+    get_update_timeout,
     resolve_kbagent_wheel_url,
 )
 
@@ -943,6 +944,27 @@ class TestResolveKbagentWheelUrl:
         # Guards the None/"" caller path -- no network call is made.
         assert resolve_kbagent_wheel_url(None) is None
         assert resolve_kbagent_wheel_url("") is None
+
+
+class TestGetUpdateTimeout:
+    """get_update_timeout resolves the self-update subprocess timeout (issue #353)."""
+
+    def test_default_is_300(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("KBAGENT_UPDATE_TIMEOUT", raising=False)
+        assert get_update_timeout() == 300.0
+
+    def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("KBAGENT_UPDATE_TIMEOUT", "600")
+        assert get_update_timeout() == 600.0
+
+    @pytest.mark.parametrize("bad_value", ["", "   ", "bogus", "-5", "0", "12.x"])
+    def test_invalid_env_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch, bad_value: str
+    ) -> None:
+        # Non-numeric or non-positive overrides must NOT disable the timeout --
+        # they silently fall back to the 300s default.
+        monkeypatch.setenv("KBAGENT_UPDATE_TIMEOUT", bad_value)
+        assert get_update_timeout() == 300.0
 
 
 class TestBuildKbagentWheelInstall:
