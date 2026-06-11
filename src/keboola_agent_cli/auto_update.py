@@ -196,6 +196,31 @@ def _should_skip_kbagent_stage() -> bool:
     return os.environ.get(ENV_SKIP_UPDATE) == "1"
 
 
+def _top_level_subcommand_is_versioning(args: list[str]) -> bool:
+    """True iff the top-level subcommand is ``update`` / ``version``.
+
+    Walks past global flags to the first POSITIONAL token -- the top-level Typer
+    subcommand -- so it correctly catches the subcommand sitting after global
+    flags (``kbagent --json update``) WITHOUT matching a nested ``update`` like
+    ``kbagent config update`` / ``flow update`` / ``agent update`` (whose first
+    positional is ``config`` / ``flow`` / ``agent``). ``--config-dir`` is the one
+    global option that consumes the following token as its value, so its value is
+    skipped too; every other global option is a boolean flag.
+    """
+    value_flags = {"--config-dir"}
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in value_flags:
+            i += 2  # skip the flag AND its value (e.g. `--config-dir /path`)
+            continue
+        if arg.startswith("-"):
+            i += 1  # boolean flag, or `--flag=value` form; skip just this token
+            continue
+        return arg.lower() in ("update", "version")
+    return False
+
+
 def _should_skip_all() -> bool:
     """Whether the entire auto-update flow should be skipped.
 
@@ -221,11 +246,11 @@ def _should_skip_all() -> bool:
 
     # Skip for `update` / `version` -- they handle versioning themselves and
     # would otherwise double-fire and disagree with the startup banner (Bug 3,
-    # issue #353). The subcommand can sit AFTER global flags, e.g.
-    # `kbagent --json update` has argv[1] == "--json", so scan all args rather
-    # than only argv[1]. A false match on an (unlikely) flag value named
-    # "update" / "version" merely skips one auto-update check -- harmless.
-    return any(arg.lower() in ("update", "version") for arg in sys.argv[1:])
+    # issue #353). The subcommand can sit AFTER global flags (`kbagent --json
+    # update`), so we resolve the first positional token rather than checking
+    # argv[1] -- WITHOUT matching nested `update` subcommands like
+    # `kbagent config update`.
+    return _top_level_subcommand_is_versioning(sys.argv[1:])
 
 
 def _should_skip() -> bool:

@@ -18,6 +18,7 @@ from keboola_agent_cli.auto_update import (
     _re_exec,
     _read_cache,
     _should_skip,
+    _top_level_subcommand_is_versioning,
     _write_cache,
     maybe_auto_update,
 )
@@ -27,6 +28,31 @@ from keboola_agent_cli.constants import ENV_AUTO_UPDATE, ENV_SKIP_UPDATE, MCP_UP
 # ---------------------------------------------------------------------------
 # _should_skip
 # ---------------------------------------------------------------------------
+class TestTopLevelSubcommandVersioning:
+    """_top_level_subcommand_is_versioning resolves the real subcommand (issue #353)."""
+
+    @pytest.mark.parametrize(
+        ("argv_tail", "expected"),
+        [
+            (["update"], True),
+            (["version"], True),
+            (["--json", "update"], True),  # Bug 3: subcommand sits after a global flag
+            (["-j", "version"], True),
+            (["--config-dir", "/tmp/x", "update"], True),  # value-taking global flag
+            (["--config-dir=/tmp/x", "update"], True),  # `--flag=value` form
+            (["config", "update"], False),  # nested -- must NOT skip (Devin finding)
+            (["flow", "update"], False),
+            (["agent", "update"], False),
+            (["config", "row-update"], False),
+            (["project", "list"], False),
+            ([], False),
+            (["--json"], False),
+        ],
+    )
+    def test_resolves_top_level_subcommand(self, argv_tail, expected):
+        assert _top_level_subcommand_is_versioning(argv_tail) is expected
+
+
 class TestShouldSkip:
     """Tests for the _should_skip() function."""
 
