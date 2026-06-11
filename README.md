@@ -9,10 +9,18 @@ No more switching between the UI, old CLI, MCP server, and raw API calls. `kbage
 ## Install
 
 ```bash
+curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh
+```
+
+This installs a **prebuilt wheel** from the latest GitHub release -- a few-seconds download, no source build. Building from `git+` instead recompiles the bundled React SPA via npm on every install, which takes minutes on WSL ([#353](https://github.com/keboola/cli/issues/353)). The script bundles the `[server]` extras by default (set `KBAGENT_NO_SERVER=1` for a CLI-only install) and needs only `curl` + [`uv`](https://docs.astral.sh/uv/).
+
+Prefer to build from source, or pin a specific ref?
+
+```bash
 uv tool install git+https://github.com/keboola/cli
 ```
 
-Auto-updates kbagent **and** its `keboola-mcp-server` dependency on every launch (since 0.30.1) -- no more silently running on a six-month-old MCP server. Run `kbagent changelog` to see what changed.
+Auto-updates kbagent **and** its `keboola-mcp-server` dependency on every launch (since 0.30.1) -- no more silently running on a six-month-old MCP server; the self-update prefers the prebuilt wheel when available. Run `kbagent changelog` to see what changed.
 
 ## Web UI (optional)
 

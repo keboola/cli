@@ -20,6 +20,7 @@ from keboola_agent_cli.services.version_service import (
     _uv_tool_list_get_mcp_version,
     _uv_tool_list_has_mcp,
     build_kbagent_upgrade_command,
+    resolve_kbagent_wheel_url,
 )
 
 
@@ -910,6 +911,115 @@ class TestFetchKbagentLatestVersion:
 
         mock_get.side_effect = httpx.HTTPError("upstream is down")
         assert _fetch_kbagent_latest_version(include_prerelease=True) is None
+
+
+class TestResolveKbagentWheelUrl:
+    """resolve_kbagent_wheel_url HEAD-probes the Release asset (issue #353)."""
+
+    @patch("keboola_agent_cli.services.version_service.httpx.head")
+    def test_returns_url_when_asset_present(self, mock_head: MagicMock) -> None:
+        mock_head.return_value = MagicMock(status_code=200)
+        url = resolve_kbagent_wheel_url("0.60.0")
+        assert url == (
+            "https://github.com/keboola/cli/releases/download/"
+            "v0.60.0/keboola_agent_cli-0.60.0-py3-none-any.whl"
+        )
+        # follow_redirects is required to traverse GitHub's asset CDN redirect.
+        assert mock_head.call_args.kwargs.get("follow_redirects") is True
+
+    @patch("keboola_agent_cli.services.version_service.httpx.head")
+    def test_returns_none_on_404(self, mock_head: MagicMock) -> None:
+        mock_head.return_value = MagicMock(status_code=404)
+        assert resolve_kbagent_wheel_url("9.9.9") is None
+
+    @patch("keboola_agent_cli.services.version_service.httpx.head")
+    def test_returns_none_on_http_error(self, mock_head: MagicMock) -> None:
+        import httpx
+
+        mock_head.side_effect = httpx.HTTPError("network down")
+        assert resolve_kbagent_wheel_url("0.60.0") is None
+
+    def test_returns_none_for_empty_version(self) -> None:
+        # Guards the None/"" caller path -- no network call is made.
+        assert resolve_kbagent_wheel_url(None) is None
+        assert resolve_kbagent_wheel_url("") is None
+
+
+class TestBuildKbagentWheelInstall:
+    """build_kbagent_upgrade_command wheel_url fast path (issue #353)."""
+
+    WHEEL = (
+        "https://github.com/keboola/cli/releases/download/"
+        "v1.2.3/keboola_agent_cli-1.2.3-py3-none-any.whl"
+    )
+
+    @patch("keboola_agent_cli.services.version_service.has_server_extras", return_value=True)
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    def test_uv_wheel_with_server_extras(
+        self, mock_which: MagicMock, mock_has_server: MagicMock
+    ) -> None:
+        mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
+        cmd = build_kbagent_upgrade_command(wheel_url=self.WHEEL)
+        assert cmd is not None
+        assert cmd == [
+            "/usr/bin/uv",
+            "tool",
+            "install",
+            "--force",
+            f"keboola-agent-cli[server] @ {self.WHEEL}",
+        ]
+        # The wheel path uses a PEP 508 direct ref -- no git+ source, no --with.
+        assert all("git+" not in part for part in cmd)
+        assert "--with" not in cmd
+
+    @patch("keboola_agent_cli.services.version_service.has_server_extras", return_value=False)
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    def test_uv_wheel_without_server_extras(
+        self, mock_which: MagicMock, mock_has_server: MagicMock
+    ) -> None:
+        mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
+        cmd = build_kbagent_upgrade_command(wheel_url=self.WHEEL)
+        assert cmd == [
+            "/usr/bin/uv",
+            "tool",
+            "install",
+            "--force",
+            f"keboola-agent-cli @ {self.WHEEL}",
+        ]
+
+    @patch("keboola_agent_cli.services.version_service.has_server_extras", return_value=False)
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    def test_pip_fallback_wheel(self, mock_which: MagicMock, mock_has_server: MagicMock) -> None:
+        mock_which.side_effect = lambda x: "/usr/bin/pip" if x == "pip" else None
+        cmd = build_kbagent_upgrade_command(wheel_url=self.WHEEL)
+        assert cmd == [
+            "/usr/bin/pip",
+            "install",
+            "--upgrade",
+            f"keboola-agent-cli @ {self.WHEEL}",
+        ]
+
+    @patch("keboola_agent_cli.services.version_service.has_server_extras", return_value=False)
+    @patch("keboola_agent_cli.services.version_service.shutil.which", return_value=None)
+    def test_wheel_no_tools_returns_none(
+        self, mock_which: MagicMock, mock_has_server: MagicMock
+    ) -> None:
+        assert build_kbagent_upgrade_command(wheel_url=self.WHEEL) is None
+
+    @patch("keboola_agent_cli.services.version_service.has_server_extras", return_value=True)
+    @patch("keboola_agent_cli.services.version_service.shutil.which")
+    def test_wheel_url_takes_precedence_over_prerelease(
+        self, mock_which: MagicMock, mock_has_server: MagicMock
+    ) -> None:
+        """wheel_url wins over prerelease / target_version (git-source knobs)."""
+        mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
+        cmd = build_kbagent_upgrade_command(
+            prerelease=True, target_version="1.2.3", wheel_url=self.WHEEL
+        )
+        assert cmd is not None
+        assert "--prerelease=allow" not in cmd
+        assert all("git+" not in part for part in cmd)
+        assert cmd[-1] == f"keboola-agent-cli[server] @ {self.WHEEL}"
 
 
 class TestBuildKbagentUpgradeCommand:

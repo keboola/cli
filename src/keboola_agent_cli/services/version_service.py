@@ -9,6 +9,7 @@ version is resolved from PyPI.
 
 import importlib.util
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -19,6 +20,7 @@ from packaging.version import InvalidVersion, Version
 
 from .. import __version__
 from ..constants import (
+    ENV_UPDATE_TIMEOUT,
     KBAGENT_GITHUB_REPO,
     KBAGENT_INSTALL_SOURCE,
     MCP_PIP_PRERELEASE_FLAG,
@@ -26,6 +28,7 @@ from ..constants import (
     MCP_PYPI_URL,
     MCP_UPGRADE_TIMEOUT,
     MCP_UV_PRERELEASE_FLAG,
+    UPDATE_TIMEOUT_SECONDS,
     VERSION_CHECK_TIMEOUT,
 )
 
@@ -65,8 +68,63 @@ def has_server_extras() -> bool:
     return importlib.util.find_spec("fastapi") is not None
 
 
+def resolve_kbagent_wheel_url(
+    version: str | None, *, timeout: float = VERSION_CHECK_TIMEOUT
+) -> str | None:
+    """Return the prebuilt-wheel Release asset URL for ``version`` if present.
+
+    The ``release.yml`` workflow (issue #353) attaches a universal
+    ``keboola_agent_cli-<version>-py3-none-any.whl`` to every GitHub release.
+    Installing that prebuilt wheel skips the on-machine npm/React SPA build that
+    makes ``git+`` installs take minutes on WSL.
+
+    A lightweight HEAD probe (verified to return 200 through GitHub's asset CDN
+    redirect) confirms the asset actually exists -- releases published before the
+    workflow have none, and those must fall back to the ``git+`` source build.
+
+    Args:
+        version: Target version (no ``v`` prefix), e.g. ``"0.60.0"``. The tag is
+            ``v<version>`` and the asset filename embeds the same version.
+        timeout: HEAD-probe timeout in seconds.
+
+    Returns:
+        The asset URL on HTTP 200, or ``None`` on any non-200 / network error so
+        the caller falls back to :data:`KBAGENT_INSTALL_SOURCE` (git+).
+    """
+    if not version:
+        return None
+    url = (
+        f"https://github.com/{KBAGENT_GITHUB_REPO}/releases/download/"
+        f"v{version}/keboola_agent_cli-{version}-py3-none-any.whl"
+    )
+    try:
+        resp = httpx.head(url, follow_redirects=True, timeout=timeout)
+    except httpx.HTTPError:
+        return None
+    return url if resp.status_code == 200 else None
+
+
+def get_update_timeout() -> float:
+    """Resolve the kbagent self-update subprocess timeout in seconds.
+
+    Defaults to :data:`UPDATE_TIMEOUT_SECONDS`; ``KBAGENT_UPDATE_TIMEOUT``
+    overrides it (a ``git+`` source build on WSL can exceed the default -- raise
+    it there). Non-numeric or non-positive overrides fall back to the default
+    rather than disabling the timeout entirely.
+    """
+    raw = os.environ.get(ENV_UPDATE_TIMEOUT, "").strip()
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            return float(UPDATE_TIMEOUT_SECONDS)
+        if value > 0:
+            return value
+    return float(UPDATE_TIMEOUT_SECONDS)
+
+
 def build_kbagent_upgrade_command(
-    *, prerelease: bool = False, target_version: str | None = None
+    *, prerelease: bool = False, target_version: str | None = None, wheel_url: str | None = None
 ) -> list[str] | None:
     """Build the argv command to upgrade kbagent in-place.
 
@@ -92,12 +150,38 @@ def build_kbagent_upgrade_command(
             main HEAD even though the version fetcher advertised the
             beta tag. Ignored for stable upgrades (the auto-update path
             always tracks main, which IS the latest stable).
+        wheel_url: When set, install the prebuilt wheel at this URL (a GitHub
+            Release asset) via a PEP 508 direct reference instead of building
+            from ``git+`` source -- the issue #353 fast path that skips the
+            on-machine npm/React build. Takes precedence over ``prerelease`` /
+            ``target_version`` (those are git-source knobs; the wheel URL
+            already pins an exact version). ``None`` keeps the git+ behaviour.
 
     Returns:
         Command list ready for :func:`subprocess.run`, or ``None`` if
         neither ``uv`` nor ``pip`` is on ``PATH`` (in which case the
         caller surfaces a manual-install hint).
     """
+    # Prebuilt-wheel fast path (issue #353): when the caller resolved a Release
+    # asset URL, install the ready-made wheel via a PEP 508 direct reference
+    # instead of git-building from source. The bundled npm/React build is what
+    # makes git+ installs take minutes on WSL; the wheel is a seconds download.
+    # wheel_url already pins the exact version, so prerelease / target_version
+    # (git-source knobs) do not apply here.
+    if wheel_url is not None:
+        spec = (
+            f"keboola-agent-cli[server] @ {wheel_url}"
+            if has_server_extras()
+            else f"keboola-agent-cli @ {wheel_url}"
+        )
+        uv_path = shutil.which("uv")
+        if uv_path:
+            return [uv_path, "tool", "install", "--force", spec]
+        pip_path = shutil.which("pip")
+        if pip_path is None:
+            return None
+        return [pip_path, "install", "--upgrade", spec]
+
     # Tag-pin the install source ONLY for beta opt-in (Variant B fix).
     # Stable upgrades let uv resolve main HEAD as before -- main IS
     # the stable channel, so an extra HTTP round-trip to fetch the
@@ -783,8 +867,12 @@ class VersionService:
         # Stable upgrades intentionally pass target_version=None so uv
         # resolves main HEAD as before -- main IS the stable channel.
         target_version = kbagent_latest if include_prerelease else None
+        # Prefer the prebuilt-wheel Release asset (issue #353) when present;
+        # resolve_kbagent_wheel_url returns None for older releases without an
+        # asset, in which case build_kbagent_upgrade_command keeps the git+ path.
+        wheel_url = resolve_kbagent_wheel_url(kbagent_latest)
         cmd = build_kbagent_upgrade_command(
-            prerelease=include_prerelease, target_version=target_version
+            prerelease=include_prerelease, target_version=target_version, wheel_url=wheel_url
         )
         if cmd is None:
             with_flag = "--with 'keboola-agent-cli[server]' " if has_server_extras() else ""
@@ -806,7 +894,7 @@ class VersionService:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=get_update_timeout(),
             )
             if result.returncode == 0:
                 return {
@@ -825,11 +913,15 @@ class VersionService:
                 "output": result.stderr.strip(),
             }
         except subprocess.TimeoutExpired:
+            timeout_s = int(get_update_timeout())
             return {
                 "updated": False,
                 "current_version": old_version,
                 "latest_version": kbagent_latest,
-                "message": "Update timed out after 120 seconds.",
+                "message": (
+                    f"Update still building after {timeout_s}s (slow git+ source build). "
+                    "It will finish on a later run; raise KBAGENT_UPDATE_TIMEOUT to wait longer."
+                ),
             }
 
     @staticmethod

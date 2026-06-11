@@ -20,6 +20,29 @@ def _clear_updated_from(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("KBAGENT_UPDATED_FROM", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_wheel_asset_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default the prebuilt-wheel HEAD probe to "asset absent" (issue #353).
+
+    ``resolve_kbagent_wheel_url`` makes a live HEAD request to GitHub. Without
+    this guard every test exercising an update path would hit the network and
+    its result would depend on which versions have wheel assets. Defaulting the
+    probe to 404 keeps the ``git+`` behaviour existing tests assert; wheel-path
+    tests override ``httpx.head`` (or patch the resolver) to simulate a present
+    asset. ``version_service`` is the only ``httpx.head`` caller in ``src``, so
+    this does not mask any other network use.
+    """
+    from types import SimpleNamespace
+
+    from keboola_agent_cli.services import version_service
+
+    monkeypatch.setattr(
+        version_service.httpx,
+        "head",
+        lambda *args, **kwargs: SimpleNamespace(status_code=404),
+    )
+
+
 @pytest.fixture
 def tmp_config_dir(tmp_path: Path) -> Path:
     """Provide a temporary directory for configuration files."""

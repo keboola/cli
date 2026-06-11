@@ -8,6 +8,7 @@ initialized when this runs. The entire flow is wrapped in a blanket
 try/except so it NEVER crashes the CLI.
 """
 
+import enum
 import json
 import logging
 import os
@@ -40,9 +41,25 @@ from .services.version_service import (
     _is_up_to_date,
     _perform_mcp_update,
     build_kbagent_upgrade_command,
+    get_update_timeout,
+    resolve_kbagent_wheel_url,
 )
 
 logger = logging.getLogger(__name__)
+
+
+class UpdateOutcome(enum.Enum):
+    """Outcome of a single kbagent self-update attempt (issue #353).
+
+    Distinguishes a build/install TIMEOUT (the git+ source build outran the
+    timeout -- not a real failure; the next run picks it up) from a genuine
+    FAILED install, so the startup hook stops printing a misleading
+    "Auto-update failed" banner when the install is merely slow.
+    """
+
+    SUCCESS = "success"
+    TIMEOUT = "timeout"
+    FAILED = "failed"
 
 
 # Process-level sentinel for the auto-update flow.
@@ -202,14 +219,13 @@ def _should_skip_all() -> bool:
     if _is_dev_install():
         return True
 
-    # Skip for update/version commands (they handle versioning themselves)
-    argv = sys.argv
-    if len(argv) >= 2:
-        cmd = argv[1].lower()
-        if cmd in ("update", "version"):
-            return True
-
-    return False
+    # Skip for `update` / `version` -- they handle versioning themselves and
+    # would otherwise double-fire and disagree with the startup banner (Bug 3,
+    # issue #353). The subcommand can sit AFTER global flags, e.g.
+    # `kbagent --json update` has argv[1] == "--json", so scan all args rather
+    # than only argv[1]. A false match on an (unlikely) flag value named
+    # "update" / "version" merely skips one auto-update check -- harmless.
+    return any(arg.lower() in ("update", "version") for arg in sys.argv[1:])
 
 
 def _should_skip() -> bool:
@@ -223,7 +239,7 @@ def _should_skip() -> bool:
     return _should_skip_kbagent_stage() or _should_skip_all()
 
 
-def _perform_update(latest_version: str) -> bool:
+def _perform_update(latest_version: str) -> UpdateOutcome:
     """Download and install the latest version.
 
     Delegates to :func:`build_kbagent_upgrade_command` so this path stays
@@ -238,24 +254,29 @@ def _perform_update(latest_version: str) -> bool:
         latest_version: The version being updated to (for logging).
 
     Returns:
-        True if the update succeeded, False otherwise.
+        :class:`UpdateOutcome`: ``SUCCESS`` on a clean install, ``TIMEOUT`` when
+        the install subprocess outran :func:`get_update_timeout` (a slow git+
+        build -- retried next run, not a real failure), ``FAILED`` otherwise.
     """
-    cmd = build_kbagent_upgrade_command()
+    # Prefer the prebuilt-wheel Release asset (issue #353) when present; falls
+    # back to the git+ source build for releases without an asset.
+    wheel_url = resolve_kbagent_wheel_url(latest_version)
+    cmd = build_kbagent_upgrade_command(wheel_url=wheel_url)
     if cmd is None:
-        return False
+        return UpdateOutcome.FAILED
 
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=get_update_timeout(),
         )
-        return result.returncode == 0
+        return UpdateOutcome.SUCCESS if result.returncode == 0 else UpdateOutcome.FAILED
     except subprocess.TimeoutExpired:
-        return False
+        return UpdateOutcome.TIMEOUT
     except OSError:
-        return False
+        return UpdateOutcome.FAILED
 
 
 def _re_exec() -> None:
@@ -454,7 +475,8 @@ def maybe_auto_update() -> None:
                 up_to_date = _is_up_to_date(__version__, latest_version)
                 if up_to_date is False:
                     sys.stderr.write(f"Updating kbagent v{__version__} -> v{latest_version}...\n")
-                    if _perform_update(latest_version):
+                    outcome = _perform_update(latest_version)
+                    if outcome is UpdateOutcome.SUCCESS:
                         sys.stderr.write(f"Updated to v{latest_version}. Re-launching...\n")
                         # Persist cache before re-exec so the new process does
                         # not refetch immediately. The re-exec'd process will
@@ -468,7 +490,17 @@ def maybe_auto_update() -> None:
                         os.environ[ENV_UPDATED_FROM] = __version__
                         _re_exec()
                         return  # Defensive: _re_exec replaces the process.
-                    sys.stderr.write("Auto-update failed; continuing with current version.\n")
+                    if outcome is UpdateOutcome.TIMEOUT:
+                        # Not a failure: the git+ source build outran the timeout.
+                        # The wheel fast path makes this rare; when it happens, say
+                        # so plainly instead of "failed" and let a later run finish
+                        # what uv already started (issue #353).
+                        sys.stderr.write(
+                            f"Update still building after {int(get_update_timeout())}s; "
+                            "it will finish on a later run. Continuing with current version.\n"
+                        )
+                    else:
+                        sys.stderr.write("Auto-update failed; continuing with current version.\n")
 
         # ----- Stage 2: keboola-mcp-server update --------------------------
         # Always runs (subject only to _should_skip_all above). After a

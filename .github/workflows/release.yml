@@ -1,0 +1,87 @@
+name: Release wheel
+
+# Publish a prebuilt wheel as a GitHub Release asset so end users install a
+# ready-made artifact instead of git-building from source on their machine.
+#
+# Why this exists (issue #353): `uv tool install git+https://github.com/keboola/cli`
+# rebuilds the bundled React SPA via `npm ci` + `vite build` on EVERY install,
+# and the uv cache does not cover the npm build. On WSL2 that is 2-4 minutes and
+# blows past the auto-update timeout. Building the (universal `py3-none-any`)
+# wheel ONCE here, on a fast Linux runner, turns the user-side install/update
+# into a few-seconds download. `build_kbagent_upgrade_command` and the
+# `install.sh` bootstrap both consume the asset this workflow uploads.
+
+on:
+  # Fires for both normal and prerelease (beta) releases -- betas get an asset
+  # too, so `kbagent update --beta` benefits from the same fast path.
+  release:
+    types: [published]
+  # Manual backfill: attach a wheel to an already-published release that predates
+  # this workflow (e.g. v0.59.0). Provide the existing tag as input.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build + attach the wheel to (e.g. v0.59.0)"
+        required: true
+        type: string
+
+permissions:
+  # Required for `gh release upload` to attach the asset.
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      # Check out the EXACT released commit, not the default branch. The wheel
+      # version is derived from pyproject.toml at this ref, so it must match the
+      # tag or the upload step's version guard below fails.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          # Pin uv to download the release asset directly instead of fetching the
+          # rate-limited uv.ndjson manifest on shared CI egress IPs (see ci.yml).
+          version: "0.11.16"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v6
+        with:
+          # Node is needed for the hatch build hook to compile the SPA into the
+          # wheel (scripts/hatch_build.py). Without it the wheel ships UI-less.
+          node-version: "20"
+          package-manager-cache: false
+
+      - name: Build the wheel (with bundled UI)
+        run: uv build --wheel
+
+      - name: Assert the SPA is bundled
+        # Guards against shipping a UI-less wheel if the npm build silently
+        # degraded -- `kbagent serve --ui` would break for everyone otherwise.
+        run: python scripts/check_wheel_ui.py --expect-ui
+
+      - name: Verify the wheel version matches the tag
+        # The asset URL that build_kbagent_upgrade_command / install.sh construct
+        # is `keboola_agent_cli-<version>-py3-none-any.whl` under the `v<version>`
+        # tag. A mismatch here means clients would build a 404 URL, so fail loud.
+        run: |
+          tag="${{ github.event.release.tag_name || inputs.tag }}"
+          version="${tag#v}"
+          expected="dist/keboola_agent_cli-${version}-py3-none-any.whl"
+          if [ ! -f "$expected" ]; then
+            echo "::error::Expected $expected but built: $(ls dist/)"
+            exit 1
+          fi
+          echo "OK: $expected matches tag $tag"
+
+      - name: Upload the wheel to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # --clobber makes a re-run idempotent (overwrites instead of erroring on
+        # "asset already exists").
+        run: gh release upload "${{ github.event.release.tag_name || inputs.tag }}" dist/*.whl --clobber
