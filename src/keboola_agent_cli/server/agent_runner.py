@@ -44,6 +44,7 @@ def _build_subprocess_env(
     *,
     upstream_run: AgentRun | None = None,
     upstream_task: AgentTask | None = None,
+    strip_admin_tokens: bool = False,
 ) -> dict[str, str]:
     """Compose the env for an AI / CLI subprocess spawned by the scheduler.
 
@@ -70,8 +71,23 @@ def _build_subprocess_env(
     - ``KBAGENT_UPSTREAM_STATUS`` (``ok`` or ``error``)
 
     Returns a fresh dict (callers can mutate without affecting parent env).
+
+    When ``strip_admin_tokens`` is set (the AI-agent paths), the manage
+    (super-admin) and master tokens are removed from the child env. An
+    autonomous AI CLI (claude/codex/gemini) never legitimately needs them --
+    it reaches Keboola via ``kbagent http`` (KBAGENT_SERVE_*) or by forking
+    ``kbagent`` against the serve's on-disk config (KBAGENT_CONFIG_DIR) -- and
+    handing a prompt-injectable child the highest-value credentials is the leak
+    fixed here (GHSA-wm54-r2hh-cxm9). Mirrors the MCP-child isolation in
+    ``mcp_transport._build_minimal_env`` and the manage-token default-deny. The
+    per-project storage token (``KBC_TOKEN``) is intentionally retained so the
+    child can still run headless ``--project __env__`` reads; cli_command
+    children keep every token -- they are ``kbagent`` itself and need them.
     """
     env = dict(os.environ)
+    if strip_admin_tokens:
+        for key in [k for k in env if k.startswith(("KBC_MANAGE_", "KBC_MASTER_"))]:
+            del env[key]
     config_store = getattr(registry, "config_store", None)
     if config_store is not None:
         env[ENV_CONFIG_DIR] = str(config_store.config_dir)
@@ -784,7 +800,12 @@ async def _run_ai_agent(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         stdin=asyncio.subprocess.DEVNULL,
-        env=_build_subprocess_env(registry, upstream_run=upstream_run, upstream_task=upstream_task),
+        env=_build_subprocess_env(
+            registry,
+            upstream_run=upstream_run,
+            upstream_task=upstream_task,
+            strip_admin_tokens=True,
+        ),
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -896,7 +917,12 @@ async def stream_ai_agent_events(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         stdin=asyncio.subprocess.DEVNULL,
-        env=_build_subprocess_env(registry, upstream_run=upstream_run, upstream_task=upstream_task),
+        env=_build_subprocess_env(
+            registry,
+            upstream_run=upstream_run,
+            upstream_task=upstream_task,
+            strip_admin_tokens=True,
+        ),
     )
 
     # Walk stdout + stderr concurrently. Each side gets its own consumer

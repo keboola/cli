@@ -95,6 +95,84 @@ class TestBuildSubprocessEnv:
             ENV_CONFIG_DIR, ""
         )
 
+    def test_strip_admin_tokens_removes_manage_and_master(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # GHSA-wm54-r2hh-cxm9: an AI-agent child must not inherit the super-admin
+        # (manage) or master tokens. Per-alias master tokens are stripped by prefix.
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "manage-secret")
+        monkeypatch.setenv("KBC_MASTER_TOKEN", "master-secret")
+        monkeypatch.setenv("KBC_MASTER_TOKEN_PROD", "master-prod-secret")
+        monkeypatch.setenv("KBC_TOKEN", "901-55555-storage")
+        registry = _make_registry(tmp_path)
+
+        env = _build_subprocess_env(registry, strip_admin_tokens=True)
+
+        assert "KBC_MANAGE_API_TOKEN" not in env
+        assert "KBC_MASTER_TOKEN" not in env
+        assert "KBC_MASTER_TOKEN_PROD" not in env
+        # The per-project storage token is intentionally retained so the child
+        # can still run headless `--project __env__` reads.
+        assert env["KBC_TOKEN"] == "901-55555-storage"
+
+    def test_default_keeps_all_tokens_for_cli_command(self, tmp_path: Path, monkeypatch) -> None:
+        # cli_command IS kbagent and legitimately needs these (e.g. a scheduled
+        # `project refresh` / `sharing` task), so the default must NOT strip.
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "manage-secret")
+        monkeypatch.setenv("KBC_MASTER_TOKEN", "master-secret")
+        registry = _make_registry(tmp_path)
+
+        env = _build_subprocess_env(registry)
+
+        assert env["KBC_MANAGE_API_TOKEN"] == "manage-secret"
+        assert env["KBC_MASTER_TOKEN"] == "master-secret"
+
+
+class TestAiAgentTokenIsolation:
+    """GHSA-wm54-r2hh-cxm9: the spawned ai_agent child is isolated from the
+    manage/master tokens; the cli_command child keeps them."""
+
+    @pytest.mark.asyncio
+    async def test_ai_agent_subprocess_strips_admin_tokens(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "manage-secret")
+        monkeypatch.setenv("KBC_MASTER_TOKEN", "master-secret")
+        monkeypatch.setenv("KBC_TOKEN", "901-55555-storage")
+        registry = _make_registry(tmp_path)
+        mock_proc = MagicMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"out", b""))
+        mock_proc.returncode = 0
+        with patch(
+            "keboola_agent_cli.server.agent_runner.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=mock_proc),
+        ) as mock_spawn:
+            await _run_ai_agent(registry, {"cli": "claude", "prompt": "summarize my jobs"})
+        env = mock_spawn.call_args.kwargs["env"]
+        assert "KBC_MANAGE_API_TOKEN" not in env
+        assert "KBC_MASTER_TOKEN" not in env
+        # Storage token + serve callback are retained so the agent can still work.
+        assert env["KBC_TOKEN"] == "901-55555-storage"
+        assert env[ENV_KBAGENT_SERVE_TOKEN] == "test-bearer-token"
+
+    @pytest.mark.asyncio
+    async def test_cli_command_subprocess_keeps_admin_tokens(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "manage-secret")
+        registry = _make_registry(tmp_path)
+        mock_proc = MagicMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"out", b""))
+        mock_proc.returncode = 0
+        with patch(
+            "keboola_agent_cli.server.agent_runner.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=mock_proc),
+        ) as mock_spawn:
+            await _run_cli(registry, {"argv": ["project", "refresh", "--all"]})
+        env = mock_spawn.call_args.kwargs["env"]
+        # cli_command keeps the manage token so scheduled admin tasks still work.
+        assert env["KBC_MANAGE_API_TOKEN"] == "manage-secret"
+
 
 class TestRunCliEnvPropagation:
     @pytest.mark.asyncio

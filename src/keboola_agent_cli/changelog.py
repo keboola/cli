@@ -24,6 +24,19 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.60.2": [
+        "Security: scheduled `ai_agent` tasks (claude/codex/gemini spawned by `kbagent serve`) no "
+        "longer inherit the manage (super-admin) or master tokens from the serve process "
+        "environment. `agent_runner._build_subprocess_env` copied the full `os.environ` into every "
+        "spawned child, so a prompt-injectable AI agent that was only meant to summarize jobs could "
+        "read `KBC_MANAGE_API_TOKEN` / `KBC_MASTER_TOKEN*` from its own environment and exfiltrate "
+        "the highest-value credentials. The AI-agent paths now strip every `KBC_MANAGE_*` / "
+        "`KBC_MASTER_*` key (mirroring the MCP-child isolation in `mcp_transport._build_minimal_env` "
+        "and the manage-token default-deny). The per-project storage token (`KBC_TOKEN`) is retained "
+        "so headless `--project __env__` reads still work, and `cli_command` children -- which are "
+        "`kbagent` itself and legitimately need the tokens for scheduled `project refresh` / "
+        "`sharing` tasks -- are unchanged. Private advisory GHSA-wm54-r2hh-cxm9.",
+    ],
     "0.60.1": [
         "Security: `kbagent storage file-download` now contains the API-supplied file name under "
         "the target directory, refusing path-traversal escapes. When `--output` was omitted, the "
