@@ -24,6 +24,18 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.60.1": [
+        "Security: `kbagent storage file-download` now contains the API-supplied file name under "
+        "the target directory, refusing path-traversal escapes. When `--output` was omitted, the "
+        "downloaded bytes were written to the server-provided `name` verbatim -- so a malicious or "
+        "compromised Storage API response with a name like `../../../../.zshrc` (or an absolute "
+        "path) could overwrite an arbitrary file on the user's machine with attacker-controlled "
+        "content. Leading separators are now stripped (an absolute name can no longer override the "
+        "target), legitimate nested subpaths are preserved, and the resolved path is asserted to "
+        "stay within the chosen directory (CWD, or the `--output` directory) -- otherwise the "
+        "download is rejected with `INVALID_ARGUMENT`. Reported via private advisory "
+        "GHSA-6px9-99p6-7j7g.",
+    ],
     "0.60.0": [
         "New (#353): kbagent installs and self-updates from a prebuilt wheel attached to each "
         "GitHub release instead of building from `git+` source. `uv tool install git+...` "

@@ -1565,3 +1565,84 @@ class TestDownloadTableKeepSlices:
         assert exc_info.value.error_code == "NOT_SLICED"
         # Crucially: the sliced download path must not have been reached
         fake_client.download_sliced_file_to_dir.assert_not_called()
+
+
+class TestDownloadFilePathTraversal:
+    """Security (GHSA-6px9-99p6-7j7g): an API-supplied file name must never
+    escape the user's target directory when writing the downloaded bytes."""
+
+    def test_rejects_traversal_name_no_output(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_file_info.return_value = {
+            **SAMPLE_FILE,
+            "name": "../../../../etc/cron.d/evil",
+            "isSliced": False,
+        }
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.download_file(alias="test", file_id=12345)
+
+        assert exc_info.value.error_code == "INVALID_ARGUMENT"
+        # The escape is refused before any bytes are fetched/written.
+        mock_client.download_file.assert_not_called()
+
+    def test_neutralizes_absolute_name(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_file_info.return_value = {
+            **SAMPLE_FILE,
+            "name": "/etc/passwd",
+            "isSliced": False,
+        }
+        mock_client.download_file.return_value = 10
+        service = _make_service(store, mock_client)
+
+        service.download_file(alias="test", file_id=12345)
+
+        # Absolute name is stripped to a relative path contained under CWD,
+        # never written to the real /etc/passwd.
+        called_path = Path(mock_client.download_file.call_args[0][1])
+        assert called_path.is_relative_to(Path.cwd())
+        assert called_path.name == "passwd"
+
+    def test_preserves_legitimate_nested_name(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_file_info.return_value = {
+            **SAMPLE_FILE,
+            "name": "exports/2026/report.csv",
+            "isSliced": False,
+        }
+        mock_client.download_file.return_value = 10
+        service = _make_service(store, mock_client)
+
+        service.download_file(alias="test", file_id=12345)
+
+        # A benign nested name still creates the subpath -- behavior preserved.
+        called_path = Path(mock_client.download_file.call_args[0][1])
+        assert called_path.is_relative_to(Path.cwd())
+        assert called_path.parts[-3:] == ("exports", "2026", "report.csv")
+
+    def test_rejects_traversal_into_output_directory(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        outdir = tmp_path / "downloads"
+        outdir.mkdir()
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_file_info.return_value = {
+            **SAMPLE_FILE,
+            "name": "../../escape.txt",
+            "isSliced": False,
+        }
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.download_file(alias="test", file_id=12345, output_path=str(outdir))
+
+        assert exc_info.value.error_code == "INVALID_ARGUMENT"
+        mock_client.download_file.assert_not_called()

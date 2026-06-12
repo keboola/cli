@@ -44,6 +44,31 @@ def _detect_legacy_branch_storage(client: Any, branch_id: int | None) -> bool:
         return False
 
 
+def _safe_download_target(base: Path, server_name: str) -> Path:
+    """Contain an API-supplied file name under ``base``.
+
+    The Storage API controls the file ``name``; using it verbatim as a write
+    path lets a malicious or compromised response escape the user's chosen
+    directory (``../../etc/...`` or an absolute path) and overwrite arbitrary
+    files with attacker-controlled bytes. We strip leading separators so an
+    absolute name cannot override ``base``, preserve legitimate nested
+    subpaths, and assert the resolved path stays within ``base``.
+    """
+    cleaned = server_name.lstrip("/\\").strip() or "download"
+    candidate = (base / cleaned).resolve()
+    if not candidate.is_relative_to(base.resolve()):
+        raise KeboolaApiError(
+            message=(
+                f"Refusing to write outside the target directory: the "
+                f"server-provided file name {server_name!r} escapes {base.resolve()}"
+            ),
+            status_code=400,
+            error_code=ErrorCode.INVALID_ARGUMENT,
+            retryable=False,
+        )
+    return candidate
+
+
 # "name:TYPE" or "name:TYPE(length)" -- type is pass-through to the Keboola
 # Storage API, which validates type/length combinations per backend and
 # returns clear errors (e.g. "'10' is not valid length for INTEGER"). This
@@ -1753,7 +1778,13 @@ class StorageService(BaseService):
             is_parquet = is_sliced and file_name.endswith(".parquet")
 
             if is_parquet:
-                effective_output = output_path or f"{file_name}.d"
+                # --output is the user's own choice (trusted); without it the
+                # slice dir is derived from the API-controlled name, so contain
+                # it under CWD to block path traversal.
+                if output_path:
+                    effective_output = output_path
+                else:
+                    effective_output = str(_safe_download_target(Path.cwd(), f"{file_name}.d"))
                 slice_info = client.download_sliced_file_to_dir(file_detail, effective_output)
                 result: dict[str, Any] = {
                     "project_alias": alias,
@@ -1767,11 +1798,18 @@ class StorageService(BaseService):
                 }
                 return result
 
-            effective_output = output_path or file_name
             if output_path and Path(output_path).is_dir():
                 # Caller passed a directory (e.g. the REST file-download endpoint);
-                # save inside it under the file's own name instead of clobbering it.
-                effective_output = str(Path(output_path) / file_name)
+                # save inside it under the file's own name. The name comes from the
+                # API, so contain it under the directory to block path traversal.
+                effective_output = str(_safe_download_target(Path(output_path), file_name))
+            elif output_path:
+                # Explicit --output file path: the user's own choice (trusted).
+                effective_output = output_path
+            else:
+                # No --output: the API-controlled name becomes the path; contain
+                # it under CWD so a malicious name (../../, absolute) cannot escape.
+                effective_output = str(_safe_download_target(Path.cwd(), file_name))
             if is_sliced:
                 bytes_written = client.download_sliced_file(file_detail, effective_output)
             else:
