@@ -32,6 +32,7 @@ from keboola_agent_cli.constants import (
 from keboola_agent_cli.server.agent_runner import (
     _AI_AGENT_PROMPT_PREFIX,
     _build_subprocess_env,
+    _resolve_ai_extra_args,
     _run_ai_agent,
     _run_cli,
     _trigger_should_fire,
@@ -172,6 +173,73 @@ class TestAiAgentTokenIsolation:
         env = mock_spawn.call_args.kwargs["env"]
         # cli_command keeps the manage token so scheduled admin tasks still work.
         assert env["KBC_MANAGE_API_TOKEN"] == "manage-secret"
+
+
+class TestAiExtraArgsGate:
+    """GHSA-777j-6p95-qv3m: ai_agent extra_args reach the AI CLI only when the
+    serve operator opts in via KBAGENT_ALLOW_AI_EXTRA_ARGS."""
+
+    def test_extra_args_dropped_without_optin(self, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_ALLOW_AI_EXTRA_ARGS", raising=False)
+        out = _resolve_ai_extra_args({"extra_args": ["--dangerously-skip-permissions"]})
+        assert out == []
+
+    def test_extra_args_honored_with_optin(self, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_ALLOW_AI_EXTRA_ARGS", "1")
+        out = _resolve_ai_extra_args({"extra_args": ["--model", "opus"]})
+        assert out == ["--model", "opus"]
+
+    def test_empty_extra_args_returns_empty(self, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_ALLOW_AI_EXTRA_ARGS", "1")
+        assert _resolve_ai_extra_args({}) == []
+
+    def test_non_list_extra_args_raises(self) -> None:
+        with pytest.raises(ValueError, match="must be a list"):
+            _resolve_ai_extra_args({"extra_args": "--oops"})
+
+    @pytest.mark.asyncio
+    async def test_run_ai_agent_drops_extra_args_without_optin(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.delenv("KBAGENT_ALLOW_AI_EXTRA_ARGS", raising=False)
+        registry = _make_registry(tmp_path)
+        mock_proc = MagicMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"out", b""))
+        mock_proc.returncode = 0
+        with patch(
+            "keboola_agent_cli.server.agent_runner.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=mock_proc),
+        ) as mock_spawn:
+            await _run_ai_agent(
+                registry,
+                {
+                    "cli": "claude",
+                    "prompt": "go",
+                    "extra_args": ["--dangerously-skip-permissions"],
+                },
+            )
+        argv = list(mock_spawn.call_args.args)
+        assert "--dangerously-skip-permissions" not in argv
+
+    @pytest.mark.asyncio
+    async def test_run_ai_agent_honors_extra_args_with_optin(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("KBAGENT_ALLOW_AI_EXTRA_ARGS", "1")
+        registry = _make_registry(tmp_path)
+        mock_proc = MagicMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"out", b""))
+        mock_proc.returncode = 0
+        with patch(
+            "keboola_agent_cli.server.agent_runner.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=mock_proc),
+        ) as mock_spawn:
+            await _run_ai_agent(
+                registry,
+                {"cli": "claude", "prompt": "go", "extra_args": ["--model", "opus"]},
+            )
+        argv = list(mock_spawn.call_args.args)
+        assert "--model" in argv and "opus" in argv
 
 
 class TestRunCliEnvPropagation:

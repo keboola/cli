@@ -36,6 +36,14 @@ CHANGELOG: dict[str, list[str]] = {
         "so headless `--project __env__` reads still work, and `cli_command` children -- which are "
         "`kbagent` itself and legitimately need the tokens for scheduled `project refresh` / "
         "`sharing` tasks -- are unchanged. Private advisory GHSA-wm54-r2hh-cxm9.",
+        "Security: `ai_agent` tasks no longer forward `extra_args` to the underlying AI CLI "
+        "(claude/codex/gemini) unless the serve operator opts in via `KBAGENT_ALLOW_AI_EXTRA_ARGS`. "
+        "`extra_args` were passed verbatim, so a task definition (or any holder of the serve bearer "
+        "token, including the immediate `/agents/test` endpoint) could inject a rail-disabling flag "
+        "-- e.g. a permission-skip / unrestricted-execution flag -- and turn a contained headless "
+        "agent into arbitrary host command execution. They are now ignored by default and dropped "
+        "with a loud warning; set `KBAGENT_ALLOW_AI_EXTRA_ARGS=1` (truthy) to honor them, mirroring "
+        "the `--allow-env-manage-token` opt-in. Private advisory GHSA-777j-6p95-qv3m.",
     ],
     "0.60.1": [
         "Security: `kbagent storage file-download` now contains the API-supplied file name under "

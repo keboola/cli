@@ -27,6 +27,7 @@ from typing import Any
 from croniter import croniter
 
 from ..constants import (
+    ENV_ALLOW_AI_EXTRA_ARGS,
     ENV_CONFIG_DIR,
     ENV_KBAGENT_SERVE_TOKEN,
     ENV_KBAGENT_SERVE_URL,
@@ -742,6 +743,38 @@ async def _run_cli(
     }
 
 
+def _resolve_ai_extra_args(params: dict[str, Any]) -> list[str]:
+    """Resolve an ai_agent task's ``extra_args``, gated behind an explicit opt-in.
+
+    ``extra_args`` are passed verbatim to the underlying AI CLI, so they can
+    carry rail-disabling flags (permission-skip / unrestricted-execution) that
+    turn a contained headless agent into arbitrary host command execution
+    (GHSA-777j-6p95-qv3m). They are therefore IGNORED unless the serve operator
+    explicitly opts in via ``KBAGENT_ALLOW_AI_EXTRA_ARGS`` -- mirroring the
+    ``--allow-env-manage-token`` opt-in for the manage token. When opted out,
+    any supplied args are dropped with a loud warning so the drop stays visible
+    to an operator who expected them to take effect.
+    """
+    raw = params.get("extra_args") or []
+    if not isinstance(raw, list):
+        raise ValueError("ai_agent.extra_args must be a list of strings")
+    extra_args = [str(a) for a in raw]
+    if not extra_args:
+        return []
+    flag = os.environ.get(ENV_ALLOW_AI_EXTRA_ARGS, "").strip().lower()
+    if flag not in ("1", "true", "yes", "on"):
+        logger.warning(
+            "Ignoring %d ai_agent extra_args because %s is not set on the serve "
+            "process. extra_args are passed verbatim to the AI CLI and can disable "
+            "its safety rails; set %s=1 to honor them.",
+            len(extra_args),
+            ENV_ALLOW_AI_EXTRA_ARGS,
+            ENV_ALLOW_AI_EXTRA_ARGS,
+        )
+        return []
+    return extra_args
+
+
 # Per-CLI launcher recipes for "single prompt, no interaction" mode.
 _AI_CLI_RECIPES: dict[str, Any] = {
     # Anthropic Claude Code: -p PROMPT runs in headless / non-interactive mode.
@@ -785,10 +818,7 @@ async def _run_ai_agent(
     prompt = params.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("ai_agent action requires a non-empty 'prompt'")
-    extra_args = params.get("extra_args") or []
-    if not isinstance(extra_args, list):
-        raise ValueError("ai_agent.extra_args must be a list of strings")
-    extra_args = [str(a) for a in extra_args]
+    extra_args = _resolve_ai_extra_args(params)
     timeout = float(params.get("timeout", 600.0))
 
     wrapped_prompt = (
@@ -888,10 +918,7 @@ async def stream_ai_agent_events(
     prompt = params.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("ai_agent action requires a non-empty 'prompt'")
-    extra_args = params.get("extra_args") or []
-    if not isinstance(extra_args, list):
-        raise ValueError("ai_agent.extra_args must be a list of strings")
-    extra_args = [str(a) for a in extra_args]
+    extra_args = _resolve_ai_extra_args(params)
     timeout = float(params.get("timeout", 600.0))
 
     wrapped_prompt = (

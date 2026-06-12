@@ -189,6 +189,14 @@ ENV_CONVERSATION_ID: str = "KBAGENT_CONVERSATION_ID"
 ENV_KBAGENT_SERVE_URL: str = "KBAGENT_SERVE_URL"
 ENV_KBAGENT_SERVE_TOKEN: str = "KBAGENT_SERVE_TOKEN"
 
+# --- AI-agent extra_args opt-in (since 0.60.2) ---
+# extra_args on an ai_agent task are passed verbatim to the AI CLI, so they can
+# carry rail-disabling flags (permission-skip / unrestricted-exec). They are
+# IGNORED unless the serve operator opts in by setting this to a truthy value
+# (1/true/yes/on) -- mirroring the --allow-env-manage-token opt-in. See
+# GHSA-777j-6p95-qv3m.
+ENV_ALLOW_AI_EXTRA_ARGS: str = "KBAGENT_ALLOW_AI_EXTRA_ARGS"
+
 # --- Upstream-chain context (set when a task is triggered as a downstream) ---
 # Populated only on runs spawned by another task's ``trigger`` field; absent
 # on cron-driven or manually-invoked runs. AI agents read these to fetch the
