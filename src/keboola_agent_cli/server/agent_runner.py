@@ -764,9 +764,10 @@ def _resolve_ai_extra_args(params: dict[str, Any]) -> list[str]:
     flag = os.environ.get(ENV_ALLOW_AI_EXTRA_ARGS, "").strip().lower()
     if flag not in ("1", "true", "yes", "on"):
         logger.warning(
-            "Ignoring %d ai_agent extra_args because %s is not set on the serve "
-            "process. extra_args are passed verbatim to the AI CLI and can disable "
-            "its safety rails; set %s=1 to honor them.",
+            "Ignoring %d ai_agent extra_args because %s is not set in the kbagent "
+            "environment (serve, or this local `agent` run). extra_args are passed "
+            "verbatim to the AI CLI and can disable its safety rails; set %s=1 to "
+            "honor them.",
             len(extra_args),
             ENV_ALLOW_AI_EXTRA_ARGS,
             ENV_ALLOW_AI_EXTRA_ARGS,
