@@ -24,6 +24,18 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.60.4": [
+        "Security: `kbagent serve --ui` no longer lets `GET /doctor`, `/version`, and `/changelog` "
+        "(and any other registered endpoint) bypass bearer auth. In single-process UI mode the auth "
+        "middleware consulted a hand-maintained prefix allow-list to decide which GETs were public "
+        "SPA paths; that list had gone stale and omitted those health-router routes, so they "
+        "executed unauthenticated -- `/doctor` in particular exposes project aliases, ids, stack "
+        "URLs, and the config path. The predicate is now route-aware: it derives the protected set "
+        "from the app's actually-registered routes, so every current and future endpoint requires "
+        "auth while genuine client-side SPA paths still fall through to the public index.html shell. "
+        "Only affects `--ui` mode; API-only `serve` was never exposed. Private advisory "
+        "GHSA-ffpq-prmh-3gx2.",
+    ],
     "0.60.3": [
         "Security: `kbagent sync pull` now sanitizes the API-supplied bucket id and table name "
         "before using them as filesystem paths when writing storage metadata + samples, and asserts "

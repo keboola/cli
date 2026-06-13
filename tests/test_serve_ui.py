@@ -125,6 +125,37 @@ class TestApiAlias:
         assert resp.status_code in {404, 401}
 
 
+class TestUiAuthRouteAwareBypass:
+    """GHSA-ffpq-prmh-3gx2: in --ui mode, real API routes must require auth even
+    when they were absent from the old hand-maintained prefix allow-list. The
+    predicate is now route-aware, so /doctor, /version, /changelog (health
+    router, all previously missing from the list and thus served unauthenticated)
+    are protected, while genuine client-side SPA routes still fall through to the
+    public index.html shell."""
+
+    @pytest.mark.parametrize("path", ["/doctor", "/version", "/changelog"])
+    def test_health_router_extras_require_auth_in_ui_mode(
+        self, tmp_path: Path, ui_dist: Path, path: str
+    ) -> None:
+        client = _make_client(tmp_path, ui_dist=ui_dist, token="t")
+        resp = client.get(path)
+        assert resp.status_code == 401, (
+            f"GET {path} must require auth in --ui mode, got {resp.status_code}: {resp.text}"
+        )
+
+    def test_non_api_path_stays_public_not_auth_walled(self, tmp_path: Path, ui_dist: Path) -> None:
+        # A path that is NOT a registered API route must remain PUBLIC (auth
+        # skipped) so the SPA surface is reachable -- it must not be mistaken
+        # for a protected endpoint and 401'd. (StaticFiles 404s an unknown path;
+        # the security-relevant property is that it is NOT a 401, i.e. the
+        # route-aware predicate did not over-protect a non-endpoint path.)
+        client = _make_client(tmp_path, ui_dist=ui_dist, token="t")
+        resp = client.get("/some-client-side-view")
+        assert resp.status_code != 401, (
+            f"non-API path must stay public (not auth-walled), got {resp.status_code}"
+        )
+
+
 class TestCookieAuth:
     """Cookie path: ``GET /`` sets the cookie, subsequent requests use it.
 
