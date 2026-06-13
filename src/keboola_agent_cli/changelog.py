@@ -24,6 +24,19 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.60.3": [
+        "Security: `kbagent sync pull` now sanitizes the API-supplied bucket id and table name "
+        "before using them as filesystem paths when writing storage metadata + samples, and asserts "
+        "the resolved path stays inside the sync workspace. `_write_storage_metadata` previously used "
+        "the table `name` verbatim (and `bucket_id.replace('.', '-')`, which neutralizes `..` but not "
+        "`/` or an absolute path), so a malicious or compromised Storage API response with a table "
+        "named like `../../../../etc/cron.d/evil` could write attacker-controlled JSON outside the "
+        "workspace. The config-write path already had this defense (`sanitize_path_segment` + "
+        "`_ensure_within_branch`); the storage-metadata and samples writers now mirror it via "
+        "`sanitize_path_segment(...)` plus a new `_ensure_path_within` containment check. Behavior is "
+        "unchanged for legitimate data: the `in.c-foo` -> `in-c-foo` bucket-directory convention and "
+        "the `<table>.json` filename are preserved. Private advisory GHSA-833q-c5wv-26r7.",
+    ],
     "0.60.2": [
         "Security: scheduled `ai_agent` tasks (claude/codex/gemini spawned by `kbagent serve`) no "
         "longer inherit the manage (super-admin) or master tokens from the serve process "

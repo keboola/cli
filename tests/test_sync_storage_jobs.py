@@ -608,6 +608,102 @@ class TestWriteStorageMetadata:
         assert '"Alice"' in sample_file.read_text(encoding="utf-8")
 
 
+class TestWriteStorageMetadataPathTraversal:
+    """GHSA-833q-c5wv-26r7: API-controlled bucket ids / table names must not
+    escape the sync workspace when storage metadata is written."""
+
+    def _make_svc(self, tmp_config_dir: Path) -> SyncService:
+        store = setup_single_project(tmp_config_dir)
+        return SyncService(config_store=store)
+
+    def test_malicious_table_name_stays_inside_workspace(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        svc = self._make_svc(tmp_config_dir)
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        tables = [
+            {
+                "id": "in.c-data.evil",
+                "name": "../../../../evil",
+                "bucket": {"id": "in.c-data"},
+                "columns": [],
+            }
+        ]
+
+        svc._write_storage_metadata(project_root, [], tables, {})
+
+        # The traversal target above the workspace must NOT be created; the
+        # metadata lands safely inside under a sanitized filename instead.
+        assert not (tmp_path / "evil.json").exists()
+        storage_dir = project_root / STORAGE_DIR_NAME
+        written = list(storage_dir.rglob("*.json"))
+        assert written, "table metadata should still be written (sanitized)"
+        for p in written:
+            assert p.resolve().is_relative_to(storage_dir.resolve())
+
+    def test_malicious_bucket_id_stays_inside_workspace(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        svc = self._make_svc(tmp_config_dir)
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        tables = [
+            {
+                "id": "x.evil",
+                "name": "t",
+                "bucket": {"id": "../../../../tmp/pwned"},
+                "columns": [],
+            }
+        ]
+
+        svc._write_storage_metadata(project_root, [], tables, {})
+
+        storage_dir = project_root / STORAGE_DIR_NAME
+        written = list(storage_dir.rglob("*.json"))
+        assert written, "table metadata should still be written (sanitized)"
+        for p in written:
+            assert p.resolve().is_relative_to(storage_dir.resolve())
+        assert not (tmp_path / "tmp" / "pwned").exists()
+
+    def test_malicious_sample_id_stays_inside_workspace(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        svc = self._make_svc(tmp_config_dir)
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        samples = {"in.c-data.../../../../etc/evil": "col\nval\n"}
+
+        svc._write_storage_metadata(project_root, [], [], samples)
+
+        storage_dir = project_root / STORAGE_DIR_NAME
+        written = list(storage_dir.rglob("sample.csv"))
+        assert written, "sample should still be written (sanitized)"
+        for p in written:
+            assert p.resolve().is_relative_to(storage_dir.resolve())
+
+    def test_legitimate_names_preserve_dir_convention(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        # Regression: the fix must keep `in.c-foo` -> `in-c-foo` and the plain
+        # `<table>.json` filename for legitimate data (no behavior change).
+        svc = self._make_svc(tmp_config_dir)
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        tables = [
+            {
+                "id": "in.c-data.users",
+                "name": "users",
+                "bucket": {"id": "in.c-data"},
+                "columns": [],
+            }
+        ]
+
+        svc._write_storage_metadata(project_root, [], tables, {})
+
+        assert (project_root / STORAGE_DIR_NAME / "tables" / "in-c-data" / "users.json").exists()
+
+
 # ===================================================================
 # 4. SyncService tests - _write_per_config_jobs()
 # ===================================================================
