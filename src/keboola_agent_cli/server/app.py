@@ -718,62 +718,43 @@ def _install_ui(app: FastAPI, *, ui_dist: str, token: str) -> None:
 def _allow_static_through_auth(app: FastAPI) -> None:
     """Mark the SPA's GET-only static surface as auth-public.
 
-    The auth middleware already exempts ``PUBLIC_PATHS`` (docs, openapi,
-    health). For the UI mode we also need to let through the SPA shell:
-    ``GET /``, ``GET /index.html``, ``GET /assets/*``, favicons, and the
-    SPA's client-side routes (which all resolve to index.html via the
-    StaticFiles ``html=True`` fallback).
+    The auth middleware exempts ``PUBLIC_PATHS`` (docs, openapi, health). In UI
+    mode the SPA also needs ``GET /``, ``GET /index.html``, ``GET /assets/*``,
+    favicons, and the SPA's client-side routes (which resolve to index.html via
+    the StaticFiles ``html=True`` fallback) to load without a token.
+
+    Route-aware (GHSA-ffpq-prmh-3gx2): instead of a hand-maintained prefix
+    deny-list -- which silently went stale and let ``GET /doctor`` / ``/stream``
+    / ``/version`` / ``/changelog`` bypass auth in ``--ui`` mode -- we derive the
+    protected set from the app's *actually-registered* routes. All routers are
+    included before this runs (and before the StaticFiles mount is appended), so
+    any GET that resolves to a real endpoint must authenticate, and only genuine
+    client-side SPA routes fall through to the public index.html shell. New API
+    routes are protected automatically, with no list to keep in sync.
 
     Implemented by stashing a predicate on ``app.state`` that the auth
-    middleware consults; we don't import-cycle by editing the auth module
-    here.
+    middleware consults; we don't import-cycle by editing the auth module here.
     """
+    from starlette.routing import Route
+
+    # Snapshot the real endpoints once. The StaticFiles mount (added by the
+    # caller AFTER this function) is a ``Mount``, not a ``Route``, so it is
+    # correctly excluded -- otherwise it would match every path and break the
+    # SPA fallback.
+    api_route_patterns = [r.path_regex for r in app.routes if isinstance(r, Route)]
+    static_paths = frozenset({"/", "/index.html", "/favicon.svg", "/favicon.ico", "/manifest.json"})
 
     def _is_ui_public(method: str, path: str) -> bool:
         if method != "GET":
             return False
-        if path == "/" or path == "/index.html":
+        # SPA shell + built assets are always public (they carry no secrets) so
+        # the browser can bootstrap and pick up the session cookie.
+        if path in static_paths or path.startswith("/assets/"):
             return True
-        if path.startswith("/assets/"):
-            return True
-        if path in {"/favicon.svg", "/favicon.ico", "/manifest.json"}:
-            return True
-        # Any non-API GET that doesn't look like an API endpoint we own:
-        # treat as a SPA route and let StaticFiles serve index.html.
-        # API routes always start with a known prefix; everything else
-        # falls to the SPA. Use a tight allow-list to avoid leaking auth
-        # bypass to API routes that might be added in future.
-        api_prefixes = (
-            "/projects",
-            "/configs",
-            "/components",
-            "/storage",
-            "/jobs",
-            "/branches",
-            "/workspaces",
-            "/flows",
-            "/schedules",
-            "/lineage",
-            "/sharing",
-            "/data-apps",
-            "/dev-portal",
-            "/mcp",
-            "/kai",
-            "/ai",
-            "/encrypt",
-            "/search",
-            "/semantic-layer",
-            "/org",
-            "/feature",
-            "/agents",
-            "/members",
-            "/health",
-            "/docs",
-            "/redoc",
-            "/openapi.json",
-            "/api/",
-        )
-        return not any(path == p or path.startswith(p + "/") for p in api_prefixes)
+        # A path that resolves to a registered route is a real endpoint and
+        # MUST go through auth. Anything else is a client-side SPA route served
+        # by the public StaticFiles shell, so skipping auth there leaks nothing.
+        return not any(pattern.match(path) for pattern in api_route_patterns)
 
     app.state.is_ui_public = _is_ui_public
 
