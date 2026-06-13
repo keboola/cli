@@ -2584,6 +2584,29 @@ intentionally drop a local edit, delete the file (or the config dir) and pull.
 Applies at config and row granularity. `--all-projects` reports a per-project
 conflict as that project's error without aborting the rest of the batch.
 
+## `ai_agent` `extra_args` need an opt-in env on the kbagent process (since v0.60.2)
+
+`extra_args` on an `ai_agent` task are passed **verbatim** to the underlying AI
+CLI (claude/codex/gemini), so they can carry rail-disabling flags
+(permission-skip / unrestricted-execution) that turn a contained headless agent
+into arbitrary host command execution. Since v0.60.2 they are **ignored by
+default** and only honored when the kbagent process running the task -- `kbagent
+serve` for scheduled tasks, or a local `agent test` / `agent run` /
+`prompt-improve` -- has a truthy `KBAGENT_ALLOW_AI_EXTRA_ARGS` (`1` / `true` /
+`yes` / `on`); otherwise they are dropped and a warning is logged. Mirrors the
+`--allow-env-manage-token` opt-in. Consequence: a task carrying
+`"extra_args": [...]` (or `--extra-arg ...` on the CLI) is a **no-op on the
+args** unless the env is set -- if your extra flags "do nothing", check the env
+on the kbagent process running the task, not the task definition. (Private
+advisory GHSA-777j-6p95-qv3m.)
+
+Related (since v0.60.2): scheduled `ai_agent` subprocesses no longer inherit the
+manage (`KBC_MANAGE_API_TOKEN`) or master (`KBC_MASTER_TOKEN*`) tokens from the
+serve environment -- an AI agent reaches Keboola via `kbagent http` or by
+forking `kbagent`, and never needs those super-admin credentials. `KBC_TOKEN`
+(storage) is retained, and `cli_command` tasks are unchanged. (Private advisory
+GHSA-wm54-r2hh-cxm9.)
+
 ## Core platform gotchas (version-independent)
 
 These are Keboola-platform behaviors, not kbagent features, so they carry no

@@ -60,6 +60,13 @@ Every task carries an `action` envelope with `type` + `params`:
 `cli` accepts `claude`, `codex`, or `gemini`. The chosen CLI must be on
 the server's `PATH` when the task fires (cron or `agent run`).
 
+**`extra_args` are ignored unless the serve operator opts in (since v0.60.2).**
+They are passed verbatim to the AI CLI and can disable its safety rails, so
+`kbagent serve` drops them with a warning unless it was started with a truthy
+`KBAGENT_ALLOW_AI_EXTRA_ARGS` (e.g. `KBAGENT_ALLOW_AI_EXTRA_ARGS=1`). The
+`["--print"]` above takes effect only when that opt-in is set. See
+[gotchas.md](gotchas.md).
+
 ## Common workflows
 
 ### Create + inspect + run

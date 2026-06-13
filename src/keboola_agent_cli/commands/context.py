@@ -1065,7 +1065,10 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
                        [--trigger-task-id ID --trigger-on success|error|always]
     Persist a new scheduled task. --manual skips the cron loop. Use
     --from-file for the full {{"type":..., "params":...}} JSON envelope
-    when prompts/args grow large.
+    when prompts/args grow large. --extra-arg on an ai_agent task is
+    honored only when the kbagent process (serve, or this `agent` run)
+    has a truthy KBAGENT_ALLOW_AI_EXTRA_ARGS env (since 0.60.2);
+    otherwise the args are dropped with a warning.
 
   kbagent agent update TASK_ID [--name N] [--description D] [--cron C]
                                 [--enabled/--disabled] [--manual/--auto]
@@ -1107,7 +1110,8 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     AI-polished single-shot prompt for an unattended agent task. Spawns
     the chosen AI CLI with a meta-prompt; the final `done` event's
     `data.prompt` carries the cleaned body ready to paste into
-    `agent create --prompt ...`.
+    `agent create --prompt ...`. --extra-arg follows the same
+    KBAGENT_ALLOW_AI_EXTRA_ARGS opt-in as `agent create` (since 0.60.2).
 
   See agent-tasks-cli-workflow.md skill reference for full walkthroughs.
 

@@ -32,6 +32,7 @@ from keboola_agent_cli.constants import (
 from keboola_agent_cli.server.agent_runner import (
     _AI_AGENT_PROMPT_PREFIX,
     _build_subprocess_env,
+    _resolve_ai_extra_args,
     _run_ai_agent,
     _run_cli,
     _trigger_should_fire,
@@ -94,6 +95,151 @@ class TestBuildSubprocessEnv:
         assert ENV_CONFIG_DIR not in env or env[ENV_CONFIG_DIR] == os.environ.get(
             ENV_CONFIG_DIR, ""
         )
+
+    def test_strip_admin_tokens_removes_manage_and_master(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # GHSA-wm54-r2hh-cxm9: an AI-agent child must not inherit the super-admin
+        # (manage) or master tokens. Per-alias master tokens are stripped by prefix.
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "manage-secret")
+        monkeypatch.setenv("KBC_MASTER_TOKEN", "master-secret")
+        monkeypatch.setenv("KBC_MASTER_TOKEN_PROD", "master-prod-secret")
+        monkeypatch.setenv("KBC_TOKEN", "901-55555-storage")
+        registry = _make_registry(tmp_path)
+
+        env = _build_subprocess_env(registry, strip_admin_tokens=True)
+
+        assert "KBC_MANAGE_API_TOKEN" not in env
+        assert "KBC_MASTER_TOKEN" not in env
+        assert "KBC_MASTER_TOKEN_PROD" not in env
+        # The per-project storage token is intentionally retained so the child
+        # can still run headless `--project __env__` reads.
+        assert env["KBC_TOKEN"] == "901-55555-storage"
+
+    def test_default_keeps_all_tokens_for_cli_command(self, tmp_path: Path, monkeypatch) -> None:
+        # cli_command IS kbagent and legitimately needs these (e.g. a scheduled
+        # `project refresh` / `sharing` task), so the default must NOT strip.
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "manage-secret")
+        monkeypatch.setenv("KBC_MASTER_TOKEN", "master-secret")
+        registry = _make_registry(tmp_path)
+
+        env = _build_subprocess_env(registry)
+
+        assert env["KBC_MANAGE_API_TOKEN"] == "manage-secret"
+        assert env["KBC_MASTER_TOKEN"] == "master-secret"
+
+
+class TestAiAgentTokenIsolation:
+    """GHSA-wm54-r2hh-cxm9: the spawned ai_agent child is isolated from the
+    manage/master tokens; the cli_command child keeps them."""
+
+    @pytest.mark.asyncio
+    async def test_ai_agent_subprocess_strips_admin_tokens(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "manage-secret")
+        monkeypatch.setenv("KBC_MASTER_TOKEN", "master-secret")
+        monkeypatch.setenv("KBC_TOKEN", "901-55555-storage")
+        registry = _make_registry(tmp_path)
+        mock_proc = MagicMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"out", b""))
+        mock_proc.returncode = 0
+        with patch(
+            "keboola_agent_cli.server.agent_runner.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=mock_proc),
+        ) as mock_spawn:
+            await _run_ai_agent(registry, {"cli": "claude", "prompt": "summarize my jobs"})
+        env = mock_spawn.call_args.kwargs["env"]
+        assert "KBC_MANAGE_API_TOKEN" not in env
+        assert "KBC_MASTER_TOKEN" not in env
+        # Storage token + serve callback are retained so the agent can still work.
+        assert env["KBC_TOKEN"] == "901-55555-storage"
+        assert env[ENV_KBAGENT_SERVE_TOKEN] == "test-bearer-token"
+
+    @pytest.mark.asyncio
+    async def test_cli_command_subprocess_keeps_admin_tokens(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "manage-secret")
+        registry = _make_registry(tmp_path)
+        mock_proc = MagicMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"out", b""))
+        mock_proc.returncode = 0
+        with patch(
+            "keboola_agent_cli.server.agent_runner.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=mock_proc),
+        ) as mock_spawn:
+            await _run_cli(registry, {"argv": ["project", "refresh", "--all"]})
+        env = mock_spawn.call_args.kwargs["env"]
+        # cli_command keeps the manage token so scheduled admin tasks still work.
+        assert env["KBC_MANAGE_API_TOKEN"] == "manage-secret"
+
+
+class TestAiExtraArgsGate:
+    """GHSA-777j-6p95-qv3m: ai_agent extra_args reach the AI CLI only when the
+    serve operator opts in via KBAGENT_ALLOW_AI_EXTRA_ARGS."""
+
+    def test_extra_args_dropped_without_optin(self, monkeypatch) -> None:
+        monkeypatch.delenv("KBAGENT_ALLOW_AI_EXTRA_ARGS", raising=False)
+        out = _resolve_ai_extra_args({"extra_args": ["--dangerously-skip-permissions"]})
+        assert out == []
+
+    def test_extra_args_honored_with_optin(self, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_ALLOW_AI_EXTRA_ARGS", "1")
+        out = _resolve_ai_extra_args({"extra_args": ["--model", "opus"]})
+        assert out == ["--model", "opus"]
+
+    def test_empty_extra_args_returns_empty(self, monkeypatch) -> None:
+        monkeypatch.setenv("KBAGENT_ALLOW_AI_EXTRA_ARGS", "1")
+        assert _resolve_ai_extra_args({}) == []
+
+    def test_non_list_extra_args_raises(self) -> None:
+        with pytest.raises(ValueError, match="must be a list"):
+            _resolve_ai_extra_args({"extra_args": "--oops"})
+
+    @pytest.mark.asyncio
+    async def test_run_ai_agent_drops_extra_args_without_optin(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.delenv("KBAGENT_ALLOW_AI_EXTRA_ARGS", raising=False)
+        registry = _make_registry(tmp_path)
+        mock_proc = MagicMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"out", b""))
+        mock_proc.returncode = 0
+        with patch(
+            "keboola_agent_cli.server.agent_runner.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=mock_proc),
+        ) as mock_spawn:
+            await _run_ai_agent(
+                registry,
+                {
+                    "cli": "claude",
+                    "prompt": "go",
+                    "extra_args": ["--dangerously-skip-permissions"],
+                },
+            )
+        argv = list(mock_spawn.call_args.args)
+        assert "--dangerously-skip-permissions" not in argv
+
+    @pytest.mark.asyncio
+    async def test_run_ai_agent_honors_extra_args_with_optin(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("KBAGENT_ALLOW_AI_EXTRA_ARGS", "1")
+        registry = _make_registry(tmp_path)
+        mock_proc = MagicMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"out", b""))
+        mock_proc.returncode = 0
+        with patch(
+            "keboola_agent_cli.server.agent_runner.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=mock_proc),
+        ) as mock_spawn:
+            await _run_ai_agent(
+                registry,
+                {"cli": "claude", "prompt": "go", "extra_args": ["--model", "opus"]},
+            )
+        argv = list(mock_spawn.call_args.args)
+        assert "--model" in argv and "opus" in argv
 
 
 class TestRunCliEnvPropagation:
@@ -204,6 +350,43 @@ class TestStreamAiAgentEvents:
         # to the fallback raw-JSON row.
         assert "raw" in stdout_evts[1]["data"]
         assert stdout_evts[2]["data"]["type"] == "result"
+
+    @pytest.mark.asyncio
+    async def test_streaming_strips_admin_tokens_and_gates_extra_args(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # NB-3: the streaming path (production-dominant: serve REST, run
+        # broadcaster, Web UI, local `agent test`) must enforce BOTH fixes,
+        # not just the one-shot `_run_ai_agent` path.
+        from keboola_agent_cli.server.agent_runner import stream_ai_agent_events
+
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "manage-secret")
+        monkeypatch.setenv("KBC_MASTER_TOKEN", "master-secret")
+        monkeypatch.setenv("KBC_TOKEN", "901-55555-storage")
+        monkeypatch.delenv("KBAGENT_ALLOW_AI_EXTRA_ARGS", raising=False)
+        registry = _make_registry(tmp_path)
+        spawn = AsyncMock(return_value=_FakeProc(b'{"type":"result","result":"ok"}\n', b""))
+        with patch(
+            "keboola_agent_cli.server.agent_runner.asyncio.create_subprocess_exec",
+            new=spawn,
+        ):
+            async for _ in stream_ai_agent_events(
+                registry,
+                {
+                    "cli": "claude",
+                    "prompt": "test",
+                    "extra_args": ["--dangerously-skip-permissions"],
+                },
+            ):
+                pass
+        env = spawn.call_args.kwargs["env"]
+        argv = list(spawn.call_args.args)
+        # M1: admin tokens stripped from the streaming child too; storage kept.
+        assert "KBC_MANAGE_API_TOKEN" not in env
+        assert "KBC_MASTER_TOKEN" not in env
+        assert env["KBC_TOKEN"] == "901-55555-storage"
+        # M3: the rail-disabling flag is dropped without the opt-in env.
+        assert "--dangerously-skip-permissions" not in argv
 
 
 class _FakeProc:

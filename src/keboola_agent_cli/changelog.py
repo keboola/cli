@@ -24,6 +24,31 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.60.2": [
+        "Security: scheduled `ai_agent` tasks (claude/codex/gemini spawned by `kbagent serve`) no "
+        "longer inherit the manage (super-admin) or master tokens from the serve process "
+        "environment. `agent_runner._build_subprocess_env` copied the full `os.environ` into every "
+        "spawned child, so a prompt-injectable AI agent that was only meant to summarize jobs could "
+        "read `KBC_MANAGE_API_TOKEN` / `KBC_MASTER_TOKEN*` from its own environment and exfiltrate "
+        "the highest-value credentials. The AI-agent paths now strip every `KBC_MANAGE_*` / "
+        "`KBC_MASTER_*` key (mirroring the MCP-child isolation in `mcp_transport._build_minimal_env` "
+        "and the manage-token default-deny). The per-project storage token (`KBC_TOKEN`) is retained "
+        "so headless `--project __env__` reads still work, and `cli_command` children -- which are "
+        "`kbagent` itself and legitimately need the tokens for scheduled `project refresh` / "
+        "`sharing` tasks -- are unchanged. Private advisory GHSA-wm54-r2hh-cxm9.",
+        "Security: `ai_agent` tasks no longer forward `extra_args` to the underlying AI CLI "
+        "(claude/codex/gemini) unless the kbagent process running the task is opted in via a truthy "
+        "`KBAGENT_ALLOW_AI_EXTRA_ARGS`. `extra_args` were passed verbatim, so a task definition (or "
+        "any holder of the serve bearer token, including the immediate `/agents/test` endpoint) "
+        "could inject a rail-disabling flag -- e.g. a permission-skip / unrestricted-execution flag "
+        "-- and turn a contained headless agent into arbitrary host command execution. They are now "
+        "ignored by default and dropped with a loud warning; set `KBAGENT_ALLOW_AI_EXTRA_ARGS=1` to "
+        "honor them, mirroring the `--allow-env-manage-token` opt-in. The gate fires in EVERY "
+        "consumer of the agent runner -- scheduled serve tasks AND local `agent test` / `agent run` "
+        "/ `prompt-improve --extra-arg` -- so a user passing `--extra-arg` on their own machine must "
+        "set `KBAGENT_ALLOW_AI_EXTRA_ARGS` in that shell, or the args are silently dropped (with a "
+        "warning). Private advisory GHSA-777j-6p95-qv3m.",
+    ],
     "0.60.1": [
         "Security: `kbagent storage file-download` now contains the API-supplied file name under "
         "the target directory, refusing path-traversal escapes. When `--output` was omitted, the "
