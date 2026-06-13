@@ -2607,6 +2607,37 @@ forking `kbagent`, and never needs those super-admin credentials. `KBC_TOKEN`
 (storage) is retained, and `cli_command` tasks are unchanged. (Private advisory
 GHSA-wm54-r2hh-cxm9.)
 
+## `data-app git-repo` / `git-branches` / `git-entrypoints` need a deployed app (since v0.63.3)
+
+The three git-repo introspection commands (sandboxes-service
+`GET /apps/{id}/git-repo`, `/branches`, `/entrypoints`) return **409 "App has no
+Git repository configured"** until the app has been **deployed at least once** --
+even though `data-app create --git-repo <url>` already wrote the git block into
+the Storage config. The git block is synced from the Storage config into the
+Data Science app record at *deploy* time; a `--no-deploy` app has no git repo
+from the service's point of view. Fix: run `kbagent data-app deploy` (the sync
+happens before the container build, so it works even if the build later fails),
+then re-run the git-repo command.
+
+Other behaviors of this family:
+
+- `git-branches` returns a **raw top-level JSON array** of
+  `{branch, sha, comment, author{...}, date}` (not wrapped in
+  `{branches: [...]}`); `git-entrypoints` returns a **raw `array<string>`** of
+  root-level filenames. The service hardcodes the entrypoint extension to `.py`,
+  so non-Python entrypoints are never listed.
+- `git-credentials` / `git-credentials-create` only apply to a **managed** git
+  repo (`app.managedGitRepoId` set). Apps created via
+  `data-app create --git-repo <url>` are **external**, so
+  `git-credentials-create` returns **409 "no managed Git repository"** for them.
+  These two endpoints also need an **admin** storage token
+  (`CanManageAppRepoCredentials`), unlike the read trio which need only the
+  ordinary project storage token.
+- For `--type http_token`, the create response carries a **one-time secret**
+  that is printed once and can never be retrieved again (mirrors
+  `data-app password`); the `git-credentials` list never returns it. `--type
+  ssh_key` requires a `--public-key` / `--public-key-file` and returns no secret.
+
 ## Core platform gotchas (version-independent)
 
 These are Keboola-platform behaviors, not kbagent features, so they carry no

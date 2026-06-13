@@ -136,6 +136,55 @@ repo. Public repos: drop `--git-pat-env` and use `--git-public`. Total
 GitHub call budget per run is ≤5 (1 tree + ≤4 contents) regardless of repo size, so the
 60/hour unauth limit rarely fires; pass a PAT for CI loops.
 
+### Inspect the deployed-from git repo (since v0.63.3)
+
+```bash
+# Clone URLs + whether the repo is managed by Keboola:
+kbagent data-app git-repo --project prod --app-id 12345678
+#   ssh_url / https_url / is_managed_git_repo
+
+# Remote branches with commit metadata (branch, sha, comment, author, date):
+kbagent data-app git-branches --project prod --app-id 12345678
+
+# Root-level .py entrypoint files on the configured branch:
+kbagent data-app git-entrypoints --project prod --app-id 12345678
+```
+
+These read the repo *the app is actually deployed from*, via the
+sandboxes-service (`GET /apps/{id}/git-repo`, `/branches`, `/entrypoints`).
+They complement `validate-repo`, which inspects an arbitrary repo URL via the
+GitHub API *before* you create an app; the `git-*` commands inspect the repo of
+an *existing* app server-side.
+
+**Precondition:** the app must have been **deployed at least once**. The git
+block is synced from the Storage config into the Data Science app record at
+deploy time, so a fresh `--no-deploy` app returns 409 "no Git repository
+configured" from all three. Run `data-app deploy` first.
+
+### Manage git credentials for a managed repo (since v0.63.3)
+
+```bash
+# List credentials of a MANAGED git repo (the secret is never returned):
+kbagent data-app git-credentials --project prod --app-id 12345678
+
+# Mint an HTTP token (the one-time secret is printed once, never again):
+kbagent data-app git-credentials-create \
+  --project prod --app-id 12345678 \
+  --type http_token --permissions readOnly --name ci-readonly --yes
+
+# Register an SSH public key instead:
+kbagent data-app git-credentials-create \
+  --project prod --app-id 12345678 \
+  --type ssh_key --permissions readWrite --public-key-file ./deploy_key.pub
+```
+
+Credential management applies **only to managed git repos**
+(`app.managedGitRepoId` set, typically provisioned in the UI). Apps created via
+`data-app create --git-repo <url>` are **external**, so `git-credentials-create`
+returns 409 "no managed Git repository" for them. Both credential commands also
+need an **admin** storage token (`CanManageAppRepoCredentials`), unlike the read
+trio above which need only the ordinary project storage token.
+
 ### Manage app-runtime secrets (since v0.29.0)
 
 ```bash

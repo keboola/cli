@@ -24,6 +24,29 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.63.3": [
+        "Fix: `kbagent context` no longer renders API path templates as "
+        "`/apps/<built-in function id>/logs/tail`. `AGENT_CONTEXT` is an f-string (it "
+        "interpolates the version), so unescaped `{id}` placeholders were evaluated against the "
+        "Python builtin `id`; the literal braces are now escaped so paths render the OpenAPI-style "
+        "`{id}` consistently (affected /jobs/{id}/kill, /tables/{id}/swap, /tables/{id}/pull, "
+        "/apps/{id}/logs/tail).",
+        "New: `data-app git-repo`, `data-app git-branches`, and `data-app git-entrypoints` introspect "
+        "the git repository a data app is deployed from (sandboxes-service `/apps/{id}/git-repo/*`): "
+        "clone URLs plus a managed flag, remote branches with commit metadata, and the root-level "
+        "`.py` entrypoint files. These read endpoints work for any configured repo (managed or "
+        'external) and need only the project storage token. Gotcha: they return 409 "no Git '
+        'repository configured" until the app has been deployed at least once -- the git block is '
+        "synced from the Storage config into the Data Science app record at deploy time, so a "
+        "`--no-deploy` app has no git repo from the service's point of view.",
+        "New: `data-app git-credentials` and `data-app git-credentials-create` list and mint git "
+        "credentials (an SSH key or an HTTP token) for a *managed* git repo. Apps created via "
+        "`data-app create --git-repo <url>` are external (not managed), so `git-credentials-create` "
+        "returns 409 for them; credential management applies to managed repos and requires an admin "
+        "storage token (CanManageAppRepoCredentials). For `--type http_token` the response carries a "
+        "one-time secret that is printed once and can never be retrieved again (mirrors `data-app "
+        "password`); `--type ssh_key` requires `--public-key` / `--public-key-file`.",
+    ],
     "0.63.2": [
         "Docs: the in-process Python SDK is now documented. New `docs/sdk.md` is the deep "
         "guide -- the importable `Client` facade vs the CLI vs the `serve` REST API, where the "

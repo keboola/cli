@@ -18,6 +18,7 @@ from ..dev_portal_client import DeveloperPortalClient
 from ..services.branch_service import BranchService
 from ..services.component_service import ComponentService
 from ..services.config_service import ConfigService
+from ..services.data_app_git_service import DataAppGitService
 from ..services.data_app_service import DataAppService
 from ..services.deep_lineage_service import DeepLineageService
 from ..services.dev_portal_service import DeveloperPortalService
@@ -74,6 +75,7 @@ class ServiceRegistry:
     deep_lineage: DeepLineageService = field(init=False)
     sharing: SharingService = field(init=False)
     data_app: DataAppService = field(init=False)
+    data_app_git: DataAppGitService = field(init=False)
     dev_portal: DeveloperPortalService = field(init=False)
     semantic_layer: SemanticLayerService = field(init=False)
     repo_validate: RepoValidateService = field(init=False)
@@ -105,6 +107,7 @@ class ServiceRegistry:
         self.deep_lineage = DeepLineageService(config_store=cs)
         self.sharing = SharingService(config_store=cs)
         self.data_app = DataAppService(config_store=cs)
+        self.data_app_git = DataAppGitService(config_store=cs)
         self.dev_portal = DeveloperPortalService(
             config_store=cs,
             client_factory=lambda identity: DeveloperPortalClient(identity),
