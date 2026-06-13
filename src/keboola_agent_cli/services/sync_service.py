@@ -56,7 +56,7 @@ from ..sync.manifest import (
     load_manifest,
     save_manifest,
 )
-from ..sync.naming import config_path, config_row_path, sanitize_name
+from ..sync.naming import config_path, config_row_path, sanitize_name, sanitize_path_segment
 from ._encryption import (
     apply_encrypted_to_local,
     encrypt_secrets_in_config,
@@ -164,6 +164,28 @@ def _ensure_within_branch(
             f"config_id='{config_id}'). Refusing to write outside "
             f"'{branch_resolved}'. This indicates a malformed API response "
             f"or a regression in path sanitization."
+        )
+
+
+def _ensure_path_within(base_dir: Path, target: Path, what: str) -> None:
+    """Reject a write whose path escapes *base_dir* (defense-in-depth).
+
+    Mirrors :func:`_ensure_within_branch` for non-config writes (storage
+    metadata + samples) whose path segments derive from API-controlled bucket
+    ids / table names (GHSA-833q-c5wv-26r7). Raises ConfigError on escape so a
+    malformed or compromised Storage response cannot write outside the sync
+    workspace.
+    """
+    try:
+        base_resolved = base_dir.resolve()
+        target_resolved = target.resolve()
+    except OSError as exc:
+        raise ConfigError(f"Cannot resolve sync path: {exc}") from exc
+    if not target_resolved.is_relative_to(base_resolved):
+        raise ConfigError(
+            f"Storage path escapes sync workspace ({what}). Refusing to write "
+            f"outside '{base_resolved}'. This indicates a malformed or compromised "
+            f"API response or a path-sanitization regression."
         )
 
 
@@ -3097,9 +3119,13 @@ class SyncService(BaseService):
         tables_written = 0
         tables_dir = storage_dir / "tables"
         for bucket_id, bucket_tables in tables_by_bucket.items():
-            # Sanitize bucket_id for filesystem (replace dots with dashes)
-            safe_bucket = bucket_id.replace(".", "-")
+            # Sanitize bucket_id for filesystem. sanitize_path_segment first
+            # kills traversal (`/`, `..`, absolute paths); the trailing replace
+            # keeps the legacy `in.c-foo` -> `in-c-foo` directory naming for
+            # legitimate ids (GHSA-833q-c5wv-26r7).
+            safe_bucket = sanitize_path_segment(bucket_id).replace(".", "-")
             bucket_dir = tables_dir / safe_bucket
+            _ensure_path_within(storage_dir, bucket_dir, f"bucket_id={bucket_id!r}")
             bucket_dir.mkdir(parents=True, exist_ok=True)
 
             for t in bucket_tables:
@@ -3120,7 +3146,13 @@ class SyncService(BaseService):
                     "metadata": t.get("metadata", []),
                     "column_metadata": t.get("columnMetadata", {}),
                 }
-                table_file = bucket_dir / f"{table_name}.json"
+                # The table name comes from the API; sanitize it for the
+                # filename and assert containment so a crafted name cannot
+                # escape the bucket dir (GHSA-833q-c5wv-26r7). The original
+                # name stays verbatim in the metadata body above.
+                safe_table = sanitize_path_segment(table_name)
+                table_file = bucket_dir / f"{safe_table}.json"
+                _ensure_path_within(storage_dir, table_file, f"table={table_name!r}")
                 table_file.write_text(
                     json.dumps(table_meta, indent=2, ensure_ascii=False),
                     encoding="utf-8",
@@ -3133,14 +3165,17 @@ class SyncService(BaseService):
             samples_dir = storage_dir / STORAGE_SAMPLES_DIR_NAME
             for table_id, csv_data in samples.items():
                 # table_id format: "in.c-bucket.table" -> samples/in-c-bucket/table/
+                # Every segment derives from the API table_id; sanitize each and
+                # assert containment so a crafted id cannot escape (GHSA-833q).
                 parts = table_id.split(".", 2)
                 if len(parts) >= 3:
-                    safe_bucket = f"{parts[0]}-{parts[1]}"
-                    table_name = parts[2]
+                    safe_bucket = sanitize_path_segment(f"{parts[0]}-{parts[1]}")
+                    safe_table = sanitize_path_segment(parts[2])
                 else:
-                    safe_bucket = table_id.replace(".", "-")
-                    table_name = "data"
-                sample_dir = samples_dir / safe_bucket / table_name
+                    safe_bucket = sanitize_path_segment(table_id.replace(".", "-"))
+                    safe_table = "data"
+                sample_dir = samples_dir / safe_bucket / safe_table
+                _ensure_path_within(storage_dir, sample_dir, f"table_id={table_id!r}")
                 sample_dir.mkdir(parents=True, exist_ok=True)
 
                 # Mask encrypted columns in CSV
