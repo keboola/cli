@@ -660,7 +660,9 @@ class TestWriteStorageMetadataPathTraversal:
         svc._write_storage_metadata(project_root, [], tables, {})
 
         storage_dir = project_root / STORAGE_DIR_NAME
-        for p in storage_dir.rglob("*.json"):
+        written = list(storage_dir.rglob("*.json"))
+        assert written, "table metadata should still be written (sanitized)"
+        for p in written:
             assert p.resolve().is_relative_to(storage_dir.resolve())
         assert not (tmp_path / "tmp" / "pwned").exists()
 
@@ -675,7 +677,9 @@ class TestWriteStorageMetadataPathTraversal:
         svc._write_storage_metadata(project_root, [], [], samples)
 
         storage_dir = project_root / STORAGE_DIR_NAME
-        for p in storage_dir.rglob("sample.csv"):
+        written = list(storage_dir.rglob("sample.csv"))
+        assert written, "sample should still be written (sanitized)"
+        for p in written:
             assert p.resolve().is_relative_to(storage_dir.resolve())
 
     def test_legitimate_names_preserve_dir_convention(
