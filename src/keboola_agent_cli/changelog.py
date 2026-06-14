@@ -24,6 +24,17 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.61.1": [
+        "Note (#416 follow-up): clarified the value-typing contract of the importable "
+        "`Client.query()`. The Query Service `/results` endpoint serializes Snowflake "
+        'scalars as JSON *strings* (`1` -> `"1"`, `1.5` -> `"1.5"`, `true` -> '
+        '`"true"`; SQL NULL -> None), and the in-process facade returns them '
+        "transparently without coercion. The 0.61.0 docstring and release notes wrongly "
+        'claimed "native JSON types"; the `query()` docstring and the gotchas reference '
+        "now document the real, stable contract so callers know to cast. No behavior "
+        "change -- caught and verified by a live E2E round-trip against a Snowflake "
+        "workspace.",
+    ],
     "0.61.0": [
         "New (#415): kbagent now ships a stateless, importable library facade -- "
         "`from keboola_agent_cli import Client` -- so any in-process Python consumer (a Keboola "
