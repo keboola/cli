@@ -146,6 +146,7 @@ class TestAddColumnService:
             definition={"type": "NUMBER", "length": "18,2", "nullable": False, "default": "0"},
             branch_id=None,
         )
+        mock_client.close.assert_called_once()
 
 
 class TestStorageCLI:

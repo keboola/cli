@@ -174,6 +174,11 @@ def preview_table_v2(
     table_id: str,
     limit: int = 100,
     columns: list[str] | None = Query(None),
+    where_column: str | None = None,
+    where_operator: str = "eq",
+    where_value: list[str] | None = Query(None),
+    changed_since: str | None = None,
+    changed_until: str | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Return up to ``limit`` rows via the synchronous data-preview endpoint.
@@ -192,7 +197,16 @@ def preview_table_v2(
     proj = projects[project]
     client = registry.storage._client_factory(proj.stack_url, proj.token)
     try:
-        text = client.get_table_data_preview(table_id=table_id, limit=limit, columns=columns)
+        text = client.get_table_data_preview(
+            table_id=table_id,
+            limit=limit,
+            columns=columns,
+            where_column=where_column,
+            where_operator=where_operator,
+            where_values=where_value,
+            changed_since=changed_since,
+            changed_until=changed_until,
+        )
     finally:
         client.close()
     reader = _csv.reader(_io.StringIO(text))
@@ -209,9 +223,14 @@ def download_table_v2(
     columns: list[str] | None = Query(None),
     limit: int | None = None,
     branch_id: int | None = None,
+    where_column: str | None = None,
+    where_operator: str = "eq",
+    where_value: list[str] | None = Query(None),
+    changed_since: str | None = None,
+    changed_until: str | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> FileResponse:
-    """Download the full table as CSV (uses async export)."""
+    """Download the table as CSV (uses async export). Optional where/changed filters."""
     out_path = Path(tempfile.mkstemp(suffix=".csv", prefix="kbagent-")[1])
     registry.storage.download_table(
         alias=project,
@@ -220,6 +239,11 @@ def download_table_v2(
         columns=columns,
         limit=limit,
         branch_id=branch_id,
+        where_column=where_column,
+        where_operator=where_operator,
+        where_values=where_value,
+        changed_since=changed_since,
+        changed_until=changed_until,
     )
     return FileResponse(
         path=str(out_path),
@@ -398,6 +422,30 @@ def describe_columns(
         table_id=table_id,
         columns=body.columns,
         branch_id=body.branch_id,
+    )
+
+
+# Registered AFTER the more specific /columns/.../describe route above: the
+# greedy {table_id:path} would otherwise shadow that POST and swallow a
+# ".../describe" suffix as part of the table id.
+@router.post("/columns/{project}/{table_id:path}", summary="Add a table column")
+def add_column(
+    project: str,
+    table_id: str,
+    column: str = Query(...),
+    not_null: bool = False,
+    default: str | None = None,
+    branch_id: int | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Add a single column to a table. Mirrors `kbagent storage add-column`."""
+    return registry.storage.add_column(
+        alias=project,
+        table_id=table_id,
+        column=column,
+        not_null=not_null,
+        default=default,
+        branch_id=branch_id,
     )
 
 

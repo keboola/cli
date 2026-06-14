@@ -2682,3 +2682,21 @@ is a thin wrapper, not a workspace manager. Three non-obvious behaviors:
   `"true"` -- with SQL `NULL` as `None`. The facade is transparent and does not
   coerce, so callers must cast (`int(row["x"])` etc.) for typed values. (Verified
   live against a Snowflake workspace; BigQuery behavior not yet verified.)
+
+### `storage download-table` row filters send `whereValues[]` (array notation) (since v0.62.0)
+
+`--where-column` + `--where-value` + `--where-operator eq|neq` and
+`--changed-since` / `--changed-until` filter the export server-side. If you call
+the raw Storage API instead of the CLI, the values parameter is `whereValues[]`
+(WITH the bracket suffix), not `whereValues`; `whereColumn`/`whereOperator` and
+`changedSince`/`changedUntil` are plain. Repeat `--where-value` for an OR set.
+This is the credential-only, no-workspace way to pull a filtered/incremental
+slice -- `workspace query` with a `WHERE` clause needs a live workspace.
+
+### `storage add-column --not-null` needs an empty table or `--default` (since v0.62.0)
+
+`storage add-column --column name:TYPE(length) [--not-null] [--default VALUE]`
+hits the SYNCHRONOUS Storage endpoint (no job to poll). `--not-null` on a table
+that ALREADY HAS ROWS is rejected by the backend with an API error (not a local
+validation error) unless you also pass `--default` -- the existing rows need a
+value for the new non-null column. Add `--default` when the table is non-empty.
