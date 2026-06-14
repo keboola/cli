@@ -692,6 +692,7 @@ class TestFullE2E:
             _invoke(
                 init_config_dir,
                 [
+                    "--json",
                     "project",
                     "add",
                     "--project",
