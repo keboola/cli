@@ -1921,11 +1921,62 @@ class KeboolaClient(BaseHttpClient):
         """
         return self.list_tables(include="columns,metadata,buckets")
 
+    @staticmethod
+    def _apply_table_filters(
+        params: dict[str, Any],
+        *,
+        where_column: str | None = None,
+        where_operator: str = "eq",
+        where_values: list[str] | None = None,
+        changed_since: str | None = None,
+        changed_until: str | None = None,
+    ) -> None:
+        """Mutate ``params`` with Storage table export/preview filter clauses.
+
+        Shared by :meth:`get_table_data_preview` and :meth:`export_table_async`
+        so the ``whereColumn`` / ``whereOperator`` / ``whereValues[]`` and
+        ``changedSince`` / ``changedUntil`` contract is identical across the
+        sync-preview and async-export endpoints.
+
+        Args:
+            where_column: Column to filter on. Must be paired with ``where_values``.
+            where_operator: ``"eq"`` or ``"neq"`` (only meaningful with a filter).
+            where_values: Values the column is matched against (OR within the set).
+            changed_since: Lower bound on import time -- a unix timestamp or a
+                strtotime string like ``"-2 days"``.
+            changed_until: Upper bound on import time (same formats).
+
+        Raises:
+            ValueError: On an invalid ``where_operator`` or a half-specified
+                where-clause (a column without values, or values without a column).
+        """
+        if (where_column is None) != (where_values is None):
+            raise ValueError(
+                "where_column and where_values must be given together "
+                "(the column to match and the values to match it against)."
+            )
+        if where_column is not None:
+            if where_operator not in ("eq", "neq"):
+                raise ValueError(f"where_operator must be 'eq' or 'neq', got {where_operator!r}.")
+            params["whereColumn"] = where_column
+            params["whereOperator"] = where_operator
+            params["whereValues[]"] = where_values
+        if changed_since is not None:
+            params["changedSince"] = changed_since
+        if changed_until is not None:
+            params["changedUntil"] = changed_until
+
     def get_table_data_preview(
         self,
         table_id: str,
         limit: int = 100,
         columns: list[str] | None = None,
+        *,
+        where_column: str | None = None,
+        where_operator: str = "eq",
+        where_values: list[str] | None = None,
+        changed_since: str | None = None,
+        changed_until: str | None = None,
     ) -> str:
         """Get a CSV preview of table data.
 
@@ -1934,6 +1985,11 @@ class KeboolaClient(BaseHttpClient):
             limit: Max number of rows to return.
             columns: Optional list of column names to export.
                      Storage API limits sync export to 30 columns max.
+            where_column: Filter to rows where this column matches ``where_values``.
+            where_operator: ``"eq"`` (default) or ``"neq"``.
+            where_values: Values for the ``where_column`` filter.
+            changed_since: Only rows imported since this time (unix ts / strtotime).
+            changed_until: Only rows imported up to this time.
 
         Returns:
             CSV string with table data preview.
@@ -1942,6 +1998,14 @@ class KeboolaClient(BaseHttpClient):
         params: dict[str, Any] = {"limit": limit}
         if columns:
             params["columns"] = ",".join(columns)
+        self._apply_table_filters(
+            params,
+            where_column=where_column,
+            where_operator=where_operator,
+            where_values=where_values,
+            changed_since=changed_since,
+            changed_until=changed_until,
+        )
         response = self._request(
             "GET",
             f"/v2/storage/tables/{safe_id}/data-preview",
@@ -1956,6 +2020,12 @@ class KeboolaClient(BaseHttpClient):
         limit: int | None = None,
         branch_id: int | None = None,
         file_type: str = "csv",
+        *,
+        where_column: str | None = None,
+        where_operator: str = "eq",
+        where_values: list[str] | None = None,
+        changed_since: str | None = None,
+        changed_until: str | None = None,
     ) -> dict[str, Any]:
         """Start an async table export and wait for completion.
 
@@ -1967,6 +2037,11 @@ class KeboolaClient(BaseHttpClient):
             file_type: Output format, either "csv" (default) or "parquet".
                 Parquet exports are always sliced and Snappy-compressed inside
                 the parquet format (not gzipped at the slice level).
+            where_column: Filter to rows where this column matches ``where_values``.
+            where_operator: ``"eq"`` (default) or ``"neq"``.
+            where_values: Values for the ``where_column`` filter.
+            changed_since: Only rows imported since this time (unix ts / strtotime).
+            changed_until: Only rows imported up to this time.
 
         Returns:
             Completed export job dict (results contain file info).
@@ -1980,12 +2055,52 @@ class KeboolaClient(BaseHttpClient):
             params["columns"] = ",".join(columns)
         if limit is not None:
             params["limit"] = str(limit)
+        self._apply_table_filters(
+            params,
+            where_column=where_column,
+            where_operator=where_operator,
+            where_values=where_values,
+            changed_since=changed_since,
+            changed_until=changed_until,
+        )
         response = self._request(
             "POST",
             f"{prefix}/tables/{safe_id}/export-async",
             data=params,
         )
         return self._wait_for_storage_job(response.json(), max_wait=EXPORT_JOB_MAX_WAIT)
+
+    def add_column(
+        self,
+        table_id: str,
+        name: str,
+        definition: dict[str, Any] | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Add a single column to an existing table (synchronous).
+
+        Unlike ``delete_column`` (async storage job), the Storage API
+        ``POST /tables/{id}/columns`` endpoint is synchronous and returns the
+        updated table resource directly -- there is no job to poll.
+
+        Args:
+            table_id: Full table ID (e.g. "in.c-bucket.table").
+            name: Name of the new column.
+            definition: Optional typed-column definition for a typed table, e.g.
+                ``{"type": "NUMBER", "length": "18,2", "nullable": False,
+                "default": "0"}``. Omit for an untyped column.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            The updated table resource dict from the API.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_id = quote(table_id, safe="")
+        body: dict[str, Any] = {"name": name}
+        if definition:
+            body["definition"] = definition
+        response = self._request("POST", f"{prefix}/tables/{safe_id}/columns", json=body)
+        return response.json()
 
     def get_file_info(self, file_id: int, branch_id: int | None = None) -> dict[str, Any]:
         """Get file metadata including download URL.

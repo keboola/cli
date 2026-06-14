@@ -2018,6 +2018,11 @@ class TestDownloadTableService:
             columns=None,
             limit=None,
             branch_id=None,
+            where_column=None,
+            where_operator="eq",
+            where_values=None,
+            changed_since=None,
+            changed_until=None,
         )
         mock_client.get_file_info.assert_called_once_with(42, branch_id=None)
         mock_client.close.assert_called_once()
@@ -2061,6 +2066,11 @@ class TestDownloadTableService:
             columns=["id", "name"],
             limit=100,
             branch_id=None,
+            where_column=None,
+            where_operator="eq",
+            where_values=None,
+            changed_since=None,
+            changed_until=None,
         )
 
     def test_derives_filename_from_table_id(self, tmp_path: Path) -> None:
@@ -2195,6 +2205,11 @@ class TestDownloadTableService:
             columns=None,
             limit=None,
             branch_id=42,
+            where_column=None,
+            where_operator="eq",
+            where_values=None,
+            changed_since=None,
+            changed_until=None,
         )
         # Issue #161: get_file_info must also receive branch_id
         mock_client.get_file_info.assert_called_once_with(7, branch_id=42)
@@ -2250,6 +2265,11 @@ class TestDownloadTableCLI:
             limit=None,
             branch_id=None,
             keep_slices=False,
+            where_column=None,
+            where_operator="eq",
+            where_values=None,
+            changed_since=None,
+            changed_until=None,
         )
 
     def test_download_table_with_columns_and_limit(self, tmp_path: Path) -> None:
@@ -2297,6 +2317,11 @@ class TestDownloadTableCLI:
             limit=50,
             branch_id=None,
             keep_slices=False,
+            where_column=None,
+            where_operator="eq",
+            where_values=None,
+            changed_since=None,
+            changed_until=None,
         )
 
     def test_download_table_api_error(self, tmp_path: Path) -> None:

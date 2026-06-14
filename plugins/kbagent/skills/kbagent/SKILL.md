@@ -193,6 +193,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Export a storage table to a local CSV file | `kbagent storage download-table --project PROJECT --table-id TABLE-ID` |
 | Delete one or more storage tables | `kbagent storage delete-table --project PROJECT --table-id TABLE-ID` |
 | Truncate (delete all rows from) one or more storage tables | `kbagent storage truncate-table --project PROJECT --table-id TABLE-ID` |
+| Add a single column to an existing table (synchronous, typed) | `kbagent storage add-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
 | Delete one or more columns from a storage table | `kbagent storage delete-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
 | Swap two storage tables (any branch, including the default/production branch) | `kbagent storage swap-tables --project PROJECT --table-id TABLE-ID --target-table-id TARGET-TABLE-ID` |
 | Clone (pull) a production table into a development branch | `kbagent storage clone-table --project PROJECT --table-id TABLE-ID` |

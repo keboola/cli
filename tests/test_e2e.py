@@ -2925,6 +2925,27 @@ class TestFullE2E:
         columns_before = data["data"]["columns"]
         assert "value" in columns_before, f"Expected 'value' column, got {columns_before}"
 
+        # add-column: add a typed column and verify it appears in table-detail
+        data = self._run_ok(
+            "storage",
+            "add-column",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--column",
+            "status:VARCHAR(20)",
+        )
+        assert data["data"]["column"] == "status"
+        assert data["data"]["definition"]["type"] == "VARCHAR"
+        assert data["data"]["table_id"] == table_id
+        data = self._run_ok(
+            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+        )
+        assert "status" in data["data"]["columns"], (
+            f"Expected 'status' column after add-column, got {data['data']['columns']}"
+        )
+
         # delete-column dry-run
         data = self._run_ok(
             "storage",
