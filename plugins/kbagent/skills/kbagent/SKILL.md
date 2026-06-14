@@ -174,16 +174,16 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Delete the deployment AND the Storage config (cascade, irreversible) | `kbagent data-app delete --project PROJECT --app-id APP-ID` |
 | Retrieve the simpleAuth password for a password-gated data app | `kbagent data-app password --project PROJECT --app-id APP-ID` |
 | Tail the container logs for a deployed data app | `kbagent data-app logs --project PROJECT --app-id APP-ID` |
-| Encrypt and write app-runtime secrets to the linked Storage config | `kbagent data-app secrets-set --project PROJECT --app-id APP-ID` |
-| List the keys in parameters.dataApp.secrets, with derived runtime env-var names | `kbagent data-app secrets-list --project PROJECT --app-id APP-ID` |
-| Show ONE key from parameters.dataApp.secrets | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |
-| Remove one or more app-runtime secrets. | `kbagent data-app secrets-remove --project PROJECT --app-id APP-ID --key KEY` |
 | Pre-flight check that a git repo follows the Keboola data-app Golden Rule | `kbagent data-app validate-repo --git-repo GIT-REPO` |
 | Show the clone URLs of a data app's configured git repository | `kbagent data-app git-repo --project PROJECT --app-id APP-ID` |
 | List the remote branches of a data app's git repository | `kbagent data-app git-branches --project PROJECT --app-id APP-ID` |
 | List root-level .py entrypoint files of a data app's git repository | `kbagent data-app git-entrypoints --project PROJECT --app-id APP-ID` |
 | List the credentials of a data app's MANAGED git repository | `kbagent data-app git-credentials --project PROJECT --app-id APP-ID` |
 | Create a git credential (SSH key or HTTP token) for a MANAGED repo | `kbagent data-app git-credentials-create --project PROJECT --app-id APP-ID --type CRED-TYPE --permissions PERMISSIONS` |
+| Encrypt and write app-runtime secrets to the linked Storage config | `kbagent data-app secrets-set --project PROJECT --app-id APP-ID` |
+| List the keys in parameters.dataApp.secrets, with derived runtime env-var names | `kbagent data-app secrets-list --project PROJECT --app-id APP-ID` |
+| Show ONE key from parameters.dataApp.secrets | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |
+| Remove one or more app-runtime secrets. | `kbagent data-app secrets-remove --project PROJECT --app-id APP-ID --key KEY` |
 | List jobs from connected projects | `kbagent job list` |
 | Show detailed information about a specific job | `kbagent job detail --project PROJECT --job-id JOB-ID` |
 | Run a job for a component configuration | `kbagent job run --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -414,7 +414,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Workspace SQL debugging | [workspace-workflow](references/workspace-workflow.md) |
 | **Agent Tasks via CLI** (`kbagent agent` CRUD + run + cron-preview + prompt-improve; cron / manual / chained; mcp_tool / cli_command / ai_agent action flavours) | [agent-tasks-cli-workflow](references/agent-tasks-cli-workflow.md) |
 | **Agent Tasks via REST** (`kbagent http <verb> /agents...` from inside scheduled subprocesses; SSE streaming) | [agent-tasks-rest-workflow](references/agent-tasks-rest-workflow.md) |
-| **Data apps** (create / deploy / start / stop / password / delete; the §9 redeploy contract; git-repo introspection + managed-repo credentials) | [data-app-workflow](references/data-app-workflow.md) |
+| **Data apps** (create / deploy / start / stop / password / delete; the §9 redeploy contract) | [data-app-workflow](references/data-app-workflow.md) |
 | Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
 | **Python library** (`from keboola_agent_cli import Client` -- in-process query + Storage Files, no CLI/daemon/config-dir) | [library-workflow](references/library-workflow.md) |
 | **Data Streams (OTLP / OpenTelemetry)** (create/inspect OTLP source, masked secret-in-URL, OTEL_EXPORTER_OTLP_ENDPOINT) | [stream-workflow](references/stream-workflow.md) |
