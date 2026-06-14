@@ -377,8 +377,11 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Use --no-auto-create to require the table to already exist.
     Full load by default; --incremental to append rows. Supports files up to 5 GB via async file-first upload flow. Branch-aware.
 
-  kbagent storage download-table --project NAME --table-id TABLE_ID [--output FILE] [--columns COL ...] [--limit N] [--branch ID]
+  kbagent storage download-table --project NAME --table-id TABLE_ID [--output FILE] [--columns COL ...] [--limit N] [--where-column COL --where-value VAL ... [--where-operator eq|neq]] [--changed-since WHEN] [--changed-until WHEN] [--branch ID]
     Export table data to a local CSV file. Async export with streaming download.
+    --where-column + --where-value (repeatable) + --where-operator eq|neq filter rows; --changed-since/--changed-until (unix ts or strtotime) filter by import time.
+  kbagent storage add-column --project NAME --table-id ID --column COL:TYPE[(length)] [--not-null] [--default VALUE] [--branch ID]
+    Add a single column to an existing table (synchronous). Same name:TYPE(length) grammar as create-table --column.
     Default filename: TABLE_NAME.csv. Use --columns to select columns (see table-detail for names).
     Use --limit to cap row count. Handles sliced files and gzip decompression transparently. Branch-aware.
 

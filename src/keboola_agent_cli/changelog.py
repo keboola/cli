@@ -24,6 +24,23 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.62.0": [
+        "New (#417): `storage download-table` gains server-side row filtering -- "
+        "`--where-column` + `--where-value` (repeatable, OR within the set) + "
+        "`--where-operator eq|neq`, plus `--changed-since` / `--changed-until` (unix ts "
+        "or strtotime like `-2 days`) to export only rows imported in a time window. "
+        "This is the credential-only, no-workspace way to pull a filtered or incremental "
+        "slice of a table -- the Query Service path needs a live workspace. The filters "
+        "thread through both `export_table_async` and `get_table_data_preview` via a "
+        "shared `_apply_table_filters` helper, so the sync-preview and async-export "
+        "endpoints honor an identical contract.",
+        "New (#417): `storage add-column` adds a single column to an existing table, "
+        "using the same `name:TYPE(length)` grammar as `create-table --column` (with "
+        "`--not-null` and `--default`). This closes a long-standing asymmetry -- kbagent "
+        "could drop a column (`delete-column`) but not add one. The Storage add-column "
+        "endpoint is synchronous (no job to wait on); the operation is classified `write` "
+        "in the permission registry.",
+    ],
     "0.61.1": [
         "Note (#416 follow-up): clarified the value-typing contract of the importable "
         "`Client.query()`. The Query Service `/results` endpoint serializes Snowflake "

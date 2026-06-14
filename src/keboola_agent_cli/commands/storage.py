@@ -811,6 +811,31 @@ def storage_download_table(
             "polars, Spark. A _columns.csv sidecar holds the column order."
         ),
     ),
+    where_column: str | None = typer.Option(
+        None,
+        "--where-column",
+        help="Export only rows where this column matches --where-value(s).",
+    ),
+    where_operator: str = typer.Option(
+        "eq",
+        "--where-operator",
+        help="Filter operator: 'eq' (default) or 'neq'.",
+    ),
+    where_value: list[str] | None = typer.Option(
+        None,
+        "--where-value",
+        help="Value(s) for --where-column (repeat for multiple: matched as OR).",
+    ),
+    changed_since: str | None = typer.Option(
+        None,
+        "--changed-since",
+        help="Only rows imported since this time (unix ts or strtotime, e.g. '-2 days').",
+    ),
+    changed_until: str | None = typer.Option(
+        None,
+        "--changed-until",
+        help="Only rows imported up to this time (unix ts or strtotime).",
+    ),
 ) -> None:
     """Export a storage table to a local CSV file.
 
@@ -844,6 +869,11 @@ def storage_download_table(
             limit=limit,
             branch_id=effective_branch,
             keep_slices=keep_slices,
+            where_column=where_column,
+            where_operator=where_operator,
+            where_values=where_value,
+            changed_since=changed_since,
+            changed_until=changed_until,
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
@@ -1078,6 +1108,83 @@ def storage_truncate_table(
 
     if result["failed"]:
         raise typer.Exit(code=1)
+
+
+@storage_app.command("add-column", rich_help_panel=_TABLES)
+def storage_add_column(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    table_id: str = typer.Option(
+        ...,
+        "--table-id",
+        help="Table ID to add the column to (e.g. 'in.c-bucket.table')",
+    ),
+    column: str = typer.Option(
+        ...,
+        "--column",
+        help=(
+            "Column spec: 'name', 'name:TYPE', or 'name:TYPE(length)' "
+            "(e.g. 'status:VARCHAR(20)', 'amount:NUMBER(18,2)')."
+        ),
+    ),
+    not_null: bool = typer.Option(
+        False,
+        "--not-null",
+        help="Make the new column NOT NULL (needs an empty table or a --default).",
+    ),
+    default: str | None = typer.Option(
+        None,
+        "--default",
+        help="Default value for the new column.",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+    ),
+) -> None:
+    """Add a single column to an existing table (synchronous, typed).
+
+    Mirrors ``create-table --column``: ``name:TYPE(length)`` creates a typed
+    column; a bare ``name`` adds an untyped STRING column. The Storage
+    add-column endpoint is synchronous -- there is no job to wait on.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "storage_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    try:
+        result = service.add_column(
+            alias=project,
+            table_id=table_id,
+            column=column,
+            not_null=not_null,
+            default=default,
+            branch_id=effective_branch,
+        )
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        col_type = result["definition"].get("type", "STRING")
+        formatter.console.print(
+            f"[bold green]Added column:[/bold green] {result['column']} "
+            f"({col_type}) to {result['table_id']}"
+        )
 
 
 @storage_app.command("delete-column", rich_help_panel=_TABLES)

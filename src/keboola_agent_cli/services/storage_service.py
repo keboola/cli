@@ -1004,8 +1004,17 @@ class StorageService(BaseService):
         limit: int | None = None,
         branch_id: int | None = None,
         keep_slices: bool = False,
+        *,
+        where_column: str | None = None,
+        where_operator: str = "eq",
+        where_values: list[str] | None = None,
+        changed_since: str | None = None,
+        changed_until: str | None = None,
     ) -> dict[str, Any]:
         """Export a storage table to a local CSV file.
+
+        Optional ``where_*`` / ``changed_*`` arguments filter the exported rows
+        server-side (forwarded verbatim to ``export_table_async``).
 
         Uses the async export flow: export-async -> poll job -> get file
         info -> download from cloud URL. Handles gzip decompression
@@ -1059,6 +1068,11 @@ class StorageService(BaseService):
                 columns=columns,
                 limit=limit,
                 branch_id=branch_id,
+                where_column=where_column,
+                where_operator=where_operator,
+                where_values=where_values,
+                changed_since=changed_since,
+                changed_until=changed_until,
             )
 
             # Step 2: Get file info from job results
@@ -1297,6 +1311,59 @@ class StorageService(BaseService):
         if dry_run:
             result["would_truncate"] = would_truncate
         return result
+
+    def add_column(
+        self,
+        alias: str,
+        table_id: str,
+        column: str,
+        not_null: bool = False,
+        default: str | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Add a single column to an existing table (synchronous).
+
+        Parses the ``name:TYPE(length)`` column spec (the same grammar as
+        ``storage create-table --column``) into a Storage API column definition
+        and POSTs it to the synchronous add-column endpoint.
+
+        Args:
+            alias: Project alias.
+            table_id: Full table ID (e.g. "in.c-bucket.table").
+            column: Column spec, e.g. ``status:VARCHAR(20)`` or a bare ``notes``
+                (implicit STRING).
+            not_null: If True, the new column is NOT NULL (the backend rejects
+                this unless the table is empty or a default is supplied).
+            default: Optional default value for the new column.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Dict with the added column name, its definition, table_id, and alias.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        col_name = column.split(":", 1)[0].strip()
+        not_null_set = {col_name} if not_null else set()
+        defaults = {col_name: default} if default is not None else {}
+        parsed = _parse_column_spec(column, not_null_set, defaults)
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            client.add_column(
+                table_id,
+                name=parsed["name"],
+                definition=parsed["definition"],
+                branch_id=branch_id,
+            )
+        finally:
+            client.close()
+        return {
+            "table_id": table_id,
+            "column": parsed["name"],
+            "definition": parsed["definition"],
+            "project_alias": alias,
+        }
 
     def delete_columns(
         self,
