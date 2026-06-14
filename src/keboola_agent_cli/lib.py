@@ -248,8 +248,12 @@ class Client:
         results inline (the fast ``/results`` path, no CSV-file materialization).
         Each row is a dict keyed by the result column names exactly as the
         warehouse reports them -- note Snowflake folds unquoted aliases to
-        UPPERCASE, so quote aliases if you want lowercase keys. Values arrive as
-        native JSON types (int/float/bool/None; VARIANT/STRUCT as dict/list).
+        UPPERCASE, so quote aliases if you want lowercase keys. Values are
+        returned exactly as the Query Service serializes them and are NOT
+        coerced by the facade: for Snowflake every scalar comes back as a JSON
+        string (``1`` -> ``"1"``, ``1.5`` -> ``"1.5"``, ``true`` -> ``"true"``),
+        with SQL ``NULL`` as ``None``. Cast on the caller side if you need typed
+        values.
 
         When ``sql`` contains multiple statements, the rows of the *last*
         statement that produced a result set are returned (so ``USE ...; SELECT

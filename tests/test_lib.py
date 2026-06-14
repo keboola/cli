@@ -68,14 +68,18 @@ class TestQuery:
         }
         mock_kc.get_query_results.return_value = {
             "columns": [{"name": "id"}, {"name": "name"}],
-            "data": [[1, "alice"], [2, "bob"]],
+            # The Query Service /results endpoint returns Snowflake scalars as
+            # JSON strings (see Client.query docstring); the facade is
+            # transparent, so the mock reflects the real string contract, not
+            # coerced ints.
+            "data": [["1", "alice"], ["2", "bob"]],
             "numberOfRows": num_rows,
         }
 
     def test_maps_columns_and_rows_to_dicts(self, client: Client, mock_kc: MagicMock) -> None:
         self._wire_single_select(mock_kc)
         rows = client.query(456, "SELECT id, name FROM t")
-        assert rows == [{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}]
+        assert rows == [{"id": "1", "name": "alice"}, {"id": "2", "name": "bob"}]
 
     def test_submits_with_resolved_default_branch(self, client: Client, mock_kc: MagicMock) -> None:
         self._wire_single_select(mock_kc)
@@ -120,11 +124,11 @@ class TestQuery:
         }
         mock_kc.get_query_results.return_value = {
             "columns": [{"name": "n"}],
-            "data": [[7]],
+            "data": [["7"]],  # warehouse-serialized string, per the documented contract
             "numberOfRows": 1,
         }
         rows = client.query(1, "USE WAREHOUSE x; SELECT 7 AS n")
-        assert rows == [{"n": 7}]
+        assert rows == [{"n": "7"}]
         # Only the result-producing statement triggers a results fetch.
         mock_kc.get_query_results.assert_called_once()
         assert mock_kc.get_query_results.call_args.args[1] == "s2"

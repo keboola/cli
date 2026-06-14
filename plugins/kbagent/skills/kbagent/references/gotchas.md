@@ -2667,7 +2667,7 @@ JSON. That does NOT mean Keboola has no metadata -- always re-fetch via
 ### `Client` library: `query()` needs a provisioned workspace; `branch_id=None` costs a branch-list call (since v0.61.0)
 
 The in-process library facade (`from keboola_agent_cli import Client`, 0.61.0+)
-is a thin wrapper, not a workspace manager. Two non-obvious behaviors:
+is a thin wrapper, not a workspace manager. Three non-obvious behaviors:
 
 - **`query(workspace_id, sql)` does NOT create a workspace.** The `workspace_id`
   must already exist (make one via `kbagent workspace create` or the Storage
@@ -2676,3 +2676,9 @@ is a thin wrapper, not a workspace manager. Two non-obvious behaviors:
   on the first `query()`** -- one extra `list_dev_branches` API call, cached
   after. Pass `branch_id=` to skip it (and to target a dev branch). Storage
   Files default to the production scope when `branch_id` is unset.
+- **`query()` values are warehouse-serialized strings, NOT native types. (updated
+  v0.61.1 -- closes #416)** The Query Service `/results` endpoint returns every
+  Snowflake scalar as a JSON string -- `1` -> `"1"`, `1.5` -> `"1.5"`, `true` ->
+  `"true"` -- with SQL `NULL` as `None`. The facade is transparent and does not
+  coerce, so callers must cast (`int(row["x"])` etc.) for typed values. (Verified
+  live against a Snowflake workspace; BigQuery behavior not yet verified.)
