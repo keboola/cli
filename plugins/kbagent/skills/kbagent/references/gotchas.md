@@ -2667,7 +2667,7 @@ JSON. That does NOT mean Keboola has no metadata -- always re-fetch via
 ### `Client` library: `query()` needs a provisioned workspace; `branch_id=None` costs a branch-list call (since v0.61.0)
 
 The in-process library facade (`from keboola_agent_cli import Client`, 0.61.0+)
-is a thin wrapper, not a workspace manager. Two non-obvious behaviors:
+is a thin wrapper, not a workspace manager. Three non-obvious behaviors:
 
 - **`query(workspace_id, sql)` does NOT create a workspace.** The `workspace_id`
   must already exist (make one via `kbagent workspace create` or the Storage
