@@ -526,6 +526,9 @@ class TestFullE2E:
             _step(26, "workspace query", "run SQL in workspace")
             self._test_workspace_query(workspace_id, table_id)
 
+            _step(26.5, "library facade", "Client.query + files round-trip, in-process")
+            self._test_library_facade(workspace_id, table_id)
+
             _step(27, "workspace delete")
             self._test_workspace_delete(workspace_id)
 
@@ -1948,6 +1951,50 @@ class TestFullE2E:
             return
         data = _json_ok(result)
         assert data["data"]["password"]  # non-empty password
+
+    def _test_library_facade(self, workspace_id: int, table_id: str) -> None:
+        """Exercise the public in-process library facade against the live stack.
+
+        Imports ``keboola_agent_cli.Client`` and runs a real query + Storage
+        Files round-trip with no CLI subprocess -- the in-process path the
+        jasnost feedback (#415) consumes. Backend-specific identifier quoting
+        mirrors ``_test_workspace_query``.
+        """
+        from keboola_agent_cli import Client, FileEntry
+
+        ws_table_name = table_id.rsplit(".", 1)[-1]
+        detail = self._run_ok(
+            "workspace",
+            "detail",
+            "--project",
+            self.alias,
+            "--workspace-id",
+            str(workspace_id),
+        )["data"]
+        quote = "`" if detail.get("backend") == "bigquery" else '"'
+        sql = f"SELECT COUNT(*) AS cnt FROM {quote}{ws_table_name}{quote}"
+
+        with Client(url=self.url, token=self.token) as kbc:
+            # query() -> list[dict] keyed by column name
+            rows = kbc.query(workspace_id, sql)
+            assert isinstance(rows, list) and rows, "facade query must return rows"
+            assert isinstance(rows[0], dict), "facade query rows must be dicts"
+            assert "cnt" in {k.lower() for k in rows[0]}, f"expected cnt column, got {rows[0]}"
+
+            # files: upload bytes -> read_bytes -> list -> delete, all in-process
+            facade_tag = f"{RUN_ID}-facade"
+            payload = b"facade-e2e-roundtrip"
+            meta = kbc.files.upload(payload, name=f"{RUN_ID}-facade.txt", tags=[facade_tag])
+            assert isinstance(meta, FileEntry) and meta.id > 0
+            self._created_file_ids.append(meta.id)
+
+            assert kbc.files.read_bytes(meta.id) == payload, "read_bytes round-trip mismatch"
+
+            listed = kbc.files.list(tags=[facade_tag])
+            assert any(f.id == meta.id for f in listed), "uploaded file must appear in list"
+
+            kbc.files.delete(meta.id)
+            self._created_file_ids.remove(meta.id)
 
     def _test_workspace_load(self, workspace_id: int, table_id: str) -> None:
         """Load a table into the workspace."""
