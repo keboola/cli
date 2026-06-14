@@ -2663,3 +2663,16 @@ cross-project flow migration is a manual dance (`sync pull` source, edit,
 A `sync pull` without the right flags leaves column metadata empty in the local
 JSON. That does NOT mean Keboola has no metadata -- always re-fetch via
 `kbagent storage table-detail` when deciding about types.
+
+### `Client` library: `query()` needs a provisioned workspace; `branch_id=None` costs a branch-list call (since v0.61.0)
+
+The in-process library facade (`from keboola_agent_cli import Client`, 0.61.0+)
+is a thin wrapper, not a workspace manager. Two non-obvious behaviors:
+
+- **`query(workspace_id, sql)` does NOT create a workspace.** The `workspace_id`
+  must already exist (make one via `kbagent workspace create` or the Storage
+  API first). An unknown id surfaces the Query Service error verbatim.
+- **`Client(url, token)` with no `branch_id` resolves the default branch lazily
+  on the first `query()`** -- one extra `list_dev_branches` API call, cached
+  after. Pass `branch_id=` to skip it (and to target a dev branch). Storage
+  Files default to the production scope when `branch_id` is unset.

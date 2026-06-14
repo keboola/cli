@@ -11,6 +11,7 @@ from unittest.mock import ANY, MagicMock
 import pytest
 
 from helpers import setup_single_project, setup_two_projects
+from keboola_agent_cli import client as client_module
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
@@ -994,7 +995,7 @@ class TestExecuteQuery:
             "qj-abc123",
             "stmt-1",
             offset=0,
-            page_size=workspace_service_module.QUERY_RESULTS_PAGE_SIZE,
+            page_size=client_module.QUERY_RESULTS_PAGE_SIZE,
         )
         mock_client.export_query_results.assert_not_called()
 
@@ -1043,7 +1044,7 @@ class TestExecuteQuery:
     ) -> None:
         """A --limit larger than one page walks offset until the limit is reached."""
         # Shrink the page size so a 4-row limit needs two /results calls.
-        monkeypatch.setattr(workspace_service_module, "QUERY_RESULTS_PAGE_SIZE", 2)
+        monkeypatch.setattr(client_module, "QUERY_RESULTS_PAGE_SIZE", 2)
         mock_client = MagicMock()
         mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
         mock_client.submit_query.return_value = {"id": "qj-page"}
@@ -1115,9 +1116,9 @@ class TestExecuteQuery:
             "qj-small",
             "stmt-1",
             offset=0,
-            page_size=workspace_service_module.QUERY_RESULTS_PAGE_SIZE,
+            page_size=client_module.QUERY_RESULTS_PAGE_SIZE,
         )
-        assert workspace_service_module.QUERY_RESULTS_PAGE_SIZE >= 100
+        assert client_module.QUERY_RESULTS_PAGE_SIZE >= 100
         assert mock_client.close.call_count == 2
 
     def test_execute_query_with_active_branch(self, tmp_config_dir: Path) -> None:
@@ -1278,7 +1279,7 @@ class TestExecuteQuery:
         Stopping at the --limit cap with a full last page (not exhausted) means
         there may be more rows, so `truncated` must be True even without a count.
         """
-        monkeypatch.setattr(workspace_service_module, "QUERY_RESULTS_PAGE_SIZE", 2)
+        monkeypatch.setattr(client_module, "QUERY_RESULTS_PAGE_SIZE", 2)
         mock_client = MagicMock()
         mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
         mock_client.submit_query.return_value = {"id": "qj-nocount"}
@@ -1310,7 +1311,7 @@ class TestExecuteQuery:
     ) -> None:
         """When total_rows lands on a page boundary, do not spend a round-trip on
         the empty next page (NIT-1)."""
-        monkeypatch.setattr(workspace_service_module, "QUERY_RESULTS_PAGE_SIZE", 2)
+        monkeypatch.setattr(client_module, "QUERY_RESULTS_PAGE_SIZE", 2)
         mock_client = MagicMock()
         mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
         mock_client.submit_query.return_value = {"id": "qj-boundary"}

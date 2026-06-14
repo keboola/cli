@@ -12,6 +12,7 @@ import logging
 import re
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -45,6 +46,80 @@ from .http_base import BaseHttpClient
 from .models import TokenVerifyResponse
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class InlineQueryResult:
+    """One statement's result fetched via the fast inline ``/results`` path."""
+
+    columns: list[dict[str, Any]]  # [{"name", "type", "nullable"}]
+    rows: list[list[Any]]  # row values, row-major; capped at the requested limit
+    total_rows: int | None  # numberOfRows reported by the warehouse (full count)
+    truncated: bool  # True when the warehouse has more rows than we fetched
+
+
+def _collect_inline_results(
+    client: "KeboolaClient",
+    query_job_id: str,
+    statement_id: str,
+    limit: int,
+) -> InlineQueryResult:
+    """Page through ``GET .../results``, accumulating up to ``limit`` rows.
+
+    The endpoint enforces ``100 <= pageSize <= 100000``, so we always request a
+    fixed, valid ``QUERY_RESULTS_PAGE_SIZE`` page and cap the accumulated rows at
+    ``limit`` locally -- deriving ``pageSize`` from a small ``limit`` (e.g. 5)
+    would trip the API's minimum with a 400. A ``limit`` larger than one page is
+    satisfied by walking ``offset``; we stop once the limit is reached (marking
+    the result truncated) or when the warehouse runs out of rows.
+
+    Lives in the client layer (not a service) because it is pure Query Service
+    pagination over :meth:`KeboolaClient.get_query_results` -- no config, no
+    business logic -- so both ``WorkspaceService`` and the public library facade
+    (:mod:`keboola_agent_cli.lib`) can share it.
+    """
+    collected: list[list[Any]] = []
+    columns: list[dict[str, Any]] = []
+    total_rows: int | None = None
+    offset = 0
+    exhausted = False
+    while len(collected) < limit:
+        payload = client.get_query_results(
+            query_job_id, statement_id, offset=offset, page_size=QUERY_RESULTS_PAGE_SIZE
+        )
+        if not columns:
+            columns = payload.get("columns", []) or []
+        if total_rows is None:
+            total_rows = payload.get("numberOfRows")
+        page_rows = payload.get("data", []) or []
+        collected.extend(page_rows)
+        # Last page: the warehouse returned fewer rows than a full page.
+        if len(page_rows) < QUERY_RESULTS_PAGE_SIZE:
+            exhausted = True
+            break
+        offset += len(page_rows)
+        # Reached the reported total on a page boundary: stop without spending a
+        # round-trip on the empty next page (e.g. total == a multiple of the
+        # page size, limit larger than total).
+        if total_rows is not None and offset >= total_rows:
+            exhausted = True
+            break
+
+    rows = collected[:limit]
+    if total_rows is not None:
+        truncated = total_rows > len(rows)
+    else:
+        # The Query Service normally reports numberOfRows, but if it omits the
+        # count we fall back to *how* the loop ended: stopping at the limit cap
+        # without exhausting a full last page means there may be more rows. Bias
+        # toward over-warning when the true count is unknown.
+        truncated = not exhausted and len(collected) >= limit
+    return InlineQueryResult(
+        columns=columns,
+        rows=rows,
+        total_rows=total_rows,
+        truncated=truncated,
+    )
 
 
 def _iter_poll_intervals(strategy: str) -> Iterator[float]:

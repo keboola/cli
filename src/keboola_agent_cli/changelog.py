@@ -24,6 +24,22 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.61.0": [
+        "New (#415): kbagent now ships a stateless, importable library facade -- "
+        "`from keboola_agent_cli import Client` -- so any in-process Python consumer (a Keboola "
+        "Data App, a transformation, a hosted service) can run Query Service SQL and read/write "
+        "Storage Files without a CLI subprocess, a `kbagent serve` daemon, or a config-dir. "
+        "`Client(url, token)` wraps the existing `KeboolaClient`; `client.query(workspace_id, sql)` "
+        "returns `list[dict]` rows over the fast inline `/results` path (native JSON types; "
+        "truncation is warned, never silently capped), and `client.files` offers "
+        "`upload(path_or_bytes)`, `read_bytes(file_id) -> bytes`, `list() -> list[FileEntry]` "
+        "(one uniform shape, read via `read_bytes` so callers never branch on a signed URL) and "
+        "`delete()`. The Query Service pagination helper moved from the workspace service into "
+        "`client.py` (re-exported, no behavior change) so the CLI and the library share one "
+        "implementation. Everything under `keboola_agent_cli.__all__` is committed public API. "
+        "Addresses the jasnost feedback points 1, 2, and 4 (point 3 -- structured query results -- "
+        "shipped in 0.59.0).",
+    ],
     "0.60.4": [
         "Security: `kbagent serve --ui` no longer lets `GET /doctor`, `/version`, and `/changelog` "
         "(and any other registered endpoint) bypass bearer auth. In single-process UI mode the auth "
