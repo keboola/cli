@@ -438,6 +438,52 @@ def _format_error(
     )
 
 
+_DEFAULT_CORS_ORIGINS = (
+    "http://localhost:5173",  # Vite dev default
+    "http://localhost:8000",  # Node BFF
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:8000",
+)
+
+
+def _is_valid_cors_origin(origin: object) -> bool:
+    """True if ``origin`` is a concrete ``scheme://host[:port]`` CORS origin.
+
+    Rejects ``"*"`` and any value carrying a path / query / fragment / userinfo
+    -- per the CORS spec an Origin is scheme + host + optional port and nothing
+    else (no ``user:pass@`` credentials, no path).
+    """
+    if not isinstance(origin, str) or origin == "*":
+        return False
+    for scheme in ("http://", "https://"):
+        if origin.startswith(scheme):
+            rest = origin[len(scheme) :]
+            return bool(rest) and not any(c in rest for c in "/?#@")
+    return False
+
+
+def _resolve_cors_origins(cors_origins: list[str] | None) -> list[str]:
+    """Resolve CORS origins for the credentialed app, rejecting unsafe values.
+
+    The app sets ``allow_credentials=True``. Combined with a wildcard (or
+    otherwise malformed) origin, Starlette reflects the request ``Origin`` and
+    returns ``Access-Control-Allow-Credentials: true`` -- letting any website
+    read authenticated cross-origin responses (GHSA-5mh2-6xgr-rf89). Fail fast
+    rather than ship that: reject ``"*"`` and any non ``scheme://host[:port]``
+    origin. Default (no ``--cors-origin``) is the localhost dev set.
+    """
+    origins = cors_origins or list(_DEFAULT_CORS_ORIGINS)
+    invalid = [o for o in origins if not _is_valid_cors_origin(o)]
+    if invalid:
+        raise ConfigError(
+            f"Refusing to start: CORS origin(s) {invalid} are unsafe with "
+            f"credentialed requests. Use explicit 'scheme://host[:port]' origins "
+            f"(e.g. http://localhost:5173); '*' is rejected because it would "
+            f"expose authenticated responses to any website."
+        )
+    return origins
+
+
 def create_app(
     *,
     config_dir: str | None = None,
@@ -524,13 +570,7 @@ def create_app(
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=cors_origins
-        or [
-            "http://localhost:5173",  # Vite dev default
-            "http://localhost:8000",  # Node BFF
-            "http://127.0.0.1:5173",
-            "http://127.0.0.1:8000",
-        ],
+        allow_origins=_resolve_cors_origins(cors_origins),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

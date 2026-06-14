@@ -20,6 +20,7 @@ from pathlib import Path
 import typer
 
 from ..constants import ENV_CONVERSATION_ID
+from ..errors import ConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,7 @@ def serve_command(
         import uvicorn
 
         from ..server import create_app
+        from ..server.app import _resolve_cors_origins
     except ModuleNotFoundError as exc:  # pragma: no cover
         missing = exc.name or "server extras"
         typer.echo(
@@ -179,6 +181,13 @@ def serve_command(
     os.environ[ENV_CONVERSATION_ID] = conversation_id
 
     cors = list(cors_origin) if cors_origin else None
+    # Validate --cors-origin up front so an unsafe value (wildcard with
+    # credentials, GHSA-5mh2) is a clean usage error -- and so we do NOT
+    # mis-attribute an unrelated create_app ConfigError to --cors-origin.
+    try:
+        _resolve_cors_origins(cors)
+    except ConfigError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--cors-origin") from None
 
     serve_url = f"http://{host}:{port}"
 
