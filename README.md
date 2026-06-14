@@ -93,6 +93,24 @@ kbagent init --from-global --read-only
 
 Three protection layers (kbagent policy + filesystem chmod + Claude Code deny rules) prevent the agent from writing, deleting, or bypassing restrictions. See [Permissions Guide](docs/guide.md#permissions) for details.
 
+## Use as a library
+
+Besides the CLI and `kbagent serve`, kbagent exposes a small **stateless, importable client** for in-process use -- a Keboola Data App, a transformation, or any Python service can run Query Service SQL and read/write Storage Files without spawning the CLI, running the daemon, or maintaining a config-dir. Auth is the storage token you pass in (12-factor); nothing is written to disk.
+
+```python
+import os
+from keboola_agent_cli import Client
+
+with Client(url=os.environ["KBC_URL"], token=os.environ["KBC_TOKEN"]) as kbc:
+    rows = kbc.query(workspace_id, "SELECT id, name FROM customers")  # list[dict]
+
+    meta = kbc.files.upload(b"hello", name="greeting.txt", tags=["demo"])
+    data = kbc.files.read_bytes(meta.id)                              # bytes
+    files = kbc.files.list(tags=["demo"])                             # list[FileEntry]
+```
+
+`query()` reads results inline (fast, native JSON types) and returns rows keyed by column name; `files` returns a uniform `FileEntry` shape and reads bytes straight into memory. Everything exported from `keboola_agent_cli` is committed public API (semver). For lower-level endpoints, reach for `Client.raw` (the underlying `KeboolaClient`).
+
 ## 30-second demo
 
 ![30-second demo](docs/assets/demo-readme-main.gif)
