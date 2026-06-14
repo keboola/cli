@@ -2676,9 +2676,9 @@ is a thin wrapper, not a workspace manager. Three non-obvious behaviors:
   on the first `query()`** -- one extra `list_dev_branches` API call, cached
   after. Pass `branch_id=` to skip it (and to target a dev branch). Storage
   Files default to the production scope when `branch_id` is unset.
-- **`query()` values are warehouse-serialized strings, NOT native types.** The
-  Query Service `/results` endpoint returns every Snowflake scalar as a JSON
-  string -- `1` -> `"1"`, `1.5` -> `"1.5"`, `true` -> `"true"` -- with SQL
-  `NULL` as `None`. The facade is transparent and does not coerce, so callers
-  must cast (`int(row["x"])` etc.) for typed values. (Verified live against a
-  Snowflake workspace; BigQuery may differ.)
+- **`query()` values are warehouse-serialized strings, NOT native types. (updated
+  v0.61.1 -- closes #416)** The Query Service `/results` endpoint returns every
+  Snowflake scalar as a JSON string -- `1` -> `"1"`, `1.5` -> `"1.5"`, `true` ->
+  `"true"` -- with SQL `NULL` as `None`. The facade is transparent and does not
+  coerce, so callers must cast (`int(row["x"])` etc.) for typed values. (Verified
+  live against a Snowflake workspace; BigQuery behavior not yet verified.)
