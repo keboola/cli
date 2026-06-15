@@ -180,7 +180,7 @@ class ConfigStore:
         if version > CURRENT_CONFIG_VERSION:
             raise ConfigError(
                 f"Config file version {version} is newer than supported version "
-                f"{CURRENT_CONFIG_VERSION}. Please upgrade keboola-agent-cli."
+                f"{CURRENT_CONFIG_VERSION}. Please upgrade keboola-cli."
             )
 
         try:

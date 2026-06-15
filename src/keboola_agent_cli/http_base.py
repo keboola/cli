@@ -34,8 +34,8 @@ def build_user_agent() -> str:
 
     Format (RFC 7231 product + comment):
 
-        keboola-agent-cli/<version> (<os> <release>; <arch>; <impl> <pyver>)
-        e.g. keboola-agent-cli/0.45.0 (Darwin 25.3.0; arm64; CPython 3.12.7)
+        keboola-cli/<version> (<os> <release>; <arch>; <impl> <pyver>)
+        e.g. keboola-cli/0.45.0 (Darwin 25.3.0; arm64; CPython 3.12.7)
 
     Keboola's edge logs this verbatim (DataDog access logs), so the fleet can
     be segmented by version and OS/arch. Only neutral host metadata is sent --

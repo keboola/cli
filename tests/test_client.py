@@ -486,7 +486,7 @@ class TestClientHeaders:
         client.verify_token()
 
         request = httpx_mock.get_request()
-        assert "keboola-agent-cli/" in request.headers["user-agent"]
+        assert "keboola-cli/" in request.headers["user-agent"]
         client.close()
 
     def test_storage_api_token_header(self, httpx_mock) -> None:

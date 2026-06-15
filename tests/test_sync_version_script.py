@@ -34,7 +34,7 @@ def isolated_repo(tmp_path: Path, monkeypatch):
     """Lay out a miniature repo tree the sync script can operate on."""
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
-        '[project]\nname = "keboola-agent-cli"\nversion = "9.9.9"\n',
+        '[project]\nname = "keboola-cli"\nversion = "9.9.9"\n',
         encoding="utf-8",
     )
 
@@ -50,7 +50,7 @@ def isolated_repo(tmp_path: Path, monkeypatch):
     marketplace_json.write_text(
         json.dumps(
             {
-                "name": "keboola-agent-cli",
+                "name": "keboola-cli",
                 "version": "1.0.0",
                 "plugins": [
                     {
@@ -67,10 +67,10 @@ def isolated_repo(tmp_path: Path, monkeypatch):
     )
 
     # Minimal uv.lock with our package entry plus an unrelated one, so we can
-    # assert the version patch is scoped to keboola-agent-cli only.
+    # assert the version patch is scoped to keboola-cli only.
     uv_lock = tmp_path / "uv.lock"
     uv_lock.write_text(
-        '[[package]]\nname = "keboola-agent-cli"\nversion = "0.0.0"\n'
+        '[[package]]\nname = "keboola-cli"\nversion = "0.0.0"\n'
         'source = { editable = "." }\n\n'
         '[[package]]\nname = "croniter"\nversion = "1.2.3"\n'
         'source = { registry = "https://pypi.org/simple" }\n',
@@ -194,21 +194,21 @@ def test_main_runs_end_to_end(isolated_repo: dict, capsys) -> None:
     out = capsys.readouterr().out
     assert "Updated plugin.json to 9.9.9" in out
     assert "Updated marketplace.json" in out
-    assert "Updated uv.lock keboola-agent-cli version to 9.9.9" in out
+    assert "Updated uv.lock keboola-cli version to 9.9.9" in out
 
     # Second run prints the idempotent message on all targets.
     _sync.main()
     out = capsys.readouterr().out
     assert "plugin.json already at 9.9.9" in out
     assert "marketplace.json" in out and "already at 9.9.9" in out
-    assert "uv.lock keboola-agent-cli version already at 9.9.9" in out
+    assert "uv.lock keboola-cli version already at 9.9.9" in out
 
 
 def test_sync_uv_lock_updates_self_version(isolated_repo: dict) -> None:
     changed = _sync.sync_uv_lock("9.9.9")
     assert changed is True
     text = isolated_repo["uv_lock"].read_text(encoding="utf-8")
-    assert 'name = "keboola-agent-cli"\nversion = "9.9.9"' in text
+    assert 'name = "keboola-cli"\nversion = "9.9.9"' in text
 
 
 def test_sync_uv_lock_does_not_touch_other_packages(isolated_repo: dict) -> None:
@@ -241,4 +241,4 @@ def test_sync_uv_lock_missing_package_entry_warns(isolated_repo: dict, capsys) -
     )
     changed = _sync.sync_uv_lock("9.9.9")
     assert changed is False
-    assert "keboola-agent-cli" in capsys.readouterr().err.lower()
+    assert "keboola-cli" in capsys.readouterr().err.lower()

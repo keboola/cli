@@ -10,7 +10,7 @@ import httpx
 # --- Application identity ---
 # Distribution/package name; single source for importlib.metadata lookup and
 # the User-Agent product token that signs every Keboola API call.
-APP_NAME: str = "keboola-agent-cli"
+APP_NAME: str = "keboola-cli"
 
 # --- Sentinel for missing metadata keys ---
 # Distinguishes "key absent" from "value is None/null" in branch metadata lookups.

@@ -11,7 +11,7 @@ Files kept in sync:
 - ``plugins/kbagent/.claude-plugin/plugin.json``            (plugin manifest)
 - ``.claude-plugin/marketplace.json`` -> ``plugins[*].version``
   (per-plugin entry the marketplace descriptor exposes to Claude Code)
-- ``uv.lock`` -> the ``keboola-agent-cli`` package's own ``version`` pin
+- ``uv.lock`` -> the ``keboola-cli`` package's own ``version`` pin
   (uv records the workspace package version; a pyproject bump leaves it
   stale until ``uv lock`` reruns, which ``version-check`` then flags)
 
@@ -43,7 +43,7 @@ UV_LOCK = REPO_ROOT / "uv.lock"
 KBAGENT_PLUGIN_NAME = "kbagent"
 
 # Distribution name of this project as it appears in uv.lock's [[package]] table.
-KBAGENT_DIST_NAME = "keboola-agent-cli"
+KBAGENT_DIST_NAME = "keboola-cli"
 
 
 def get_pyproject_version() -> str:

@@ -579,7 +579,7 @@ wheels = [
 ]
 
 [[package]]
-name = "keboola-agent-cli"
+name = "keboola-cli"
 version = "0.62.0"
 source = { editable = "." }
 dependencies = [

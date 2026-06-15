@@ -37,7 +37,7 @@ class TestManageClientHeaders:
 
         request = httpx_mock.get_request()
         assert request.headers["X-KBC-ManageApiToken"] == MANAGE_TOKEN
-        assert "keboola-agent-cli" in request.headers["User-Agent"]
+        assert "keboola-cli" in request.headers["User-Agent"]
         client.close()
 
     def test_does_not_send_storage_token_header(self, httpx_mock) -> None:

@@ -1,5 +1,5 @@
 [project]
-name = "keboola-agent-cli"
+name = "keboola-cli"
 version = "0.62.0"
 description = "AI-friendly CLI for managing Keboola projects"
 readme = "README.md"

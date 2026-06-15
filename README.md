@@ -27,7 +27,7 @@ Auto-updates kbagent **and** its `keboola-mcp-server` dependency on every launch
 Want a browser dashboard? One command:
 
 ```bash
-uv tool install --with 'keboola-agent-cli[server]' 'git+https://github.com/keboola/cli'
+uv tool install --with 'keboola-cli[server]' 'git+https://github.com/keboola/cli'
 kbagent serve --ui
 # Open the URL printed at startup -- the browser is auto-authenticated.
 ```
@@ -51,7 +51,7 @@ Build the agent once, schedule it, walk away — the platform handles auth, sche
 The scheduler runs **inside `kbagent serve`** -- the same single Python process that hosts the Web UI. If you already installed kbagent with the `[server]` extras (see [Web UI](#web-ui-optional) above), you're set; otherwise:
 
 ```bash
-uv tool install --with 'keboola-agent-cli[server]' 'git+https://github.com/keboola/cli'
+uv tool install --with 'keboola-cli[server]' 'git+https://github.com/keboola/cli'
 kbagent serve --ui
 # Open the URL printed at startup -> sidebar "Agent Tasks" -> "+ New task".
 ```
