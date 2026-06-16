@@ -5,6 +5,7 @@ from importlib.metadata import PackageNotFoundError, version
 from .constants import APP_NAME
 from .lib import Client, FileEntry, Files
 from .result_models import (
+    CloneResult,
     ConfigDetailResult,
     JobResult,
     QueryResult,
@@ -20,6 +21,7 @@ except PackageNotFoundError:
 
 __all__ = [
     "Client",
+    "CloneResult",
     "ConfigDetailResult",
     "FileEntry",
     "Files",

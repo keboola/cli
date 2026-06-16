@@ -282,6 +282,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "sync.status": "read",
     "sync.diff": "read",
     "sync.push": "write",
+    "sync.clone": "write",
     "sync.branch-link": "write",
     "sync.branch-unlink": "write",
     "sync.branch-status": "read",

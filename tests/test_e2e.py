@@ -4111,6 +4111,27 @@ class TestE2ESyncWorkflow:
         )
         assert data["status"] == "ok"
 
+        # 6. sync clone --dry-run (#426): copy the pulled tree into a fresh dir and
+        # diff it against the SAME project -- exercises the clone composite
+        # end-to-end (copy + manifest re-point + diff) WITHOUT mutating anything.
+        _step(6, "sync clone --dry-run")
+        clone_dir = self.project_dir.parent / "clone-target"
+        data = self._run_ok(
+            "sync",
+            "clone",
+            "--source",
+            str(self.project_dir),
+            "--target",
+            self.alias,
+            "--target-dir",
+            str(clone_dir),
+            "--dry-run",
+        )
+        assert data["status"] == "ok"
+        clone_result = data["data"]
+        assert clone_result["status"] == "dry_run"
+        assert clone_result["target_alias"] == self.alias
+
     def test_sync_force_pull_conflict_aware(self) -> None:
         """`sync pull --force` is conflict-aware (0.53.0+), end-to-end.
 
