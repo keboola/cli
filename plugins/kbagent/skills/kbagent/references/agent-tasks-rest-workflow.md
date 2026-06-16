@@ -13,7 +13,7 @@ use it from scripts, other AI agents, or `kbagent http` subprocesses.
 
 ```bash
 # One-time install with server extras
-uv tool install --with 'keboola-agent-cli[server]' \
+uv tool install --with 'keboola-cli[server]' \
   'git+https://github.com/keboola/cli'
 
 # Run (keep this terminal open; scheduler dies when the server stops)

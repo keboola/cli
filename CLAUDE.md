@@ -135,7 +135,7 @@ Seven clients, all inheriting `BaseHttpClient` (`http_base.py`) which provides s
 
 **Single source of truth: `pyproject.toml`** (`version = "X.Y.Z"`).
 
-- `src/keboola_agent_cli/__init__.py` reads the version at runtime via `importlib.metadata.version("keboola-agent-cli")`. **Never hardcode a version string in `__init__.py`.**
+- `src/keboola_agent_cli/__init__.py` reads the version at runtime via `importlib.metadata.version(APP_NAME)` (where `APP_NAME = "keboola-cli"`). **Never hardcode a version string in `__init__.py`.**
 - `plugins/kbagent/.claude-plugin/plugin.json` must match. Run `make version-sync` (or `python scripts/sync_version.py`) to update it.
 - The pre-commit hook and CI automatically check version consistency.
 
