@@ -2700,3 +2700,35 @@ hits the SYNCHRONOUS Storage endpoint (no job to poll). `--not-null` on a table
 that ALREADY HAS ROWS is rejected by the backend with an API error (not a local
 validation error) unless you also pass `--default` -- the existing rows need a
 value for the new non-null column. Add `--default` when the table is non-empty.
+
+### `job run --idempotency-key` is client-side dedup, scoped to one machine (since v0.63.0)
+
+The Keboola Queue API `POST /jobs` accepts **no** client-supplied idempotency /
+dedup token -- verified against the live OpenAPI spec (v1.3.8) and the server
+source (an internal `deduplicationId` exists but is daemon-only, never read from
+the public create-job request). So `kbagent job run --idempotency-key KEY`
+de-duplicates **client-side**: a `<config-dir>/job_idempotency.json` map of
+`key -> prior job`. Consequences to know:
+- Dedup only works where that file is shared -- it is per config-dir / per
+  machine. A replay from a *different* machine is NOT deduplicated.
+- A prior run that is still running or finished non-failed is returned
+  (`idempotent_replay: true`); a prior FAILED run is re-run; `--force-rerun`
+  always creates fresh.
+- Reusing a key for a *different* `--component-id`/`--config-id` exits
+  `INVALID_ARGUMENT` (it refuses to return the wrong job), not silently.
+- In-process SDK users get the same via `Client.run_job(idempotency_key=...,
+  idempotency_store=JobIdempotencyStore(path))` -- the facade is config-dir-free,
+  so you must supply the store path.
+
+### The importable SDK is now typed (`py.typed` + result models) (since v0.63.0)
+
+`keboola_agent_cli` ships a PEP 561 `py.typed` marker, so `mypy`/`ty`/IDEs treat
+the in-process library as typed. The high-traffic facade methods return pydantic
+models (`JobResult`, `QueryResult`, `UploadTableResult`, `ConfigDetailResult`,
+`SyncPushResult`) exported from the package root, instead of bare dicts. Every
+model is `extra="allow"`, so a new backend field never raises -- the *named*
+fields are the stable, semver-versioned surface and extras stay reachable via
+attribute access / `model_dump()`. They also accept the raw API key or the
+snake_case field name, so `JobResult.model_validate(service_dict)` works on a
+service-layer dict directly. This is a typing/contract addition only; the dict
+shapes returned by the service layer and the `--json` CLI output are unchanged.

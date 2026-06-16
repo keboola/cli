@@ -3289,6 +3289,58 @@ class TestJobRun:
             call_kwargs[1].get("branch_id") == 789 if call_kwargs[1] else False
         )
 
+    def test_job_run_idempotency_key_forwarded(self, tmp_path: Path) -> None:
+        """job run --idempotency-key K --force-rerun forwards both to run_job,
+        and a replayed result prints the dedup note in human mode (issue #427)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            job_service = MagicMock()
+            job_service.run_job.return_value = {
+                "id": 555,
+                "status": "waiting",
+                "idempotent_replay": True,
+            }
+            MockJobService.return_value = job_service
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            result = runner.invoke(
+                app,
+                [
+                    "job",
+                    "run",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.snowflake-transformation",
+                    "--config-id",
+                    "100",
+                    "--idempotency-key",
+                    "build-step-1",
+                    "--force-rerun",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        call_kwargs = job_service.run_job.call_args.kwargs
+        assert call_kwargs.get("idempotency_key") == "build-step-1"
+        assert call_kwargs.get("force_rerun") is True
+        # Human mode surfaces the replay note when the result was deduplicated.
+        assert "prior run" in result.output
+
     def test_job_run_active_branch_resolved(self, tmp_path: Path) -> None:
         """job run without --branch uses active_branch_id from config."""
         config_dir = tmp_path / "config"

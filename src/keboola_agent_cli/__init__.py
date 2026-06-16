@@ -11,6 +11,7 @@ from .result_models import (
     SyncPushResult,
     UploadTableResult,
 )
+from .services.job_idempotency_store import JobIdempotencyStore
 
 try:
     __version__ = version(APP_NAME)
@@ -22,6 +23,7 @@ __all__ = [
     "ConfigDetailResult",
     "FileEntry",
     "Files",
+    "JobIdempotencyStore",
     "JobResult",
     "QueryResult",
     "SyncPushResult",
