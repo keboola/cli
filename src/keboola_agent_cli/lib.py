@@ -23,6 +23,11 @@ assemble inside its service layer. Auth is the storage token passed at
 construction (12-factor: read it from ``KBC_TOKEN`` yourself); nothing is
 persisted to disk.
 
+For replay-safe job runs (issue #427), pass an ``idempotency_store`` (the facade
+is config-dir-free, so the consumer supplies *where* to persist the dedup map --
+typically inside its own resume-checkpoint dir) and an ``idempotency_key`` per
+``run_job``.
+
 Everything exported here is committed public API and changes follow semver. For
 lower-level access (raw Queue/Storage endpoints) reach for the underlying
 :class:`KeboolaClient` via :attr:`Client.raw`.
@@ -45,6 +50,7 @@ from .constants import (
 )
 from .errors import ErrorCode, KeboolaApiError
 from .result_models import ConfigDetailResult, JobResult, QueryResult, UploadTableResult
+from .services.job_idempotency_store import JobIdempotencyStore, run_idempotent_job
 
 logger = logging.getLogger(__name__)
 
@@ -206,8 +212,9 @@ class Files:
 class Client:
     """Stateless in-process entry point to one Keboola project.
 
-    Holds nothing but the stack URL, token, and a single :class:`KeboolaClient`
-    (which carries the shared retry/backoff). No config-dir, no ``project add``.
+    Holds nothing but the stack URL, token, a single :class:`KeboolaClient`
+    (which carries the shared retry/backoff), and an optional idempotency store.
+    No config-dir, no ``project add``.
 
     Args:
         url: Stack URL, e.g. ``https://connection.keboola.com``.
@@ -215,15 +222,27 @@ class Client:
         branch_id: Dev branch to scope every operation to. ``None`` (default)
             targets production: Storage Files use the production scope and
             :meth:`query` resolves the project's default branch on first use.
+        idempotency_store: Optional default :class:`JobIdempotencyStore` used by
+            :meth:`run_job` when an ``idempotency_key`` is given (issue #427).
+            The facade is config-dir-free, so the consumer decides where the
+            dedup map lives. A per-call ``idempotency_store`` overrides this.
     """
 
-    def __init__(self, url: str, token: str, *, branch_id: int | None = None) -> None:
+    def __init__(
+        self,
+        url: str,
+        token: str,
+        *,
+        branch_id: int | None = None,
+        idempotency_store: JobIdempotencyStore | None = None,
+    ) -> None:
         if not url:
             raise ValueError("url is required")
         if not token:
             raise ValueError("token is required")
         self._client = KeboolaClient(stack_url=url, token=token)
         self._resolved_branch_id = branch_id
+        self._idempotency_store = idempotency_store
         self.files = Files(self._client, branch_id)
 
     @property
@@ -359,6 +378,9 @@ class Client:
         wait: bool = False,
         timeout: float = DEFAULT_JOB_RUN_TIMEOUT,
         poll_strategy: str = DEFAULT_POLL_STRATEGY,
+        idempotency_key: str | None = None,
+        force_rerun: bool = False,
+        idempotency_store: JobIdempotencyStore | None = None,
     ) -> JobResult:
         """Run a Queue API job and return a typed :class:`JobResult`.
 
@@ -366,6 +388,14 @@ class Client:
         terminal state (or ``timeout`` elapses). Unlike ``JobService.run_job``
         this thin facade does **not** auto-resolve linked variable values; pass
         ``variable_values_id`` explicitly if the config needs a values row.
+
+        Idempotency (issue #427): pass ``idempotency_key`` (plus an
+        ``idempotency_store`` here or on the constructor) to make a replayed call
+        safe -- a prior still-running or non-failed job is returned (with
+        ``JobResult.idempotent_replay = True``) instead of creating a duplicate.
+        A prior *failed* run is re-run; ``force_rerun=True`` always creates a
+        fresh job. The Queue API has no server-side idempotency, so this is
+        client-side and scoped to the supplied store.
 
         Args:
             component_id: Component to run, e.g. ``keboola.ex-db-snowflake``.
@@ -378,21 +408,51 @@ class Client:
             wait: If True, poll until the job finishes or ``timeout`` elapses.
             timeout: Max seconds to wait (only used when ``wait=True``).
             poll_strategy: Wait cadence, one of ``VALID_POLL_STRATEGIES``.
+            idempotency_key: Client-supplied de-duplication token.
+            force_rerun: Ignore any stored entry for ``idempotency_key``.
+            idempotency_store: Per-call store override (else the constructor's).
+
+        Raises:
+            ValueError: If ``idempotency_key`` is given but no store is available
+                (the stateless facade cannot invent a persistence location).
         """
         effective_branch = branch_id if branch_id is not None else self._resolved_branch_id
-        job = self._client.create_job(
+
+        def _create() -> dict[str, Any]:
+            return self._client.create_job(
+                component_id=component_id,
+                config_id=config_id,
+                config_row_ids=config_row_ids,
+                mode=mode,
+                branch_id=effective_branch,
+                variable_values_id=variable_values_id,
+            )
+
+        store = idempotency_store if idempotency_store is not None else self._idempotency_store
+        if idempotency_key and store is None:
+            raise ValueError(
+                "idempotency_key requires an idempotency_store -- pass one to "
+                "Client(...) or to run_job(...). The stateless facade has no "
+                "config-dir to default it to."
+            )
+
+        job, replayed = run_idempotent_job(
+            store=store,
+            key=idempotency_key,
             component_id=component_id,
             config_id=config_id,
-            config_row_ids=config_row_ids,
-            mode=mode,
             branch_id=effective_branch,
-            variable_values_id=variable_values_id,
+            force_rerun=force_rerun,
+            create=_create,
+            fetch=self._client.get_job_detail,
         )
         job_id = str(job.get("id", ""))
         if wait and job_id:
             job = self._client.wait_for_queue_job(
                 job_id, max_wait=timeout, poll_strategy=poll_strategy
             )
+        if replayed:
+            job = {**job, "idempotent_replay": True}
         return JobResult.model_validate(job)
 
     def config_detail(

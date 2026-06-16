@@ -115,6 +115,10 @@ DEFAULT_POLL_STRATEGY: str = "exponential"
 # failures without touching production tables.
 VALID_JOB_MODES: frozenset[str] = frozenset({"run", "debug"})
 DEFAULT_JOB_MODE: str = "run"
+# Client-side job idempotency store (issue #427). Lives in the config-dir
+# alongside config.json; maps idempotency_key -> prior job so a replayed
+# `kbagent job run --idempotency-key` does not fire a duplicate side effect.
+JOB_IDEMPOTENCY_FILENAME: str = "job_idempotency.json"
 # Default log-tail length surfaced on FAILED/WARNING/TERMINATED jobs.
 DEFAULT_LOG_TAIL_LINES: int = 200
 # Upper bound to prevent accidentally pulling tens of thousands of events

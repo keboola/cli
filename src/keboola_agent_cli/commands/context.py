@@ -266,7 +266,7 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent job detail --project NAME --job-id ID
     Full job detail including result message and timing.
 
-  kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N]
+  kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
     Run a Queue API job. --row-id selects specific config rows (repeatable; omit to run entire config).
     --wait polls until job finishes. --timeout sets max wait in seconds (default 300). Branch-aware.
     When the config has linked variables (configuration.variables_id), kbagent auto-resolves

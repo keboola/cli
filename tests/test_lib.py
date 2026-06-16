@@ -17,6 +17,7 @@ from keboola_agent_cli import (
     ConfigDetailResult,
     FileEntry,
     Files,
+    JobIdempotencyStore,
     JobResult,
     QueryResult,
     UploadTableResult,
@@ -406,3 +407,47 @@ class TestModuleLayout:
             "SyncPushResult",
             "ConfigDetailResult",
         }
+
+
+class TestRunJobIdempotency:
+    """Facade run_job idempotency (issue #427)."""
+
+    def test_key_without_store_raises(self, client: Client) -> None:
+        with pytest.raises(ValueError, match="idempotency_store"):
+            client.run_job("c", "cfg", idempotency_key="K")
+
+    def test_replay_returns_prior_job(self, mock_kc: MagicMock, tmp_path: Path) -> None:
+        store = JobIdempotencyStore(tmp_path / "idem.json")
+        with patch("keboola_agent_cli.lib.KeboolaClient", return_value=mock_kc):
+            c = Client(url=STACK_URL, token=FAKE_TOKEN, idempotency_store=store)
+        mock_kc.create_job.return_value = {"id": "j1", "status": "processing"}
+        first = c.run_job("c", "cfg", idempotency_key="K")
+        assert first.id == "j1" and first.idempotent_replay is False
+
+        mock_kc.get_job_detail.return_value = {"id": "j1", "status": "processing"}
+        second = c.run_job("c", "cfg", idempotency_key="K")
+        assert second.id == "j1" and second.idempotent_replay is True
+        mock_kc.create_job.assert_called_once()
+
+    def test_per_call_store_override(self, mock_kc: MagicMock, tmp_path: Path) -> None:
+        store = JobIdempotencyStore(tmp_path / "idem.json")
+        with patch("keboola_agent_cli.lib.KeboolaClient", return_value=mock_kc):
+            c = Client(url=STACK_URL, token=FAKE_TOKEN)  # no default store
+        mock_kc.create_job.return_value = {"id": "j1", "status": "processing"}
+        c.run_job("c", "cfg", idempotency_key="K", idempotency_store=store)
+        entry = store.lookup("K")
+        assert entry is not None and entry.job_id == "j1"
+
+    def test_force_rerun_creates_fresh(self, mock_kc: MagicMock, tmp_path: Path) -> None:
+        store = JobIdempotencyStore(tmp_path / "idem.json")
+        with patch("keboola_agent_cli.lib.KeboolaClient", return_value=mock_kc):
+            c = Client(url=STACK_URL, token=FAKE_TOKEN, idempotency_store=store)
+        mock_kc.create_job.side_effect = [
+            {"id": "j1", "status": "processing"},
+            {"id": "j2", "status": "processing"},
+        ]
+        mock_kc.get_job_detail.return_value = {"id": "j1", "status": "success"}
+        c.run_job("c", "cfg", idempotency_key="K")
+        second = c.run_job("c", "cfg", idempotency_key="K", force_rerun=True)
+        assert second.id == "j2" and second.idempotent_replay is False
+        assert mock_kc.create_job.call_count == 2

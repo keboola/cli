@@ -87,6 +87,14 @@ class JobResult(_ApiResultModel):
         validation_alias=AliasChoices("logTail", "log_tail"),
         description="Trailing job events surfaced on a non-success terminal state (wait mode).",
     )
+    idempotent_replay: bool = Field(
+        default=False,
+        description=(
+            "True when this job was returned from a prior run via a matching "
+            "idempotency key (issue #427) rather than freshly created -- i.e. no "
+            "new side effect was fired."
+        ),
+    )
 
     @property
     def succeeded(self) -> bool:
