@@ -862,6 +862,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
+  kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]
+    Clone a reference synced tree into a fresh target project + parameterize it
+    (bucket_map / variable_values / instance_rename overrides), then push so every
+    config CREATEs fresh. keboola.flow task configIds + variable links remap
+    reference->ULID. Idempotent (re-run -> no_changes); needs a fresh target.
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
     Fresh-CREATE behavior (since 0.47.0): if the manifest contains a placeholder entry at
     (component_id, path), the create path updates it in place (no manifest duplication)

@@ -2732,3 +2732,20 @@ attribute access / `model_dump()`. They also accept the raw API key or the
 snake_case field name, so `JobResult.model_validate(service_dict)` works on a
 service-layer dict directly. This is a typing/contract addition only; the dict
 shapes returned by the service layer and the `--json` CLI output are unchanged.
+
+### `sync clone` needs a fresh target; flow/variable links remap automatically (since v0.63.0)
+
+`sync clone` copies a reference synced tree into a **fresh** target project. Two
+things to internalise:
+- It does **not** reset config ids to placeholders. The reference's ids simply
+  don't exist in the fresh target, so the push diff marks every config `added`
+  and assigns new ULIDs. `created_id_map` (keyed by the reference id) then drives
+  the Phase-C variable-link remap **and** the new Phase-D `keboola.flow`
+  `task.configId` remap (reference→ULID). You do NOT need a separate
+  "remap orchestrator/flow task" step — `sync push` now does it for ANY
+  fresh-create push, not just clone.
+- If the target project already contains configs with the reference's ids, clone
+  **fails fast** (`CONFIG_ERROR`) rather than UPDATE them. Clone requires a
+  new/empty target. Re-running clone with the same `--target-dir` is idempotent
+  (`no_changes`), because after the first push the local manifest carries the new
+  ULIDs that match the target remote.

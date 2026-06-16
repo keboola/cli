@@ -200,6 +200,41 @@ class SyncPushResult(_ApiResultModel):
         return not self.errors
 
 
+class CloneResult(_ApiResultModel):
+    """Result of a ``sync clone`` composite (issue #426).
+
+    Returned by ``SyncService.clone_project``. ``status`` is ``cloned`` (configs
+    created), ``no_changes`` (idempotent re-run -- nothing left to create), or
+    ``dry_run``. The embedded ``push`` is the underlying ``SyncPushResult``.
+    """
+
+    status: str = Field(default="", description="cloned | no_changes | dry_run.")
+    target_alias: str = Field(default="", description="Project the clone was pushed into.")
+    target_dir: str = Field(default="", description="Where the clone was materialised.")
+    created: int = Field(default=0, description="Configs/rows created in the target.")
+    bucket_rewrites: int = Field(
+        default=0, description="Table references rewritten by the bucket_map override."
+    )
+    variable_overrides: int = Field(default=0, description="keboola.variables values overridden.")
+    renamed_instances: int = Field(
+        default=0, description="Config paths renamed by the instance_rename override."
+    )
+    flow_task_remaps: int = Field(
+        default=0, description="keboola.flow task configIds remapped reference->ULID."
+    )
+    push: SyncPushResult | None = Field(
+        default=None, description="The underlying sync push result (None for dry_run)."
+    )
+    errors: list[dict[str, Any]] = Field(
+        default_factory=list, description="Per-change push errors, if any."
+    )
+
+    @property
+    def ok(self) -> bool:
+        """True iff the clone completed with no errors."""
+        return not self.errors
+
+
 class ConfigDetailResult(_ApiResultModel):
     """Detail of a single configuration.
 

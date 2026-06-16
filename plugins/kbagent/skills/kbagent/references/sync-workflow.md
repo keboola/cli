@@ -371,3 +371,44 @@ the 3-way diff state per config (and per row):
 > have un-pushed edits elsewhere: non-conflicting edits survive; a real conflict
 > stops you loudly instead of losing work. To intentionally drop a local edit,
 > delete the file (or the config directory) and pull.
+
+## Cloning a reference project (`sync clone`, since v0.63.0)
+
+`sync clone` builds a new customer/instance project by **copying a golden
+reference tree and parameterizing it**, instead of re-implementing the copy +
+id-rewrite + push surgery by hand.
+
+```bash
+kbagent sync clone \
+  --source ./golden-reference \
+  --target new-customer-alias \
+  --target-dir ./clones/new-customer \
+  --bucket-map ./overrides/buckets.json \
+  --variable-values ./overrides/vars.json \
+  --instance-rename ./overrides/rename.json
+```
+
+Override files are JSON or YAML objects:
+- `--bucket-map` → `{ "in.c-ref": "in.c-prod", "out.c-ref": "out.c-prod" }` — rewrites the bucket prefix of every storage input `source` / output `destination`.
+- `--variable-values` → `{ "db_host": "prod-db", "api_base": "https://..." }` — overrides matching `keboola.variables` row values.
+- `--instance-rename` → `{ "extractor/keboola.ex-db/Acme": "extractor/keboola.ex-db/Globex" }` — renames config dirs + manifest paths.
+
+**Why it just works on a fresh target:** the reference's config ids do not exist
+in the target project, so the push diff classifies every config as `added` and
+assigns new ULIDs. Because the push's `created_id_map` is keyed by the reference
+id, the **Phase-C** transformation variable links **and the Phase-D
+`keboola.flow` task `configId`s** remap reference→ULID automatically — no manual
+"remap orchestrator task" pass. The push result carries `flow_task_remaps`.
+
+**Idempotent:** re-running with an existing `--target-dir` skips the copy +
+overrides and just pushes, so a completed clone reports `no_changes` /
+`created: 0`. Re-running is safe.
+
+**Fresh-target requirement:** clone refuses (`CONFIG_ERROR`) if the target
+project already contains the reference's configs — it will not UPDATE a
+stranger's config. Use a new/empty target project.
+
+**In-process SDK:** `SyncService.clone_project(source, target_alias, target_dir,
+overrides={...})` returns a typed `CloneResult` (exported from
+`keboola_agent_cli`). This is the tested SDK surface a scaffold/provisioning tool
+should call instead of hand-rolling the mechanics.

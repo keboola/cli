@@ -71,6 +71,11 @@ logger = logging.getLogger(__name__)
 # and ``configuration.variables_values_id`` (a row id).
 VARIABLES_COMPONENT_ID = "keboola.variables"
 
+# Conditional-flow component. A flow runs other configs via
+# ``configuration.tasks[].task.configId`` (job-type tasks); the Phase-D backfill
+# remaps those ids placeholder/source -> ULID after a fresh create (e.g. clone).
+FLOW_COMPONENT_ID = "keboola.flow"
+
 
 @dataclass
 class WritebackResult:
@@ -112,6 +117,21 @@ class VariableBindingResult:
 
     errors: list[dict[str, str]] = field(default_factory=list)
     configs_rewritten: int = 0
+
+
+@dataclass
+class FlowBindingResult:
+    """Outcome of the Phase-D flow-task-link backfill (#426).
+
+    ``configs_rewritten`` counts flows whose task ``configId``s were remapped to
+    ULIDs (drives the manifest-dirty flag); ``tasks_remapped`` is the total task
+    references rewritten; ``errors`` accumulates PUT failures so the push
+    envelope surfaces them.
+    """
+
+    errors: list[dict[str, str]] = field(default_factory=list)
+    configs_rewritten: int = 0
+    tasks_remapped: int = 0
 
 
 @dataclass
@@ -1724,6 +1744,21 @@ class SyncService(BaseService):
             if binding.configs_rewritten:
                 manifest_dirty = True
 
+            # ---- Phase D: flow task configId backfill (#426) -------------
+            # After variable links, remap keboola.flow task configIds that point
+            # at configs created this push (golden/placeholder -> ULID). Reuses
+            # created_id_map; a no-op when no flow was created.
+            flow_binding = self._resolve_flow_task_bindings(
+                client,
+                created_configs=created_configs,
+                created_id_map=created_id_map,
+                manifest=manifest,
+                branch_id=branch_id,
+            )
+            errors.extend(flow_binding.errors)
+            if flow_binding.configs_rewritten:
+                manifest_dirty = True
+
         # Save manifest with updated hashes / new IDs / removed entries
         if manifest_dirty:
             save_manifest(project_root, manifest)
@@ -1736,9 +1771,154 @@ class SyncService(BaseService):
             "errors": errors,
             "pushed_details": pushed_details,
         }
+        if flow_binding.tasks_remapped:
+            result_data["flow_task_remaps"] = flow_binding.tasks_remapped
         if name_drift_warnings and not no_name_drift_warnings:
             result_data["name_drift_warnings"] = name_drift_warnings
         return result_data
+
+    def clone_project(
+        self,
+        source: str | Path,
+        target_alias: str,
+        target_dir: str | Path,
+        *,
+        overrides: dict[str, Any] | None = None,
+        dry_run: bool = False,
+        branch_override: int | None = None,
+    ) -> dict[str, Any]:
+        """Clone a reference synced project into a fresh target project (#426).
+
+        Copies the reference tree at ``source`` into ``target_dir``, applies the
+        declarative ``overrides`` (``bucket_map``, ``variable_values``,
+        ``instance_rename``), re-points the manifest at ``target_alias``'s
+        project, and pushes -- so every config is CREATEd fresh and its flow
+        task / variable links are remapped reference->ULID by push Phase C/D.
+
+        Cloning into a fresh target needs no id surgery: the reference's config
+        ids do not exist in the target remote, so the diff classifies every
+        config as ``added`` and ``created_id_map`` (keyed by the reference id)
+        drives the link remaps.
+
+        Idempotent: re-running with an existing ``target_dir`` skips the copy +
+        overrides and just pushes, so a clean clone then reports ``no_changes`` /
+        ``created: 0``.
+
+        Args:
+            source: A reference synced project dir (must contain
+                ``.keboola/manifest.json``).
+            target_alias: The project alias to clone INTO (must be a fresh
+                project on the first clone).
+            target_dir: Where to materialise the clone.
+            overrides: Optional dict with ``bucket_map`` (old->new bucket id),
+                ``variable_values`` (var name->value), and ``instance_rename``
+                (old path prefix->new path prefix) keys.
+            dry_run: Apply overrides + report the diff without pushing.
+            branch_override: Optional target branch id.
+
+        Returns:
+            A dict matching ``CloneResult``: ``status``
+            (``cloned`` | ``no_changes`` | ``dry_run``), ``target_alias``,
+            ``target_dir``, ``created``, ``bucket_rewrites``,
+            ``variable_overrides``, ``renamed_instances``, ``flow_task_remaps``,
+            ``push`` (the underlying push result), ``errors``.
+
+        Raises:
+            ConfigError: ``source`` is not a synced project, ``target_alias`` is
+                unknown, or (first clone) the target project already contains the
+                reference's configs (not a fresh target).
+        """
+        from urllib.parse import urlparse
+
+        from ..sync.clone import (
+            apply_bucket_map,
+            apply_instance_rename,
+            apply_variable_values,
+            copy_reference_tree,
+            repoint_manifest_project,
+        )
+
+        overrides = overrides or {}
+        bucket_map = overrides.get("bucket_map") or {}
+        variable_values = overrides.get("variable_values") or {}
+        instance_rename = overrides.get("instance_rename") or {}
+        source_dir = Path(source)
+        target_path = Path(target_dir)
+
+        # Validate the reference is a synced project.
+        try:
+            load_manifest(source_dir)
+        except FileNotFoundError as exc:
+            raise ConfigError(
+                f"Source {source_dir} is not a synced project (no "
+                ".keboola/manifest.json). Run `kbagent sync pull` there first."
+            ) from exc
+
+        target_project = self.resolve_projects([target_alias])[target_alias]
+
+        bucket_rewrites = 0
+        variable_overrides = 0
+        renamed_instances = 0
+        already_cloned = target_path.exists()
+
+        if not already_cloned:
+            copy_reference_tree(source_dir, target_path)
+            manifest = load_manifest(target_path)
+            repoint_manifest_project(
+                manifest,
+                project_id=target_project.project_id or 0,
+                api_host=urlparse(target_project.stack_url).netloc,
+            )
+            bucket_rewrites = apply_bucket_map(target_path, manifest, bucket_map)
+            variable_overrides = apply_variable_values(target_path, manifest, variable_values)
+            renamed_instances = apply_instance_rename(target_path, manifest, instance_rename)
+            save_manifest(target_path, manifest)
+
+        override_counts = {
+            "bucket_rewrites": bucket_rewrites,
+            "variable_overrides": variable_overrides,
+            "renamed_instances": renamed_instances,
+        }
+
+        if dry_run:
+            diff_result = self.diff(target_alias, target_path, branch_override=branch_override)
+            return {
+                "status": "dry_run",
+                "target_alias": target_alias,
+                "target_dir": str(target_path),
+                "summary": diff_result["summary"],
+                **override_counts,
+            }
+
+        # Fresh-target guard: on a first clone every one of OUR configs must be a
+        # CREATE. A non-'added' change means a reference id already exists in the
+        # target -> not a fresh target; refuse rather than UPDATE a stranger's config.
+        if not already_cloned:
+            diff_result = self.diff(target_alias, target_path, branch_override=branch_override)
+            collisions = [
+                f"{c.get('component_id')}/{c.get('config_id')}"
+                for c in diff_result["changes"]
+                if c["change_type"] != "added"
+            ]
+            if collisions:
+                raise ConfigError(
+                    "Clone requires a fresh target project, but these configs already "
+                    f"exist there: {', '.join(collisions[:10])}. Use a new/empty target "
+                    "project, or remove the existing configs first."
+                )
+
+        push_result = self.push(target_alias, target_path, branch_override=branch_override)
+        status = "no_changes" if push_result.get("status") == "no_changes" else "cloned"
+        return {
+            "status": status,
+            "target_alias": target_alias,
+            "target_dir": str(target_path),
+            "created": push_result.get("created", 0),
+            "flow_task_remaps": push_result.get("flow_task_remaps", 0),
+            "push": push_result,
+            "errors": push_result.get("errors", []),
+            **override_counts,
+        }
 
     # Kept for test compatibility: tests exercise fail-closed encryption via
     # ``SyncService._encrypt_secrets_in_config(...)``. Production code uses
@@ -2385,6 +2565,147 @@ class SyncService(BaseService):
 
         # config_hash includes _configuration_extra, so refresh the stored
         # hashes from the post-rewrite disk state or sync diff sees a conflict.
+        hashes = self._compute_config_hashes(created.config_dir, created.component_id)
+        target_branch = branch_id or 0
+        for cfg in manifest.configurations:
+            if (
+                cfg.branch_id == target_branch
+                and cfg.component_id == created.component_id
+                and cfg.id == created.config_id
+            ):
+                cfg.metadata["pull_hash"] = hashes.file_hash
+                cfg.metadata["pull_config_hash"] = hashes.cfg_hash
+                cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
+                break
+
+    def _resolve_flow_task_bindings(
+        self,
+        client: Any,
+        *,
+        created_configs: list[CreatedConfig],
+        created_id_map: dict[tuple[str, str], str],
+        manifest: Manifest,
+        branch_id: int | None,
+    ) -> FlowBindingResult:
+        """Remap keboola.flow task ``configId``s from source ids to ULIDs (Phase D).
+
+        A ``keboola.flow`` config runs other configs via
+        ``configuration.tasks[].task.configId`` (job-type tasks only; on disk
+        these live under ``_configuration_extra.tasks``). When a flow is created
+        in the same push as the configs it targets -- e.g. a ``sync clone`` of a
+        reference project -- those task ``configId``s still point at the source
+        config ids. This pass (mirroring the Phase-C variable backfill) resolves
+        each job task's ``(componentId, configId)`` via ``created_id_map`` to the
+        ULID assigned this push, PUTs the corrected flow, rewrites the local
+        ``_config.yml``, and refreshes the manifest hashes so a re-push is clean.
+
+        A no-op when no flow was created this push, or when no task references a
+        config created this push (the id is left untouched -- it may legitimately
+        point at a pre-existing config).
+        """
+        result = FlowBindingResult()
+        for created in created_configs:
+            if created.component_id != FLOW_COMPONENT_ID:
+                continue
+            local_data = self._read_config_file(created.config_dir)
+            if local_data is None:
+                continue
+            extra = local_data.get("_configuration_extra")
+            if not isinstance(extra, dict):
+                continue
+            tasks = extra.get("tasks")
+            if not isinstance(tasks, list):
+                continue
+
+            remapped = self._remap_flow_tasks_in_place(tasks, created_id_map)
+            if not remapped:
+                continue
+
+            try:
+                self._apply_flow_task_binding(
+                    client,
+                    created=created,
+                    local_data=local_data,
+                    manifest=manifest,
+                    branch_id=branch_id,
+                )
+            except KeboolaApiError as exc:
+                result.errors.append(
+                    {
+                        "change_type": "flow_task_link",
+                        "error_code": ErrorCode.API_ERROR,
+                        "component_id": created.component_id,
+                        "config_id": created.config_id,
+                        "message": str(exc),
+                    }
+                )
+                continue
+            result.configs_rewritten += 1
+            result.tasks_remapped += remapped
+        return result
+
+    @staticmethod
+    def _remap_flow_tasks_in_place(
+        tasks: list[Any], created_id_map: dict[tuple[str, str], str]
+    ) -> int:
+        """Rewrite job-task ``configId``s in a flow ``tasks`` list in place.
+
+        Returns the number of task references actually remapped. Only
+        ``task.type == 'job'`` entries carry a ``configId``; notification and
+        variable tasks are skipped. A task is rewritten only when
+        ``(componentId, configId)`` matches an entry created this push.
+        """
+        remapped = 0
+        for task_entry in tasks:
+            if not isinstance(task_entry, dict):
+                continue
+            task = task_entry.get("task")
+            if not isinstance(task, dict) or task.get("type") != "job":
+                continue
+            comp = task.get("componentId")
+            old_cfg = task.get("configId")
+            if not isinstance(comp, str) or not isinstance(old_cfg, (str, int)):
+                continue
+            new_id = created_id_map.get((comp, str(old_cfg)))
+            if new_id and str(old_cfg) != new_id:
+                task["configId"] = new_id
+                remapped += 1
+        return remapped
+
+    def _apply_flow_task_binding(
+        self,
+        client: Any,
+        *,
+        created: CreatedConfig,
+        local_data: dict[str, Any],
+        manifest: Manifest,
+        branch_id: int | None,
+    ) -> None:
+        """PUT a remapped flow, rewrite local ``_config.yml``, refresh hashes.
+
+        ``local_data`` already carries the remapped task ``configId``s (the
+        caller mutated ``_configuration_extra.tasks`` in place). A deep copy is
+        code-merged to build the PUT body (no-op for flows, which carry no code)
+        so the API receives the corrected ``configuration.tasks``.
+        """
+        merged = copy.deepcopy(local_data)
+        merge_code_files(created.component_id, merged, created.config_dir)
+        _name, _description, configuration = local_config_to_api(merged)
+
+        client.update_config(
+            component_id=created.component_id,
+            config_id=created.config_id,
+            configuration=configuration,
+            change_description="Remap flow task configIds via kbagent sync push",
+            branch_id=branch_id,
+        )
+        logger.info(
+            "Remapped flow task configIds for %s/%s",
+            created.component_id,
+            created.config_id,
+        )
+
+        self._write_config_file(created.config_dir, local_data)
         hashes = self._compute_config_hashes(created.config_dir, created.component_id)
         target_branch = branch_id or 0
         for cfg in manifest.configurations:
