@@ -1,0 +1,3 @@
+# PEP 561 marker: keboola_agent_cli ships inline type annotations.
+# Downstream mypy / ty / IDEs treat the importable SDK (Client, the
+# result_models.* contracts) as typed. See issue #428.

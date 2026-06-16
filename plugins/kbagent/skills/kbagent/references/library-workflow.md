@@ -15,6 +15,10 @@ shell operations, use the `kbagent` CLI.
 |--------|---------|
 | `Client(url, token, *, branch_id=None)` | Stateless entry point to one project; context manager |
 | `Client.query(workspace_id, sql, *, transactional=False, limit=500)` | Run SQL in a workspace -> `list[dict]` |
+| `Client.query_result(workspace_id, sql, ...)` | Same, but typed -> `QueryResult` (columns + truncation) |
+| `Client.run_job(component_id, config_id, *, wait=False, ...)` | Run a Queue job -> `JobResult` |
+| `Client.config_detail(component_id, config_id, *, branch_id=None)` | One config's detail -> `ConfigDetailResult` |
+| `Client.upload_table(table_id, file_path, *, incremental=False, ...)` | Import a CSV into an existing table -> `UploadTableResult` |
 | `Client.files.upload(source, *, name=None, tags=None, permanent=False)` | Upload a path **or** bytes -> `FileEntry` |
 | `Client.files.read_bytes(file_id)` | Download a file fully into memory -> `bytes` |
 | `Client.files.list(*, tags=None, query=None, limit=100, ...)` | List files -> `list[FileEntry]` |
@@ -22,8 +26,35 @@ shell operations, use the `kbagent` CLI.
 | `Client.raw` | The underlying `KeboolaClient` for endpoints the facade omits |
 | `FileEntry` | Uniform file shape: `id, name, tags, created, size_bytes, is_permanent, raw` |
 
-Everything exported from `keboola_agent_cli` (`Client`, `Files`, `FileEntry`) is
-committed public API and follows semver.
+Everything exported from `keboola_agent_cli` (`Client`, `Files`, `FileEntry`, and
+the typed result models `JobResult`, `QueryResult`, `UploadTableResult`,
+`SyncPushResult`, `ConfigDetailResult`) is committed public API and follows
+semver. Since 0.63.0 the package ships a **`py.typed`** marker (PEP 561), so
+`mypy` / `ty` / IDEs treat the SDK as typed -- a contract change surfaces at
+type-check time, not at runtime.
+
+## Typed result models
+
+The high-traffic operations return pydantic models (`result_models.py`) instead
+of bare dicts, so you get autocomplete and a versioned contract:
+
+```python
+job = kbc.run_job("keboola.ex-db-snowflake", "12345", wait=True)
+if job.succeeded:                       # -> JobResult
+    print(job.id, job.result)
+
+res = kbc.query_result(ws, 'SELECT id, name FROM t')   # -> QueryResult
+print(res.columns, res.row_count, res.truncated)
+
+cfg = kbc.config_detail("keboola.ex-http", "98765")    # -> ConfigDetailResult
+print(cfg.name, cfg.version, cfg.configuration)
+```
+
+Every model is **tolerant of extra fields** (`extra="allow"`): the named fields
+are the stable surface, but anything else the API returns is preserved
+(reachable via attribute access and `model_dump()`), so a new backend field
+never raises. They also accept the raw API key *or* the snake_case field name, so
+`JobResult.model_validate(service_dict)` works directly on a service-layer dict.
 
 ## Auth & construction
 
@@ -100,8 +131,8 @@ kbc.files.delete(meta.id)
 
 ## Lower-level access
 
-For endpoints the facade does not wrap (buckets, tables, jobs, branches, ...),
-reach for the underlying client:
+For endpoints the facade does not wrap (buckets, tables, branches, job polling
+internals, ...), reach for the underlying client:
 
 ```python
 client = kbc.raw                      # a KeboolaClient
