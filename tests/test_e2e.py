@@ -3992,7 +3992,16 @@ class TestE2EJsonConsistency:
 @skip_without_credentials
 @pytest.mark.e2e
 class TestE2ESyncWorkflow:
-    """Test sync init/pull/diff/status/push in a temp git repo."""
+    """Test sync init/pull/diff/status/push/clone in a temp git repo.
+
+    NOTE on ``sync clone`` coverage: the clone step (step 6) runs ``--dry-run``
+    against the SAME project, so it exercises copy + manifest re-point + diff but
+    NOT a real push (Phase D flow remap, fresh-target guard, idempotent re-run).
+    A full live clone push would create configs in a second, dedicated *fresh*
+    project, which the single-project E2E harness (E2E_API_TOKEN + E2E_URL) does
+    not provide. The push path is covered by the unit suite
+    (``tests/test_sync_clone.py``); a nightly full-clone E2E would need a
+    separate empty target project (tracked as a follow-up)."""
 
     @pytest.fixture(autouse=True)
     def setup(self, tmp_path: Path) -> None:

@@ -30,9 +30,11 @@ shell operations, use the `kbagent` CLI.
 Everything exported from `keboola_agent_cli` (`Client`, `Files`, `FileEntry`,
 `JobIdempotencyStore`, and the typed result models `JobResult`, `QueryResult`,
 `UploadTableResult`, `SyncPushResult`, `ConfigDetailResult`, `CloneResult`) is
-committed public API and follows semver. (`CloneResult` is returned by the
-service-layer `SyncService.clone_project` -- see [GitOps sync](sync-workflow.md)
--- not the `Client` facade, which is token-only.) Since 0.63.0 the package ships a **`py.typed`** marker
+committed public API and follows semver. (`CloneResult` **documents the dict
+shape** returned by the service-layer `SyncService.clone_project` -- see [GitOps
+sync](sync-workflow.md) -- which, like the rest of the service layer, returns a
+plain `dict`; wrap it with `CloneResult.model_validate(result)` for a typed
+object. It is not on the `Client` facade, which is token-only.) Since 0.63.0 the package ships a **`py.typed`** marker
 (PEP 561), so `mypy` / `ty` / IDEs treat the SDK as typed -- a contract change
 surfaces at type-check time, not at runtime.
 

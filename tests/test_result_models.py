@@ -11,6 +11,7 @@ consumer types against. The tests pin three invariants per model:
 """
 
 from keboola_agent_cli import (
+    CloneResult,
     ConfigDetailResult,
     JobResult,
     QueryResult,
@@ -168,6 +169,43 @@ class TestConfigDetailResult:
         assert cd.model_dump()["isDisabled"] is True
 
 
+class TestCloneResult:
+    def test_validates_service_dict_and_embeds_push(self) -> None:
+        cr = CloneResult.model_validate(
+            {
+                "status": "cloned",
+                "target_alias": "new-customer",
+                "target_dir": "/tmp/clone",
+                "created": 3,
+                "bucket_rewrites": 2,
+                "variable_overrides": 1,
+                "renamed_instances": 0,
+                "flow_task_remaps": 1,
+                "push": {"status": "pushed", "created": 3, "errors": []},
+                "errors": [],
+            }
+        )
+        assert cr.status == "cloned"
+        assert cr.target_alias == "new-customer"
+        assert cr.created == 3
+        assert cr.bucket_rewrites == 2
+        assert cr.flow_task_remaps == 1
+        assert cr.ok is True
+        # the embedded push validates into a typed SyncPushResult
+        assert isinstance(cr.push, SyncPushResult)
+        assert cr.push.created == 3 and cr.push.ok is True
+
+    def test_ok_false_on_errors(self) -> None:
+        cr = CloneResult.model_validate({"status": "cloned", "errors": [{"message": "boom"}]})
+        assert cr.ok is False
+
+    def test_dry_run_without_push(self) -> None:
+        cr = CloneResult.model_validate(
+            {"status": "dry_run", "target_alias": "t", "bucket_rewrites": 1}
+        )
+        assert cr.status == "dry_run" and cr.push is None and cr.ok is True
+
+
 class TestBaseConfig:
     def test_all_models_allow_extra(self) -> None:
         for model in (
@@ -176,6 +214,7 @@ class TestBaseConfig:
             UploadTableResult,
             SyncPushResult,
             ConfigDetailResult,
+            CloneResult,
         ):
             assert issubclass(model, _ApiResultModel)
             assert model.model_config.get("extra") == "allow"

@@ -229,6 +229,11 @@ def run_idempotent_job(
         return create(), False
 
     existing = store.lookup(key)
+    # ``force_rerun`` is the documented escape hatch: it INTENTIONALLY bypasses
+    # the collision guard below (and the prior-job probe), creating a fresh job
+    # and overwriting the stored entry. Do not hoist the collision check out of
+    # this ``not force_rerun`` branch -- the error message tells the caller to
+    # pass --force-rerun precisely to get past it.
     if existing is not None and not force_rerun:
         if existing.component_id != component_id or existing.config_id != config_id:
             raise KeboolaApiError(

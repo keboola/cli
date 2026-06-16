@@ -412,3 +412,9 @@ stranger's config. Use a new/empty target project.
 overrides={...})` returns a typed `CloneResult` (exported from
 `keboola_agent_cli`). This is the tested SDK surface a scaffold/provisioning tool
 should call instead of hand-rolling the mechanics.
+
+> **`--dry-run` still writes to disk.** A clone dry-run copies the reference tree
+> into `--target-dir`, applies the overrides, and saves the manifest -- it only
+> skips the *push*. So `--target-dir` exists on disk afterward (the diff it
+> reports is computed from that materialised tree). Use a throwaway path, or
+> delete it after inspecting.
