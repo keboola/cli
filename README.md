@@ -109,7 +109,9 @@ with Client(url=os.environ["KBC_URL"], token=os.environ["KBC_TOKEN"]) as kbc:
     files = kbc.files.list(tags=["demo"])                             # list[FileEntry]
 ```
 
-`query()` reads results inline (fast, native JSON types) and returns rows keyed by column name; `files` returns a uniform `FileEntry` shape and reads bytes straight into memory. Everything exported from `keboola_agent_cli` is committed public API (semver). For lower-level endpoints, reach for `Client.raw` (the underlying `KeboolaClient`).
+`query()` reads results inline and returns rows keyed by column name; `files` returns a uniform `FileEntry` shape and reads bytes straight into memory; `run_job()` / `config_detail()` / `upload_table()` return typed pydantic models. Everything exported from `keboola_agent_cli` is committed public API (semver). For lower-level endpoints, reach for `Client.raw` (the underlying `KeboolaClient`).
+
+**Full SDK reference:** [docs/sdk.md](docs/sdk.md) -- the deep guide (every method, the typed result-model contract, `py.typed`, idempotent `run_job`, gotchas, and how to extend the SDK). **Runnable demo:** [`examples/storage_tui/`](examples/storage_tui/) -- a terminal Storage browser built entirely on this `Client`.
 
 ## 30-second demo
 
@@ -259,6 +261,8 @@ kbagent             init | context | doctor | version | update | changelog
 |-------|---------------|
 | [Tutorial](docs/TUTORIAL.md) | End-to-end walkthrough: register projects (1, N, whole org), global vs local config, plugin install, using the specialist subagent and `/keboola` slash command. |
 | [User Guide](docs/guide.md) | Configuration, permissions, per-directory isolation, workflows |
+| [Python SDK](docs/sdk.md) | The in-process importable `Client`: method reference, typed result models, `py.typed`, idempotent jobs, gotchas, and how to extend the SDK. Demo: [`examples/storage_tui/`](examples/storage_tui/). |
+| [Build a REST client](docs/build-your-own-client.md) | The `kbagent serve` HTTP API spec for non-Python callers (JS, Go, Slack bots, Web UIs). |
 | [Contributing](CONTRIBUTING.md) | Architecture, coding style, adding commands, testing checklist |
 
 ## Development

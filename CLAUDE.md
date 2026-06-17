@@ -51,10 +51,21 @@ uv run pytest tests/test_cli.py::TestProjectAdd::test_project_add_success_json -
 
 ```
 src/keboola_agent_cli/
-  __init__.py           # exposes __version__ (read at runtime via importlib.metadata; never hardcoded)
+  __init__.py           # PUBLIC SDK ENTRYPOINT + __version__. Re-exports the importable
+                        #   facade (Client, Files, FileEntry) and the typed result models
+                        #   (JobResult, QueryResult, UploadTableResult, SyncPushResult,
+                        #   ConfigDetailResult, CloneResult, JobIdempotencyStore). Everything
+                        #   in __all__ is committed public API (semver). __version__ is read
+                        #   at runtime via importlib.metadata; never hardcoded. See docs/sdk.md.
+  lib.py                # In-process SDK facade: Client (query/run_job/config_detail/
+                        #   upload_table + .files + .raw) over KeboolaClient. Stateless,
+                        #   config-dir-free, token passed at construction (issue #415). See docs/sdk.md.
+  result_models.py      # Typed pydantic return contracts for the SDK facade (extra="allow",
+                        #   populate_by_name); the semver-stable shapes consumers type against (issue #428).
+  py.typed              # PEP 561 marker -- ships in the wheel so downstream mypy/ty treat the SDK as typed.
   __main__.py           # python -m support
   cli.py                # Typer root app, global options, subcommand wiring
-  constants.py          # Shared constants (retry params, timeouts, exit codes, defaults)
+  constants.py          # Shared constants + dynamic APP_NAME resolution (retry params, timeouts, defaults)
   json_utils.py         # Deep-merge, set_nested_value, compute_diff utilities
   models.py             # Pydantic models shared across layers
   output.py             # OutputFormatter: JSON vs Rich dual-mode output
@@ -135,7 +146,7 @@ Seven clients, all inheriting `BaseHttpClient` (`http_base.py`) which provides s
 
 **Single source of truth: `pyproject.toml`** (`version = "X.Y.Z"`).
 
-- `src/keboola_agent_cli/__init__.py` reads the version at runtime via `importlib.metadata.version(APP_NAME)` (where `APP_NAME = "keboola-cli"`). **Never hardcode a version string in `__init__.py`.**
+- `src/keboola_agent_cli/__init__.py` reads the version at runtime via `importlib.metadata.version(APP_NAME)`. `APP_NAME` is resolved **dynamically** in `constants.py` (`_resolve_app_name()`: prefers the current distribution `keboola-cli`, falls back to the legacy `keboola-agent-cli` so the #424 migration-bridge wheel keeps working) -- it is **not** a fixed literal. **Never hardcode a version string in `__init__.py`.**
 - `plugins/kbagent/.claude-plugin/plugin.json` must match. Run `make version-sync` (or `python scripts/sync_version.py`) to update it.
 - The pre-commit hook and CI automatically check version consistency.
 

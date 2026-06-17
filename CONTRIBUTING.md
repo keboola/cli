@@ -7,7 +7,7 @@ Read this **before** writing code. It will save review rounds.
 
 ### Python conventions
 
-- **Python 3.11+** -- use modern syntax (`str | None`, not `Optional[str]`)
+- **Python 3.12+** (`pyproject.toml` pins `requires-python = ">=3.12"`) -- use modern syntax (`str | None`, not `Optional[str]`)
 - **Type hints** on all function signatures
 - **f-strings** for string formatting (no `.format()` or `%`)
 - **`pathlib.Path`** over `os.path` -- consistently used throughout the project
@@ -391,6 +391,42 @@ before the PR is mergeable.
 - [ ] Error messages are actionable ("Bucket not found" not just "404")
 - [ ] Destructive operations have `--dry-run` and `--yes` flags
 - [ ] Write operations log what they did (created X, uploaded Y rows)
+
+## Extending the importable SDK
+
+Besides the CLI, kbagent ships an **in-process Python SDK** -- the importable
+`Client` facade (`lib.py`) and its typed result models (`result_models.py`),
+re-exported from the package root. A Keboola Data App, a transformation, or any
+Python service can `from keboola_agent_cli import Client` and use Query Service
+SQL, Storage Files, run-job, and config detail **without** a CLI subprocess or a
+`kbagent serve` daemon.
+
+**Everything exported from `keboola_agent_cli.__all__` is committed public API
+under semver.** Changing it is a deliberate act, not a side effect of touching a
+service. The full architecture, method reference, and the step-by-step checklist
+for adding a facade method or a result model live in **[docs/sdk.md](docs/sdk.md)**
+(see "Extending the SDK"). The short version:
+
+- [ ] **Facade methods go in `lib.py`** and call `KeboolaClient` directly --
+  never import the service layer (it carries config-dir / orchestration
+  assumptions the stateless facade must not inherit). Re-assemble the
+  high-level shape yourself, and **state in the docstring** which service
+  conveniences you intentionally omit (auto-create, alias/variable resolution).
+- [ ] **Return a typed model** (`result_models.py`), not a bare dict, for any
+  non-trivial shape. Subclass `_ApiResultModel` (`extra="allow"` +
+  `populate_by_name`); type **only** the stable subset, alias raw API keys via
+  `AliasChoices`, and never `extra="forbid"` (the API grows fields and the
+  contract must not raise).
+- [ ] **Export it** from `__init__.py` + `__all__` -- that list *is* the public
+  surface. Treat a field rename or a type tightening as a **breaking change**;
+  prefer adding over mutating.
+- [ ] **`make typecheck` stays clean** (types are a user-facing promise here),
+  add facade/model tests in `tests/`, and **document the addition in
+  [docs/sdk.md](docs/sdk.md)** (and the README "Use as a library" one-liner if
+  it's a headline capability).
+
+A runnable teaching example -- a curses Storage browser built entirely on the
+SDK -- lives in [`examples/storage_tui/`](examples/storage_tui/).
 
 ## Plugin synchronization map
 
