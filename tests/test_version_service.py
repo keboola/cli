@@ -293,10 +293,7 @@ class TestGetLocalMcpVersion:
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=(
-                "keboola-agent-cli v0.30.1\n"
-                "- kbagent\n"
-                f"{MCP_PACKAGE_NAME} v1.59.1\n"
-                f"- {MCP_BINARY_NAME}\n"
+                f"keboola-cli v0.30.1\n- kbagent\n{MCP_PACKAGE_NAME} v1.59.1\n- {MCP_BINARY_NAME}\n"
             ),
             stderr="",
         )
@@ -409,7 +406,7 @@ class TestUvToolListGetMcpVersion:
             "- da\n"
             "juncture v0.41.3\n"
             "- juncture\n"
-            "keboola-agent-cli v0.30.1\n"
+            "keboola-cli v0.30.1\n"
             "- kbagent\n"
             f"{MCP_PACKAGE_NAME} v1.59.1\n"
             f"- {MCP_BINARY_NAME}\n"
@@ -417,7 +414,7 @@ class TestUvToolListGetMcpVersion:
         assert _uv_tool_list_get_mcp_version(stdout) == "1.59.1"
 
     def test_not_listed_returns_none(self) -> None:
-        stdout = "keboola-agent-cli v0.30.1\n- kbagent\n"
+        stdout = "keboola-cli v0.30.1\n- kbagent\n"
         assert _uv_tool_list_get_mcp_version(stdout) is None
 
     def test_similar_named_package_rejected(self) -> None:
@@ -485,7 +482,7 @@ class TestUvToolListHasMcp:
     def test_match_with_other_tools_listed(self) -> None:
         """The package is found alongside other unrelated tools."""
         stdout = (
-            "keboola-agent-cli v0.30.0\n"
+            "keboola-cli v0.30.0\n"
             "- kbagent\n"
             f"{MCP_PACKAGE_NAME} v1.59.1\n"
             f"- {MCP_BINARY_NAME}\n"
@@ -923,7 +920,7 @@ class TestResolveKbagentWheelUrl:
         url = resolve_kbagent_wheel_url("0.60.0")
         assert url == (
             "https://github.com/keboola/cli/releases/download/"
-            "v0.60.0/keboola_agent_cli-0.60.0-py3-none-any.whl"
+            "v0.60.0/keboola_cli-0.60.0-py3-none-any.whl"
         )
         # follow_redirects is required to traverse GitHub's asset CDN redirect.
         assert mock_head.call_args.kwargs.get("follow_redirects") is True
@@ -971,8 +968,7 @@ class TestBuildKbagentWheelInstall:
     """build_kbagent_upgrade_command wheel_url fast path (issue #353)."""
 
     WHEEL = (
-        "https://github.com/keboola/cli/releases/download/"
-        "v1.2.3/keboola_agent_cli-1.2.3-py3-none-any.whl"
+        "https://github.com/keboola/cli/releases/download/v1.2.3/keboola_cli-1.2.3-py3-none-any.whl"
     )
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras", return_value=True)
@@ -988,7 +984,7 @@ class TestBuildKbagentWheelInstall:
             "tool",
             "install",
             "--force",
-            f"keboola-agent-cli[server] @ {self.WHEEL}",
+            f"keboola-cli[server] @ {self.WHEEL}",
         ]
         # The wheel path uses a PEP 508 direct ref -- no git+ source, no --with.
         assert all("git+" not in part for part in cmd)
@@ -1006,7 +1002,7 @@ class TestBuildKbagentWheelInstall:
             "tool",
             "install",
             "--force",
-            f"keboola-agent-cli @ {self.WHEEL}",
+            f"keboola-cli @ {self.WHEEL}",
         ]
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras", return_value=False)
@@ -1018,7 +1014,7 @@ class TestBuildKbagentWheelInstall:
             "/usr/bin/pip",
             "install",
             "--upgrade",
-            f"keboola-agent-cli @ {self.WHEEL}",
+            f"keboola-cli @ {self.WHEEL}",
         ]
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras", return_value=False)
@@ -1041,7 +1037,7 @@ class TestBuildKbagentWheelInstall:
         assert cmd is not None
         assert "--prerelease=allow" not in cmd
         assert all("git+" not in part for part in cmd)
-        assert cmd[-1] == f"keboola-agent-cli[server] @ {self.WHEEL}"
+        assert cmd[-1] == f"keboola-cli[server] @ {self.WHEEL}"
 
 
 class TestBuildKbagentUpgradeCommand:
@@ -1090,7 +1086,7 @@ class TestBuildKbagentUpgradeCommand:
         assert "--prerelease=allow" in cmd
         # Extras flag preserved
         assert "--with" in cmd
-        assert "keboola-agent-cli[server]" in cmd
+        assert "keboola-cli[server]" in cmd
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras")
     @patch("keboola_agent_cli.services.version_service.shutil.which")

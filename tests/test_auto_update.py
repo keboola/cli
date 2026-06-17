@@ -294,7 +294,7 @@ class TestPerformUpdate:
         Before v0.41.1, ``_perform_update`` ran a bare
         ``uv tool install --upgrade git+...`` which silently dropped the
         FastAPI + uvicorn extras a user originally installed with
-        ``--with 'keboola-agent-cli[server]'`` -- so a user who had
+        ``--with 'keboola-cli[server]'`` -- so a user who had
         ``kbagent serve --ui`` working would lose it on the next startup
         auto-update. Now ``_perform_update`` delegates to
         :func:`build_kbagent_upgrade_command`, which pairs ``--with`` and
@@ -303,10 +303,10 @@ class TestPerformUpdate:
         mock_run.return_value = MagicMock(returncode=0)
         assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
         argv = mock_run.call_args[0][0]
-        # uv tool install --force --with 'keboola-agent-cli[server]' git+...
+        # uv tool install --force --with 'keboola-cli[server]' git+...
         assert "--force" in argv
         assert "--with" in argv
-        assert "keboola-agent-cli[server]" in argv
+        assert "keboola-cli[server]" in argv
         # Must NOT pass --upgrade in this branch (uv rejects --upgrade + --with).
         assert "--upgrade" not in argv
 
@@ -323,7 +323,7 @@ class TestPerformUpdate:
         argv = mock_run.call_args[0][0]
         assert "--upgrade" in argv
         assert "--with" not in argv
-        assert "keboola-agent-cli[server]" not in argv
+        assert "keboola-cli[server]" not in argv
 
 
 class TestPerformUpdateWheel:
@@ -348,7 +348,7 @@ class TestPerformUpdateWheel:
         argv = mock_run.call_args[0][0]
         # PEP 508 direct ref to the versioned wheel, --force, and no git+ source.
         assert "--force" in argv
-        assert any(part.endswith("keboola_agent_cli-2.0.0-py3-none-any.whl") for part in argv)
+        assert any(part.endswith("keboola_cli-2.0.0-py3-none-any.whl") for part in argv)
         assert all("git+" not in part for part in argv)
 
     @patch("keboola_agent_cli.services.version_service.httpx.head")

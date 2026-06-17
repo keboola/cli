@@ -22,8 +22,8 @@
 set -eu
 
 REPO="keboola/cli"
-PKG="keboola-agent-cli"
-DIST="keboola_agent_cli" # normalized distribution name used in the wheel filename
+PKG="keboola-cli"
+DIST="keboola_cli" # normalized distribution name used in the wheel filename
 
 info() { printf '%s\n' "$*" >&2; }
 

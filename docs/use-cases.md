@@ -345,7 +345,7 @@ Expired tokens clean themselves up. No manual rotation needed.
 
 ```bash
 # Install
-uv pip install keboola-agent-cli
+uv pip install keboola-cli
 
 # Add your first project
 kbagent project add --project analytics \

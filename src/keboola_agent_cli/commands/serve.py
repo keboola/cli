@@ -159,7 +159,7 @@ def serve_command(
             f"(missing: {missing}).\n\n"
             "Reinstall with the [server] extras:\n\n"
             "  # If you installed via uv tool install (recommended for end users):\n"
-            "  uv tool install --force --with 'keboola-agent-cli[server]' \\\n"
+            "  uv tool install --force --with 'keboola-cli[server]' \\\n"
             "    git+https://github.com/keboola/cli\n\n"
             "  # If you have a local checkout (development):\n"
             "  uv pip install -e '.[server]'\n",

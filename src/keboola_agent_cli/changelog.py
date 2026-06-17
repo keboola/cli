@@ -40,6 +40,13 @@ CHANGELOG: dict[str, list[str]] = {
         "could drop a column (`delete-column`) but not add one. The Storage add-column "
         "endpoint is synchronous (no job to wait on); the operation is classified `write` "
         "in the permission registry.",
+        "Change (#424): the PyPI distribution is renamed from `keboola-agent-cli` to "
+        "`keboola-cli`; the prebuilt-wheel asset is now `keboola_cli-<version>-py3-none-any.whl`. "
+        "The import package (`keboola_agent_cli`), the `kbagent` binary, and the config dir "
+        "(`~/.config/keboola-agent-cli/`) are unchanged, so existing installs keep working. "
+        "Only a literal `pip install keboola-agent-cli` from PyPI stops resolving -- use "
+        "`keboola-cli`. The release CI, `install.sh`, and the self-update resolver all build "
+        "the new wheel name end-to-end.",
     ],
     "0.61.1": [
         "Note (#416 follow-up): clarified the value-typing contract of the importable "

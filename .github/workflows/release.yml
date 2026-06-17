@@ -71,12 +71,12 @@ jobs:
 
       - name: Verify the wheel version matches the tag
         # The asset URL that build_kbagent_upgrade_command / install.sh construct
-        # is `keboola_agent_cli-<version>-py3-none-any.whl` under the `v<version>`
+        # is `keboola_cli-<version>-py3-none-any.whl` under the `v<version>`
         # tag. A mismatch here means clients would build a 404 URL, so fail loud.
         run: |
           tag="$TAG"
           version="${tag#v}"
-          expected="dist/keboola_agent_cli-${version}-py3-none-any.whl"
+          expected="dist/keboola_cli-${version}-py3-none-any.whl"
           if [ ! -f "$expected" ]; then
             echo "::error::Expected $expected but built: $(ls dist/)"
             exit 1

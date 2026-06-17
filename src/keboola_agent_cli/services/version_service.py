@@ -55,11 +55,11 @@ def has_server_extras() -> bool:
     is pulled in *only* by the optional ``[server]`` extra (declared in
     ``pyproject.toml``'s ``[project.optional-dependencies]`` table), so its
     presence is a reliable proxy for "user originally installed with
-    ``--with 'keboola-agent-cli[server]'``".
+    ``--with 'keboola-cli[server]'``".
 
     Used by every kbagent self-upgrade path (``kbagent update`` and the
     startup auto-update hook) to decide whether to pair ``uv tool install``
-    with ``--with 'keboola-agent-cli[server]'`` -- without that flag, the
+    with ``--with 'keboola-cli[server]'`` -- without that flag, the
     fresh re-resolution silently drops the FastAPI + uvicorn extras and
     breaks ``kbagent serve --ui`` for users who originally installed with
     ``[server]``. (Bug fixed in v0.40.2 for the explicit ``kbagent update``
@@ -74,7 +74,7 @@ def resolve_kbagent_wheel_url(
     """Return the prebuilt-wheel Release asset URL for ``version`` if present.
 
     The ``release.yml`` workflow (issue #353) attaches a universal
-    ``keboola_agent_cli-<version>-py3-none-any.whl`` to every GitHub release.
+    ``keboola_cli-<version>-py3-none-any.whl`` to every GitHub release.
     Installing that prebuilt wheel skips the on-machine npm/React SPA build that
     makes ``git+`` installs take minutes on WSL.
 
@@ -95,7 +95,7 @@ def resolve_kbagent_wheel_url(
         return None
     url = (
         f"https://github.com/{KBAGENT_GITHUB_REPO}/releases/download/"
-        f"v{version}/keboola_agent_cli-{version}-py3-none-any.whl"
+        f"v{version}/keboola_cli-{version}-py3-none-any.whl"
     )
     try:
         resp = httpx.head(url, follow_redirects=True, timeout=timeout)
@@ -170,9 +170,9 @@ def build_kbagent_upgrade_command(
     # (git-source knobs) do not apply here.
     if wheel_url is not None:
         spec = (
-            f"keboola-agent-cli[server] @ {wheel_url}"
+            f"keboola-cli[server] @ {wheel_url}"
             if has_server_extras()
-            else f"keboola-agent-cli @ {wheel_url}"
+            else f"keboola-cli @ {wheel_url}"
         )
         uv_path = shutil.which("uv")
         if uv_path:
@@ -205,7 +205,7 @@ def build_kbagent_upgrade_command(
                 "install",
                 "--force",
                 "--with",
-                "keboola-agent-cli[server]",
+                "keboola-cli[server]",
                 install_source,
             ]
         else:
@@ -221,7 +221,7 @@ def build_kbagent_upgrade_command(
     # pip extras syntax: the [server] suffix attaches to the project
     # name in the PEP 508 spec; for git+ URLs we wrap with the project
     # name on the left of the URL.
-    install_spec = f"keboola-agent-cli[server] @ {install_source}" if has_server else install_source
+    install_spec = f"keboola-cli[server] @ {install_source}" if has_server else install_source
     cmd = [pip_path, "install", "--upgrade", install_spec]
     if prerelease:
         cmd.insert(2, "--pre")
@@ -882,7 +882,7 @@ class VersionService:
             prerelease=include_prerelease, target_version=target_version, wheel_url=wheel_url
         )
         if cmd is None:
-            with_flag = "--with 'keboola-agent-cli[server]' " if has_server_extras() else ""
+            with_flag = "--with 'keboola-cli[server]' " if has_server_extras() else ""
             pre_flag = "--prerelease=allow " if include_prerelease else ""
             tag_suffix = f"@v{target_version}" if target_version else ""
             return {

@@ -171,7 +171,7 @@ def _is_dev_install() -> bool:
         return True
 
     try:
-        dist = distribution("keboola-agent-cli")
+        dist = distribution("keboola-cli")
         direct_url = dist.read_text("direct_url.json")
         if direct_url:
             data = json.loads(direct_url)

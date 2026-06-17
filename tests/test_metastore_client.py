@@ -73,7 +73,7 @@ class TestAuthHeader:
             client.close()
         request = httpx_mock.get_requests()[0]
         assert request.headers["X-StorageApi-Token"] == TOKEN
-        assert "keboola-agent-cli/" in request.headers["User-Agent"]
+        assert "keboola-cli/" in request.headers["User-Agent"]
 
 
 class TestListItems:

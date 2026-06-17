@@ -203,7 +203,7 @@ Run:
 uv build --wheel 2>&1 | tail -5
 ```
 
-Expected: a `dist/keboola_agent_cli-0.55.0-*.whl` (version bumps later).
+Expected: a `dist/keboola_cli-0.55.0-*.whl` (version bumps later).
 
 - [ ] **Step 2: Assert the schema is inside the wheel**
 
