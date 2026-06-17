@@ -21,6 +21,7 @@ from keboola_agent_cli.constants import (
 )
 from keboola_agent_cli.errors import ConfigError
 from keboola_agent_cli.models import TokenVerifyResponse
+from keboola_agent_cli.services._sync_push_ops import push_update_row
 from keboola_agent_cli.services._sync_writeback import (
     propagate_kbc_metadata,
     writeback_create_config_in_manifest,
@@ -1466,7 +1467,8 @@ class TestPushRows:
             rows=[ManifestConfigRow(id="vals-default", path="rows/default", metadata={})],
         )
 
-        push_svc._push_update_row(
+        push_update_row(
+            push_svc,
             push_client,
             component_id="keboola.variables",
             parent_config_id="vars-001",
@@ -1519,7 +1521,8 @@ class TestPushRows:
         )
 
         with pytest.raises(KeboolaApiError) as excinfo:
-            push_svc._push_update_row(
+            push_update_row(
+                push_svc,
                 push_client,
                 component_id="keboola.variables",
                 parent_config_id="vars-001",
