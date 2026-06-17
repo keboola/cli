@@ -16,7 +16,7 @@ Two ways to run the UI:
 
 ```bash
 # Node 20+ on PATH so the build hook can compile the SPA into the wheel:
-uv tool install --with 'keboola-agent-cli[server]' 'git+https://github.com/keboola/cli'
+uv tool install --with 'keboola-cli[server]' 'git+https://github.com/keboola/cli'
 
 # Run:
 kbagent serve --ui

@@ -348,7 +348,7 @@ class TestPerformUpdateWheel:
         argv = mock_run.call_args[0][0]
         # PEP 508 direct ref to the versioned wheel, --force, and no git+ source.
         assert "--force" in argv
-        assert any(part.endswith("keboola_agent_cli-2.0.0-py3-none-any.whl") for part in argv)
+        assert any(part.endswith("keboola_cli-2.0.0-py3-none-any.whl") for part in argv)
         assert all("git+" not in part for part in argv)
 
     @patch("keboola_agent_cli.services.version_service.httpx.head")

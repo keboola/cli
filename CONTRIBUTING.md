@@ -559,7 +559,7 @@ PEP 440 syntax in `pyproject.toml`'s `version` field). Two gates keep stable
 users safe from accidentally landing on a beta:
 
 1. **Version string itself.** PEP 440 marks any pre-release suffix as such;
-   `pip install keboola-agent-cli` and `uv tool install ...` default to
+   `pip install keboola-cli` and `uv tool install ...` default to
    **skipping** pre-releases unless the resolver is told otherwise (`--pre`
    for pip, `--prerelease=allow` for uv).
 2. **GitHub Release `prerelease: true` flag.** The auto-update startup

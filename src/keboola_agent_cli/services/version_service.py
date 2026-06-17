@@ -74,7 +74,7 @@ def resolve_kbagent_wheel_url(
     """Return the prebuilt-wheel Release asset URL for ``version`` if present.
 
     The ``release.yml`` workflow (issue #353) attaches a universal
-    ``keboola_agent_cli-<version>-py3-none-any.whl`` to every GitHub release.
+    ``keboola_cli-<version>-py3-none-any.whl`` to every GitHub release.
     Installing that prebuilt wheel skips the on-machine npm/React SPA build that
     makes ``git+`` installs take minutes on WSL.
 
@@ -95,7 +95,7 @@ def resolve_kbagent_wheel_url(
         return None
     url = (
         f"https://github.com/{KBAGENT_GITHUB_REPO}/releases/download/"
-        f"v{version}/keboola_agent_cli-{version}-py3-none-any.whl"
+        f"v{version}/keboola_cli-{version}-py3-none-any.whl"
     )
     try:
         resp = httpx.head(url, follow_redirects=True, timeout=timeout)

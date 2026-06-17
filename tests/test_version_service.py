@@ -920,7 +920,7 @@ class TestResolveKbagentWheelUrl:
         url = resolve_kbagent_wheel_url("0.60.0")
         assert url == (
             "https://github.com/keboola/cli/releases/download/"
-            "v0.60.0/keboola_agent_cli-0.60.0-py3-none-any.whl"
+            "v0.60.0/keboola_cli-0.60.0-py3-none-any.whl"
         )
         # follow_redirects is required to traverse GitHub's asset CDN redirect.
         assert mock_head.call_args.kwargs.get("follow_redirects") is True
@@ -968,8 +968,7 @@ class TestBuildKbagentWheelInstall:
     """build_kbagent_upgrade_command wheel_url fast path (issue #353)."""
 
     WHEEL = (
-        "https://github.com/keboola/cli/releases/download/"
-        "v1.2.3/keboola_agent_cli-1.2.3-py3-none-any.whl"
+        "https://github.com/keboola/cli/releases/download/v1.2.3/keboola_cli-1.2.3-py3-none-any.whl"
     )
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras", return_value=True)
