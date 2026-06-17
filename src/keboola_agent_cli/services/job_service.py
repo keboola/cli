@@ -14,6 +14,7 @@ from ..constants import (
     DEFAULT_JOB_MODE,
     DEFAULT_LOG_TAIL_LINES,
     DEFAULT_POLL_STRATEGY,
+    JOB_IDEMPOTENCY_FILENAME,
     JOB_TERMINATE_GRACE_SECONDS,
     JOB_TERMINATE_POLL_INTERVAL,
     KILLABLE_JOB_STATUSES,
@@ -23,6 +24,7 @@ from ..constants import (
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
+from .job_idempotency_store import JobIdempotencyStore, run_idempotent_job
 
 logger = logging.getLogger(__name__)
 
@@ -324,6 +326,8 @@ class JobService(BaseService):
         poll_strategy: str = DEFAULT_POLL_STRATEGY,
         log_tail_lines: int = DEFAULT_LOG_TAIL_LINES,
         mode: str = DEFAULT_JOB_MODE,
+        idempotency_key: str | None = None,
+        force_rerun: bool = False,
     ) -> dict[str, Any]:
         """Create and optionally wait for a Queue API job.
 
@@ -372,6 +376,17 @@ class JobService(BaseService):
                 ``debug-<jobId>`` instead of into destination buckets, so the
                 job can be safely re-run for diagnostics without touching
                 production data.
+            idempotency_key: Optional client-supplied de-duplication token
+                (issue #427). When a prior run recorded under the same key is
+                still running or finished non-failed, that job is returned
+                instead of creating a duplicate -- so an interrupted, replayed
+                build step is safe. A prior *failed* run is re-run. The Queue
+                API has no server-side idempotency, so dedup is client-side and
+                scoped to the local config-dir store (per machine). Reusing a key
+                for a *different* component/config raises rather than return a
+                wrong job.
+            force_rerun: If True, ignore any recorded ``idempotency_key`` entry
+                and always create a fresh job (overwriting the stored entry).
 
         Returns:
             Job dict with ``project_alias``. If wait=True, returns the
@@ -419,13 +434,26 @@ class JobService(BaseService):
                     branch_id=branch_id,
                 )
 
-            job = client.create_job(
+            def _create() -> dict[str, Any]:
+                return client.create_job(
+                    component_id=component_id,
+                    config_id=config_id,
+                    config_row_ids=config_row_ids,
+                    branch_id=branch_id,
+                    variable_values_id=resolved_values_id,
+                    mode=mode,
+                )
+
+            store = self._default_idempotency_store() if idempotency_key else None
+            job, replayed = run_idempotent_job(
+                store=store,
+                key=idempotency_key,
                 component_id=component_id,
                 config_id=config_id,
-                config_row_ids=config_row_ids,
                 branch_id=branch_id,
-                variable_values_id=resolved_values_id,
-                mode=mode,
+                force_rerun=force_rerun,
+                create=_create,
+                fetch=client.get_job_detail,
             )
             job_id = str(job.get("id", ""))
 
@@ -456,7 +484,19 @@ class JobService(BaseService):
         job["project_alias"] = alias
         if resolved_values_id:
             job["resolvedVariableValuesId"] = resolved_values_id
+        if replayed:
+            job["idempotent_replay"] = True
         return job
+
+    def _default_idempotency_store(self) -> JobIdempotencyStore:
+        """The config-dir-scoped dedup store for the CLI / service job-run path.
+
+        In-process SDK consumers supply their own store (see
+        ``keboola_agent_cli.Client``); the CLI path persists alongside
+        ``config.json`` so a replayed `kbagent job run --idempotency-key` is
+        deduplicated across invocations on the same machine.
+        """
+        return JobIdempotencyStore(self._config_store.config_dir / JOB_IDEMPOTENCY_FILENAME)
 
     def _handle_wait_error(
         self,

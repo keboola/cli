@@ -266,7 +266,7 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent job detail --project NAME --job-id ID
     Full job detail including result message and timing.
 
-  kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N]
+  kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
     Run a Queue API job. --row-id selects specific config rows (repeatable; omit to run entire config).
     --wait polls until job finishes. --timeout sets max wait in seconds (default 300). Branch-aware.
     When the config has linked variables (configuration.variables_id), kbagent auto-resolves
@@ -879,6 +879,14 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     the branch id.
     --no-name-drift-warnings (since 0.47.0): suppress the cosmetic name_drift_warnings
     array from the result envelope.
+
+  kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]
+    Clone a reference synced tree into a fresh target project + parameterize it
+    (bucket_map / variable_values / instance_rename overrides), then push so every
+    config CREATEs fresh. keboola.flow task configIds + variable links remap
+    reference->ULID. Idempotent (re-run -> no_changes); needs a fresh target.
+    Note: --dry-run still creates --target-dir on disk (copy + overrides + manifest)
+    but does not push.
 
   kbagent sync branch-link --project ALIAS [--branch-id ID] [--branch-name NAME]
     Link git branch to Keboola dev branch. Auto-creates if needed.

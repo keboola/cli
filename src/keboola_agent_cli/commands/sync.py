@@ -49,6 +49,26 @@ def _resolve_project_root(directory: Path, alias: str | None = None) -> Path:
     return root  # let caller handle the error
 
 
+def _load_override_file(path: Path) -> dict[str, str]:
+    """Load a clone override map (JSON or YAML) as a flat ``{str: str}`` dict.
+
+    YAML's loader also parses JSON, so a single path handles both. Every value
+    is coerced to ``str`` (bucket ids, variable values, and path prefixes are
+    all strings).
+    """
+    import yaml
+
+    if not path.exists():
+        raise ConfigError(f"Override file not found: {path}")
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"Cannot parse override file {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ConfigError(f"Override file {path} must contain a JSON/YAML object (mapping).")
+    return {str(key): str(value) for key, value in data.items()}
+
+
 def _change_label(change: dict) -> str:
     """Build a human-readable label for a config change entry."""
     path = change.get("path", "")
@@ -991,6 +1011,131 @@ def sync_push(
                 f"  Error: {err['change_type']} {err['component_id']}/{err['config_id']}: "
                 f"{err['message']}"
             )
+
+
+@sync_app.command("clone")
+def sync_clone(
+    ctx: typer.Context,
+    source: Path = typer.Option(
+        ...,
+        "--source",
+        help="Reference synced project directory (must contain .keboola/manifest.json)",
+    ),
+    target: str = typer.Option(
+        ...,
+        "--target",
+        help="Target project alias to clone INTO (a fresh/empty project on first clone)",
+    ),
+    target_dir: Path = typer.Option(
+        ...,
+        "--target-dir",
+        help="Directory to materialise the clone into (must not exist on first clone)",
+    ),
+    bucket_map: Path | None = typer.Option(
+        None,
+        "--bucket-map",
+        help="JSON/YAML file mapping {old_bucket_id: new_bucket_id} for input/output rewrites",
+    ),
+    variable_values: Path | None = typer.Option(
+        None,
+        "--variable-values",
+        help="JSON/YAML file mapping {variable_name: value} to override keboola.variables rows",
+    ),
+    instance_rename: Path | None = typer.Option(
+        None,
+        "--instance-rename",
+        help="JSON/YAML file mapping {old_path_prefix: new_path_prefix} to rename config dirs",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Apply overrides and show the would-be diff without pushing",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Target dev branch id (defaults to the target project's production branch)",
+    ),
+) -> None:
+    """Clone a reference project into a fresh target, parameterised by overrides.
+
+    Copies the reference tree, applies declarative overrides (bucket_map,
+    variable_values, instance_rename), and pushes so every config is CREATEd
+    fresh -- keboola.flow task configIds and transformation variable links are
+    remapped reference->ULID automatically. Idempotent: re-running with an
+    existing --target-dir just pushes and reports no_changes.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "sync_service")
+
+    try:
+        overrides: dict[str, Any] = {}
+        if bucket_map is not None:
+            overrides["bucket_map"] = _load_override_file(bucket_map)
+        if variable_values is not None:
+            overrides["variable_values"] = _load_override_file(variable_values)
+        if instance_rename is not None:
+            overrides["instance_rename"] = _load_override_file(instance_rename)
+
+        result = service.clone_project(
+            source=source,
+            target_alias=target,
+            target_dir=target_dir,
+            overrides=overrides,
+            dry_run=dry_run,
+            branch_override=branch,
+        )
+    except FileNotFoundError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
+        raise typer.Exit(code=1) from None
+    except FileExistsError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+    if formatter.json_mode:
+        formatter.output(result)
+    else:
+        _format_clone_result(formatter, result)
+
+
+def _format_clone_result(formatter: Any, result: dict[str, Any]) -> None:
+    """Human-mode rendering for ``sync clone``."""
+    status = result.get("status", "")
+    overrides = (
+        f"buckets={result.get('bucket_rewrites', 0)}, "
+        f"variables={result.get('variable_overrides', 0)}, "
+        f"renamed={result.get('renamed_instances', 0)}"
+    )
+    if status == "dry_run":
+        summary = result.get("summary", {})
+        formatter.console.print("[yellow]Dry run -- nothing pushed.[/yellow]")
+        formatter.console.print(f"  Overrides applied: {overrides}")
+        formatter.console.print(
+            f"  Would create {summary.get('added', 0)} config(s) in "
+            f"[cyan]{result.get('target_alias')}[/cyan]."
+        )
+        return
+    if status == "no_changes":
+        formatter.console.print(
+            f"[green]Already cloned[/green] -- no changes to push into "
+            f"[cyan]{result.get('target_alias')}[/cyan]."
+        )
+        return
+    formatter.success(
+        f"Cloned into {result.get('target_alias')}: {result.get('created', 0)} created "
+        f"({overrides}, flow_task_remaps={result.get('flow_task_remaps', 0)})"
+    )
+    for err in result.get("errors", []):
+        formatter.warning(
+            f"  Error: {err.get('change_type')} "
+            f"{err.get('component_id')}/{err.get('config_id')}: {err.get('message')}"
+        )
 
 
 @sync_app.command("branch-link")

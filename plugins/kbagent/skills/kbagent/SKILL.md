@@ -268,6 +268,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show which local configurations have been modified, added, or deleted | `kbagent sync status` |
 | Show detailed diff between local and remote configurations | `kbagent sync diff` |
 | Push local configuration changes to a Keboola project | `kbagent sync push` |
+| Clone a reference project into a fresh target, parameterised by overrides | `kbagent sync clone --source SOURCE --target TARGET --target-dir TARGET-DIR` |
 | Link the current git branch to a Keboola development branch | `kbagent sync branch-link --project PROJECT` |
 | Remove the branch mapping for the current git branch | `kbagent sync branch-unlink` |
 | Show the branch mapping status for the current git branch | `kbagent sync branch-status` |

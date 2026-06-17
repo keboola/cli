@@ -3992,7 +3992,16 @@ class TestE2EJsonConsistency:
 @skip_without_credentials
 @pytest.mark.e2e
 class TestE2ESyncWorkflow:
-    """Test sync init/pull/diff/status/push in a temp git repo."""
+    """Test sync init/pull/diff/status/push/clone in a temp git repo.
+
+    NOTE on ``sync clone`` coverage: the clone step (step 6) runs ``--dry-run``
+    against the SAME project, so it exercises copy + manifest re-point + diff but
+    NOT a real push (Phase D flow remap, fresh-target guard, idempotent re-run).
+    A full live clone push would create configs in a second, dedicated *fresh*
+    project, which the single-project E2E harness (E2E_API_TOKEN + E2E_URL) does
+    not provide. The push path is covered by the unit suite
+    (``tests/test_sync_clone.py``); a nightly full-clone E2E would need a
+    separate empty target project (tracked as a follow-up)."""
 
     @pytest.fixture(autouse=True)
     def setup(self, tmp_path: Path) -> None:
@@ -4110,6 +4119,27 @@ class TestE2ESyncWorkflow:
             "--dry-run",
         )
         assert data["status"] == "ok"
+
+        # 6. sync clone --dry-run (#426): copy the pulled tree into a fresh dir and
+        # diff it against the SAME project -- exercises the clone composite
+        # end-to-end (copy + manifest re-point + diff) WITHOUT mutating anything.
+        _step(6, "sync clone --dry-run")
+        clone_dir = self.project_dir.parent / "clone-target"
+        data = self._run_ok(
+            "sync",
+            "clone",
+            "--source",
+            str(self.project_dir),
+            "--target",
+            self.alias,
+            "--target-dir",
+            str(clone_dir),
+            "--dry-run",
+        )
+        assert data["status"] == "ok"
+        clone_result = data["data"]
+        assert clone_result["status"] == "dry_run"
+        assert clone_result["target_alias"] == self.alias
 
     def test_sync_force_pull_conflict_aware(self) -> None:
         """`sync pull --force` is conflict-aware (0.53.0+), end-to-end.

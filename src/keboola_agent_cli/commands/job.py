@@ -238,6 +238,23 @@ def job_run(
             f"{MAX_LOG_TAIL_LINES}."
         ),
     ),
+    idempotency_key: str | None = typer.Option(
+        None,
+        "--idempotency-key",
+        help=(
+            "Client-supplied de-duplication token (issue #427). On replay with "
+            "the same key, a prior still-running or non-failed job is returned "
+            "instead of creating a duplicate -- safe for resumed/retried build "
+            "steps. A prior FAILED run is re-run. Dedup is client-side (the "
+            "Queue API has no idempotency key) and scoped to this machine's "
+            "config-dir; reusing a key for a different component/config errors."
+        ),
+    ),
+    force_rerun: bool = typer.Option(
+        False,
+        "--force-rerun",
+        help="Ignore any stored --idempotency-key entry and always create a fresh job.",
+    ),
 ) -> None:
     """Run a job for a component configuration.
 
@@ -328,6 +345,8 @@ def job_run(
             poll_strategy=poll_strategy,
             log_tail_lines=log_tail_lines,
             mode=mode,
+            idempotency_key=idempotency_key,
+            force_rerun=force_rerun,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -347,6 +366,11 @@ def job_run(
     if formatter.json_mode:
         formatter.output(result)
     else:
+        if result.get("idempotent_replay"):
+            formatter.console.print(
+                "[dim]Idempotency key matched a prior run -- returning the existing "
+                "job (no new job created).[/dim]"
+            )
         resolved_id = result.get("resolvedVariableValuesId")
         if resolved_id:
             formatter.console.print(f"[dim]Bound variable values row: {escape(resolved_id)}[/dim]")

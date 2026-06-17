@@ -4569,3 +4569,107 @@ class TestStatusParallel:
         assert result[2]["status"] == "error"
         assert result[2]["error_code"] == "UNEXPECTED_ERROR"
         assert "Segfault simulation" in result[2]["error"]
+
+
+class TestJobServiceRunJobIdempotency:
+    """JobService.run_job idempotency_key wiring (issue #427).
+
+    Uses a real ConfigStore on a tmp config-dir, so the default dedup store
+    lands at ``<config_dir>/job_idempotency.json`` -- the same path the CLI uses.
+    """
+
+    @staticmethod
+    def _service(tmp_config_dir: Path, mock_client: MagicMock) -> JobService:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+                project_name="Production",
+                project_id=1234,
+            ),
+        )
+        return JobService(config_store=store, client_factory=lambda url, token: mock_client)
+
+    def test_first_run_creates_and_persists_entry(self, tmp_config_dir: Path) -> None:
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": "job-1", "status": "processing"}
+        service = self._service(tmp_config_dir, mock_client)
+
+        result = service.run_job(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="cfg-1",
+            no_variables=True,
+            idempotency_key="build-step-1",
+        )
+        assert result["id"] == "job-1"
+        assert "idempotent_replay" not in result
+        mock_client.create_job.assert_called_once()
+        # Entry persisted to the config-dir store.
+        assert (tmp_config_dir / "job_idempotency.json").exists()
+
+    def test_replay_returns_prior_without_recreating(self, tmp_config_dir: Path) -> None:
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": "job-1", "status": "processing"}
+        mock_client.get_job_detail.return_value = {"id": "job-1", "status": "processing"}
+        service = self._service(tmp_config_dir, mock_client)
+
+        first = service.run_job(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="cfg-1",
+            no_variables=True,
+            idempotency_key="build-step-1",
+        )
+        second = service.run_job(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="cfg-1",
+            no_variables=True,
+            idempotency_key="build-step-1",
+        )
+        assert first["id"] == "job-1"
+        assert second["id"] == "job-1"
+        assert second["idempotent_replay"] is True
+        # The side effect (create_job) fired exactly once across both calls.
+        mock_client.create_job.assert_called_once()
+
+    def test_replay_reruns_when_prior_failed(self, tmp_config_dir: Path) -> None:
+        mock_client = MagicMock()
+        mock_client.create_job.side_effect = [
+            {"id": "job-1", "status": "processing"},
+            {"id": "job-2", "status": "processing"},
+        ]
+        mock_client.get_job_detail.return_value = {"id": "job-1", "status": "error"}
+        service = self._service(tmp_config_dir, mock_client)
+
+        service.run_job(
+            alias="prod",
+            component_id="c",
+            config_id="cfg",
+            no_variables=True,
+            idempotency_key="K",
+        )
+        second = service.run_job(
+            alias="prod",
+            component_id="c",
+            config_id="cfg",
+            no_variables=True,
+            idempotency_key="K",
+        )
+        assert second["id"] == "job-2"
+        assert "idempotent_replay" not in second
+        assert mock_client.create_job.call_count == 2
+
+    def test_no_key_never_dedups(self, tmp_config_dir: Path) -> None:
+        mock_client = MagicMock()
+        mock_client.create_job.return_value = {"id": "job-1", "status": "processing"}
+        service = self._service(tmp_config_dir, mock_client)
+
+        service.run_job(alias="prod", component_id="c", config_id="cfg", no_variables=True)
+        service.run_job(alias="prod", component_id="c", config_id="cfg", no_variables=True)
+        assert mock_client.create_job.call_count == 2
+        # No store file created when no key is used.
+        assert not (tmp_config_dir / "job_idempotency.json").exists()

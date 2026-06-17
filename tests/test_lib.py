@@ -12,7 +12,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from keboola_agent_cli import Client, FileEntry, Files
+from keboola_agent_cli import (
+    Client,
+    ConfigDetailResult,
+    FileEntry,
+    Files,
+    JobIdempotencyStore,
+    JobResult,
+    QueryResult,
+    UploadTableResult,
+)
 from keboola_agent_cli.errors import KeboolaApiError
 
 # Canonical fake token (projectId-tokenId-secret); never a realistic secret.
@@ -239,6 +248,143 @@ class TestFilesDelete:
         mock_kc.delete_file.assert_called_once_with(11, branch_id=None)
 
 
+class TestQueryResult:
+    def test_returns_typed_shape_with_columns_and_truncation(
+        self, client: Client, mock_kc: MagicMock
+    ) -> None:
+        mock_kc.list_dev_branches.return_value = [{"id": 1, "isDefault": True}]
+        mock_kc.submit_query.return_value = {"queryJobId": "qj"}
+        mock_kc.wait_for_query_job.return_value = {
+            "statements": [{"id": "s1", "status": "completed", "numberOfRows": 100}]
+        }
+        mock_kc.get_query_results.return_value = {
+            "columns": [{"name": "id"}, {"name": "name"}],
+            "data": [["1", "alice"], ["2", "bob"]],
+            "numberOfRows": 100,
+        }
+        result = client.query_result(456, "SELECT id, name FROM big", limit=2)
+        assert isinstance(result, QueryResult)
+        assert result.columns == ["id", "name"]
+        assert result.rows == [{"id": "1", "name": "alice"}, {"id": "2", "name": "bob"}]
+        assert result.row_count == 2
+        assert result.truncated is True
+        assert result.total_rows == 100
+
+    def test_query_and_query_result_share_rows(self, client: Client, mock_kc: MagicMock) -> None:
+        mock_kc.list_dev_branches.return_value = [{"id": 1, "isDefault": True}]
+        mock_kc.submit_query.return_value = {"queryJobId": "qj"}
+        mock_kc.wait_for_query_job.return_value = {
+            "statements": [{"id": "s1", "status": "completed", "numberOfRows": 1}]
+        }
+        mock_kc.get_query_results.return_value = {
+            "columns": [{"name": "n"}],
+            "data": [["7"]],
+            "numberOfRows": 1,
+        }
+        assert client.query_result(1, "SELECT 7 AS n").rows == client.query(1, "SELECT 7 AS n")
+
+
+class TestRunJob:
+    def test_create_only_returns_job_result(self, client: Client, mock_kc: MagicMock) -> None:
+        mock_kc.create_job.return_value = {
+            "id": "job-1",
+            "status": "processing",
+            "component": "keboola.ex-db-snowflake",
+            "configId": "cfg-9",
+        }
+        result = client.run_job("keboola.ex-db-snowflake", "cfg-9")
+        assert isinstance(result, JobResult)
+        assert result.id == "job-1" and result.component_id == "keboola.ex-db-snowflake"
+        assert result.config_id == "cfg-9"
+        mock_kc.wait_for_queue_job.assert_not_called()
+        # production (no branch) by default, no variable resolution in the facade
+        call = mock_kc.create_job.call_args.kwargs
+        assert call["branch_id"] is None and call["variable_values_id"] is None
+
+    def test_wait_polls_for_terminal_state(self, client: Client, mock_kc: MagicMock) -> None:
+        mock_kc.create_job.return_value = {"id": "job-2", "status": "processing"}
+        mock_kc.wait_for_queue_job.return_value = {
+            "id": "job-2",
+            "status": "success",
+            "isFinished": True,
+        }
+        result = client.run_job("c", "cfg", wait=True, timeout=30, poll_strategy="fixed")
+        assert result.succeeded and result.is_finished
+        mock_kc.wait_for_queue_job.assert_called_once_with(
+            "job-2", max_wait=30, poll_strategy="fixed"
+        )
+
+    def test_branch_and_row_ids_forwarded(self, mock_kc: MagicMock) -> None:
+        c = _make_client(mock_kc, branch_id=77)
+        mock_kc.create_job.return_value = {"id": "j", "status": "created"}
+        c.run_job("c", "cfg", config_row_ids=["r1"], variable_values_id="vv1", mode="debug")
+        call = mock_kc.create_job.call_args.kwargs
+        assert call["branch_id"] == 77
+        assert call["config_row_ids"] == ["r1"]
+        assert call["variable_values_id"] == "vv1"
+        assert call["mode"] == "debug"
+
+    def test_explicit_branch_overrides_client_branch(self, mock_kc: MagicMock) -> None:
+        c = _make_client(mock_kc, branch_id=77)
+        mock_kc.create_job.return_value = {"id": "j", "status": "created"}
+        c.run_job("c", "cfg", branch_id=88)
+        assert mock_kc.create_job.call_args.kwargs["branch_id"] == 88
+
+
+class TestConfigDetail:
+    def test_returns_typed_detail(self, client: Client, mock_kc: MagicMock) -> None:
+        mock_kc.get_config_detail.return_value = {
+            "id": "cfg-1",
+            "name": "My Config",
+            "currentVersion": 4,
+            "configuration": {"parameters": {"x": 1}},
+            "rows": [],
+        }
+        detail = client.config_detail("keboola.ex-http", "cfg-1")
+        assert isinstance(detail, ConfigDetailResult)
+        assert detail.id == "cfg-1" and detail.version == 4
+        assert detail.component_id == "keboola.ex-http"  # injected from the arg
+        assert detail.configuration == {"parameters": {"x": 1}}
+        mock_kc.get_config_detail.assert_called_once_with(
+            "keboola.ex-http", "cfg-1", branch_id=None
+        )
+
+    def test_branch_scoped(self, mock_kc: MagicMock) -> None:
+        c = _make_client(mock_kc, branch_id=55)
+        mock_kc.get_config_detail.return_value = {"id": "cfg-2", "name": "n"}
+        detail = c.config_detail("keboola.ex-http", "cfg-2")
+        assert mock_kc.get_config_detail.call_args.kwargs["branch_id"] == 55
+        assert detail.branch_id == 55
+
+
+class TestUploadTable:
+    def test_computes_size_and_maps_imported_rows(
+        self, client: Client, mock_kc: MagicMock, tmp_path: Path
+    ) -> None:
+        csv = tmp_path / "data.csv"
+        csv.write_text("a,b\n1,2\n3,4\n")
+        mock_kc.upload_table.return_value = {"importedRowsCount": 2, "warnings": []}
+        result = client.upload_table("in.c-x.t", csv, incremental=True)
+        assert isinstance(result, UploadTableResult)
+        assert result.table_id == "in.c-x.t"
+        assert result.incremental is True
+        assert result.imported_rows == 2
+        assert result.file_size_bytes == csv.stat().st_size
+        # facade never auto-creates
+        assert result.auto_created_bucket is False and result.auto_created_table is False
+        call = mock_kc.upload_table.call_args.kwargs
+        assert call["table_id"] == "in.c-x.t" and call["incremental"] is True
+        assert call["branch_id"] is None
+
+    def test_branch_scoped_upload(self, mock_kc: MagicMock, tmp_path: Path) -> None:
+        c = _make_client(mock_kc, branch_id=33)
+        csv = tmp_path / "d.csv"
+        csv.write_text("a\n1\n")
+        mock_kc.upload_table.return_value = {"importedRowsCount": 1}
+        c.upload_table("in.c-x.t", csv)
+        assert mock_kc.upload_table.call_args.kwargs["branch_id"] == 33
+
+
 class TestModuleLayout:
     def test_pagination_helper_relocated_to_client(self) -> None:
         """_collect_inline_results lives in client.py; workspace_service re-exports it."""
@@ -251,4 +397,57 @@ class TestModuleLayout:
     def test_public_surface(self) -> None:
         import keboola_agent_cli as pkg
 
-        assert set(pkg.__all__) >= {"Client", "Files", "FileEntry"}
+        assert set(pkg.__all__) >= {
+            "Client",
+            "Files",
+            "FileEntry",
+            "JobResult",
+            "QueryResult",
+            "UploadTableResult",
+            "SyncPushResult",
+            "ConfigDetailResult",
+        }
+
+
+class TestRunJobIdempotency:
+    """Facade run_job idempotency (issue #427)."""
+
+    def test_key_without_store_raises(self, client: Client) -> None:
+        with pytest.raises(ValueError, match="idempotency_store"):
+            client.run_job("c", "cfg", idempotency_key="K")
+
+    def test_replay_returns_prior_job(self, mock_kc: MagicMock, tmp_path: Path) -> None:
+        store = JobIdempotencyStore(tmp_path / "idem.json")
+        with patch("keboola_agent_cli.lib.KeboolaClient", return_value=mock_kc):
+            c = Client(url=STACK_URL, token=FAKE_TOKEN, idempotency_store=store)
+        mock_kc.create_job.return_value = {"id": "j1", "status": "processing"}
+        first = c.run_job("c", "cfg", idempotency_key="K")
+        assert first.id == "j1" and first.idempotent_replay is False
+
+        mock_kc.get_job_detail.return_value = {"id": "j1", "status": "processing"}
+        second = c.run_job("c", "cfg", idempotency_key="K")
+        assert second.id == "j1" and second.idempotent_replay is True
+        mock_kc.create_job.assert_called_once()
+
+    def test_per_call_store_override(self, mock_kc: MagicMock, tmp_path: Path) -> None:
+        store = JobIdempotencyStore(tmp_path / "idem.json")
+        with patch("keboola_agent_cli.lib.KeboolaClient", return_value=mock_kc):
+            c = Client(url=STACK_URL, token=FAKE_TOKEN)  # no default store
+        mock_kc.create_job.return_value = {"id": "j1", "status": "processing"}
+        c.run_job("c", "cfg", idempotency_key="K", idempotency_store=store)
+        entry = store.lookup("K")
+        assert entry is not None and entry.job_id == "j1"
+
+    def test_force_rerun_creates_fresh(self, mock_kc: MagicMock, tmp_path: Path) -> None:
+        store = JobIdempotencyStore(tmp_path / "idem.json")
+        with patch("keboola_agent_cli.lib.KeboolaClient", return_value=mock_kc):
+            c = Client(url=STACK_URL, token=FAKE_TOKEN, idempotency_store=store)
+        mock_kc.create_job.side_effect = [
+            {"id": "j1", "status": "processing"},
+            {"id": "j2", "status": "processing"},
+        ]
+        mock_kc.get_job_detail.return_value = {"id": "j1", "status": "success"}
+        c.run_job("c", "cfg", idempotency_key="K")
+        second = c.run_job("c", "cfg", idempotency_key="K", force_rerun=True)
+        assert second.id == "j2" and second.idempotent_replay is False
+        assert mock_kc.create_job.call_count == 2

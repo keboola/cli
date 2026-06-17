@@ -13,8 +13,13 @@ shell operations, use the `kbagent` CLI.
 
 | Symbol | Purpose |
 |--------|---------|
-| `Client(url, token, *, branch_id=None)` | Stateless entry point to one project; context manager |
+| `Client(url, token, *, branch_id=None, idempotency_store=None)` | Stateless entry point to one project; context manager |
 | `Client.query(workspace_id, sql, *, transactional=False, limit=500)` | Run SQL in a workspace -> `list[dict]` |
+| `Client.query_result(workspace_id, sql, ...)` | Same, but typed -> `QueryResult` (columns + truncation) |
+| `Client.run_job(component_id, config_id, *, wait=False, idempotency_key=None, ...)` | Run a Queue job -> `JobResult` (replay-safe with a key) |
+| `JobIdempotencyStore(path)` | Client-side dedup map for replay-safe `run_job` |
+| `Client.config_detail(component_id, config_id, *, branch_id=None)` | One config's detail -> `ConfigDetailResult` |
+| `Client.upload_table(table_id, file_path, *, incremental=False, ...)` | Import a CSV into an existing table -> `UploadTableResult` |
 | `Client.files.upload(source, *, name=None, tags=None, permanent=False)` | Upload a path **or** bytes -> `FileEntry` |
 | `Client.files.read_bytes(file_id)` | Download a file fully into memory -> `bytes` |
 | `Client.files.list(*, tags=None, query=None, limit=100, ...)` | List files -> `list[FileEntry]` |
@@ -22,8 +27,71 @@ shell operations, use the `kbagent` CLI.
 | `Client.raw` | The underlying `KeboolaClient` for endpoints the facade omits |
 | `FileEntry` | Uniform file shape: `id, name, tags, created, size_bytes, is_permanent, raw` |
 
-Everything exported from `keboola_agent_cli` (`Client`, `Files`, `FileEntry`) is
-committed public API and follows semver.
+Everything exported from `keboola_agent_cli` (`Client`, `Files`, `FileEntry`,
+`JobIdempotencyStore`, and the typed result models `JobResult`, `QueryResult`,
+`UploadTableResult`, `SyncPushResult`, `ConfigDetailResult`, `CloneResult`) is
+committed public API and follows semver. (`CloneResult` **documents the dict
+shape** returned by the service-layer `SyncService.clone_project` -- see [GitOps
+sync](sync-workflow.md) -- which, like the rest of the service layer, returns a
+plain `dict`; wrap it with `CloneResult.model_validate(result)` for a typed
+object. It is not on the `Client` facade, which is token-only.) Since 0.63.0 the package ships a **`py.typed`** marker
+(PEP 561), so `mypy` / `ty` / IDEs treat the SDK as typed -- a contract change
+surfaces at type-check time, not at runtime.
+
+## Typed result models
+
+The high-traffic operations return pydantic models (`result_models.py`) instead
+of bare dicts, so you get autocomplete and a versioned contract:
+
+```python
+job = kbc.run_job("keboola.ex-db-snowflake", "12345", wait=True)
+if job.succeeded:                       # -> JobResult
+    print(job.id, job.result)
+
+res = kbc.query_result(ws, 'SELECT id, name FROM t')   # -> QueryResult
+print(res.columns, res.row_count, res.truncated)
+
+cfg = kbc.config_detail("keboola.ex-http", "98765")    # -> ConfigDetailResult
+print(cfg.name, cfg.version, cfg.configuration)
+```
+
+Every model is **tolerant of extra fields** (`extra="allow"`): the named fields
+are the stable surface, but anything else the API returns is preserved
+(reachable via attribute access and `model_dump()`), so a new backend field
+never raises. They also accept the raw API key *or* the snake_case field name, so
+`JobResult.model_validate(service_dict)` works directly on a service-layer dict.
+
+## Replay-safe job runs (idempotency)
+
+An agentic orchestrator that replays a side-effecting build step after a crash
+must not fire the same job twice. The Queue API has **no** server-side
+idempotency token, so kbagent dedups client-side: give `run_job` an
+`idempotency_key` and a `JobIdempotencyStore` (the facade is config-dir-free, so
+*you* choose where the dedup map lives -- typically inside your resume-checkpoint
+dir).
+
+```python
+from keboola_agent_cli import Client, JobIdempotencyStore
+
+store = JobIdempotencyStore("/var/run/myapp/job_idempotency.json")
+with Client(url=URL, token=TOKEN, idempotency_store=store) as kbc:
+    job = kbc.run_job("keboola.ex-db-snowflake", "12345",
+                      idempotency_key="bootstrap-extract", wait=True)
+    if job.idempotent_replay:
+        ...  # a prior run was returned -- no new job fired
+```
+
+- A prior run that is still running or finished **non-failed** is returned
+  (`job.idempotent_replay is True`); a prior **failed** run is re-run;
+  `force_rerun=True` always creates fresh.
+- Reusing a key for a *different* component/config raises (it refuses to return
+  the wrong job).
+- Dedup is scoped to the store file -- a replay from a machine that does not
+  share it is **not** deduplicated.
+- Pass `idempotency_store=` per-call to override the constructor's; passing
+  `idempotency_key` with no store anywhere raises `ValueError` (the stateless
+  facade has no config-dir to default it to). The `kbagent job run
+  --idempotency-key` CLI path defaults the store to `<config-dir>/`.
 
 ## Auth & construction
 
@@ -100,8 +168,8 @@ kbc.files.delete(meta.id)
 
 ## Lower-level access
 
-For endpoints the facade does not wrap (buckets, tables, jobs, branches, ...),
-reach for the underlying client:
+For endpoints the facade does not wrap (buckets, tables, branches, job polling
+internals, ...), reach for the underlying client:
 
 ```python
 client = kbc.raw                      # a KeboolaClient
