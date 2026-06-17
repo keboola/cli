@@ -24,6 +24,20 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.63.2": [
+        "Docs: the in-process Python SDK is now documented. New `docs/sdk.md` is the deep "
+        "guide -- the importable `Client` facade vs the CLI vs the `serve` REST API, where the "
+        "facade sits in the 3-layer architecture, a full method reference "
+        "(query / query_result / run_job / config_detail / upload_table / files / raw), the "
+        'typed result-model contract (`extra="allow"`, `populate_by_name`, semver via '
+        "`__all__`), `py.typed`, idempotent `run_job`, a gotchas cheat-sheet, and a contributor "
+        "section on extending the SDK. A runnable curses Storage-browser demo "
+        "(`examples/storage_tui/`) drives a real project entirely through the SDK, and "
+        "`CONTRIBUTING.md` gains an 'Extending the importable SDK' section. Also fixes doc "
+        "drift (dynamic `APP_NAME`, Python 3.12+, `__init__` documented as the public SDK "
+        "entrypoint). No runtime code change -- the installed package is functionally identical "
+        "to 0.63.1; docs and examples ship in the repo, not the wheel.",
+    ],
     "0.63.1": [
         "Fix (#424): self-update is repaired for users still on <=0.62.0. The PyPI rename "
         "`keboola-agent-cli` -> `keboola-cli` broke `kbagent update` for every already-installed "
