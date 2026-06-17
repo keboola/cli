@@ -80,6 +80,13 @@ class RepoValidate(BaseModel):
     strict: bool = False
 
 
+class GitCredentialCreate(BaseModel):
+    type: str
+    permissions: str
+    public_key: str | None = None
+    name: str | None = None
+
+
 @router.get("", summary="List data apps across projects")
 def list_apps(
     project: list[str] | None = Query(None),
@@ -311,4 +318,67 @@ def validate_repo(
         git_pat=git_pat,
         type_=body.type,
         strict=body.strict,
+    )
+
+
+@router.get("/{project}/{app_id}/git-repo", summary="Get a data app's git repository")
+def git_repo(
+    project: str, app_id: str, registry: ServiceRegistry = Depends(get_registry)
+) -> dict[str, Any]:
+    """Show clone URLs of the app's configured git repo. Mirrors `kbagent data-app git-repo`.
+
+    Returns 409 until the app has been deployed at least once (the git block is
+    synced from the Storage config into the Data Science app record at deploy
+    time).
+    """
+    return registry.data_app_git.get_data_app_git_repo(alias=project, app_id=app_id)
+
+
+@router.get("/{project}/{app_id}/git-repo/branches", summary="List a data app's git branches")
+def git_branches(
+    project: str, app_id: str, registry: ServiceRegistry = Depends(get_registry)
+) -> dict[str, Any]:
+    """List remote branches of the app's git repo. Mirrors `kbagent data-app git-branches`."""
+    return registry.data_app_git.list_data_app_git_branches(alias=project, app_id=app_id)
+
+
+@router.get("/{project}/{app_id}/git-repo/entrypoints", summary="List a data app's git entrypoints")
+def git_entrypoints(
+    project: str, app_id: str, registry: ServiceRegistry = Depends(get_registry)
+) -> dict[str, Any]:
+    """List root-level .py entrypoints. Mirrors `kbagent data-app git-entrypoints`."""
+    return registry.data_app_git.list_data_app_git_entrypoints(alias=project, app_id=app_id)
+
+
+@router.get("/{project}/{app_id}/git-repo/credentials", summary="List managed git credentials")
+def git_credentials(
+    project: str, app_id: str, registry: ServiceRegistry = Depends(get_registry)
+) -> dict[str, Any]:
+    """List credentials of the app's MANAGED git repo. Mirrors `kbagent data-app git-credentials`.
+
+    The credential secret is never returned here; needs an admin storage token.
+    """
+    return registry.data_app_git.list_data_app_git_credentials(alias=project, app_id=app_id)
+
+
+@router.post("/{project}/{app_id}/git-repo/credentials", summary="Create a managed git credential")
+def git_credentials_create(
+    project: str,
+    app_id: str,
+    body: GitCredentialCreate,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Mint a git credential for the app's MANAGED git repo.
+
+    Mirrors `kbagent data-app git-credentials-create`. For ``type=http_token``
+    the response carries a one-time ``secret``. Needs an admin storage token;
+    external repos return 409.
+    """
+    return registry.data_app_git.create_data_app_git_credential(
+        alias=project,
+        app_id=app_id,
+        type_=body.type,
+        permissions=body.permissions,
+        public_key=body.public_key,
+        name=body.name,
     )

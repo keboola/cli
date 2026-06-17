@@ -48,6 +48,7 @@ from .services.agent_service import AgentService
 from .services.branch_service import BranchService
 from .services.component_service import ComponentService
 from .services.config_service import ConfigService
+from .services.data_app_git_service import DataAppGitService
 from .services.data_app_service import DataAppService
 from .services.deep_lineage_service import DeepLineageService
 from .services.doctor_service import DoctorService
@@ -326,6 +327,7 @@ def main(
     schedule_service = ScheduleService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
     data_app_service = DataAppService(config_store=config_store)
+    data_app_git_service = DataAppGitService(config_store=config_store)
     semantic_layer_service = SemanticLayerService(config_store=config_store)
     repo_validate_service = RepoValidateService(config_store=config_store)
     kai_service = KaiService(config_store=config_store)
@@ -380,6 +382,7 @@ def main(
     ctx.obj["schedule_service"] = schedule_service
     ctx.obj["workspace_service"] = workspace_service
     ctx.obj["data_app_service"] = data_app_service
+    ctx.obj["data_app_git_service"] = data_app_git_service
     ctx.obj["semantic_layer_service"] = semantic_layer_service
     ctx.obj["repo_validate_service"] = repo_validate_service
     ctx.obj["kai_service"] = kai_service

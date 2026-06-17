@@ -292,7 +292,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     jq pattern: `.error.details.logTail? // .data.logTail? // []` picks up the tail regardless of exit.
 
   kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
-    Kill running jobs via Queue API (POST /jobs/{id}/kill). Use to stop runaway loops or pile-ups.
+    Kill running jobs via Queue API (POST /jobs/{{id}}/kill). Use to stop runaway loops or pile-ups.
     Two modes: single/batch by --job-id, or bulk by --status. --status any covers all killable states
     (created+waiting+processing). Response partitions into killed / already_finished / not_found / failed.
     Idempotent: re-running on terminal jobs reports them as already_finished rather than failing.
@@ -401,7 +401,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Delete one or more buckets. --force cascade-deletes tables. Linked/shared buckets protected. Branch-aware.
 
   kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes]
-    Swap two storage tables in any branch, including the default/production branch (POST /tables/{id}/swap). Both tables exchange physical positions;
+    Swap two storage tables in any branch, including the default/production branch (POST /tables/{{id}}/swap). Both tables exchange physical positions;
     aliases are NOT transferred (they keep pointing at the same physical position and therefore expose the
     OTHER table's data after the swap). Use to promote a typed rebuild back into the original name without
     touching downstream config references. branch_id is mandatory (--branch or active branch via 'kbagent
@@ -410,7 +410,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     does not carry storage schema).
 
   kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
-    Clone (pull) a production table into a dev branch (POST /tables/{id}/pull). On storage-branches projects a
+    Clone (pull) a production table into a dev branch (POST /tables/{{id}}/pull). On storage-branches projects a
     dev branch reads prod tables transparently until first write, so mutating a table's schema in the branch
     (swap-tables, dropping columns) first needs a branch-local copy. This materializes that copy (one-way:
     default -> branch). Branch is mandatory; service guards before any HTTP call when no branch is set.
@@ -769,7 +769,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     and CANNOT be rotated -- delete and recreate the app to mint a new one.
 
   kbagent data-app logs --project NAME --app-id ID [--lines N] [--since ISO8601]
-    Tail the container log buffer (Data Science /apps/{id}/logs/tail).
+    Tail the container log buffer (Data Science /apps/{{id}}/logs/tail).
     Plain-text body covering the full spin-up trace ([TIMING] git_clone,
     Cloning into /app, uv install, supervisord boot, runtime stack traces).
     Default --lines 500; pass --lines 0 to fetch the full current buffer
@@ -829,6 +829,42 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     citation. --type currently restricted to python-js; streamlit /
     pure-Python / R / Node-only follow-up. --strict treats WARNs as
     failures (exit 1).
+
+  kbagent data-app git-repo --project NAME --app-id ID
+    Show the clone URLs (ssh_url / https_url) of the app's configured git
+    repository plus is_managed_git_repo (sandboxes-service
+    GET /apps/{{id}}/git-repo). Read-only; project storage token only.
+    GOTCHA: returns 409 "no Git repository configured" until the app has
+    been DEPLOYED at least once -- the git block is synced from the Storage
+    config into the Data Science app record at deploy time, so a fresh
+    --no-deploy app has no git repo from the service's point of view.
+
+  kbagent data-app git-branches --project NAME --app-id ID
+    List the remote branches of the app's git repository with commit
+    metadata (branch, sha, comment, author name+email, date). Raw
+    top-level array from the server. Same deploy-once precondition as
+    git-repo.
+
+  kbagent data-app git-entrypoints --project NAME --app-id ID
+    List root-level .py entrypoint files of the app's git repository on the
+    configured branch. Extension is hardcoded to py server-side (non-Python
+    entrypoints are not listable). Same deploy-once precondition.
+
+  kbagent data-app git-credentials --project NAME --app-id ID
+    List the credentials of the app's MANAGED git repository (id, type,
+    permissions, name, owner_admin_id, created_at). The secret is NEVER
+    returned here. Needs an admin storage token. External repos (the kind
+    `data-app create --git-repo` produces) have no managed credentials.
+
+  kbagent data-app git-credentials-create --project NAME --app-id ID
+        --type ssh_key|http_token --permissions readOnly|readWrite
+        [--public-key KEY | --public-key-file PATH] [--name LABEL] [--yes]
+    Mint a git credential for the app's MANAGED git repository. ssh_key
+    requires a public key; http_token returns a ONE-TIME secret printed
+    once and never retrievable again (mirrors data-app password). Requires
+    an admin storage token. Apps created via `data-app create --git-repo`
+    are EXTERNAL (not managed) -> 409 "no managed Git repository".
+    Confirmation prompt unless --yes or --json.
 
 ### Project Sync
 

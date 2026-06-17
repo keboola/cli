@@ -228,3 +228,115 @@ class DataScienceClient(BaseHttpClient):
         # the caller wants the server's default buffer-all behavior.
         response = self._do_request("GET", path, params=params or None)
         return response.text
+
+    # ------------------------------------------------------------------
+    # Git repository (sandboxes-service /apps/{id}/git-repo/*)
+    #
+    # These endpoints introspect and manage the git repository a data app
+    # is deployed from. Ground truth: keboola/sandboxes-service server
+    # source + docs/swagger.yaml. Two functional groups:
+    #
+    #   * Repo introspection (git-repo, /branches, /entrypoints) -- works
+    #     for ANY configured repo (managed or external); auth = the same
+    #     X-StorageApi-Token, permission CanManageApp.
+    #   * Credential management (/credentials GET + POST) -- ONLY for a
+    #     *managed* git repo (app.managedGitRepoId set); a repo configured
+    #     via `data-app create --git-repo <url>` is *external*, so these
+    #     return 409. Auth needs an admin storage token
+    #     (CanManageAppRepoCredentials).
+    #
+    # IMPORTANT response-shape gotchas (verified in both sources):
+    #   * /branches returns a RAW top-level JSON array (NOT wrapped in
+    #     {branches: [...]}).
+    #   * /entrypoints returns a RAW top-level array<string>.
+    #   * /credentials (GET) IS wrapped: {"credentials": [...]}.
+    #   * POST /credentials returns the created credential; the one-time
+    #     ``secret`` is present ONLY for type=http_token and ONLY here.
+    # ------------------------------------------------------------------
+
+    def get_git_repo(self, app_id: str) -> dict[str, Any]:
+        """Return the clone URLs of the app's configured git repository.
+
+        Shape: ``{"sshUrl": str|None, "httpsUrl": str|None,
+        "isManagedGitRepo": bool}``. For external repos only the URL
+        matching the configured protocol is populated (the other is
+        ``None``) and embedded credentials are stripped. ``409`` if the
+        app has no git repository configured.
+        """
+        response = self._do_request("GET", f"/apps/{quote(str(app_id), safe='')}/git-repo")
+        body = response.json()
+        return body if isinstance(body, dict) else {}
+
+    def list_git_branches(self, app_id: str) -> list[dict[str, Any]]:
+        """List the remote branches of the app's configured git repository.
+
+        Returns the server's RAW top-level array of branch objects
+        ``[{"branch", "comment", "sha", "author": {"name", "email"},
+        "date"}]`` (HEAD/origin/HEAD filtered, sorted by name). Works for
+        managed and external repos alike.
+        """
+        response = self._do_request("GET", f"/apps/{quote(str(app_id), safe='')}/git-repo/branches")
+        body = response.json()
+        return body if isinstance(body, list) else []
+
+    def list_git_entrypoints(self, app_id: str) -> list[str]:
+        """List root-level ``.py`` entrypoint files of the app's repo.
+
+        Returns the server's RAW top-level ``array<string>`` of root
+        filenames on the configured branch (or the repo default).
+        Extension is hardcoded to ``py`` server-side, so non-Python
+        entrypoints are not listable here.
+        """
+        response = self._do_request(
+            "GET", f"/apps/{quote(str(app_id), safe='')}/git-repo/entrypoints"
+        )
+        body = response.json()
+        return [str(item) for item in body] if isinstance(body, list) else []
+
+    def list_git_credentials(self, app_id: str) -> dict[str, Any]:
+        """List the credentials of the app's MANAGED git repository.
+
+        Shape: ``{"credentials": [{"id", "type", "name", "permissions",
+        "ownerAdminId", "createdAt"}]}``. The ``secret`` is NEVER returned
+        here. ``409`` if the app has no managed git repository; requires an
+        admin storage token.
+        """
+        response = self._do_request(
+            "GET", f"/apps/{quote(str(app_id), safe='')}/git-repo/credentials"
+        )
+        body = response.json()
+        return body if isinstance(body, dict) else {}
+
+    def create_git_credential(
+        self,
+        app_id: str,
+        *,
+        type_: str,
+        permissions: str,
+        public_key: str | None = None,
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a credential for the app's MANAGED git repository.
+
+        ``type_`` is ``"ssh_key"`` or ``"http_token"``; ``permissions`` is
+        ``"readOnly"`` or ``"readWrite"``. ``public_key`` is required IFF
+        ``type_ == "ssh_key"`` and MUST be absent otherwise (the server
+        returns 400 on a wrong combination).
+
+        Returns the created credential. The one-time ``secret`` field is
+        present ONLY when ``type_ == "http_token"`` and is never retrievable
+        again. ``409`` if the app has no managed git repository; requires an
+        admin storage token.
+        """
+        payload: dict[str, Any] = {"type": type_, "permissions": permissions}
+        if public_key is not None:
+            payload["publicKey"] = public_key
+        if name is not None:
+            payload["name"] = name
+        response = self._do_request(
+            "POST",
+            f"/apps/{quote(str(app_id), safe='')}/git-repo/credentials",
+            content=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        return response.json()

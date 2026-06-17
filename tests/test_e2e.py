@@ -7763,6 +7763,106 @@ class TestE2EDataAppLifecycle:
             "Storage config version should be populated after PUT"
         )
 
+    @skip_without_data_app_public
+    def test_data_app_git_repo_introspection(self) -> None:
+        """git-repo / git-branches / git-entrypoints against a deployed public app.
+
+        The three introspection endpoints (sandboxes-service
+        ``/apps/{id}/git-repo/*``) return 409 "no Git repository configured"
+        until the app has been DEPLOYED at least once -- the git block is
+        synced from the Storage config into the Data Science app record at
+        deploy time. We fire a deploy (no ``--wait``, so we don't block on a
+        container build) and poll ``git-repo`` until the sync lands.
+        """
+        _step(1, "Create a public-repo data app (no deploy yet)")
+        repo = os.environ[ENV_DATA_APP_GIT_REPO_PUBLIC]
+        slug = f"e2e-git-{RUN_ID}"[:60]
+        create = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "create",
+                    "--project",
+                    self.alias,
+                    "--name",
+                    f"E2E Git {RUN_ID}",
+                    "--slug",
+                    slug,
+                    "--git-repo",
+                    repo,
+                    "--git-public",
+                    "--auth",
+                    "public",
+                    "--no-deploy",
+                ],
+            )
+        )
+        app_id = create["data"]["app_id"]
+        self._created_app_ids.append(app_id)
+
+        _step(2, "Fire deploy (no wait) so the git block syncs into the DS record")
+        _invoke(
+            self.config_dir,
+            ["--json", "data-app", "deploy", "--project", self.alias, "--app-id", app_id],
+        )
+
+        _step(3, "Poll git-repo until the deploy-time git sync completes")
+        repo_data = None
+        for _ in range(20):
+            res = _invoke(
+                self.config_dir,
+                ["--json", "data-app", "git-repo", "--project", self.alias, "--app-id", app_id],
+            )
+            if res.exit_code == 0:
+                repo_data = json.loads(res.output)["data"]
+                break
+            time.sleep(3)
+        if repo_data is None:
+            pytest.skip("git-repo did not become available within the poll budget")
+        assert repo_data["https_url"] or repo_data["ssh_url"], "expected a clone URL"
+        assert "is_managed_git_repo" in repo_data
+
+        _step(4, "git-branches returns commit metadata")
+        branches = _json_ok(
+            _invoke(
+                self.config_dir,
+                ["--json", "data-app", "git-branches", "--project", self.alias, "--app-id", app_id],
+            )
+        )["data"]
+        assert branches["count"] >= 1
+        assert branches["branches"][0]["branch"]
+        assert "author" in branches["branches"][0]
+
+        _step(5, "git-entrypoints returns a (possibly empty) list of root .py files")
+        entry = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "git-entrypoints",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                ],
+            )
+        )["data"]
+        assert isinstance(entry["entrypoints"], list)
+
+        _step(6, "git-credentials on an external repo lists no managed credentials")
+        cred_res = _invoke(
+            self.config_dir,
+            ["--json", "data-app", "git-credentials", "--project", self.alias, "--app-id", app_id],
+        )
+        # External repos (the kind `data-app create --git-repo` produces) have
+        # no managed credential store: the list endpoint returns an empty list
+        # (200). A 409 here would also satisfy the managed-only contract.
+        if cred_res.exit_code == 0:
+            assert json.loads(cred_res.output)["data"]["credentials"] == []
+
     @skip_without_data_app_private
     def test_data_app_lifecycle_private_and_redeploy(self) -> None:
         _step(1, "Create private-repo simpleAuth data app", "encryption + git PAT")

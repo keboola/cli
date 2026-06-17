@@ -21,6 +21,7 @@ from rich.markup import escape
 
 from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ._data_app_git import register_git_commands
 from ._helpers import (
     check_cli_permission,
     emit_project_warnings,
@@ -34,6 +35,7 @@ from ._helpers import (
 # operators have a one-click path to the rule a flag enforces.
 _REF_PYTHON_JS = "https://help.keboola.com/data-apps/python-js/"
 _REF_STORAGE_ACCESS = "https://help.keboola.com/data-apps/storage-access/"
+
 
 data_app_app = typer.Typer(help="Keboola data-app lifecycle (create, deploy, manage)")
 
@@ -1269,3 +1271,9 @@ def data_app_validate_repo(
             raise typer.Exit(code=1)
         # Human mode: the verdict line above conveyed the failure.
         raise typer.Exit(code=1)
+
+
+# Attach the data-app git-* commands. They live in _data_app_git.py to keep
+# this module under the file-size budget (CONTRIBUTING.md "File-size budgets");
+# they still register as `kbagent data-app git-*` on the same sub-app.
+register_git_commands(data_app_app)
