@@ -21,6 +21,12 @@ from keboola_agent_cli.constants import (
 )
 from keboola_agent_cli.errors import ConfigError
 from keboola_agent_cli.models import TokenVerifyResponse
+from keboola_agent_cli.services._sync_push_ops import push_update_row
+from keboola_agent_cli.services._sync_writeback import (
+    propagate_kbc_metadata,
+    writeback_create_config_in_manifest,
+    writeback_create_row_in_manifest,
+)
 from keboola_agent_cli.services.sync_service import SyncService
 from keboola_agent_cli.sync.manifest import Manifest, load_manifest
 
@@ -1461,7 +1467,8 @@ class TestPushRows:
             rows=[ManifestConfigRow(id="vals-default", path="rows/default", metadata={})],
         )
 
-        push_svc._push_update_row(
+        push_update_row(
+            push_svc,
             push_client,
             component_id="keboola.variables",
             parent_config_id="vars-001",
@@ -1514,7 +1521,8 @@ class TestPushRows:
         )
 
         with pytest.raises(KeboolaApiError) as excinfo:
-            push_svc._push_update_row(
+            push_update_row(
+                push_svc,
                 push_client,
                 component_id="keboola.variables",
                 parent_config_id="vars-001",
@@ -2826,7 +2834,6 @@ class TestFreshCreateWriteback:
         updated in place; the manifest does not grow."""
         from keboola_agent_cli.sync.manifest import ManifestConfiguration
 
-        svc = self._make_svc(tmp_config_dir)
         manifest = Manifest.model_construct(
             project={"id": 1, "apiHost": "connection.keboola.com"},  # type: ignore[arg-type]
             naming={"config": "{component_type}/{component_id}/{config_name}"},  # type: ignore[arg-type]
@@ -2841,7 +2848,7 @@ class TestFreshCreateWriteback:
             ],
         )
 
-        writeback = svc._writeback_create_config_in_manifest(
+        writeback = writeback_create_config_in_manifest(
             manifest=manifest,
             component_id="keboola.snowflake-transformation",
             branch_id=12345,
@@ -2870,7 +2877,6 @@ class TestFreshCreateWriteback:
         branch's entry is left untouched."""
         from keboola_agent_cli.sync.manifest import ManifestConfiguration
 
-        svc = self._make_svc(tmp_config_dir)
         # Placeholder for branch 12345 (e.g. main); we push to dev branch 99999.
         manifest = Manifest.model_construct(
             project={"id": 1, "apiHost": "connection.keboola.com"},  # type: ignore[arg-type]
@@ -2886,7 +2892,7 @@ class TestFreshCreateWriteback:
             ],
         )
 
-        writeback = svc._writeback_create_config_in_manifest(
+        writeback = writeback_create_config_in_manifest(
             manifest=manifest,
             component_id="keboola.snowflake-transformation",
             branch_id=99999,
@@ -2911,14 +2917,13 @@ class TestFreshCreateWriteback:
 
     def test_writeback_config_appends_when_no_placeholder(self, tmp_config_dir: Path) -> None:
         """If no placeholder exists at the path, append (legacy fallback)."""
-        svc = self._make_svc(tmp_config_dir)
         manifest = Manifest.model_construct(
             project={"id": 1, "apiHost": "connection.keboola.com"},  # type: ignore[arg-type]
             naming={"config": "{component_type}/{component_id}/{config_name}"},  # type: ignore[arg-type]
             configurations=[],
         )
 
-        writeback = svc._writeback_create_config_in_manifest(
+        writeback = writeback_create_config_in_manifest(
             manifest=manifest,
             component_id="keboola.ex-http",
             branch_id=0,
@@ -2940,7 +2945,6 @@ class TestFreshCreateWriteback:
         keys (``pull_hash``, ...) are filtered out."""
         from keboola_agent_cli.sync.manifest import ManifestConfiguration
 
-        svc = self._make_svc(tmp_config_dir)
         entry = ManifestConfiguration(
             branchId=0,
             componentId="keboola.snowflake-transformation",
@@ -2955,7 +2959,7 @@ class TestFreshCreateWriteback:
         )
         client = MagicMock()
 
-        svc._propagate_kbc_metadata(client, entry, branch_id=99)
+        propagate_kbc_metadata(client, entry, branch_id=99)
 
         client.set_config_metadata.assert_called_once()
         call = client.set_config_metadata.call_args
@@ -2972,7 +2976,6 @@ class TestFreshCreateWriteback:
         """No KBC.* keys → no API call (don't waste a round-trip)."""
         from keboola_agent_cli.sync.manifest import ManifestConfiguration
 
-        svc = self._make_svc(tmp_config_dir)
         entry = ManifestConfiguration(
             branchId=0,
             componentId="x",
@@ -2982,7 +2985,7 @@ class TestFreshCreateWriteback:
         )
         client = MagicMock()
 
-        result = svc._propagate_kbc_metadata(client, entry, branch_id=None)
+        result = propagate_kbc_metadata(client, entry, branch_id=None)
 
         client.set_config_metadata.assert_not_called()
         assert result is None
@@ -2995,7 +2998,6 @@ class TestFreshCreateWriteback:
         from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
         from keboola_agent_cli.sync.manifest import ManifestConfiguration
 
-        svc = self._make_svc(tmp_config_dir)
         entry = ManifestConfiguration(
             branchId=0,
             componentId="keboola.snowflake-transformation",
@@ -3010,7 +3012,7 @@ class TestFreshCreateWriteback:
             error_code=ErrorCode.API_ERROR,
         )
 
-        result = svc._propagate_kbc_metadata(client, entry, branch_id=None)
+        result = propagate_kbc_metadata(client, entry, branch_id=None)
 
         assert result == "metastore 500", (
             "non-fatal metadata failure must return the message for the caller "
@@ -3023,7 +3025,6 @@ class TestFreshCreateWriteback:
         rows list does not grow."""
         from keboola_agent_cli.sync.manifest import ManifestConfigRow, ManifestConfiguration
 
-        svc = self._make_svc(tmp_config_dir)
         parent = ManifestConfiguration(
             branchId=0,
             componentId="keboola.variables",
@@ -3038,7 +3039,7 @@ class TestFreshCreateWriteback:
             ],
         )
 
-        row = svc._writeback_create_row_in_manifest(
+        row = writeback_create_row_in_manifest(
             parent=parent,
             row_path_str="rows/default",
             new_row_id="vals-real-id",
@@ -3054,7 +3055,6 @@ class TestFreshCreateWriteback:
         """No placeholder row → append (legacy fallback for untracked rows)."""
         from keboola_agent_cli.sync.manifest import ManifestConfiguration
 
-        svc = self._make_svc(tmp_config_dir)
         parent = ManifestConfiguration(
             branchId=0,
             componentId="keboola.ex-http",
@@ -3063,7 +3063,7 @@ class TestFreshCreateWriteback:
             rows=[],
         )
 
-        row = svc._writeback_create_row_in_manifest(
+        row = writeback_create_row_in_manifest(
             parent=parent,
             row_path_str="rows/new",
             new_row_id="row-001",

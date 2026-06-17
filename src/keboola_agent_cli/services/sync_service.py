@@ -4,15 +4,11 @@ Handles downloading Keboola project configurations to the local filesystem
 in a dev-friendly format (YAML configs), and tracking local changes.
 """
 
-import copy
 import hashlib
 import json
 import logging
 import shutil
 import subprocess
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -25,14 +21,8 @@ from ..constants import (
     DEFAULT_JOBS_PER_CONFIG,
     DEFAULT_MAX_SAMPLES,
     DEFAULT_SAMPLE_LIMIT,
-    ENCRYPTED_COLUMN_MASK,
-    ENCRYPTED_COLUMN_PREFIX,
-    JOBS_FILENAME,
     KEBOOLA_DIR_NAME,
     MANIFEST_VERSION,
-    STORAGE_BUCKETS_FILENAME,
-    STORAGE_DIR_NAME,
-    STORAGE_SAMPLES_DIR_NAME,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
 from ..sync.code_extraction import extract_code_files, merge_code_files
@@ -56,98 +46,46 @@ from ..sync.manifest import (
     load_manifest,
     save_manifest,
 )
-from ..sync.naming import config_path, config_row_path, sanitize_name, sanitize_path_segment
+from ..sync.naming import config_path, config_row_path, sanitize_name
 from ._encryption import (
-    apply_encrypted_to_local,
     encrypt_secrets_in_config,
     find_plaintext_secret_keys,
+)
+from ._sync_bindings import resolve_flow_task_bindings, resolve_variable_bindings
+from ._sync_branch import (
+    branch_link as _branch_link,
+)
+from ._sync_branch import (
+    branch_status as _branch_status,
+)
+from ._sync_branch import (
+    branch_unlink as _branch_unlink,
+)
+from ._sync_bulk import (
+    diff_all as _bulk_diff_all,
+)
+from ._sync_bulk import (
+    pull_all as _bulk_pull_all,
+)
+from ._sync_bulk import (
+    push_all as _bulk_push_all,
+)
+from ._sync_clone import clone_project as _clone_project_impl
+from ._sync_models import CreatedConfig, LocalConfigHashes
+from ._sync_push_ops import push_create, push_row_change, push_update
+from ._sync_storage import (
+    fetch_jobs_per_config,
+    fetch_samples,
+    write_per_config_jobs,
+    write_storage_metadata,
+)
+from ._sync_writeback import (
+    propagate_kbc_metadata,
+    writeback_create_config_in_manifest,
 )
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
-
-# Sibling component that backs a transformation's variable links. A
-# transformation references it via ``configuration.variables_id`` (the config)
-# and ``configuration.variables_values_id`` (a row id).
-VARIABLES_COMPONENT_ID = "keboola.variables"
-
-# Conditional-flow component. A flow runs other configs via
-# ``configuration.tasks[].task.configId`` (job-type tasks); the Phase-D backfill
-# remaps those ids placeholder/source -> ULID after a fresh create (e.g. clone).
-FLOW_COMPONENT_ID = "keboola.flow"
-
-
-@dataclass
-class WritebackResult:
-    """Outcome of recording a freshly-created config in the manifest.
-
-    ``previous_id`` is the manifest entry's id **before** the placeholder ->
-    ULID overwrite (empty string when a brand-new entry was appended). The
-    create pass uses it to key ``created_id_map`` so row parents and
-    transformation variable links can be remapped placeholder -> ULID.
-    """
-
-    entry: ManifestConfiguration
-    previous_id: str
-
-
-@dataclass
-class CreatedConfig:
-    """A config created during a single ``push`` create pass.
-
-    Carries just enough to drive the Phase-C variable-link backfill: the
-    component id, the API-assigned ULID, and the on-disk directory holding
-    the (post-writeback) ``_config.yml``.
-    """
-
-    component_id: str
-    config_id: str
-    config_dir: Path
-
-
-@dataclass
-class VariableBindingResult:
-    """Outcome of the Phase-C variable-link backfill.
-
-    ``configs_rewritten`` counts transformations whose remote configuration +
-    local ``_configuration_extra`` were rebound to ULIDs (drives the
-    manifest-dirty flag). ``errors`` accumulates unresolved links so the push
-    envelope surfaces them instead of leaving a broken link silently.
-    """
-
-    errors: list[dict[str, str]] = field(default_factory=list)
-    configs_rewritten: int = 0
-
-
-@dataclass
-class FlowBindingResult:
-    """Outcome of the Phase-D flow-task-link backfill (#426).
-
-    ``configs_rewritten`` counts flows whose task ``configId``s were remapped to
-    ULIDs (drives the manifest-dirty flag); ``tasks_remapped`` is the total task
-    references rewritten; ``errors`` accumulates PUT failures so the push
-    envelope surfaces them.
-    """
-
-    errors: list[dict[str, str]] = field(default_factory=list)
-    configs_rewritten: int = 0
-    tasks_remapped: int = 0
-
-
-@dataclass
-class LocalConfigHashes:
-    """Hashes describing a config dir's on-disk state after a push.
-
-    ``file_hash`` is the ``_config.yml`` content hash, ``cfg_hash`` the
-    normalized config hash (see :func:`config_hash`), and ``extra_hashes``
-    maps each extracted code/companion file to its hash. Stored on the
-    manifest entry so the next ``sync diff`` recognises local == remote.
-    """
-
-    file_hash: str
-    cfg_hash: str
-    extra_hashes: dict[str, str] = field(default_factory=dict)
-
 
 # Companion files extracted alongside a config's ``_config.yml`` whose hashes
 # are tracked so ``sync diff`` notices edits to code/description files.
@@ -184,28 +122,6 @@ def _ensure_within_branch(
             f"config_id='{config_id}'). Refusing to write outside "
             f"'{branch_resolved}'. This indicates a malformed API response "
             f"or a regression in path sanitization."
-        )
-
-
-def _ensure_path_within(base_dir: Path, target: Path, what: str) -> None:
-    """Reject a write whose path escapes *base_dir* (defense-in-depth).
-
-    Mirrors :func:`_ensure_within_branch` for non-config writes (storage
-    metadata + samples) whose path segments derive from API-controlled bucket
-    ids / table names (GHSA-833q-c5wv-26r7). Raises ConfigError on escape so a
-    malformed or compromised Storage response cannot write outside the sync
-    workspace.
-    """
-    try:
-        base_resolved = base_dir.resolve()
-        target_resolved = target.resolve()
-    except OSError as exc:
-        raise ConfigError(f"Cannot resolve sync path: {exc}") from exc
-    if not target_resolved.is_relative_to(base_resolved):
-        raise ConfigError(
-            f"Storage path escapes sync workspace ({what}). Refusing to write "
-            f"outside '{base_resolved}'. This indicates a malformed or compromised "
-            f"API response or a path-sanitization regression."
         )
 
 
@@ -668,12 +584,12 @@ class SyncService(BaseService):
                             group_limit,
                             job_limit,
                         )
-                        jobs_grouped = self._fetch_jobs_per_config(client, components, job_limit)
+                        jobs_grouped = fetch_jobs_per_config(self, client, components, job_limit)
                 except Exception:
                     logger.warning("Failed to fetch jobs", exc_info=True)
 
             if with_samples and tables_data:
-                samples_data = self._fetch_samples(client, tables_data, sample_limit, max_samples)
+                samples_data = fetch_samples(client, tables_data, sample_limit, max_samples)
 
         # Determine branch directory name
         branch_dir_name = self._find_branch_path(manifest, branch_id)
@@ -1079,14 +995,14 @@ class SyncService(BaseService):
         # -- Storage metadata (read-only, not tracked in manifest) --
         storage_stats: dict[str, int] = {"buckets": 0, "tables": 0, "samples": 0}
         if not dry_run and buckets_data:
-            storage_stats = self._write_storage_metadata(
+            storage_stats = write_storage_metadata(
                 project_root, buckets_data, tables_data, samples_data
             )
 
         # -- Per-config jobs (JSONL files next to _config.yml) --
         jobs_written = 0
         if not dry_run and jobs_grouped:
-            jobs_written = self._write_per_config_jobs(branch_dir, new_configurations, jobs_grouped)
+            jobs_written = write_per_config_jobs(branch_dir, new_configurations, jobs_grouped)
 
         if not dry_run:
             # Update manifest with pulled configurations
@@ -1567,7 +1483,8 @@ class SyncService(BaseService):
 
                 try:
                     if change_type == "added":
-                        result = self._push_create(
+                        result = push_create(
+                            self,
                             client,
                             component_id,
                             config_path_str,
@@ -1580,7 +1497,7 @@ class SyncService(BaseService):
                             new_id = str(result.get("id", ""))
                             config_dir = project_root / branch_path / config_path_str
                             hashes = self._compute_config_hashes(config_dir, component_id)
-                            writeback = self._writeback_create_config_in_manifest(
+                            writeback = writeback_create_config_in_manifest(
                                 manifest=manifest,
                                 component_id=component_id,
                                 branch_id=branch_id,
@@ -1600,7 +1517,7 @@ class SyncService(BaseService):
                                     config_dir=config_dir,
                                 )
                             )
-                            metadata_error = self._propagate_kbc_metadata(
+                            metadata_error = propagate_kbc_metadata(
                                 client, writeback.entry, branch_id
                             )
                             if metadata_error is not None:
@@ -1622,7 +1539,8 @@ class SyncService(BaseService):
                             pushed_details.append(change)
 
                     elif change_type == "modified":
-                        self._push_update(
+                        push_update(
+                            self,
                             client,
                             component_id,
                             config_id,
@@ -1695,7 +1613,8 @@ class SyncService(BaseService):
                 )
 
                 try:
-                    new_row_id = self._push_row_change(
+                    new_row_id = push_row_change(
+                        self,
                         client,
                         change_type=change_type,
                         component_id=component_id,
@@ -1731,7 +1650,8 @@ class SyncService(BaseService):
                     self._record_push_error(errors, change_type, component_id, config_id, exc)
 
             # ---- Phase C: variable-link backfill (KFR-03) ----------------
-            binding = self._resolve_variable_bindings(
+            binding = resolve_variable_bindings(
+                self,
                 client,
                 created_configs=created_configs,
                 created_id_map=created_id_map,
@@ -1748,7 +1668,8 @@ class SyncService(BaseService):
             # After variable links, remap keboola.flow task configIds that point
             # at configs created this push (golden/placeholder -> ULID). Reuses
             # created_id_map; a no-op when no flow was created.
-            flow_binding = self._resolve_flow_task_bindings(
+            flow_binding = resolve_flow_task_bindings(
+                self,
                 client,
                 created_configs=created_configs,
                 created_id_map=created_id_map,
@@ -1789,136 +1710,20 @@ class SyncService(BaseService):
     ) -> dict[str, Any]:
         """Clone a reference synced project into a fresh target project (#426).
 
-        Copies the reference tree at ``source`` into ``target_dir``, applies the
-        declarative ``overrides`` (``bucket_map``, ``variable_values``,
-        ``instance_rename``), re-points the manifest at ``target_alias``'s
-        project, and pushes -- so every config is CREATEd fresh and its flow
-        task / variable links are remapped reference->ULID by push Phase C/D.
-
-        Cloning into a fresh target needs no id surgery: the reference's config
-        ids do not exist in the target remote, so the diff classifies every
-        config as ``added`` and ``created_id_map`` (keyed by the reference id)
-        drives the link remaps.
-
-        Idempotent: re-running with an existing ``target_dir`` skips the copy +
-        overrides and just pushes, so a clean clone then reports ``no_changes`` /
-        ``created: 0``.
-
-        Args:
-            source: A reference synced project dir (must contain
-                ``.keboola/manifest.json``).
-            target_alias: The project alias to clone INTO (must be a fresh
-                project on the first clone).
-            target_dir: Where to materialise the clone.
-            overrides: Optional dict with ``bucket_map`` (old->new bucket id),
-                ``variable_values`` (var name->value), and ``instance_rename``
-                (old path prefix->new path prefix) keys.
-            dry_run: Apply overrides + report the diff without pushing.
-            branch_override: Optional target branch id.
-
-        Returns:
-            A dict matching ``CloneResult``: ``status``
-            (``cloned`` | ``no_changes`` | ``dry_run``), ``target_alias``,
-            ``target_dir``, ``created``, ``bucket_rewrites``,
-            ``variable_overrides``, ``renamed_instances``, ``flow_task_remaps``,
-            ``push`` (the underlying push result), ``errors``.
-
-        Raises:
-            ConfigError: ``source`` is not a synced project, ``target_alias`` is
-                unknown, or (first clone) the target project already contains the
-                reference's configs (not a fresh target).
+        Thin delegator to :func:`._sync_clone.clone_project`; see that function
+        (and ``sync-workflow.md``) for the full behavior -- copy + parameterize
+        (bucket_map / variable_values / instance_rename) + push, with Phase-C/D
+        link remap, a fresh-target guard, and idempotent re-runs.
         """
-        from urllib.parse import urlparse
-
-        from ..sync.clone import (
-            apply_bucket_map,
-            apply_instance_rename,
-            apply_variable_values,
-            copy_reference_tree,
-            repoint_manifest_project,
+        return _clone_project_impl(
+            self,
+            source,
+            target_alias,
+            target_dir,
+            overrides=overrides,
+            dry_run=dry_run,
+            branch_override=branch_override,
         )
-
-        overrides = overrides or {}
-        bucket_map = overrides.get("bucket_map") or {}
-        variable_values = overrides.get("variable_values") or {}
-        instance_rename = overrides.get("instance_rename") or {}
-        source_dir = Path(source)
-        target_path = Path(target_dir)
-
-        # Validate the reference is a synced project.
-        try:
-            load_manifest(source_dir)
-        except FileNotFoundError as exc:
-            raise ConfigError(
-                f"Source {source_dir} is not a synced project (no "
-                ".keboola/manifest.json). Run `kbagent sync pull` there first."
-            ) from exc
-
-        target_project = self.resolve_projects([target_alias])[target_alias]
-
-        bucket_rewrites = 0
-        variable_overrides = 0
-        renamed_instances = 0
-        already_cloned = target_path.exists()
-
-        if not already_cloned:
-            copy_reference_tree(source_dir, target_path)
-            manifest = load_manifest(target_path)
-            repoint_manifest_project(
-                manifest,
-                project_id=target_project.project_id or 0,
-                api_host=urlparse(target_project.stack_url).netloc,
-            )
-            bucket_rewrites = apply_bucket_map(target_path, manifest, bucket_map)
-            variable_overrides = apply_variable_values(target_path, manifest, variable_values)
-            renamed_instances = apply_instance_rename(target_path, manifest, instance_rename)
-            save_manifest(target_path, manifest)
-
-        override_counts = {
-            "bucket_rewrites": bucket_rewrites,
-            "variable_overrides": variable_overrides,
-            "renamed_instances": renamed_instances,
-        }
-
-        if dry_run:
-            diff_result = self.diff(target_alias, target_path, branch_override=branch_override)
-            return {
-                "status": "dry_run",
-                "target_alias": target_alias,
-                "target_dir": str(target_path),
-                "summary": diff_result["summary"],
-                **override_counts,
-            }
-
-        # Fresh-target guard: on a first clone every one of OUR configs must be a
-        # CREATE. A non-'added' change means a reference id already exists in the
-        # target -> not a fresh target; refuse rather than UPDATE a stranger's config.
-        if not already_cloned:
-            diff_result = self.diff(target_alias, target_path, branch_override=branch_override)
-            collisions = [
-                f"{c.get('component_id')}/{c.get('config_id')}"
-                for c in diff_result["changes"]
-                if c["change_type"] != "added"
-            ]
-            if collisions:
-                raise ConfigError(
-                    "Clone requires a fresh target project, but these configs already "
-                    f"exist there: {', '.join(collisions[:10])}. Use a new/empty target "
-                    "project, or remove the existing configs first."
-                )
-
-        push_result = self.push(target_alias, target_path, branch_override=branch_override)
-        status = "no_changes" if push_result.get("status") == "no_changes" else "cloned"
-        return {
-            "status": status,
-            "target_alias": target_alias,
-            "target_dir": str(target_path),
-            "created": push_result.get("created", 0),
-            "flow_task_remaps": push_result.get("flow_task_remaps", 0),
-            "push": push_result,
-            "errors": push_result.get("errors", []),
-            **override_counts,
-        }
 
     # Kept for test compatibility: tests exercise fail-closed encryption via
     # ``SyncService._encrypt_secrets_in_config(...)``. Production code uses
@@ -1978,897 +1783,6 @@ class SyncService(BaseService):
             }
         )
 
-    def _push_row_change(
-        self,
-        client: Any,
-        *,
-        change_type: str,
-        component_id: str,
-        parent_config_id: str,
-        row_id: str,
-        row_path_str: str,
-        project_root: Path,
-        manifest: Manifest,
-        branch_id: int | None,
-        allow_plaintext_fallback: bool = False,
-    ) -> str | None:
-        """Dispatch a single row-level change (added/modified/deleted) to the API.
-
-        ``#``-prefixed secrets in the row's configuration are encrypted via
-        :func:`encrypt_secrets_in_config` before POST/PUT (same fail-closed
-        semantics as parent configs). Mutates ``manifest`` in place; the
-        caller is responsible for persisting it.
-
-        ``parent_config_id`` must already be the *effective* parent id: on a
-        fresh CREATE the caller remaps the diff-time placeholder to the
-        API-assigned ULID before dispatch, so both the manifest parent lookup
-        and ``create_config_row(config_id=...)`` hit the real config (KFR-05).
-
-        Returns the API-assigned row id on ``added`` (so the caller can map
-        placeholder -> ULID for variable-link backfill), else ``None``.
-        """
-        parent = next(
-            (
-                c
-                for c in manifest.configurations
-                if c.component_id == component_id and c.id == parent_config_id
-            ),
-            None,
-        )
-        if parent is None and change_type != "deleted":
-            raise KeboolaApiError(
-                message=(
-                    f"Cannot push row {row_id}: parent config {component_id}/"
-                    f"{parent_config_id} is not tracked in the manifest."
-                ),
-                status_code=0,
-                error_code=ErrorCode.PARENT_CONFIG_NOT_TRACKED,
-            )
-
-        project_id = manifest.project.id if manifest.project else None
-
-        if change_type == "deleted":
-            self._push_delete_row(
-                client,
-                component_id=component_id,
-                parent_config_id=parent_config_id,
-                row_id=row_id,
-                parent=parent,
-                branch_id=branch_id,
-            )
-            return None
-
-        # added / modified both read a local row file and encrypt-then-push.
-        assert parent is not None  # guarded above for non-deleted change_types
-        source_branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
-        row_dir = project_root / source_branch_path / parent.path / row_path_str
-
-        if change_type == "added":
-            return self._push_create_row(
-                client,
-                component_id=component_id,
-                parent_config_id=parent_config_id,
-                row_dir=row_dir,
-                parent=parent,
-                row_path_str=row_path_str,
-                branch_id=branch_id,
-                project_id=project_id,
-                allow_plaintext_fallback=allow_plaintext_fallback,
-            )
-
-        if change_type == "modified":
-            self._push_update_row(
-                client,
-                component_id=component_id,
-                parent_config_id=parent_config_id,
-                row_id=row_id,
-                row_dir=row_dir,
-                parent=parent,
-                branch_id=branch_id,
-                project_id=project_id,
-                allow_plaintext_fallback=allow_plaintext_fallback,
-            )
-            return None
-
-        raise ValueError(f"Unsupported row change_type: {change_type}")
-
-    def _push_create_row(
-        self,
-        client: Any,
-        *,
-        component_id: str,
-        parent_config_id: str,
-        row_dir: Path,
-        parent: ManifestConfiguration,
-        row_path_str: str,
-        branch_id: int | None,
-        project_id: int | None,
-        allow_plaintext_fallback: bool,
-    ) -> str:
-        """POST a new row; record API-assigned id + hashes in the parent's row list.
-
-        Returns the API-assigned row id.
-        """
-        local_data = self._read_config_file(row_dir)
-        if local_data is None:
-            raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
-
-        pristine_data = copy.deepcopy(local_data)
-        name, description, configuration = local_row_to_api(local_data, component_id)
-        configuration = encrypt_secrets_in_config(
-            client,
-            project_id,
-            component_id,
-            configuration,
-            allow_plaintext_fallback=allow_plaintext_fallback,
-        )
-
-        result = client.create_config_row(
-            component_id=component_id,
-            config_id=parent_config_id,
-            name=name,
-            configuration=configuration,
-            description=description,
-            branch_id=branch_id,
-        )
-        new_row_id = str(result.get("id", ""))
-        logger.info("Created row %s/%s/%s", component_id, parent_config_id, new_row_id)
-
-        # Write-back: encrypted secrets land in the local file so a subsequent
-        # diff sees local == remote. ``config_id=""`` tells the shared helper
-        # to skip writing a config_id into ``_keboola`` (rows use ``row_id``).
-        self._writeback_after_push(pristine_data, row_dir, "", configuration)
-
-        row_file = row_dir / CONFIG_FILENAME
-        new_file_hash = self._file_hash(row_file) if row_file.exists() else ""
-        cfg_hash_value = config_hash(pristine_data)
-        self._writeback_create_row_in_manifest(
-            parent=parent,
-            row_path_str=row_path_str,
-            new_row_id=new_row_id,
-            file_hash=new_file_hash,
-            cfg_hash=cfg_hash_value,
-        )
-        return new_row_id
-
-    def _push_update_row(
-        self,
-        client: Any,
-        *,
-        component_id: str,
-        parent_config_id: str,
-        row_id: str,
-        row_dir: Path,
-        parent: ManifestConfiguration,
-        branch_id: int | None,
-        project_id: int | None,
-        allow_plaintext_fallback: bool,
-    ) -> None:
-        """PUT an existing row; refresh its hashes in the parent's row list."""
-        local_data = self._read_config_file(row_dir)
-        if local_data is None:
-            raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
-
-        pristine_data = copy.deepcopy(local_data)
-        name, description, configuration = local_row_to_api(local_data, component_id)
-        configuration = encrypt_secrets_in_config(
-            client,
-            project_id,
-            component_id,
-            configuration,
-            allow_plaintext_fallback=allow_plaintext_fallback,
-        )
-
-        client.update_config_row(
-            component_id=component_id,
-            config_id=parent_config_id,
-            row_id=row_id,
-            name=name,
-            configuration=configuration,
-            description=description,
-            change_description="Updated via kbagent sync push",
-            branch_id=branch_id,
-        )
-        logger.info("Updated row %s/%s/%s", component_id, parent_config_id, row_id)
-
-        self._writeback_after_push(pristine_data, row_dir, "", configuration)
-
-        row_file = row_dir / CONFIG_FILENAME
-        new_file_hash = self._file_hash(row_file) if row_file.exists() else ""
-        cfg_hash_value = config_hash(pristine_data)
-        for r in parent.rows:
-            if r.id == row_id:
-                r.metadata["pull_hash"] = new_file_hash
-                r.metadata["pull_config_hash"] = cfg_hash_value
-                break
-
-    def _push_delete_row(
-        self,
-        client: Any,
-        *,
-        component_id: str,
-        parent_config_id: str,
-        row_id: str,
-        parent: ManifestConfiguration | None,
-        branch_id: int | None,
-    ) -> None:
-        """DELETE a row; prune it from the parent's row list in the manifest."""
-        client.delete_config_row(
-            component_id=component_id,
-            config_id=parent_config_id,
-            row_id=row_id,
-            branch_id=branch_id,
-        )
-        if parent is not None:
-            parent.rows = [r for r in parent.rows if r.id != row_id]
-        logger.info("Deleted row %s/%s/%s", component_id, parent_config_id, row_id)
-
-    def _push_create(
-        self,
-        client: Any,
-        component_id: str,
-        config_path_str: str,
-        project_root: Path,
-        manifest: Manifest,
-        branch_id: int | None,
-        *,
-        allow_plaintext_fallback: bool = False,
-    ) -> dict[str, Any] | None:
-        """Create a new config from a local _config.yml file."""
-        branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
-        config_dir = project_root / branch_path / config_path_str
-        local_data = self._read_config_file(config_dir)
-        if local_data is None:
-            return None
-
-        # Preserve pristine data for writeback (merge_code_files mutates
-        # local_data by injecting parameters.blocks which should not end
-        # up in _config.yml).
-        pristine_data = copy.deepcopy(local_data)
-
-        # Merge code files (transform.sql, transform.py, code.py) back into config
-        merge_code_files(component_id, local_data, config_dir)
-
-        name, description, configuration = local_config_to_api(local_data)
-
-        # Encrypt #-prefixed secrets before sending to API
-        project_id = manifest.project.id if manifest.project else None
-        configuration = encrypt_secrets_in_config(
-            client,
-            project_id,
-            component_id,
-            configuration,
-            allow_plaintext_fallback=allow_plaintext_fallback,
-        )
-
-        result = client.create_config(
-            component_id=component_id,
-            name=name,
-            configuration=configuration,
-            description=description,
-            branch_id=branch_id,
-        )
-        new_config_id = result.get("id", "")
-        logger.info(
-            "Created config %s/%s (ID: %s)",
-            component_id,
-            name,
-            new_config_id,
-        )
-
-        # Write back: update local file with config_id + encrypted secrets.
-        # Use pristine_data so blocks/code stay only in their code files.
-        self._writeback_after_push(pristine_data, config_dir, new_config_id, configuration)
-
-        return result
-
-    def _push_update(
-        self,
-        client: Any,
-        component_id: str,
-        config_id: str,
-        config_path_str: str,
-        project_root: Path,
-        manifest: Manifest,
-        branch_id: int | None,
-        *,
-        allow_plaintext_fallback: bool = False,
-    ) -> None:
-        """Update an existing config from a local _config.yml file."""
-        branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
-        config_dir = project_root / branch_path / config_path_str
-        local_data = self._read_config_file(config_dir)
-        if local_data is None:
-            raise FileNotFoundError(f"Config file not found: {config_dir / CONFIG_FILENAME}")
-
-        # Preserve pristine data for writeback (merge_code_files mutates
-        # local_data by injecting parameters.blocks which should not end
-        # up in _config.yml).
-        pristine_data = copy.deepcopy(local_data)
-
-        # Merge code files (transform.sql, transform.py, code.py) back into config
-        merge_code_files(component_id, local_data, config_dir)
-
-        name, description, configuration = local_config_to_api(local_data)
-
-        # Encrypt #-prefixed secrets before sending to API
-        project_id = manifest.project.id if manifest.project else None
-        configuration = encrypt_secrets_in_config(
-            client,
-            project_id,
-            component_id,
-            configuration,
-            allow_plaintext_fallback=allow_plaintext_fallback,
-        )
-
-        client.update_config(
-            component_id=component_id,
-            config_id=config_id,
-            name=name,
-            configuration=configuration,
-            description=description,
-            change_description="Updated via kbagent sync push",
-            branch_id=branch_id,
-        )
-        logger.info("Updated config %s/%s", component_id, config_id)
-
-        # Write back: update local file with encrypted secrets.
-        # Use pristine_data so blocks/code stay only in their code files.
-        self._writeback_after_push(pristine_data, config_dir, config_id, configuration)
-
-    def _resolve_variable_bindings(
-        self,
-        client: Any,
-        *,
-        created_configs: list[CreatedConfig],
-        created_id_map: dict[tuple[str, str], str],
-        created_row_id_map: dict[str, str],
-        created_rows_by_parent: dict[str, list[str]],
-        manifest: Manifest,
-        branch_id: int | None,
-    ) -> VariableBindingResult:
-        """Rebind transformation -> variables links from placeholders to ULIDs.
-
-        On a fresh CREATE the transformation config is POSTed with its
-        ``_configuration_extra.variables_id`` / ``variables_values_id`` still
-        set to the externally-authored placeholder strings (``config_format``
-        merges ``_configuration_extra`` into the API body verbatim). This pass,
-        run after the variables config and its values row have been created,
-        resolves each placeholder to the ULID assigned during this push, PUTs
-        the corrected configuration body, then rewrites the local file and
-        refreshes the manifest hashes so a re-push is clean (KFR-03).
-
-        Resolution is a no-op when no ``keboola.variables`` config was created
-        this push (the already-bound / UPDATE path). When the exact placeholder
-        key misses but exactly one ``keboola.variables`` config was created this
-        push, it binds to that one with a warning; zero or ambiguous (>1)
-        matches accumulate an error rather than writing a broken link.
-        """
-        result = VariableBindingResult()
-
-        created_variables_ulids = [
-            ulid
-            for (component_id, _placeholder), ulid in created_id_map.items()
-            if component_id == VARIABLES_COMPONENT_ID
-        ]
-
-        for created in created_configs:
-            if created.component_id == VARIABLES_COMPONENT_ID:
-                continue  # the variables config itself never carries a link
-            local_data = self._read_config_file(created.config_dir)
-            if local_data is None:
-                continue
-            extra = local_data.get("_configuration_extra")
-            if not isinstance(extra, dict):
-                continue
-            vars_placeholder = extra.get("variables_id")
-            if not vars_placeholder or not isinstance(vars_placeholder, str):
-                continue
-            raw_vals = extra.get("variables_values_id")
-            vals_placeholder = raw_vals if isinstance(raw_vals, str) else ""
-
-            parent_ulid = self._resolve_variables_parent(
-                created=created,
-                vars_placeholder=vars_placeholder,
-                created_id_map=created_id_map,
-                created_variables_ulids=created_variables_ulids,
-                errors=result.errors,
-            )
-            if parent_ulid is None:
-                continue
-
-            row_ulid = self._resolve_variables_row(
-                created=created,
-                parent_ulid=parent_ulid,
-                vals_placeholder=vals_placeholder,
-                created_row_id_map=created_row_id_map,
-                created_rows_by_parent=created_rows_by_parent,
-                errors=result.errors,
-            )
-            # A missing-but-required values row already recorded an error.
-            if vals_placeholder and row_ulid is None:
-                continue
-
-            try:
-                self._apply_variable_binding(
-                    client,
-                    created=created,
-                    local_data=local_data,
-                    parent_ulid=parent_ulid,
-                    row_ulid=row_ulid,
-                    manifest=manifest,
-                    branch_id=branch_id,
-                )
-            except KeboolaApiError as exc:
-                result.errors.append(
-                    {
-                        "change_type": "variable_link",
-                        "error_code": ErrorCode.VARIABLE_LINK_UNRESOLVED,
-                        "component_id": created.component_id,
-                        "config_id": created.config_id,
-                        "message": str(exc),
-                    }
-                )
-                continue
-            result.configs_rewritten += 1
-
-        return result
-
-    def _resolve_variables_parent(
-        self,
-        *,
-        created: CreatedConfig,
-        vars_placeholder: str,
-        created_id_map: dict[tuple[str, str], str],
-        created_variables_ulids: list[str],
-        errors: list[dict[str, str]],
-    ) -> str | None:
-        """Resolve a transformation's ``variables_id`` placeholder to a ULID.
-
-        Returns the ULID, or ``None`` when there is nothing to backfill
-        (already-bound path) or the link is ambiguous (an error is appended).
-        """
-        parent_ulid = created_id_map.get((VARIABLES_COMPONENT_ID, vars_placeholder))
-        if parent_ulid is not None:
-            return parent_ulid
-        if not created_variables_ulids:
-            # No variables config created this push: the link is either already
-            # a ULID (UPDATE path) or points outside this push. Leave it.
-            return None
-        if len(created_variables_ulids) == 1:
-            parent_ulid = created_variables_ulids[0]
-            logger.warning(
-                "Transformation %s/%s variables_id placeholder %r did not match any "
-                "created variables config; binding to the single keboola.variables "
-                "config created this push (%s).",
-                created.component_id,
-                created.config_id,
-                vars_placeholder,
-                parent_ulid,
-            )
-            return parent_ulid
-        errors.append(
-            {
-                "change_type": "variable_link",
-                "error_code": ErrorCode.VARIABLE_LINK_UNRESOLVED,
-                "component_id": created.component_id,
-                "config_id": created.config_id,
-                "message": (
-                    f"Cannot resolve variables_id placeholder {vars_placeholder!r}: "
-                    f"{len(created_variables_ulids)} keboola.variables configs were "
-                    "created this push and none matched by placeholder. Refusing to "
-                    "write an ambiguous variables link."
-                ),
-            }
-        )
-        return None
-
-    def _resolve_variables_row(
-        self,
-        *,
-        created: CreatedConfig,
-        parent_ulid: str,
-        vals_placeholder: str,
-        created_row_id_map: dict[str, str],
-        created_rows_by_parent: dict[str, list[str]],
-        errors: list[dict[str, str]],
-    ) -> str | None:
-        """Resolve a transformation's ``variables_values_id`` placeholder.
-
-        Returns the row ULID, or ``None`` when no values row was created (the
-        link is then left unset) or the choice is ambiguous (an error is
-        appended only when ``vals_placeholder`` was actually requested).
-        """
-        if vals_placeholder:
-            mapped = created_row_id_map.get(vals_placeholder)
-            if mapped is not None:
-                return mapped
-        siblings = created_rows_by_parent.get(parent_ulid, [])
-        if len(siblings) == 1:
-            row_ulid = siblings[0]
-            if vals_placeholder:
-                logger.warning(
-                    "Transformation %s/%s variables_values_id placeholder %r did not "
-                    "match a created row; binding to the single row created under "
-                    "variables config %s.",
-                    created.component_id,
-                    created.config_id,
-                    vals_placeholder,
-                    parent_ulid,
-                )
-            return row_ulid
-        if vals_placeholder:
-            errors.append(
-                {
-                    "change_type": "variable_link",
-                    "error_code": ErrorCode.VARIABLE_LINK_UNRESOLVED,
-                    "component_id": created.component_id,
-                    "config_id": created.config_id,
-                    "message": (
-                        f"Cannot resolve variables_values_id placeholder "
-                        f"{vals_placeholder!r}: {len(siblings)} rows were created under "
-                        f"variables config {parent_ulid}. Refusing to write an "
-                        "ambiguous values link."
-                    ),
-                }
-            )
-        return None
-
-    def _apply_variable_binding(
-        self,
-        client: Any,
-        *,
-        created: CreatedConfig,
-        local_data: dict[str, Any],
-        parent_ulid: str,
-        row_ulid: str | None,
-        manifest: Manifest,
-        branch_id: int | None,
-    ) -> None:
-        """PUT the resolved variables link, rewrite local, refresh manifest hashes.
-
-        ``local_data`` is the pristine on-disk ``_config.yml`` dict; a deep
-        copy is code-merged to build the full PUT body so blocks/code stay only
-        in their companion files. Uses :meth:`KeboolaClient.update_config`
-        (PUT) directly -- **not** ``set_variables``, which would create a
-        *second* variables config.
-        """
-        merged = copy.deepcopy(local_data)
-        merge_code_files(created.component_id, merged, created.config_dir)
-        _name, _description, configuration = local_config_to_api(merged)
-        configuration["variables_id"] = parent_ulid
-        if row_ulid:
-            configuration["variables_values_id"] = row_ulid
-
-        client.update_config(
-            component_id=created.component_id,
-            config_id=created.config_id,
-            configuration=configuration,
-            change_description="Resolve variables link via kbagent sync push",
-            branch_id=branch_id,
-        )
-        logger.info(
-            "Resolved variables link for %s/%s -> variables_id=%s variables_values_id=%s",
-            created.component_id,
-            created.config_id,
-            parent_ulid,
-            row_ulid,
-        )
-
-        # Rewrite the local _configuration_extra to the ULIDs (pristine data:
-        # no merged blocks leak into _config.yml).
-        extra = local_data.setdefault("_configuration_extra", {})
-        extra["variables_id"] = parent_ulid
-        if row_ulid:
-            extra["variables_values_id"] = row_ulid
-        self._write_config_file(created.config_dir, local_data)
-
-        # config_hash includes _configuration_extra, so refresh the stored
-        # hashes from the post-rewrite disk state or sync diff sees a conflict.
-        hashes = self._compute_config_hashes(created.config_dir, created.component_id)
-        target_branch = branch_id or 0
-        for cfg in manifest.configurations:
-            if (
-                cfg.branch_id == target_branch
-                and cfg.component_id == created.component_id
-                and cfg.id == created.config_id
-            ):
-                cfg.metadata["pull_hash"] = hashes.file_hash
-                cfg.metadata["pull_config_hash"] = hashes.cfg_hash
-                cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
-                break
-
-    def _resolve_flow_task_bindings(
-        self,
-        client: Any,
-        *,
-        created_configs: list[CreatedConfig],
-        created_id_map: dict[tuple[str, str], str],
-        manifest: Manifest,
-        branch_id: int | None,
-    ) -> FlowBindingResult:
-        """Remap keboola.flow task ``configId``s from source ids to ULIDs (Phase D).
-
-        A ``keboola.flow`` config runs other configs via
-        ``configuration.tasks[].task.configId`` (job-type tasks only; on disk
-        these live under ``_configuration_extra.tasks``). When a flow is created
-        in the same push as the configs it targets -- e.g. a ``sync clone`` of a
-        reference project -- those task ``configId``s still point at the source
-        config ids. This pass (mirroring the Phase-C variable backfill) resolves
-        each job task's ``(componentId, configId)`` via ``created_id_map`` to the
-        ULID assigned this push, PUTs the corrected flow, rewrites the local
-        ``_config.yml``, and refreshes the manifest hashes so a re-push is clean.
-
-        A no-op when no flow was created this push, or when no task references a
-        config created this push (the id is left untouched -- it may legitimately
-        point at a pre-existing config).
-        """
-        result = FlowBindingResult()
-        for created in created_configs:
-            if created.component_id != FLOW_COMPONENT_ID:
-                continue
-            local_data = self._read_config_file(created.config_dir)
-            if local_data is None:
-                continue
-            extra = local_data.get("_configuration_extra")
-            if not isinstance(extra, dict):
-                continue
-            tasks = extra.get("tasks")
-            if not isinstance(tasks, list):
-                continue
-
-            remapped = self._remap_flow_tasks_in_place(tasks, created_id_map)
-            if not remapped:
-                continue
-
-            try:
-                self._apply_flow_task_binding(
-                    client,
-                    created=created,
-                    local_data=local_data,
-                    manifest=manifest,
-                    branch_id=branch_id,
-                )
-            except KeboolaApiError as exc:
-                result.errors.append(
-                    {
-                        "change_type": "flow_task_link",
-                        "error_code": ErrorCode.API_ERROR,
-                        "component_id": created.component_id,
-                        "config_id": created.config_id,
-                        "message": str(exc),
-                    }
-                )
-                continue
-            result.configs_rewritten += 1
-            result.tasks_remapped += remapped
-        return result
-
-    @staticmethod
-    def _remap_flow_tasks_in_place(
-        tasks: list[Any], created_id_map: dict[tuple[str, str], str]
-    ) -> int:
-        """Rewrite job-task ``configId``s in a flow ``tasks`` list in place.
-
-        Returns the number of task references actually remapped. Only
-        ``task.type == 'job'`` entries carry a ``configId``; notification and
-        variable tasks are skipped. A task is rewritten only when
-        ``(componentId, configId)`` matches an entry created this push.
-        """
-        remapped = 0
-        for task_entry in tasks:
-            if not isinstance(task_entry, dict):
-                continue
-            task = task_entry.get("task")
-            if not isinstance(task, dict) or task.get("type") != "job":
-                continue
-            comp = task.get("componentId")
-            old_cfg = task.get("configId")
-            if not isinstance(comp, str) or not isinstance(old_cfg, (str, int)):
-                continue
-            new_id = created_id_map.get((comp, str(old_cfg)))
-            if new_id and str(old_cfg) != new_id:
-                task["configId"] = new_id
-                remapped += 1
-        return remapped
-
-    def _apply_flow_task_binding(
-        self,
-        client: Any,
-        *,
-        created: CreatedConfig,
-        local_data: dict[str, Any],
-        manifest: Manifest,
-        branch_id: int | None,
-    ) -> None:
-        """PUT a remapped flow, rewrite local ``_config.yml``, refresh hashes.
-
-        ``local_data`` already carries the remapped task ``configId``s (the
-        caller mutated ``_configuration_extra.tasks`` in place). A deep copy is
-        code-merged to build the PUT body (no-op for flows, which carry no code)
-        so the API receives the corrected ``configuration.tasks``.
-        """
-        merged = copy.deepcopy(local_data)
-        merge_code_files(created.component_id, merged, created.config_dir)
-        _name, _description, configuration = local_config_to_api(merged)
-
-        client.update_config(
-            component_id=created.component_id,
-            config_id=created.config_id,
-            configuration=configuration,
-            change_description="Remap flow task configIds via kbagent sync push",
-            branch_id=branch_id,
-        )
-        logger.info(
-            "Remapped flow task configIds for %s/%s",
-            created.component_id,
-            created.config_id,
-        )
-
-        self._write_config_file(created.config_dir, local_data)
-        hashes = self._compute_config_hashes(created.config_dir, created.component_id)
-        target_branch = branch_id or 0
-        for cfg in manifest.configurations:
-            if (
-                cfg.branch_id == target_branch
-                and cfg.component_id == created.component_id
-                and cfg.id == created.config_id
-            ):
-                cfg.metadata["pull_hash"] = hashes.file_hash
-                cfg.metadata["pull_config_hash"] = hashes.cfg_hash
-                cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
-                break
-
-    def _writeback_create_config_in_manifest(
-        self,
-        *,
-        manifest: Manifest,
-        component_id: str,
-        branch_id: int | None,
-        config_path_str: str,
-        new_id: str,
-        file_hash: str,
-        cfg_hash: str,
-    ) -> WritebackResult:
-        """Record a freshly-created config in the manifest.
-
-        If a placeholder entry already exists at
-        ``(branch_id, component_id, path)`` -- the FIIA / scaffold emit
-        pattern -- update it in place, preserving any user-declared metadata
-        (e.g. ``KBC.configuration.folderName``) and refreshing only the
-        bookkeeping hashes. Otherwise append a new entry.
-
-        Matching includes ``branch_id`` because a single manifest can hold
-        entries from multiple branches in git-branching mode; matching on
-        ``(component_id, path)`` alone would risk updating the wrong branch's
-        entry when the same logical path exists under two branches.
-
-        Returns a :class:`WritebackResult` carrying the entry and its
-        pre-overwrite ``previous_id`` so the create pass can remap any child
-        row parents / transformation variable links from the placeholder id
-        to the freshly-assigned ULID.
-        """
-        target_branch = branch_id or 0
-        for entry in manifest.configurations:
-            if (
-                entry.branch_id == target_branch
-                and entry.component_id == component_id
-                and entry.path == config_path_str
-            ):
-                previous_id = entry.id
-                entry.id = new_id
-                entry.metadata["pull_hash"] = file_hash
-                entry.metadata["pull_config_hash"] = cfg_hash
-                return WritebackResult(entry=entry, previous_id=previous_id)
-        new_entry = ManifestConfiguration(
-            branchId=target_branch,
-            componentId=component_id,
-            id=new_id,
-            path=config_path_str,
-            metadata={"pull_hash": file_hash, "pull_config_hash": cfg_hash},
-        )
-        manifest.configurations.append(new_entry)
-        return WritebackResult(entry=new_entry, previous_id="")
-
-    def _writeback_create_row_in_manifest(
-        self,
-        *,
-        parent: ManifestConfiguration,
-        row_path_str: str,
-        new_row_id: str,
-        file_hash: str,
-        cfg_hash: str,
-    ) -> ManifestConfigRow:
-        """Record a freshly-created row under its parent in the manifest.
-
-        Mirrors :meth:`_writeback_create_config_in_manifest` for rows: update
-        any placeholder row entry in place, otherwise append.
-        """
-        for row in parent.rows:
-            if row.path == row_path_str:
-                row.id = new_row_id
-                row.metadata["pull_hash"] = file_hash
-                row.metadata["pull_config_hash"] = cfg_hash
-                return row
-        new_row = ManifestConfigRow(
-            id=new_row_id,
-            path=row_path_str,
-            metadata={"pull_hash": file_hash, "pull_config_hash": cfg_hash},
-        )
-        parent.rows.append(new_row)
-        return new_row
-
-    def _propagate_kbc_metadata(
-        self,
-        client: Any,
-        entry: ManifestConfiguration,
-        branch_id: int | None,
-    ) -> str | None:
-        """POST any ``KBC.*`` keys from the manifest entry to the metadata API.
-
-        Bookkeeping keys (``pull_hash``, ``pull_config_hash``, ...) live in the
-        same metadata dict but are filtered by the ``KBC.`` prefix. Called only
-        on CREATE; updates use ``kbagent config set-metadata`` explicitly. The
-        metadata API stores configuration-level annotations only -- this is
-        **not** a secret store; do not place tokens or passwords under
-        ``KBC.*`` keys.
-
-        Returns ``None`` on success (or when there are no KBC.* keys to
-        propagate). Returns the API error message on a non-fatal write
-        failure: the config is already created on the remote and the
-        manifest writeback is complete, so a single failed metadata POST
-        is reported back to the push loop as an accumulated error rather
-        than aborting the rest of the push.
-        """
-        entries = [
-            (key, str(value)) for key, value in entry.metadata.items() if key.startswith("KBC.")
-        ]
-        if not entries:
-            return None
-        try:
-            client.set_config_metadata(
-                component_id=entry.component_id,
-                config_id=entry.id,
-                entries=entries,
-                branch_id=branch_id,
-            )
-        except KeboolaApiError as exc:
-            logger.warning(
-                "Failed to propagate KBC.* metadata for %s/%s: %s",
-                entry.component_id,
-                entry.id,
-                exc,
-            )
-            return exc.message
-        return None
-
-    def _writeback_after_push(
-        self,
-        local_data: dict[str, Any],
-        config_dir: Path,
-        config_id: str,
-        pushed_configuration: dict[str, Any],
-    ) -> None:
-        """Update local _config.yml after a successful push.
-
-        Writes back:
-        - _keboola.config_id (assigned by API on first create)
-        - Encrypted secret values (so local matches remote state)
-        """
-        # Ensure _keboola section exists and has config_id
-        keboola_meta = local_data.setdefault("_keboola", {})
-        if config_id:
-            keboola_meta["config_id"] = config_id
-
-        # Apply encrypted values from the pushed configuration back to local_data
-        pushed_params = pushed_configuration.get("parameters", {})
-        local_params = local_data.get("parameters", {})
-        if pushed_params and local_params:
-            apply_encrypted_to_local(local_params, pushed_params)
-
-        self._write_config_file(config_dir, local_data)
-        logger.debug("Updated local config at %s after push", config_dir)
-
     # ------------------------------------------------------------------
     # bulk operations (all projects)
     # ------------------------------------------------------------------
@@ -2885,148 +1799,23 @@ class SyncService(BaseService):
         sample_limit: int = DEFAULT_SAMPLE_LIMIT,
         max_samples: int = DEFAULT_MAX_SAMPLES,
     ) -> dict[str, Any]:
-        """Pull all registered projects in parallel.
-
-        For each project, creates ``base_dir/<alias>/`` and initializes
-        if no manifest exists yet, then pulls.
-
-        Args:
-            base_dir: Parent directory; each project gets a subdirectory.
-            force: Overwrite local files without checking.
-            dry_run: Compute what would be pulled but don't write.
-            job_limit: Max jobs per config to pull.
-            no_storage: Skip storage metadata download.
-            no_jobs: Skip per-config jobs download.
-            with_samples: Download table data samples.
-            sample_limit: Max rows per sample.
-            max_samples: Max number of tables to sample.
-
-        Returns:
-            Dict with per-project results and a summary.
-        """
-        projects = self.resolve_projects(None)
-        results: dict[str, Any] = {}
-        success_count = 0
-        failed_count = 0
-
-        def _worker(alias: str) -> None:
-            nonlocal success_count, failed_count
-            project_root = base_dir / alias
-            manifest_path = project_root / KEBOOLA_DIR_NAME / "manifest.json"
-            try:
-                if not manifest_path.exists():
-                    self.init_sync(alias, project_root)
-                result = self.pull(
-                    alias,
-                    project_root,
-                    force=force,
-                    dry_run=dry_run,
-                    job_limit=job_limit,
-                    no_storage=no_storage,
-                    no_jobs=no_jobs,
-                    with_samples=with_samples,
-                    sample_limit=sample_limit,
-                    max_samples=max_samples,
-                )
-                results[alias] = result
-                success_count += 1
-            except SyncConflictError as exc:
-                # Preserve the structured conflict so a programmatic / AI
-                # consumer of `--all-projects --json` can tell a merge conflict
-                # apart from any other error and read the conflicting configs --
-                # the single-project path emits the same code + conflicts.
-                results[alias] = {
-                    "error": exc.message,
-                    "error_code": exc.error_code,
-                    "conflicts": exc.conflicts,
-                }
-                failed_count += 1
-            except Exception as exc:
-                results[alias] = {"error": str(exc)}
-                failed_count += 1
-
-        max_workers = min(len(projects), self._resolve_max_workers()) if projects else 1
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_worker, alias): alias for alias in projects}
-            for future in as_completed(futures):
-                # Exceptions are captured inside _worker; this catches truly
-                # unexpected failures (e.g. threading errors).
-                try:
-                    future.result()
-                except Exception as exc:
-                    alias = futures[future]
-                    results[alias] = {"error": str(exc)}
-                    failed_count += 1
-
-        total = len(projects)
-        return {
-            "projects": results,
-            "summary": {
-                "total": total,
-                "success": success_count,
-                "failed": failed_count,
-            },
-        }
+        """Pull all registered projects in parallel (see ``_sync_bulk.pull_all``)."""
+        return _bulk_pull_all(
+            self,
+            base_dir,
+            force=force,
+            dry_run=dry_run,
+            job_limit=job_limit,
+            no_storage=no_storage,
+            no_jobs=no_jobs,
+            with_samples=with_samples,
+            sample_limit=sample_limit,
+            max_samples=max_samples,
+        )
 
     def diff_all(self, base_dir: Path) -> dict[str, Any]:
-        """Diff all registered projects that have a local manifest.
-
-        Projects without an existing manifest are skipped.
-
-        Args:
-            base_dir: Parent directory containing per-project subdirectories.
-
-        Returns:
-            Dict with per-project diff results, a summary, and skipped list.
-        """
-        projects = self.resolve_projects(None)
-        results: dict[str, Any] = {}
-        skipped: list[str] = []
-        success_count = 0
-        failed_count = 0
-
-        # Partition into actionable vs skipped
-        actionable: list[str] = []
-        for alias in projects:
-            manifest_path = base_dir / alias / KEBOOLA_DIR_NAME / "manifest.json"
-            if manifest_path.exists():
-                actionable.append(alias)
-            else:
-                skipped.append(alias)
-
-        def _worker(alias: str) -> None:
-            nonlocal success_count, failed_count
-            project_root = base_dir / alias
-            try:
-                result = self.diff(alias, project_root)
-                results[alias] = result
-                success_count += 1
-            except Exception as exc:
-                results[alias] = {"error": str(exc)}
-                failed_count += 1
-
-        max_workers = min(len(actionable), self._resolve_max_workers()) if actionable else 1
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_worker, alias): alias for alias in actionable}
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception as exc:
-                    alias = futures[future]
-                    results[alias] = {"error": str(exc)}
-                    failed_count += 1
-
-        total = len(projects)
-        return {
-            "projects": results,
-            "summary": {
-                "total": total,
-                "success": success_count,
-                "failed": failed_count,
-                "skipped": len(skipped),
-            },
-            "skipped": skipped,
-        }
+        """Diff all registered projects with a local manifest (see ``_sync_bulk.diff_all``)."""
+        return _bulk_diff_all(self, base_dir)
 
     def push_all(
         self,
@@ -3035,74 +1824,14 @@ class SyncService(BaseService):
         force: bool = False,
         allow_plaintext_fallback: bool = False,
     ) -> dict[str, Any]:
-        """Push all registered projects that have a local manifest.
-
-        Projects without an existing manifest are skipped.
-
-        Args:
-            base_dir: Parent directory containing per-project subdirectories.
-            dry_run: Compute changes but don't execute them.
-            force: Allow deletions without extra confirmation.
-            allow_plaintext_fallback: Allow push with plaintext secrets on
-                encryption failure.
-
-        Returns:
-            Dict with per-project push results, a summary, and skipped list.
-        """
-        projects = self.resolve_projects(None)
-        results: dict[str, Any] = {}
-        skipped: list[str] = []
-        success_count = 0
-        failed_count = 0
-
-        # Partition into actionable vs skipped
-        actionable: list[str] = []
-        for alias in projects:
-            manifest_path = base_dir / alias / KEBOOLA_DIR_NAME / "manifest.json"
-            if manifest_path.exists():
-                actionable.append(alias)
-            else:
-                skipped.append(alias)
-
-        def _worker(alias: str) -> None:
-            nonlocal success_count, failed_count
-            project_root = base_dir / alias
-            try:
-                result = self.push(
-                    alias,
-                    project_root,
-                    dry_run=dry_run,
-                    force=force,
-                    allow_plaintext_fallback=allow_plaintext_fallback,
-                )
-                results[alias] = result
-                success_count += 1
-            except Exception as exc:
-                results[alias] = {"error": str(exc)}
-                failed_count += 1
-
-        max_workers = min(len(actionable), self._resolve_max_workers()) if actionable else 1
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_worker, alias): alias for alias in actionable}
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception as exc:
-                    alias = futures[future]
-                    results[alias] = {"error": str(exc)}
-                    failed_count += 1
-
-        total = len(projects)
-        return {
-            "projects": results,
-            "summary": {
-                "total": total,
-                "success": success_count,
-                "failed": failed_count,
-                "skipped": len(skipped),
-            },
-            "skipped": skipped,
-        }
+        """Push all registered projects with a local manifest (see ``_sync_bulk.push_all``)."""
+        return _bulk_push_all(
+            self,
+            base_dir,
+            dry_run=dry_run,
+            force=force,
+            allow_plaintext_fallback=allow_plaintext_fallback,
+        )
 
     # ------------------------------------------------------------------
     # branch mapping
@@ -3115,198 +1844,16 @@ class SyncService(BaseService):
         branch_id: int | None = None,
         branch_name: str | None = None,
     ) -> dict[str, Any]:
-        """Link the current git branch to a Keboola development branch.
+        """Link the current git branch to a Keboola dev branch (see ``_sync_branch``)."""
+        return _branch_link(self, alias, project_root, branch_id, branch_name)
 
-        If no branch_id or branch_name is given:
-        1. Get current git branch name
-        2. Search for existing Keboola branch with same name
-        3. If not found: create a new dev branch
-        4. Save mapping to branch-mapping.json
+    def branch_unlink(self, project_root: Path) -> dict[str, Any]:
+        """Remove the branch mapping for the current git branch (see ``_sync_branch``)."""
+        return _branch_unlink(project_root)
 
-        Args:
-            alias: Project alias.
-            project_root: Root directory of the sync working tree.
-            branch_id: Link to a specific existing Keboola branch.
-            branch_name: Create/find a branch with this name.
-
-        Returns:
-            Dict with link result including git branch, Keboola branch ID, name.
-        """
-        from ..sync.branch_mapping import load_branch_mapping, save_branch_mapping
-        from ..sync.git_utils import get_current_branch
-
-        manifest = load_manifest(project_root)
-        if not manifest.git_branching.enabled:
-            raise ConfigError(
-                "Git-branching mode is not enabled. Run 'sync init --git-branching' first."
-            )
-
-        git_branch = get_current_branch(project_root)
-        if git_branch is None:
-            raise ConfigError("Cannot determine current git branch.")
-
-        default_branch = manifest.git_branching.default_branch
-        if git_branch == default_branch:
-            raise ConfigError(
-                f"Cannot link the default branch '{default_branch}'. "
-                "It is automatically linked to Keboola production."
-            )
-
-        # Load existing mapping
-        try:
-            mapping = load_branch_mapping(project_root)
-        except FileNotFoundError:
-            from ..sync.branch_mapping import BranchMapping
-
-            mapping = BranchMapping()
-            mapping.set(default_branch, None, "Main")
-
-        # Check if already linked
-        existing = mapping.get(git_branch)
-        if existing is not None:
-            return {
-                "status": "already_linked",
-                "git_branch": git_branch,
-                "keboola_branch_id": existing.keboola_id,
-                "keboola_branch_name": existing.name,
-            }
-
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
-        client = self._client_factory(project.stack_url, project.token)
-
-        with client:
-            if branch_id:
-                # Link to existing branch by ID
-                branches = client.list_dev_branches()
-                branch_info = next(
-                    (b for b in branches if b["id"] == branch_id),
-                    None,
-                )
-                if branch_info is None:
-                    raise ConfigError(f"Keboola branch {branch_id} not found.")
-                kbc_branch_id = int(branch_info["id"])
-                kbc_branch_name = branch_info.get("name", "")
-            elif branch_name:
-                # Search by name or create
-                branches = client.list_dev_branches()
-                branch_info = next(
-                    (b for b in branches if b.get("name") == branch_name),
-                    None,
-                )
-                if branch_info:
-                    kbc_branch_id = int(branch_info["id"])
-                    kbc_branch_name = branch_info.get("name", "")
-                else:
-                    result = client.create_dev_branch(name=branch_name)
-                    kbc_branch_id = int(result["id"])
-                    kbc_branch_name = branch_name
-            else:
-                # Default: use git branch name to search/create
-                branches = client.list_dev_branches()
-                branch_info = next(
-                    (b for b in branches if b.get("name") == git_branch),
-                    None,
-                )
-                if branch_info:
-                    kbc_branch_id = int(branch_info["id"])
-                    kbc_branch_name = branch_info.get("name", "")
-                else:
-                    result = client.create_dev_branch(name=git_branch)
-                    kbc_branch_id = int(result["id"])
-                    kbc_branch_name = git_branch
-
-        mapping.set(git_branch, kbc_branch_id, kbc_branch_name)
-        save_branch_mapping(project_root, mapping)
-
-        return {
-            "status": "linked",
-            "git_branch": git_branch,
-            "keboola_branch_id": kbc_branch_id,
-            "keboola_branch_name": kbc_branch_name,
-        }
-
-    def branch_unlink(
-        self,
-        project_root: Path,
-    ) -> dict[str, Any]:
-        """Remove the branch mapping for the current git branch."""
-        from ..sync.branch_mapping import load_branch_mapping, save_branch_mapping
-        from ..sync.git_utils import get_current_branch
-
-        manifest = load_manifest(project_root)
-        if not manifest.git_branching.enabled:
-            raise ConfigError("Git-branching mode is not enabled.")
-
-        git_branch = get_current_branch(project_root)
-        if git_branch is None:
-            raise ConfigError("Cannot determine current git branch.")
-
-        default_branch = manifest.git_branching.default_branch
-        if git_branch == default_branch:
-            raise ConfigError(
-                f"Cannot unlink the default branch '{default_branch}'. "
-                "It is permanently linked to Keboola production."
-            )
-
-        mapping = load_branch_mapping(project_root)
-        existing = mapping.get(git_branch)
-        if existing is None:
-            return {
-                "status": "not_linked",
-                "git_branch": git_branch,
-            }
-
-        kbc_id = existing.keboola_id
-        kbc_name = existing.name
-        mapping.remove(git_branch)
-        save_branch_mapping(project_root, mapping)
-
-        return {
-            "status": "unlinked",
-            "git_branch": git_branch,
-            "keboola_branch_id": kbc_id,
-            "keboola_branch_name": kbc_name,
-        }
-
-    def branch_status(
-        self,
-        project_root: Path,
-    ) -> dict[str, Any]:
-        """Show the branch mapping status for the current git branch."""
-        from ..sync.branch_mapping import load_branch_mapping
-        from ..sync.git_utils import get_current_branch
-
-        manifest = load_manifest(project_root)
-        if not manifest.git_branching.enabled:
-            return {"git_branching": False}
-
-        git_branch = get_current_branch(project_root)
-        try:
-            mapping = load_branch_mapping(project_root)
-        except FileNotFoundError:
-            return {
-                "git_branching": True,
-                "git_branch": git_branch,
-                "linked": False,
-            }
-
-        entry = mapping.get(git_branch) if git_branch else None
-        if entry is None:
-            return {
-                "git_branching": True,
-                "git_branch": git_branch,
-                "linked": False,
-            }
-
-        return {
-            "git_branching": True,
-            "git_branch": git_branch,
-            "linked": True,
-            "keboola_branch_id": entry.keboola_id,
-            "keboola_branch_name": entry.name,
-            "is_production": entry.is_production(),
-        }
+    def branch_status(self, project_root: Path) -> dict[str, Any]:
+        """Show the branch mapping status for the current git branch (see ``_sync_branch``)."""
+        return _branch_status(project_root)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -3382,342 +1929,6 @@ class SyncService(BaseService):
     # ------------------------------------------------------------------
     # Storage metadata / jobs / samples helpers
     # ------------------------------------------------------------------
-
-    def _write_storage_metadata(
-        self,
-        project_root: Path,
-        buckets: list[dict[str, Any]],
-        tables: list[dict[str, Any]],
-        samples: dict[str, str],
-    ) -> dict[str, int]:
-        """Write storage bucket and table metadata to the filesystem.
-
-        Creates:
-            storage/buckets.json - list of all buckets
-            storage/tables/{bucket_id}/{table_name}.json - per-table metadata
-            storage/samples/{bucket}/{table}/sample.csv - data samples (if any)
-
-        Returns:
-            Dict with counts: buckets, tables, samples written.
-        """
-        storage_dir = project_root / STORAGE_DIR_NAME
-        storage_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write buckets index
-        # API may return null for tablesCount / dataSizeBytes on empty
-        # buckets; coerce to 0 (dict.get default only fires when key is
-        # missing, not when the value is explicitly null).
-        bucket_summaries = [
-            {
-                "id": b.get("id", ""),
-                "name": b.get("name", ""),
-                "stage": b.get("stage", ""),
-                "description": b.get("description", ""),
-                "tables_count": b.get("tablesCount") or 0,
-                "data_size_bytes": b.get("dataSizeBytes") or 0,
-                "metadata": b.get("metadata", []),
-            }
-            for b in buckets
-        ]
-        buckets_file = storage_dir / STORAGE_BUCKETS_FILENAME
-        buckets_file.write_text(
-            json.dumps(bucket_summaries, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-        # Group tables by bucket
-        tables_by_bucket: dict[str, list[dict[str, Any]]] = {}
-        for t in tables:
-            bucket_id = (
-                t.get("bucket", {}).get("id", "")
-                if isinstance(t.get("bucket"), dict)
-                else t.get("bucketId", "")
-            )
-            if not bucket_id:
-                continue
-            tables_by_bucket.setdefault(bucket_id, []).append(t)
-
-        tables_written = 0
-        tables_dir = storage_dir / "tables"
-        for bucket_id, bucket_tables in tables_by_bucket.items():
-            # Sanitize bucket_id for filesystem. sanitize_path_segment first
-            # kills traversal (`/`, `..`, absolute paths); the trailing replace
-            # keeps the legacy `in.c-foo` -> `in-c-foo` directory naming for
-            # legitimate ids (GHSA-833q-c5wv-26r7).
-            safe_bucket = sanitize_path_segment(bucket_id).replace(".", "-")
-            bucket_dir = tables_dir / safe_bucket
-            _ensure_path_within(storage_dir, bucket_dir, f"bucket_id={bucket_id!r}")
-            bucket_dir.mkdir(parents=True, exist_ok=True)
-
-            for t in bucket_tables:
-                table_name = t.get("name", "unknown")
-                table_meta = {
-                    "id": t.get("id", ""),
-                    "name": table_name,
-                    "primary_key": t.get("primaryKey", []),
-                    "columns": t.get("columns", []),
-                    # API may return null for rowsCount / dataSizeBytes on
-                    # newly-created or empty tables; coerce to 0 explicitly
-                    # (dict.get default only fires when the key is missing).
-                    "rows_count": t.get("rowsCount") or 0,
-                    "data_size_bytes": t.get("dataSizeBytes") or 0,
-                    "last_import_date": t.get("lastImportDate", ""),
-                    "last_change_date": t.get("lastChangeDate", ""),
-                    "description": t.get("description", ""),
-                    "metadata": t.get("metadata", []),
-                    "column_metadata": t.get("columnMetadata", {}),
-                }
-                # The table name comes from the API; sanitize it for the
-                # filename and assert containment so a crafted name cannot
-                # escape the bucket dir (GHSA-833q-c5wv-26r7). The original
-                # name stays verbatim in the metadata body above.
-                safe_table = sanitize_path_segment(table_name)
-                table_file = bucket_dir / f"{safe_table}.json"
-                _ensure_path_within(storage_dir, table_file, f"table={table_name!r}")
-                table_file.write_text(
-                    json.dumps(table_meta, indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                tables_written += 1
-
-        # Write samples
-        samples_written = 0
-        if samples:
-            samples_dir = storage_dir / STORAGE_SAMPLES_DIR_NAME
-            for table_id, csv_data in samples.items():
-                # table_id format: "in.c-bucket.table" -> samples/in-c-bucket/table/
-                # Every segment derives from the API table_id; sanitize each and
-                # assert containment so a crafted id cannot escape (GHSA-833q).
-                parts = table_id.split(".", 2)
-                if len(parts) >= 3:
-                    safe_bucket = sanitize_path_segment(f"{parts[0]}-{parts[1]}")
-                    safe_table = sanitize_path_segment(parts[2])
-                else:
-                    safe_bucket = sanitize_path_segment(table_id.replace(".", "-"))
-                    safe_table = "data"
-                sample_dir = samples_dir / safe_bucket / safe_table
-                _ensure_path_within(storage_dir, sample_dir, f"table_id={table_id!r}")
-                sample_dir.mkdir(parents=True, exist_ok=True)
-
-                # Mask encrypted columns in CSV
-                masked_csv = self._mask_encrypted_columns(csv_data)
-                (sample_dir / "sample.csv").write_text(masked_csv, encoding="utf-8")
-                samples_written += 1
-
-        return {
-            "buckets": len(buckets),
-            "tables": tables_written,
-            "samples": samples_written,
-        }
-
-    def _fetch_jobs_per_config(
-        self,
-        client: Any,
-        components: list[dict[str, Any]],
-        job_limit: int,
-    ) -> list[dict[str, Any]]:
-        """Fetch jobs per config via /search/jobs in parallel.
-
-        Used as fallback when the grouped-jobs API cannot return all configs
-        in a single call (jobsPerGroup * limit <= 500 constraint).
-
-        Returns data in the same format as list_jobs_grouped() so that
-        _write_per_config_jobs() works unchanged.
-        """
-        config_pairs: list[tuple[str, str]] = []
-        for comp in components:
-            comp_id = comp.get("id", "")
-            for cfg in comp.get("configurations", []):
-                cfg_id = str(cfg.get("id", ""))
-                if comp_id and cfg_id:
-                    config_pairs.append((comp_id, cfg_id))
-
-        if not config_pairs:
-            return []
-
-        results: list[dict[str, Any]] = []
-        lock = threading.Lock()
-        max_workers = min(len(config_pairs), self._resolve_max_workers())
-
-        def _fetch_one(pair: tuple[str, str]) -> None:
-            comp_id, cfg_id = pair
-            try:
-                jobs = client.list_jobs(
-                    component_id=comp_id,
-                    config_id=cfg_id,
-                    limit=job_limit,
-                )
-                if jobs:
-                    with lock:
-                        results.append(
-                            {
-                                "group": {"componentId": comp_id, "configId": cfg_id},
-                                "jobs": jobs,
-                            }
-                        )
-            except Exception:
-                logger.debug("Failed to fetch jobs for %s/%s", comp_id, cfg_id, exc_info=True)
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(_fetch_one, pair) for pair in config_pairs]
-            for future in as_completed(futures):
-                future.result()  # propagate unexpected errors
-
-        return results
-
-    def _write_per_config_jobs(
-        self,
-        branch_dir: Path,
-        configurations: list[ManifestConfiguration],
-        jobs_grouped: list[dict[str, Any]],
-    ) -> int:
-        """Write _jobs.jsonl files next to each configuration.
-
-        Matches grouped jobs to configs by componentId+configId,
-        then writes a JSONL file with light job records.
-
-        Returns:
-            Number of _jobs.jsonl files written.
-        """
-        # Build lookup: (component_id, config_id) -> list of jobs
-        jobs_by_config: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        for group in jobs_grouped:
-            group_key = group.get("group", {})
-            component_id = group_key.get("componentId", "")
-            config_id = group_key.get("configId", "")
-            if component_id and config_id:
-                jobs_by_config[(component_id, config_id)] = group.get("jobs", [])
-
-        files_written = 0
-        for cfg in configurations:
-            key = (cfg.component_id, cfg.id)
-            jobs = jobs_by_config.get(key)
-            if not jobs:
-                continue
-
-            config_dir = branch_dir / cfg.path
-            config_dir.mkdir(parents=True, exist_ok=True)
-            jobs_file = config_dir / JOBS_FILENAME
-
-            lines: list[str] = []
-            for job in jobs:
-                light_job: dict[str, Any] = {
-                    "id": str(job.get("id", "")),
-                    "status": job.get("status", ""),
-                    "start_time": job.get("startTime", ""),
-                    "end_time": job.get("endTime", ""),
-                    "duration_seconds": job.get("durationSeconds", 0),
-                }
-                if job.get("mode") and job["mode"] != "run":
-                    light_job["mode"] = job["mode"]
-                # Include error message for failed/warning jobs
-                status = job.get("status", "")
-                if status in ("error", "warning", "terminated", "cancelled"):
-                    result = job.get("result", {})
-                    if isinstance(result, dict) and result.get("message"):
-                        light_job["error_message"] = result["message"]
-                lines.append(json.dumps(light_job, ensure_ascii=False))
-
-            jobs_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            files_written += 1
-
-        return files_written
-
-    def _fetch_samples(
-        self,
-        client: Any,
-        tables: list[dict[str, Any]],
-        sample_limit: int,
-        max_samples: int,
-    ) -> dict[str, str]:
-        """Fetch CSV data previews for tables, respecting limits.
-
-        Selects tables sorted by rowsCount descending (largest first),
-        limited to max_samples tables.
-
-        Returns:
-            Dict mapping table_id -> CSV string.
-        """
-
-        # Storage API may return rowsCount=None for empty/newly-created tables
-        # on some backends; dict.get() does not coerce None to the default value.
-        def _rows(t: dict[str, Any]) -> int:
-            return t.get("rowsCount") or 0
-
-        # Sort by rows count desc, pick top N
-        sorted_tables = sorted(
-            [t for t in tables if _rows(t) > 0],
-            key=_rows,
-            reverse=True,
-        )[:max_samples]
-
-        # Storage API sync export limit
-        max_sync_columns = 30
-
-        samples: dict[str, str] = {}
-        for t in sorted_tables:
-            table_id = t.get("id", "")
-            if not table_id:
-                continue
-            try:
-                # Limit columns to max_sync_columns to avoid API 400 error
-                all_columns = t.get("columns", [])
-                columns = (
-                    all_columns[:max_sync_columns] if len(all_columns) > max_sync_columns else None
-                )
-                csv_data = client.get_table_data_preview(
-                    table_id, limit=sample_limit, columns=columns
-                )
-                samples[table_id] = csv_data
-            except Exception:
-                logger.warning("Failed to fetch sample for %s", table_id, exc_info=True)
-
-        return samples
-
-    @staticmethod
-    def _mask_encrypted_columns(csv_data: str) -> str:
-        """Mask encrypted column values in CSV data.
-
-        Encrypted columns in Keboola start with '#' in the column name.
-        Their values are replaced with the masked placeholder.
-        """
-        if not csv_data:
-            return csv_data
-
-        lines = csv_data.split("\n")
-        if not lines:
-            return csv_data
-
-        # Parse header to find encrypted column indices
-        import csv
-        import io
-
-        reader = csv.reader(io.StringIO(lines[0]))
-        try:
-            header = next(reader)
-        except StopIteration:
-            return csv_data
-
-        encrypted_indices = [
-            i for i, col in enumerate(header) if col.startswith(ENCRYPTED_COLUMN_PREFIX)
-        ]
-        if not encrypted_indices:
-            return csv_data
-
-        # Rewrite CSV with masked values
-        output = io.StringIO()
-        writer = csv.writer(output)
-        full_reader = csv.reader(io.StringIO(csv_data))
-        for row_idx, row in enumerate(full_reader):
-            if row_idx == 0:
-                writer.writerow(row)  # header unchanged
-            else:
-                for idx in encrypted_indices:
-                    if idx < len(row):
-                        row[idx] = ENCRYPTED_COLUMN_MASK
-                writer.writerow(row)
-
-        return output.getvalue()
 
     def _write_config_file(self, config_dir: Path, config_data: dict[str, Any]) -> str:
         """Write a ``_config.yml`` file and return its SHA256 hash.
