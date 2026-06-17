@@ -10,7 +10,6 @@ import json
 import logging
 import shutil
 import subprocess
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +53,24 @@ from ._encryption import (
     find_plaintext_secret_keys,
 )
 from ._sync_bindings import resolve_flow_task_bindings, resolve_variable_bindings
+from ._sync_branch import (
+    branch_link as _branch_link,
+)
+from ._sync_branch import (
+    branch_status as _branch_status,
+)
+from ._sync_branch import (
+    branch_unlink as _branch_unlink,
+)
+from ._sync_bulk import (
+    diff_all as _bulk_diff_all,
+)
+from ._sync_bulk import (
+    pull_all as _bulk_pull_all,
+)
+from ._sync_bulk import (
+    push_all as _bulk_push_all,
+)
 from ._sync_clone import clone_project as _clone_project_impl
 from ._sync_models import CreatedConfig, LocalConfigHashes
 from ._sync_storage import (
@@ -2119,148 +2136,23 @@ class SyncService(BaseService):
         sample_limit: int = DEFAULT_SAMPLE_LIMIT,
         max_samples: int = DEFAULT_MAX_SAMPLES,
     ) -> dict[str, Any]:
-        """Pull all registered projects in parallel.
-
-        For each project, creates ``base_dir/<alias>/`` and initializes
-        if no manifest exists yet, then pulls.
-
-        Args:
-            base_dir: Parent directory; each project gets a subdirectory.
-            force: Overwrite local files without checking.
-            dry_run: Compute what would be pulled but don't write.
-            job_limit: Max jobs per config to pull.
-            no_storage: Skip storage metadata download.
-            no_jobs: Skip per-config jobs download.
-            with_samples: Download table data samples.
-            sample_limit: Max rows per sample.
-            max_samples: Max number of tables to sample.
-
-        Returns:
-            Dict with per-project results and a summary.
-        """
-        projects = self.resolve_projects(None)
-        results: dict[str, Any] = {}
-        success_count = 0
-        failed_count = 0
-
-        def _worker(alias: str) -> None:
-            nonlocal success_count, failed_count
-            project_root = base_dir / alias
-            manifest_path = project_root / KEBOOLA_DIR_NAME / "manifest.json"
-            try:
-                if not manifest_path.exists():
-                    self.init_sync(alias, project_root)
-                result = self.pull(
-                    alias,
-                    project_root,
-                    force=force,
-                    dry_run=dry_run,
-                    job_limit=job_limit,
-                    no_storage=no_storage,
-                    no_jobs=no_jobs,
-                    with_samples=with_samples,
-                    sample_limit=sample_limit,
-                    max_samples=max_samples,
-                )
-                results[alias] = result
-                success_count += 1
-            except SyncConflictError as exc:
-                # Preserve the structured conflict so a programmatic / AI
-                # consumer of `--all-projects --json` can tell a merge conflict
-                # apart from any other error and read the conflicting configs --
-                # the single-project path emits the same code + conflicts.
-                results[alias] = {
-                    "error": exc.message,
-                    "error_code": exc.error_code,
-                    "conflicts": exc.conflicts,
-                }
-                failed_count += 1
-            except Exception as exc:
-                results[alias] = {"error": str(exc)}
-                failed_count += 1
-
-        max_workers = min(len(projects), self._resolve_max_workers()) if projects else 1
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_worker, alias): alias for alias in projects}
-            for future in as_completed(futures):
-                # Exceptions are captured inside _worker; this catches truly
-                # unexpected failures (e.g. threading errors).
-                try:
-                    future.result()
-                except Exception as exc:
-                    alias = futures[future]
-                    results[alias] = {"error": str(exc)}
-                    failed_count += 1
-
-        total = len(projects)
-        return {
-            "projects": results,
-            "summary": {
-                "total": total,
-                "success": success_count,
-                "failed": failed_count,
-            },
-        }
+        """Pull all registered projects in parallel (see ``_sync_bulk.pull_all``)."""
+        return _bulk_pull_all(
+            self,
+            base_dir,
+            force=force,
+            dry_run=dry_run,
+            job_limit=job_limit,
+            no_storage=no_storage,
+            no_jobs=no_jobs,
+            with_samples=with_samples,
+            sample_limit=sample_limit,
+            max_samples=max_samples,
+        )
 
     def diff_all(self, base_dir: Path) -> dict[str, Any]:
-        """Diff all registered projects that have a local manifest.
-
-        Projects without an existing manifest are skipped.
-
-        Args:
-            base_dir: Parent directory containing per-project subdirectories.
-
-        Returns:
-            Dict with per-project diff results, a summary, and skipped list.
-        """
-        projects = self.resolve_projects(None)
-        results: dict[str, Any] = {}
-        skipped: list[str] = []
-        success_count = 0
-        failed_count = 0
-
-        # Partition into actionable vs skipped
-        actionable: list[str] = []
-        for alias in projects:
-            manifest_path = base_dir / alias / KEBOOLA_DIR_NAME / "manifest.json"
-            if manifest_path.exists():
-                actionable.append(alias)
-            else:
-                skipped.append(alias)
-
-        def _worker(alias: str) -> None:
-            nonlocal success_count, failed_count
-            project_root = base_dir / alias
-            try:
-                result = self.diff(alias, project_root)
-                results[alias] = result
-                success_count += 1
-            except Exception as exc:
-                results[alias] = {"error": str(exc)}
-                failed_count += 1
-
-        max_workers = min(len(actionable), self._resolve_max_workers()) if actionable else 1
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_worker, alias): alias for alias in actionable}
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception as exc:
-                    alias = futures[future]
-                    results[alias] = {"error": str(exc)}
-                    failed_count += 1
-
-        total = len(projects)
-        return {
-            "projects": results,
-            "summary": {
-                "total": total,
-                "success": success_count,
-                "failed": failed_count,
-                "skipped": len(skipped),
-            },
-            "skipped": skipped,
-        }
+        """Diff all registered projects with a local manifest (see ``_sync_bulk.diff_all``)."""
+        return _bulk_diff_all(self, base_dir)
 
     def push_all(
         self,
@@ -2269,74 +2161,14 @@ class SyncService(BaseService):
         force: bool = False,
         allow_plaintext_fallback: bool = False,
     ) -> dict[str, Any]:
-        """Push all registered projects that have a local manifest.
-
-        Projects without an existing manifest are skipped.
-
-        Args:
-            base_dir: Parent directory containing per-project subdirectories.
-            dry_run: Compute changes but don't execute them.
-            force: Allow deletions without extra confirmation.
-            allow_plaintext_fallback: Allow push with plaintext secrets on
-                encryption failure.
-
-        Returns:
-            Dict with per-project push results, a summary, and skipped list.
-        """
-        projects = self.resolve_projects(None)
-        results: dict[str, Any] = {}
-        skipped: list[str] = []
-        success_count = 0
-        failed_count = 0
-
-        # Partition into actionable vs skipped
-        actionable: list[str] = []
-        for alias in projects:
-            manifest_path = base_dir / alias / KEBOOLA_DIR_NAME / "manifest.json"
-            if manifest_path.exists():
-                actionable.append(alias)
-            else:
-                skipped.append(alias)
-
-        def _worker(alias: str) -> None:
-            nonlocal success_count, failed_count
-            project_root = base_dir / alias
-            try:
-                result = self.push(
-                    alias,
-                    project_root,
-                    dry_run=dry_run,
-                    force=force,
-                    allow_plaintext_fallback=allow_plaintext_fallback,
-                )
-                results[alias] = result
-                success_count += 1
-            except Exception as exc:
-                results[alias] = {"error": str(exc)}
-                failed_count += 1
-
-        max_workers = min(len(actionable), self._resolve_max_workers()) if actionable else 1
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_worker, alias): alias for alias in actionable}
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception as exc:
-                    alias = futures[future]
-                    results[alias] = {"error": str(exc)}
-                    failed_count += 1
-
-        total = len(projects)
-        return {
-            "projects": results,
-            "summary": {
-                "total": total,
-                "success": success_count,
-                "failed": failed_count,
-                "skipped": len(skipped),
-            },
-            "skipped": skipped,
-        }
+        """Push all registered projects with a local manifest (see ``_sync_bulk.push_all``)."""
+        return _bulk_push_all(
+            self,
+            base_dir,
+            dry_run=dry_run,
+            force=force,
+            allow_plaintext_fallback=allow_plaintext_fallback,
+        )
 
     # ------------------------------------------------------------------
     # branch mapping
@@ -2349,198 +2181,16 @@ class SyncService(BaseService):
         branch_id: int | None = None,
         branch_name: str | None = None,
     ) -> dict[str, Any]:
-        """Link the current git branch to a Keboola development branch.
+        """Link the current git branch to a Keboola dev branch (see ``_sync_branch``)."""
+        return _branch_link(self, alias, project_root, branch_id, branch_name)
 
-        If no branch_id or branch_name is given:
-        1. Get current git branch name
-        2. Search for existing Keboola branch with same name
-        3. If not found: create a new dev branch
-        4. Save mapping to branch-mapping.json
+    def branch_unlink(self, project_root: Path) -> dict[str, Any]:
+        """Remove the branch mapping for the current git branch (see ``_sync_branch``)."""
+        return _branch_unlink(project_root)
 
-        Args:
-            alias: Project alias.
-            project_root: Root directory of the sync working tree.
-            branch_id: Link to a specific existing Keboola branch.
-            branch_name: Create/find a branch with this name.
-
-        Returns:
-            Dict with link result including git branch, Keboola branch ID, name.
-        """
-        from ..sync.branch_mapping import load_branch_mapping, save_branch_mapping
-        from ..sync.git_utils import get_current_branch
-
-        manifest = load_manifest(project_root)
-        if not manifest.git_branching.enabled:
-            raise ConfigError(
-                "Git-branching mode is not enabled. Run 'sync init --git-branching' first."
-            )
-
-        git_branch = get_current_branch(project_root)
-        if git_branch is None:
-            raise ConfigError("Cannot determine current git branch.")
-
-        default_branch = manifest.git_branching.default_branch
-        if git_branch == default_branch:
-            raise ConfigError(
-                f"Cannot link the default branch '{default_branch}'. "
-                "It is automatically linked to Keboola production."
-            )
-
-        # Load existing mapping
-        try:
-            mapping = load_branch_mapping(project_root)
-        except FileNotFoundError:
-            from ..sync.branch_mapping import BranchMapping
-
-            mapping = BranchMapping()
-            mapping.set(default_branch, None, "Main")
-
-        # Check if already linked
-        existing = mapping.get(git_branch)
-        if existing is not None:
-            return {
-                "status": "already_linked",
-                "git_branch": git_branch,
-                "keboola_branch_id": existing.keboola_id,
-                "keboola_branch_name": existing.name,
-            }
-
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
-        client = self._client_factory(project.stack_url, project.token)
-
-        with client:
-            if branch_id:
-                # Link to existing branch by ID
-                branches = client.list_dev_branches()
-                branch_info = next(
-                    (b for b in branches if b["id"] == branch_id),
-                    None,
-                )
-                if branch_info is None:
-                    raise ConfigError(f"Keboola branch {branch_id} not found.")
-                kbc_branch_id = int(branch_info["id"])
-                kbc_branch_name = branch_info.get("name", "")
-            elif branch_name:
-                # Search by name or create
-                branches = client.list_dev_branches()
-                branch_info = next(
-                    (b for b in branches if b.get("name") == branch_name),
-                    None,
-                )
-                if branch_info:
-                    kbc_branch_id = int(branch_info["id"])
-                    kbc_branch_name = branch_info.get("name", "")
-                else:
-                    result = client.create_dev_branch(name=branch_name)
-                    kbc_branch_id = int(result["id"])
-                    kbc_branch_name = branch_name
-            else:
-                # Default: use git branch name to search/create
-                branches = client.list_dev_branches()
-                branch_info = next(
-                    (b for b in branches if b.get("name") == git_branch),
-                    None,
-                )
-                if branch_info:
-                    kbc_branch_id = int(branch_info["id"])
-                    kbc_branch_name = branch_info.get("name", "")
-                else:
-                    result = client.create_dev_branch(name=git_branch)
-                    kbc_branch_id = int(result["id"])
-                    kbc_branch_name = git_branch
-
-        mapping.set(git_branch, kbc_branch_id, kbc_branch_name)
-        save_branch_mapping(project_root, mapping)
-
-        return {
-            "status": "linked",
-            "git_branch": git_branch,
-            "keboola_branch_id": kbc_branch_id,
-            "keboola_branch_name": kbc_branch_name,
-        }
-
-    def branch_unlink(
-        self,
-        project_root: Path,
-    ) -> dict[str, Any]:
-        """Remove the branch mapping for the current git branch."""
-        from ..sync.branch_mapping import load_branch_mapping, save_branch_mapping
-        from ..sync.git_utils import get_current_branch
-
-        manifest = load_manifest(project_root)
-        if not manifest.git_branching.enabled:
-            raise ConfigError("Git-branching mode is not enabled.")
-
-        git_branch = get_current_branch(project_root)
-        if git_branch is None:
-            raise ConfigError("Cannot determine current git branch.")
-
-        default_branch = manifest.git_branching.default_branch
-        if git_branch == default_branch:
-            raise ConfigError(
-                f"Cannot unlink the default branch '{default_branch}'. "
-                "It is permanently linked to Keboola production."
-            )
-
-        mapping = load_branch_mapping(project_root)
-        existing = mapping.get(git_branch)
-        if existing is None:
-            return {
-                "status": "not_linked",
-                "git_branch": git_branch,
-            }
-
-        kbc_id = existing.keboola_id
-        kbc_name = existing.name
-        mapping.remove(git_branch)
-        save_branch_mapping(project_root, mapping)
-
-        return {
-            "status": "unlinked",
-            "git_branch": git_branch,
-            "keboola_branch_id": kbc_id,
-            "keboola_branch_name": kbc_name,
-        }
-
-    def branch_status(
-        self,
-        project_root: Path,
-    ) -> dict[str, Any]:
-        """Show the branch mapping status for the current git branch."""
-        from ..sync.branch_mapping import load_branch_mapping
-        from ..sync.git_utils import get_current_branch
-
-        manifest = load_manifest(project_root)
-        if not manifest.git_branching.enabled:
-            return {"git_branching": False}
-
-        git_branch = get_current_branch(project_root)
-        try:
-            mapping = load_branch_mapping(project_root)
-        except FileNotFoundError:
-            return {
-                "git_branching": True,
-                "git_branch": git_branch,
-                "linked": False,
-            }
-
-        entry = mapping.get(git_branch) if git_branch else None
-        if entry is None:
-            return {
-                "git_branching": True,
-                "git_branch": git_branch,
-                "linked": False,
-            }
-
-        return {
-            "git_branching": True,
-            "git_branch": git_branch,
-            "linked": True,
-            "keboola_branch_id": entry.keboola_id,
-            "keboola_branch_name": entry.name,
-            "is_production": entry.is_production(),
-        }
+    def branch_status(self, project_root: Path) -> dict[str, Any]:
+        """Show the branch mapping status for the current git branch (see ``_sync_branch``)."""
+        return _branch_status(project_root)
 
     # ------------------------------------------------------------------
     # Private helpers
