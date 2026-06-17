@@ -2,6 +2,7 @@
 
 import platform
 from typing import SupportsIndex
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -641,6 +642,45 @@ class TestUserAgent:
         request = httpx_mock.get_request()
         assert request.headers["User-Agent"] == build_user_agent()
         assert "stale/0.0.1" not in request.headers["User-Agent"]
+
+
+class TestResolveAppName:
+    """Dynamic distribution-name resolution (PyPI rename bridge, #424).
+
+    One codebase must run under BOTH `keboola-cli` (current) and the legacy
+    `keboola-agent-cli` distribution (the migration-bridge wheel), so
+    `version()` / User-Agent never break depending on how the user installed.
+    """
+
+    def _patch_version(self, installed: set[str]):
+        from importlib.metadata import PackageNotFoundError
+
+        def fake_version(name: str) -> str:
+            if name in installed:
+                return "0.63.1"
+            raise PackageNotFoundError(name)
+
+        return patch("keboola_agent_cli.constants.version", side_effect=fake_version)
+
+    def test_prefers_current_name(self) -> None:
+        from keboola_agent_cli.constants import _resolve_app_name
+
+        with self._patch_version({"keboola-cli", "keboola-agent-cli"}):
+            assert _resolve_app_name() == "keboola-cli"
+
+    def test_falls_back_to_legacy_name(self) -> None:
+        from keboola_agent_cli.constants import _resolve_app_name
+
+        # Installed via the bridge wheel -> only the legacy distribution exists.
+        with self._patch_version({"keboola-agent-cli"}):
+            assert _resolve_app_name() == "keboola-agent-cli"
+
+    def test_defaults_to_current_when_neither_installed(self) -> None:
+        from keboola_agent_cli.constants import APP_NAME_CANDIDATES, _resolve_app_name
+
+        # Editable/source checkout without built metadata -> stable default.
+        with self._patch_version(set()):
+            assert _resolve_app_name() == APP_NAME_CANDIDATES[0] == "keboola-cli"
 
 
 class TestBaseHttpClientContextManager:

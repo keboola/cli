@@ -5,12 +5,45 @@ and environment variable names are centralized here to avoid duplication
 and ensure consistency across the codebase.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 import httpx
 
 # --- Application identity ---
-# Distribution/package name; single source for importlib.metadata lookup and
-# the User-Agent product token that signs every Keboola API call.
-APP_NAME: str = "keboola-cli"
+# Distribution name used for the importlib.metadata version lookup and the
+# User-Agent product token that signs every Keboola API call.
+#
+# Resolved DYNAMICALLY so one codebase runs correctly under BOTH the current
+# distribution (`keboola-cli`) and the legacy pre-0.63 name
+# (`keboola-agent-cli`). The PyPI rename (#424) ships a migration-bridge wheel
+# under the legacy name so already-installed <=0.62 users self-update in place;
+# under that distribution `version("keboola-cli")` raises PackageNotFoundError,
+# which would break `kbagent version` if APP_NAME were a fixed literal.
+#
+# NOTE: this is the PyPI/distribution identity ONLY. The on-disk config dir
+# (`~/.config/keboola-agent-cli/`) is a SEPARATE fixed literal in
+# config_store.py -- it must not move with the distribution name or existing
+# users would lose their config location.
+APP_NAME_CANDIDATES: tuple[str, ...] = ("keboola-cli", "keboola-agent-cli")
+
+
+def _resolve_app_name() -> str:
+    """Return the installed distribution name, preferring the current one.
+
+    Falls back to the first (current) candidate when neither is importable --
+    an editable/source checkout without built metadata -- so callers always get
+    a stable product token.
+    """
+    for name in APP_NAME_CANDIDATES:
+        try:
+            version(name)
+            return name
+        except PackageNotFoundError:
+            continue
+    return APP_NAME_CANDIDATES[0]
+
+
+APP_NAME: str = _resolve_app_name()
 
 # --- Sentinel for missing metadata keys ---
 # Distinguishes "key absent" from "value is None/null" in branch metadata lookups.

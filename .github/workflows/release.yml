@@ -83,6 +83,40 @@ jobs:
           fi
           echo "OK: $expected matches tag $tag"
 
+      - name: Build the legacy-named compat wheel (self-update bridge for <=0.62 clients)
+        # MIGRATION BRIDGE (#424). Pre-0.63 clients were installed as the
+        # `keboola-agent-cli` distribution. Their (immutable, already-shipped)
+        # self-update code builds the asset URL with the OLD wheel name
+        # `keboola_agent_cli-<version>-py3-none-any.whl` and runs
+        #   uv tool install --force "keboola-agent-cli[...] @ <url>"
+        # After the PyPI rename the release only carried `keboola_cli-*.whl`, so
+        # that HEAD probe 404'd, the client fell back to the git+ build, and uv
+        # aborted with `Executable already exists: kbagent` -- self-update
+        # silently failed for every <=0.62 user.
+        #
+        # Shipping a SECOND wheel whose DISTRIBUTION name is still
+        # `keboola-agent-cli` (identical code; only the [project].name differs)
+        # lets those clients find their asset and upgrade in place. Dynamic
+        # APP_NAME (constants.py) keeps `kbagent version` / User-Agent working
+        # under either distribution name. Remove this step (and the verify
+        # below) once the <=0.62 fleet has migrated off the legacy name.
+        run: |
+          cp pyproject.toml pyproject.toml.orig
+          sed -i 's/^name = "keboola-cli"$/name = "keboola-agent-cli"/' pyproject.toml
+          uv build --wheel
+          mv pyproject.toml.orig pyproject.toml
+
+      - name: Verify the legacy compat wheel exists
+        run: |
+          tag="$TAG"
+          version="${tag#v}"
+          expected="dist/keboola_agent_cli-${version}-py3-none-any.whl"
+          if [ ! -f "$expected" ]; then
+            echo "::error::Expected legacy compat wheel $expected but built: $(ls dist/)"
+            exit 1
+          fi
+          echo "OK: legacy compat wheel $expected present"
+
       - name: Upload the wheel to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
