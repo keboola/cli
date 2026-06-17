@@ -24,6 +24,37 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.63.0": [
+        "New (#428): the importable SDK is now statically typed -- a PEP 561 `py.typed` "
+        "marker ships in the wheel and the high-traffic facade operations return typed "
+        "pydantic models (`JobResult`, `QueryResult`, `UploadTableResult`, `SyncPushResult`, "
+        "`ConfigDetailResult`, `CloneResult`) exported from the package root. Downstream "
+        "`mypy`/`ty`/IDEs now treat `keboola_agent_cli` as typed, so an SDK contract change "
+        'surfaces at type-check time instead of at runtime. Every model is `extra="allow"` '
+        "(backend field drift never raises) and accepts the raw API key or the snake_case "
+        "field name, so `Model.model_validate(service_dict)` works directly. Typed at the "
+        "facade only: the dict-returning service layer and `--json` CLI output are unchanged. "
+        "New typed wrappers: `Client.run_job` / `query_result` / `config_detail` / `upload_table`.",
+        "New (#427): `kbagent job run --idempotency-key KEY [--force-rerun]` (and "
+        "`Client.run_job(idempotency_key=..., idempotency_store=...)`) makes a replayed, "
+        "interrupted build step safe -- a prior still-running or non-failed job is returned "
+        "instead of creating a duplicate side effect; a prior failed run is re-run. The Queue "
+        "API `POST /jobs` has no server-side idempotency token (verified against the live spec "
+        "v1.3.8 and the job-queue server source -- the internal `deduplicationId` is "
+        "daemon-only), so dedup is client-side: a `JobIdempotencyStore` (atomic, fcntl-locked, "
+        "0600) at `<config-dir>/job_idempotency.json`. Reusing a key for a different "
+        "component/config raises; dedup is scoped to one machine.",
+        "New (#426): `kbagent sync clone --source DIR --target ALIAS --target-dir DIR` (and "
+        "`SyncService.clone_project` -> `CloneResult`) builds a new project by cloning a "
+        "reference synced tree and parameterizing it via declarative override files -- "
+        "`--bucket-map` (rewrite storage input/output bucket prefixes), `--variable-values` "
+        "(override keboola.variables rows), `--instance-rename` (rename config-path prefixes) "
+        "-- then pushes so every config CREATEs fresh. A new push Phase D remaps `keboola.flow` "
+        "task `configId`s reference->ULID via `created_id_map` (generic; benefits any "
+        "fresh-create push), alongside the Phase-C variable-link remap. Cloning into a fresh "
+        "target needs no id surgery; a fresh-target guard refuses a non-empty target and a "
+        "re-run with an existing target-dir is idempotent (`no_changes`).",
+    ],
     "0.62.0": [
         "New (#417): `storage download-table` gains server-side row filtering -- "
         "`--where-column` + `--where-value` (repeatable, OR within the set) + "
