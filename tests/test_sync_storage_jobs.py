@@ -22,6 +22,13 @@ from keboola_agent_cli.constants import (
     STORAGE_DIR_NAME,
 )
 from keboola_agent_cli.models import TokenVerifyResponse
+from keboola_agent_cli.services._sync_storage import (
+    fetch_jobs_per_config,
+    fetch_samples,
+    mask_encrypted_columns,
+    write_per_config_jobs,
+    write_storage_metadata,
+)
 from keboola_agent_cli.services.sync_service import SyncService
 from keboola_agent_cli.sync.manifest import ManifestConfiguration
 
@@ -428,7 +435,7 @@ class TestGetTableDataPreview:
 
 
 class TestWriteStorageMetadata:
-    """Tests for SyncService._write_storage_metadata()."""
+    """Tests for write_storage_metadata()."""
 
     def _make_svc(self, tmp_config_dir: Path) -> SyncService:
         """Create a SyncService with a minimal ConfigStore."""
@@ -437,11 +444,10 @@ class TestWriteStorageMetadata:
 
     def test_creates_directory_structure(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """_write_storage_metadata creates storage/buckets.json and storage/tables/ dirs."""
-        svc = self._make_svc(tmp_config_dir)
         project_root = tmp_path / "project"
         project_root.mkdir()
 
-        stats = svc._write_storage_metadata(project_root, SAMPLE_BUCKETS_API, SAMPLE_TABLES_API, {})
+        stats = write_storage_metadata(project_root, SAMPLE_BUCKETS_API, SAMPLE_TABLES_API, {})
 
         storage_dir = project_root / STORAGE_DIR_NAME
         assert storage_dir.exists()
@@ -454,11 +460,10 @@ class TestWriteStorageMetadata:
 
     def test_bucket_summary_format(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """buckets.json contains correct summary fields for each bucket."""
-        svc = self._make_svc(tmp_config_dir)
         project_root = tmp_path / "project"
         project_root.mkdir()
 
-        svc._write_storage_metadata(project_root, SAMPLE_BUCKETS_API, [], {})
+        write_storage_metadata(project_root, SAMPLE_BUCKETS_API, [], {})
 
         buckets_file = project_root / STORAGE_DIR_NAME / STORAGE_BUCKETS_FILENAME
         buckets = json.loads(buckets_file.read_text(encoding="utf-8"))
@@ -480,11 +485,10 @@ class TestWriteStorageMetadata:
 
     def test_table_metadata_format(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """Per-table JSON files contain correct metadata fields."""
-        svc = self._make_svc(tmp_config_dir)
         project_root = tmp_path / "project"
         project_root.mkdir()
 
-        svc._write_storage_metadata(project_root, SAMPLE_BUCKETS_API, SAMPLE_TABLES_API, {})
+        write_storage_metadata(project_root, SAMPLE_BUCKETS_API, SAMPLE_TABLES_API, {})
 
         # Check table under in.c-data -> in-c-data/users.json
         table_file = project_root / STORAGE_DIR_NAME / "tables" / "in-c-data" / "users.json"
@@ -501,11 +505,10 @@ class TestWriteStorageMetadata:
 
     def test_tables_grouped_by_bucket(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """Tables are organized in subdirectories named after their bucket."""
-        svc = self._make_svc(tmp_config_dir)
         project_root = tmp_path / "project"
         project_root.mkdir()
 
-        svc._write_storage_metadata(project_root, SAMPLE_BUCKETS_API, SAMPLE_TABLES_API, {})
+        write_storage_metadata(project_root, SAMPLE_BUCKETS_API, SAMPLE_TABLES_API, {})
 
         tables_dir = project_root / STORAGE_DIR_NAME / "tables"
 
@@ -518,11 +521,10 @@ class TestWriteStorageMetadata:
 
     def test_empty_buckets_and_tables(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """_write_storage_metadata with empty lists creates only the directory."""
-        svc = self._make_svc(tmp_config_dir)
         project_root = tmp_path / "project"
         project_root.mkdir()
 
-        stats = svc._write_storage_metadata(project_root, [], [], {})
+        stats = write_storage_metadata(project_root, [], [], {})
 
         assert stats["buckets"] == 0
         assert stats["tables"] == 0
@@ -541,7 +543,6 @@ class TestWriteStorageMetadata:
         Companion to issue #233 -- same root cause, no crash but inconsistent
         data shape.
         """
-        svc = self._make_svc(tmp_config_dir)
         project_root = tmp_path / "project"
         project_root.mkdir()
 
@@ -573,7 +574,7 @@ class TestWriteStorageMetadata:
             }
         ]
 
-        svc._write_storage_metadata(project_root, buckets, tables, {})
+        write_storage_metadata(project_root, buckets, tables, {})
 
         buckets_file = project_root / STORAGE_DIR_NAME / STORAGE_BUCKETS_FILENAME
         bucket_summaries = json.loads(buckets_file.read_text(encoding="utf-8"))
@@ -587,7 +588,6 @@ class TestWriteStorageMetadata:
 
     def test_samples_written_to_correct_path(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """Samples are written to storage/samples/{bucket}/{table}/sample.csv."""
-        svc = self._make_svc(tmp_config_dir)
         project_root = tmp_path / "project"
         project_root.mkdir()
 
@@ -595,9 +595,7 @@ class TestWriteStorageMetadata:
             "in.c-data.users": '"id","name"\n"1","Alice"\n',
         }
 
-        stats = svc._write_storage_metadata(
-            project_root, SAMPLE_BUCKETS_API, SAMPLE_TABLES_API, samples
-        )
+        stats = write_storage_metadata(project_root, SAMPLE_BUCKETS_API, SAMPLE_TABLES_API, samples)
 
         assert stats["samples"] == 1
 
@@ -619,7 +617,6 @@ class TestWriteStorageMetadataPathTraversal:
     def test_malicious_table_name_stays_inside_workspace(
         self, tmp_config_dir: Path, tmp_path: Path
     ) -> None:
-        svc = self._make_svc(tmp_config_dir)
         project_root = tmp_path / "project"
         project_root.mkdir()
         tables = [
@@ -631,7 +628,7 @@ class TestWriteStorageMetadataPathTraversal:
             }
         ]
 
-        svc._write_storage_metadata(project_root, [], tables, {})
+        write_storage_metadata(project_root, [], tables, {})
 
         # The traversal target above the workspace must NOT be created; the
         # metadata lands safely inside under a sanitized filename instead.
@@ -645,7 +642,6 @@ class TestWriteStorageMetadataPathTraversal:
     def test_malicious_bucket_id_stays_inside_workspace(
         self, tmp_config_dir: Path, tmp_path: Path
     ) -> None:
-        svc = self._make_svc(tmp_config_dir)
         project_root = tmp_path / "project"
         project_root.mkdir()
         tables = [
@@ -657,7 +653,7 @@ class TestWriteStorageMetadataPathTraversal:
             }
         ]
 
-        svc._write_storage_metadata(project_root, [], tables, {})
+        write_storage_metadata(project_root, [], tables, {})
 
         storage_dir = project_root / STORAGE_DIR_NAME
         written = list(storage_dir.rglob("*.json"))
@@ -669,12 +665,11 @@ class TestWriteStorageMetadataPathTraversal:
     def test_malicious_sample_id_stays_inside_workspace(
         self, tmp_config_dir: Path, tmp_path: Path
     ) -> None:
-        svc = self._make_svc(tmp_config_dir)
         project_root = tmp_path / "project"
         project_root.mkdir()
         samples = {"in.c-data.../../../../etc/evil": "col\nval\n"}
 
-        svc._write_storage_metadata(project_root, [], [], samples)
+        write_storage_metadata(project_root, [], [], samples)
 
         storage_dir = project_root / STORAGE_DIR_NAME
         written = list(storage_dir.rglob("sample.csv"))
@@ -687,7 +682,6 @@ class TestWriteStorageMetadataPathTraversal:
     ) -> None:
         # Regression: the fix must keep `in.c-foo` -> `in-c-foo` and the plain
         # `<table>.json` filename for legitimate data (no behavior change).
-        svc = self._make_svc(tmp_config_dir)
         project_root = tmp_path / "project"
         project_root.mkdir()
         tables = [
@@ -699,7 +693,7 @@ class TestWriteStorageMetadataPathTraversal:
             }
         ]
 
-        svc._write_storage_metadata(project_root, [], tables, {})
+        write_storage_metadata(project_root, [], tables, {})
 
         assert (project_root / STORAGE_DIR_NAME / "tables" / "in-c-data" / "users.json").exists()
 
@@ -710,7 +704,7 @@ class TestWriteStorageMetadataPathTraversal:
 
 
 class TestWritePerConfigJobs:
-    """Tests for SyncService._write_per_config_jobs()."""
+    """Tests for write_per_config_jobs()."""
 
     def _make_svc(self, tmp_config_dir: Path) -> SyncService:
         store = setup_single_project(tmp_config_dir)
@@ -735,12 +729,11 @@ class TestWritePerConfigJobs:
 
     def test_writes_jobs_jsonl_next_to_configs(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """_write_per_config_jobs creates _jobs.jsonl in each config directory."""
-        svc = self._make_svc(tmp_config_dir)
         branch_dir = tmp_path / "main"
         branch_dir.mkdir()
         configs = self._make_configs()
 
-        files_written = svc._write_per_config_jobs(branch_dir, configs, SAMPLE_GROUPED_JOBS)
+        files_written = write_per_config_jobs(branch_dir, configs, SAMPLE_GROUPED_JOBS)
 
         assert files_written == 2
 
@@ -754,12 +747,11 @@ class TestWritePerConfigJobs:
 
     def test_jsonl_format(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """Each line in _jobs.jsonl is a valid JSON object."""
-        svc = self._make_svc(tmp_config_dir)
         branch_dir = tmp_path / "main"
         branch_dir.mkdir()
         configs = self._make_configs()
 
-        svc._write_per_config_jobs(branch_dir, configs, SAMPLE_GROUPED_JOBS)
+        write_per_config_jobs(branch_dir, configs, SAMPLE_GROUPED_JOBS)
 
         jobs_file = branch_dir / configs[0].path / JOBS_FILENAME
         lines = jobs_file.read_text(encoding="utf-8").strip().split("\n")
@@ -772,12 +764,11 @@ class TestWritePerConfigJobs:
 
     def test_light_job_fields(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """Each job record contains only the light fields."""
-        svc = self._make_svc(tmp_config_dir)
         branch_dir = tmp_path / "main"
         branch_dir.mkdir()
         configs = self._make_configs()
 
-        svc._write_per_config_jobs(branch_dir, configs, SAMPLE_GROUPED_JOBS)
+        write_per_config_jobs(branch_dir, configs, SAMPLE_GROUPED_JOBS)
 
         jobs_file = branch_dir / configs[0].path / JOBS_FILENAME
         lines = jobs_file.read_text(encoding="utf-8").strip().split("\n")
@@ -796,12 +787,11 @@ class TestWritePerConfigJobs:
         self, tmp_config_dir: Path, tmp_path: Path
     ) -> None:
         """error_message is included for error/warning status jobs."""
-        svc = self._make_svc(tmp_config_dir)
         branch_dir = tmp_path / "main"
         branch_dir.mkdir()
         configs = self._make_configs()
 
-        svc._write_per_config_jobs(branch_dir, configs, SAMPLE_GROUPED_JOBS)
+        write_per_config_jobs(branch_dir, configs, SAMPLE_GROUPED_JOBS)
 
         jobs_file = branch_dir / configs[0].path / JOBS_FILENAME
         lines = jobs_file.read_text(encoding="utf-8").strip().split("\n")
@@ -813,12 +803,11 @@ class TestWritePerConfigJobs:
 
     def test_mode_field_only_for_non_run(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """mode field is included only when it's not 'run'."""
-        svc = self._make_svc(tmp_config_dir)
         branch_dir = tmp_path / "main"
         branch_dir.mkdir()
         configs = self._make_configs()
 
-        svc._write_per_config_jobs(branch_dir, configs, SAMPLE_GROUPED_JOBS)
+        write_per_config_jobs(branch_dir, configs, SAMPLE_GROUPED_JOBS)
 
         # Second config (cfg-002) has mode="debug"
         jobs_file = branch_dir / configs[1].path / JOBS_FILENAME
@@ -831,7 +820,6 @@ class TestWritePerConfigJobs:
         self, tmp_config_dir: Path, tmp_path: Path
     ) -> None:
         """Configs that have no matching jobs don't get a _jobs.jsonl file."""
-        svc = self._make_svc(tmp_config_dir)
         branch_dir = tmp_path / "main"
         branch_dir.mkdir()
 
@@ -845,7 +833,7 @@ class TestWritePerConfigJobs:
             ),
         ]
 
-        files_written = svc._write_per_config_jobs(branch_dir, configs, SAMPLE_GROUPED_JOBS)
+        files_written = write_per_config_jobs(branch_dir, configs, SAMPLE_GROUPED_JOBS)
 
         assert files_written == 0
         jobs_file = branch_dir / configs[0].path / JOBS_FILENAME
@@ -853,12 +841,11 @@ class TestWritePerConfigJobs:
 
     def test_empty_jobs_grouped(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """No files written when jobs_grouped is empty."""
-        svc = self._make_svc(tmp_config_dir)
         branch_dir = tmp_path / "main"
         branch_dir.mkdir()
         configs = self._make_configs()
 
-        files_written = svc._write_per_config_jobs(branch_dir, configs, [])
+        files_written = write_per_config_jobs(branch_dir, configs, [])
 
         assert files_written == 0
 
@@ -869,13 +856,13 @@ class TestWritePerConfigJobs:
 
 
 class TestMaskEncryptedColumns:
-    """Tests for SyncService._mask_encrypted_columns()."""
+    """Tests for mask_encrypted_columns()."""
 
     def test_mask_columns_starting_with_hash(self) -> None:
         """Columns starting with '#' have their values masked."""
         csv_data = '"id","name","#password"\n"1","Alice","secret123"\n"2","Bob","p@ss"\n'
 
-        result = SyncService._mask_encrypted_columns(csv_data)
+        result = mask_encrypted_columns(csv_data)
 
         assert "#password" in result
         assert "secret123" not in result
@@ -886,14 +873,14 @@ class TestMaskEncryptedColumns:
         """Columns not starting with '#' keep their values."""
         csv_data = '"id","name","email"\n"1","Alice","alice@test.com"\n'
 
-        result = SyncService._mask_encrypted_columns(csv_data)
+        result = mask_encrypted_columns(csv_data)
 
         # No encrypted columns -> returned unchanged (original string)
         assert result == csv_data
 
     def test_empty_csv_input(self) -> None:
         """Empty string input is returned as-is."""
-        result = SyncService._mask_encrypted_columns("")
+        result = mask_encrypted_columns("")
 
         assert result == ""
 
@@ -901,7 +888,7 @@ class TestMaskEncryptedColumns:
         """CSV with no '#' columns is returned unchanged (original string)."""
         csv_data = '"col1","col2","col3"\n"a","b","c"\n'
 
-        result = SyncService._mask_encrypted_columns(csv_data)
+        result = mask_encrypted_columns(csv_data)
 
         # No encrypted columns -> original string returned
         assert result == csv_data
@@ -910,7 +897,7 @@ class TestMaskEncryptedColumns:
         """Multiple '#' columns are all masked."""
         csv_data = '"id","#token","#secret"\n"1","tok-xxx","sec-yyy"\n'
 
-        result = SyncService._mask_encrypted_columns(csv_data)
+        result = mask_encrypted_columns(csv_data)
 
         assert "tok-xxx" not in result
         assert "sec-yyy" not in result
@@ -921,7 +908,7 @@ class TestMaskEncryptedColumns:
         """CSV with only header line (no data rows) returns valid output."""
         csv_data = '"id","#password"\n'
 
-        result = SyncService._mask_encrypted_columns(csv_data)
+        result = mask_encrypted_columns(csv_data)
 
         # Header should be preserved (csv writer may strip quotes)
         assert "#password" in result
@@ -933,7 +920,7 @@ class TestMaskEncryptedColumns:
 
 
 class TestFetchSamples:
-    """Tests for SyncService._fetch_samples()."""
+    """Tests for fetch_samples()."""
 
     def _make_svc(self, tmp_config_dir: Path) -> SyncService:
         store = setup_single_project(tmp_config_dir)
@@ -941,7 +928,6 @@ class TestFetchSamples:
 
     def test_tables_sorted_by_rows_count_largest_first(self, tmp_config_dir: Path) -> None:
         """Tables are sorted by rowsCount descending before fetching."""
-        svc = self._make_svc(tmp_config_dir)
         mock_client = MagicMock()
         mock_client.get_table_data_preview.return_value = '"col"\n"val"\n'
 
@@ -951,7 +937,7 @@ class TestFetchSamples:
             {"id": "t3", "rowsCount": 1000},
         ]
 
-        result = svc._fetch_samples(mock_client, tables, sample_limit=100, max_samples=2)
+        result = fetch_samples(mock_client, tables, sample_limit=100, max_samples=2)
 
         # max_samples=2, so only the top 2 (t2 with 50000, t3 with 1000) should be fetched
         assert len(result) == 2
@@ -961,20 +947,18 @@ class TestFetchSamples:
 
     def test_max_samples_limit(self, tmp_config_dir: Path) -> None:
         """Only max_samples tables are fetched."""
-        svc = self._make_svc(tmp_config_dir)
         mock_client = MagicMock()
         mock_client.get_table_data_preview.return_value = '"data"\n"value"\n'
 
         tables = [{"id": f"table-{i}", "rowsCount": 1000 - i} for i in range(10)]
 
-        result = svc._fetch_samples(mock_client, tables, sample_limit=50, max_samples=3)
+        result = fetch_samples(mock_client, tables, sample_limit=50, max_samples=3)
 
         assert len(result) == 3
         assert mock_client.get_table_data_preview.call_count == 3
 
     def test_tables_with_zero_rows_skipped(self, tmp_config_dir: Path) -> None:
         """Tables with rowsCount=0 are excluded from sampling."""
-        svc = self._make_svc(tmp_config_dir)
         mock_client = MagicMock()
         mock_client.get_table_data_preview.return_value = '"col"\n"val"\n'
 
@@ -984,7 +968,7 @@ class TestFetchSamples:
             {"id": "also-empty", "rowsCount": 0},
         ]
 
-        result = svc._fetch_samples(mock_client, tables, sample_limit=100, max_samples=10)
+        result = fetch_samples(mock_client, tables, sample_limit=100, max_samples=10)
 
         assert len(result) == 1
         assert "has-data" in result
@@ -992,7 +976,6 @@ class TestFetchSamples:
 
     def test_failed_preview_skipped_gracefully(self, tmp_config_dir: Path) -> None:
         """If get_table_data_preview fails for a table, it's skipped."""
-        svc = self._make_svc(tmp_config_dir)
         mock_client = MagicMock()
         mock_client.get_table_data_preview.side_effect = [
             '"col"\n"ok"\n',
@@ -1006,7 +989,7 @@ class TestFetchSamples:
             {"id": "t3", "rowsCount": 1000},
         ]
 
-        result = svc._fetch_samples(mock_client, tables, sample_limit=100, max_samples=10)
+        result = fetch_samples(mock_client, tables, sample_limit=100, max_samples=10)
 
         assert len(result) == 2
         assert "t1" in result
@@ -1015,13 +998,12 @@ class TestFetchSamples:
 
     def test_sample_limit_passed_to_preview(self, tmp_config_dir: Path) -> None:
         """sample_limit is passed as the limit param to get_table_data_preview."""
-        svc = self._make_svc(tmp_config_dir)
         mock_client = MagicMock()
         mock_client.get_table_data_preview.return_value = '"col"\n'
 
         tables = [{"id": "t1", "rowsCount": 100}]
 
-        svc._fetch_samples(mock_client, tables, sample_limit=42, max_samples=10)
+        fetch_samples(mock_client, tables, sample_limit=42, max_samples=10)
 
         mock_client.get_table_data_preview.assert_called_once_with("t1", limit=42, columns=None)
 
@@ -1031,7 +1013,6 @@ class TestFetchSamples:
         Regression for issue #233: dict.get("rowsCount", 0) returns None when the key
         is present with a null value, which crashes the > 0 comparison on Python 3.
         """
-        svc = self._make_svc(tmp_config_dir)
         mock_client = MagicMock()
         mock_client.get_table_data_preview.return_value = '"col"\n"val"\n'
 
@@ -1041,7 +1022,7 @@ class TestFetchSamples:
             {"id": "rows-missing"},
         ]
 
-        result = svc._fetch_samples(mock_client, tables, sample_limit=100, max_samples=10)
+        result = fetch_samples(mock_client, tables, sample_limit=100, max_samples=10)
 
         assert len(result) == 1
         assert "has-data" in result
@@ -1054,7 +1035,6 @@ class TestFetchSamples:
         Regression for issue #233: even after filtering, the sort key can break
         if any None slips through. Verify the sort key tolerates None entries.
         """
-        svc = self._make_svc(tmp_config_dir)
         mock_client = MagicMock()
         mock_client.get_table_data_preview.return_value = '"col"\n"v"\n'
 
@@ -1065,7 +1045,7 @@ class TestFetchSamples:
             {"id": "d", "rowsCount": None},
         ]
 
-        result = svc._fetch_samples(mock_client, tables, sample_limit=10, max_samples=5)
+        result = fetch_samples(mock_client, tables, sample_limit=10, max_samples=5)
 
         assert set(result.keys()) == {"b", "c"}
 
@@ -1246,7 +1226,7 @@ def _make_many_configs(n: int) -> list[dict[str, Any]]:
 
 
 class TestFetchJobsPerConfig:
-    """Tests for SyncService._fetch_jobs_per_config() fallback method."""
+    """Tests for fetch_jobs_per_config() fallback method."""
 
     def test_returns_grouped_format(self, tmp_config_dir: Path) -> None:
         """_fetch_jobs_per_config returns data in same format as list_jobs_grouped."""
@@ -1258,7 +1238,7 @@ class TestFetchJobsPerConfig:
         ]
 
         svc = SyncService(config_store=store, client_factory=lambda u, t: client)
-        result = svc._fetch_jobs_per_config(client, SAMPLE_COMPONENTS_SIMPLE, job_limit=5)
+        result = fetch_jobs_per_config(svc, client, SAMPLE_COMPONENTS_SIMPLE, job_limit=5)
 
         assert len(result) == 2  # 2 configs in SAMPLE_COMPONENTS_SIMPLE
         for group in result:
@@ -1286,7 +1266,7 @@ class TestFetchJobsPerConfig:
         client.list_jobs.side_effect = _side_effect
 
         svc = SyncService(config_store=store, client_factory=lambda u, t: client)
-        result = svc._fetch_jobs_per_config(client, SAMPLE_COMPONENTS_SIMPLE, job_limit=5)
+        result = fetch_jobs_per_config(svc, client, SAMPLE_COMPONENTS_SIMPLE, job_limit=5)
 
         assert len(result) == 1
         assert result[0]["group"]["componentId"] == "keboola.ex-http"
@@ -1304,7 +1284,7 @@ class TestFetchJobsPerConfig:
         client.list_jobs.side_effect = _side_effect
 
         svc = SyncService(config_store=store, client_factory=lambda u, t: client)
-        result = svc._fetch_jobs_per_config(client, SAMPLE_COMPONENTS_SIMPLE, job_limit=5)
+        result = fetch_jobs_per_config(svc, client, SAMPLE_COMPONENTS_SIMPLE, job_limit=5)
 
         # Only the successful config should be in results
         assert len(result) == 1
@@ -1316,7 +1296,7 @@ class TestFetchJobsPerConfig:
         client = MagicMock()
 
         svc = SyncService(config_store=store, client_factory=lambda u, t: client)
-        result = svc._fetch_jobs_per_config(client, [], job_limit=5)
+        result = fetch_jobs_per_config(svc, client, [], job_limit=5)
 
         assert result == []
         client.list_jobs.assert_not_called()
@@ -1344,7 +1324,7 @@ class TestFetchJobsPerConfig:
         ]
 
         svc = SyncService(config_store=store, client_factory=lambda u, t: client)
-        svc._fetch_jobs_per_config(client, components, job_limit=10)
+        fetch_jobs_per_config(svc, client, components, job_limit=10)
 
         client.list_jobs.assert_called_once_with(
             component_id="keboola.ex-http",

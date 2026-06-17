@@ -10,7 +10,6 @@ import json
 import logging
 import shutil
 import subprocess
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -24,14 +23,8 @@ from ..constants import (
     DEFAULT_JOBS_PER_CONFIG,
     DEFAULT_MAX_SAMPLES,
     DEFAULT_SAMPLE_LIMIT,
-    ENCRYPTED_COLUMN_MASK,
-    ENCRYPTED_COLUMN_PREFIX,
-    JOBS_FILENAME,
     KEBOOLA_DIR_NAME,
     MANIFEST_VERSION,
-    STORAGE_BUCKETS_FILENAME,
-    STORAGE_DIR_NAME,
-    STORAGE_SAMPLES_DIR_NAME,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
 from ..sync.code_extraction import extract_code_files, merge_code_files
@@ -55,15 +48,26 @@ from ..sync.manifest import (
     load_manifest,
     save_manifest,
 )
-from ..sync.naming import config_path, config_row_path, sanitize_name, sanitize_path_segment
+from ..sync.naming import config_path, config_row_path, sanitize_name
 from ._encryption import (
-    apply_encrypted_to_local,
     encrypt_secrets_in_config,
     find_plaintext_secret_keys,
 )
 from ._sync_bindings import resolve_flow_task_bindings, resolve_variable_bindings
 from ._sync_clone import clone_project as _clone_project_impl
-from ._sync_models import CreatedConfig, LocalConfigHashes, WritebackResult
+from ._sync_models import CreatedConfig, LocalConfigHashes
+from ._sync_storage import (
+    fetch_jobs_per_config,
+    fetch_samples,
+    write_per_config_jobs,
+    write_storage_metadata,
+)
+from ._sync_writeback import (
+    propagate_kbc_metadata,
+    writeback_after_push,
+    writeback_create_config_in_manifest,
+    writeback_create_row_in_manifest,
+)
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
@@ -103,28 +107,6 @@ def _ensure_within_branch(
             f"config_id='{config_id}'). Refusing to write outside "
             f"'{branch_resolved}'. This indicates a malformed API response "
             f"or a regression in path sanitization."
-        )
-
-
-def _ensure_path_within(base_dir: Path, target: Path, what: str) -> None:
-    """Reject a write whose path escapes *base_dir* (defense-in-depth).
-
-    Mirrors :func:`_ensure_within_branch` for non-config writes (storage
-    metadata + samples) whose path segments derive from API-controlled bucket
-    ids / table names (GHSA-833q-c5wv-26r7). Raises ConfigError on escape so a
-    malformed or compromised Storage response cannot write outside the sync
-    workspace.
-    """
-    try:
-        base_resolved = base_dir.resolve()
-        target_resolved = target.resolve()
-    except OSError as exc:
-        raise ConfigError(f"Cannot resolve sync path: {exc}") from exc
-    if not target_resolved.is_relative_to(base_resolved):
-        raise ConfigError(
-            f"Storage path escapes sync workspace ({what}). Refusing to write "
-            f"outside '{base_resolved}'. This indicates a malformed or compromised "
-            f"API response or a path-sanitization regression."
         )
 
 
@@ -587,12 +569,12 @@ class SyncService(BaseService):
                             group_limit,
                             job_limit,
                         )
-                        jobs_grouped = self._fetch_jobs_per_config(client, components, job_limit)
+                        jobs_grouped = fetch_jobs_per_config(self, client, components, job_limit)
                 except Exception:
                     logger.warning("Failed to fetch jobs", exc_info=True)
 
             if with_samples and tables_data:
-                samples_data = self._fetch_samples(client, tables_data, sample_limit, max_samples)
+                samples_data = fetch_samples(client, tables_data, sample_limit, max_samples)
 
         # Determine branch directory name
         branch_dir_name = self._find_branch_path(manifest, branch_id)
@@ -998,14 +980,14 @@ class SyncService(BaseService):
         # -- Storage metadata (read-only, not tracked in manifest) --
         storage_stats: dict[str, int] = {"buckets": 0, "tables": 0, "samples": 0}
         if not dry_run and buckets_data:
-            storage_stats = self._write_storage_metadata(
+            storage_stats = write_storage_metadata(
                 project_root, buckets_data, tables_data, samples_data
             )
 
         # -- Per-config jobs (JSONL files next to _config.yml) --
         jobs_written = 0
         if not dry_run and jobs_grouped:
-            jobs_written = self._write_per_config_jobs(branch_dir, new_configurations, jobs_grouped)
+            jobs_written = write_per_config_jobs(branch_dir, new_configurations, jobs_grouped)
 
         if not dry_run:
             # Update manifest with pulled configurations
@@ -1499,7 +1481,7 @@ class SyncService(BaseService):
                             new_id = str(result.get("id", ""))
                             config_dir = project_root / branch_path / config_path_str
                             hashes = self._compute_config_hashes(config_dir, component_id)
-                            writeback = self._writeback_create_config_in_manifest(
+                            writeback = writeback_create_config_in_manifest(
                                 manifest=manifest,
                                 component_id=component_id,
                                 branch_id=branch_id,
@@ -1519,7 +1501,7 @@ class SyncService(BaseService):
                                     config_dir=config_dir,
                                 )
                             )
-                            metadata_error = self._propagate_kbc_metadata(
+                            metadata_error = propagate_kbc_metadata(
                                 client, writeback.entry, branch_id
                             )
                             if metadata_error is not None:
@@ -1922,12 +1904,12 @@ class SyncService(BaseService):
         # Write-back: encrypted secrets land in the local file so a subsequent
         # diff sees local == remote. ``config_id=""`` tells the shared helper
         # to skip writing a config_id into ``_keboola`` (rows use ``row_id``).
-        self._writeback_after_push(pristine_data, row_dir, "", configuration)
+        writeback_after_push(self, pristine_data, row_dir, "", configuration)
 
         row_file = row_dir / CONFIG_FILENAME
         new_file_hash = self._file_hash(row_file) if row_file.exists() else ""
         cfg_hash_value = config_hash(pristine_data)
-        self._writeback_create_row_in_manifest(
+        writeback_create_row_in_manifest(
             parent=parent,
             row_path_str=row_path_str,
             new_row_id=new_row_id,
@@ -1976,7 +1958,7 @@ class SyncService(BaseService):
         )
         logger.info("Updated row %s/%s/%s", component_id, parent_config_id, row_id)
 
-        self._writeback_after_push(pristine_data, row_dir, "", configuration)
+        writeback_after_push(self, pristine_data, row_dir, "", configuration)
 
         row_file = row_dir / CONFIG_FILENAME
         new_file_hash = self._file_hash(row_file) if row_file.exists() else ""
@@ -2063,7 +2045,7 @@ class SyncService(BaseService):
 
         # Write back: update local file with config_id + encrypted secrets.
         # Use pristine_data so blocks/code stay only in their code files.
-        self._writeback_after_push(pristine_data, config_dir, new_config_id, configuration)
+        writeback_after_push(self, pristine_data, config_dir, new_config_id, configuration)
 
         return result
 
@@ -2119,157 +2101,7 @@ class SyncService(BaseService):
 
         # Write back: update local file with encrypted secrets.
         # Use pristine_data so blocks/code stay only in their code files.
-        self._writeback_after_push(pristine_data, config_dir, config_id, configuration)
-
-    def _writeback_create_config_in_manifest(
-        self,
-        *,
-        manifest: Manifest,
-        component_id: str,
-        branch_id: int | None,
-        config_path_str: str,
-        new_id: str,
-        file_hash: str,
-        cfg_hash: str,
-    ) -> WritebackResult:
-        """Record a freshly-created config in the manifest.
-
-        If a placeholder entry already exists at
-        ``(branch_id, component_id, path)`` -- the FIIA / scaffold emit
-        pattern -- update it in place, preserving any user-declared metadata
-        (e.g. ``KBC.configuration.folderName``) and refreshing only the
-        bookkeeping hashes. Otherwise append a new entry.
-
-        Matching includes ``branch_id`` because a single manifest can hold
-        entries from multiple branches in git-branching mode; matching on
-        ``(component_id, path)`` alone would risk updating the wrong branch's
-        entry when the same logical path exists under two branches.
-
-        Returns a :class:`WritebackResult` carrying the entry and its
-        pre-overwrite ``previous_id`` so the create pass can remap any child
-        row parents / transformation variable links from the placeholder id
-        to the freshly-assigned ULID.
-        """
-        target_branch = branch_id or 0
-        for entry in manifest.configurations:
-            if (
-                entry.branch_id == target_branch
-                and entry.component_id == component_id
-                and entry.path == config_path_str
-            ):
-                previous_id = entry.id
-                entry.id = new_id
-                entry.metadata["pull_hash"] = file_hash
-                entry.metadata["pull_config_hash"] = cfg_hash
-                return WritebackResult(entry=entry, previous_id=previous_id)
-        new_entry = ManifestConfiguration(
-            branchId=target_branch,
-            componentId=component_id,
-            id=new_id,
-            path=config_path_str,
-            metadata={"pull_hash": file_hash, "pull_config_hash": cfg_hash},
-        )
-        manifest.configurations.append(new_entry)
-        return WritebackResult(entry=new_entry, previous_id="")
-
-    def _writeback_create_row_in_manifest(
-        self,
-        *,
-        parent: ManifestConfiguration,
-        row_path_str: str,
-        new_row_id: str,
-        file_hash: str,
-        cfg_hash: str,
-    ) -> ManifestConfigRow:
-        """Record a freshly-created row under its parent in the manifest.
-
-        Mirrors :meth:`_writeback_create_config_in_manifest` for rows: update
-        any placeholder row entry in place, otherwise append.
-        """
-        for row in parent.rows:
-            if row.path == row_path_str:
-                row.id = new_row_id
-                row.metadata["pull_hash"] = file_hash
-                row.metadata["pull_config_hash"] = cfg_hash
-                return row
-        new_row = ManifestConfigRow(
-            id=new_row_id,
-            path=row_path_str,
-            metadata={"pull_hash": file_hash, "pull_config_hash": cfg_hash},
-        )
-        parent.rows.append(new_row)
-        return new_row
-
-    def _propagate_kbc_metadata(
-        self,
-        client: Any,
-        entry: ManifestConfiguration,
-        branch_id: int | None,
-    ) -> str | None:
-        """POST any ``KBC.*`` keys from the manifest entry to the metadata API.
-
-        Bookkeeping keys (``pull_hash``, ``pull_config_hash``, ...) live in the
-        same metadata dict but are filtered by the ``KBC.`` prefix. Called only
-        on CREATE; updates use ``kbagent config set-metadata`` explicitly. The
-        metadata API stores configuration-level annotations only -- this is
-        **not** a secret store; do not place tokens or passwords under
-        ``KBC.*`` keys.
-
-        Returns ``None`` on success (or when there are no KBC.* keys to
-        propagate). Returns the API error message on a non-fatal write
-        failure: the config is already created on the remote and the
-        manifest writeback is complete, so a single failed metadata POST
-        is reported back to the push loop as an accumulated error rather
-        than aborting the rest of the push.
-        """
-        entries = [
-            (key, str(value)) for key, value in entry.metadata.items() if key.startswith("KBC.")
-        ]
-        if not entries:
-            return None
-        try:
-            client.set_config_metadata(
-                component_id=entry.component_id,
-                config_id=entry.id,
-                entries=entries,
-                branch_id=branch_id,
-            )
-        except KeboolaApiError as exc:
-            logger.warning(
-                "Failed to propagate KBC.* metadata for %s/%s: %s",
-                entry.component_id,
-                entry.id,
-                exc,
-            )
-            return exc.message
-        return None
-
-    def _writeback_after_push(
-        self,
-        local_data: dict[str, Any],
-        config_dir: Path,
-        config_id: str,
-        pushed_configuration: dict[str, Any],
-    ) -> None:
-        """Update local _config.yml after a successful push.
-
-        Writes back:
-        - _keboola.config_id (assigned by API on first create)
-        - Encrypted secret values (so local matches remote state)
-        """
-        # Ensure _keboola section exists and has config_id
-        keboola_meta = local_data.setdefault("_keboola", {})
-        if config_id:
-            keboola_meta["config_id"] = config_id
-
-        # Apply encrypted values from the pushed configuration back to local_data
-        pushed_params = pushed_configuration.get("parameters", {})
-        local_params = local_data.get("parameters", {})
-        if pushed_params and local_params:
-            apply_encrypted_to_local(local_params, pushed_params)
-
-        self._write_config_file(config_dir, local_data)
-        logger.debug("Updated local config at %s after push", config_dir)
+        writeback_after_push(self, pristine_data, config_dir, config_id, configuration)
 
     # ------------------------------------------------------------------
     # bulk operations (all projects)
@@ -2784,342 +2616,6 @@ class SyncService(BaseService):
     # ------------------------------------------------------------------
     # Storage metadata / jobs / samples helpers
     # ------------------------------------------------------------------
-
-    def _write_storage_metadata(
-        self,
-        project_root: Path,
-        buckets: list[dict[str, Any]],
-        tables: list[dict[str, Any]],
-        samples: dict[str, str],
-    ) -> dict[str, int]:
-        """Write storage bucket and table metadata to the filesystem.
-
-        Creates:
-            storage/buckets.json - list of all buckets
-            storage/tables/{bucket_id}/{table_name}.json - per-table metadata
-            storage/samples/{bucket}/{table}/sample.csv - data samples (if any)
-
-        Returns:
-            Dict with counts: buckets, tables, samples written.
-        """
-        storage_dir = project_root / STORAGE_DIR_NAME
-        storage_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write buckets index
-        # API may return null for tablesCount / dataSizeBytes on empty
-        # buckets; coerce to 0 (dict.get default only fires when key is
-        # missing, not when the value is explicitly null).
-        bucket_summaries = [
-            {
-                "id": b.get("id", ""),
-                "name": b.get("name", ""),
-                "stage": b.get("stage", ""),
-                "description": b.get("description", ""),
-                "tables_count": b.get("tablesCount") or 0,
-                "data_size_bytes": b.get("dataSizeBytes") or 0,
-                "metadata": b.get("metadata", []),
-            }
-            for b in buckets
-        ]
-        buckets_file = storage_dir / STORAGE_BUCKETS_FILENAME
-        buckets_file.write_text(
-            json.dumps(bucket_summaries, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-        # Group tables by bucket
-        tables_by_bucket: dict[str, list[dict[str, Any]]] = {}
-        for t in tables:
-            bucket_id = (
-                t.get("bucket", {}).get("id", "")
-                if isinstance(t.get("bucket"), dict)
-                else t.get("bucketId", "")
-            )
-            if not bucket_id:
-                continue
-            tables_by_bucket.setdefault(bucket_id, []).append(t)
-
-        tables_written = 0
-        tables_dir = storage_dir / "tables"
-        for bucket_id, bucket_tables in tables_by_bucket.items():
-            # Sanitize bucket_id for filesystem. sanitize_path_segment first
-            # kills traversal (`/`, `..`, absolute paths); the trailing replace
-            # keeps the legacy `in.c-foo` -> `in-c-foo` directory naming for
-            # legitimate ids (GHSA-833q-c5wv-26r7).
-            safe_bucket = sanitize_path_segment(bucket_id).replace(".", "-")
-            bucket_dir = tables_dir / safe_bucket
-            _ensure_path_within(storage_dir, bucket_dir, f"bucket_id={bucket_id!r}")
-            bucket_dir.mkdir(parents=True, exist_ok=True)
-
-            for t in bucket_tables:
-                table_name = t.get("name", "unknown")
-                table_meta = {
-                    "id": t.get("id", ""),
-                    "name": table_name,
-                    "primary_key": t.get("primaryKey", []),
-                    "columns": t.get("columns", []),
-                    # API may return null for rowsCount / dataSizeBytes on
-                    # newly-created or empty tables; coerce to 0 explicitly
-                    # (dict.get default only fires when the key is missing).
-                    "rows_count": t.get("rowsCount") or 0,
-                    "data_size_bytes": t.get("dataSizeBytes") or 0,
-                    "last_import_date": t.get("lastImportDate", ""),
-                    "last_change_date": t.get("lastChangeDate", ""),
-                    "description": t.get("description", ""),
-                    "metadata": t.get("metadata", []),
-                    "column_metadata": t.get("columnMetadata", {}),
-                }
-                # The table name comes from the API; sanitize it for the
-                # filename and assert containment so a crafted name cannot
-                # escape the bucket dir (GHSA-833q-c5wv-26r7). The original
-                # name stays verbatim in the metadata body above.
-                safe_table = sanitize_path_segment(table_name)
-                table_file = bucket_dir / f"{safe_table}.json"
-                _ensure_path_within(storage_dir, table_file, f"table={table_name!r}")
-                table_file.write_text(
-                    json.dumps(table_meta, indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                tables_written += 1
-
-        # Write samples
-        samples_written = 0
-        if samples:
-            samples_dir = storage_dir / STORAGE_SAMPLES_DIR_NAME
-            for table_id, csv_data in samples.items():
-                # table_id format: "in.c-bucket.table" -> samples/in-c-bucket/table/
-                # Every segment derives from the API table_id; sanitize each and
-                # assert containment so a crafted id cannot escape (GHSA-833q).
-                parts = table_id.split(".", 2)
-                if len(parts) >= 3:
-                    safe_bucket = sanitize_path_segment(f"{parts[0]}-{parts[1]}")
-                    safe_table = sanitize_path_segment(parts[2])
-                else:
-                    safe_bucket = sanitize_path_segment(table_id.replace(".", "-"))
-                    safe_table = "data"
-                sample_dir = samples_dir / safe_bucket / safe_table
-                _ensure_path_within(storage_dir, sample_dir, f"table_id={table_id!r}")
-                sample_dir.mkdir(parents=True, exist_ok=True)
-
-                # Mask encrypted columns in CSV
-                masked_csv = self._mask_encrypted_columns(csv_data)
-                (sample_dir / "sample.csv").write_text(masked_csv, encoding="utf-8")
-                samples_written += 1
-
-        return {
-            "buckets": len(buckets),
-            "tables": tables_written,
-            "samples": samples_written,
-        }
-
-    def _fetch_jobs_per_config(
-        self,
-        client: Any,
-        components: list[dict[str, Any]],
-        job_limit: int,
-    ) -> list[dict[str, Any]]:
-        """Fetch jobs per config via /search/jobs in parallel.
-
-        Used as fallback when the grouped-jobs API cannot return all configs
-        in a single call (jobsPerGroup * limit <= 500 constraint).
-
-        Returns data in the same format as list_jobs_grouped() so that
-        _write_per_config_jobs() works unchanged.
-        """
-        config_pairs: list[tuple[str, str]] = []
-        for comp in components:
-            comp_id = comp.get("id", "")
-            for cfg in comp.get("configurations", []):
-                cfg_id = str(cfg.get("id", ""))
-                if comp_id and cfg_id:
-                    config_pairs.append((comp_id, cfg_id))
-
-        if not config_pairs:
-            return []
-
-        results: list[dict[str, Any]] = []
-        lock = threading.Lock()
-        max_workers = min(len(config_pairs), self._resolve_max_workers())
-
-        def _fetch_one(pair: tuple[str, str]) -> None:
-            comp_id, cfg_id = pair
-            try:
-                jobs = client.list_jobs(
-                    component_id=comp_id,
-                    config_id=cfg_id,
-                    limit=job_limit,
-                )
-                if jobs:
-                    with lock:
-                        results.append(
-                            {
-                                "group": {"componentId": comp_id, "configId": cfg_id},
-                                "jobs": jobs,
-                            }
-                        )
-            except Exception:
-                logger.debug("Failed to fetch jobs for %s/%s", comp_id, cfg_id, exc_info=True)
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(_fetch_one, pair) for pair in config_pairs]
-            for future in as_completed(futures):
-                future.result()  # propagate unexpected errors
-
-        return results
-
-    def _write_per_config_jobs(
-        self,
-        branch_dir: Path,
-        configurations: list[ManifestConfiguration],
-        jobs_grouped: list[dict[str, Any]],
-    ) -> int:
-        """Write _jobs.jsonl files next to each configuration.
-
-        Matches grouped jobs to configs by componentId+configId,
-        then writes a JSONL file with light job records.
-
-        Returns:
-            Number of _jobs.jsonl files written.
-        """
-        # Build lookup: (component_id, config_id) -> list of jobs
-        jobs_by_config: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        for group in jobs_grouped:
-            group_key = group.get("group", {})
-            component_id = group_key.get("componentId", "")
-            config_id = group_key.get("configId", "")
-            if component_id and config_id:
-                jobs_by_config[(component_id, config_id)] = group.get("jobs", [])
-
-        files_written = 0
-        for cfg in configurations:
-            key = (cfg.component_id, cfg.id)
-            jobs = jobs_by_config.get(key)
-            if not jobs:
-                continue
-
-            config_dir = branch_dir / cfg.path
-            config_dir.mkdir(parents=True, exist_ok=True)
-            jobs_file = config_dir / JOBS_FILENAME
-
-            lines: list[str] = []
-            for job in jobs:
-                light_job: dict[str, Any] = {
-                    "id": str(job.get("id", "")),
-                    "status": job.get("status", ""),
-                    "start_time": job.get("startTime", ""),
-                    "end_time": job.get("endTime", ""),
-                    "duration_seconds": job.get("durationSeconds", 0),
-                }
-                if job.get("mode") and job["mode"] != "run":
-                    light_job["mode"] = job["mode"]
-                # Include error message for failed/warning jobs
-                status = job.get("status", "")
-                if status in ("error", "warning", "terminated", "cancelled"):
-                    result = job.get("result", {})
-                    if isinstance(result, dict) and result.get("message"):
-                        light_job["error_message"] = result["message"]
-                lines.append(json.dumps(light_job, ensure_ascii=False))
-
-            jobs_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            files_written += 1
-
-        return files_written
-
-    def _fetch_samples(
-        self,
-        client: Any,
-        tables: list[dict[str, Any]],
-        sample_limit: int,
-        max_samples: int,
-    ) -> dict[str, str]:
-        """Fetch CSV data previews for tables, respecting limits.
-
-        Selects tables sorted by rowsCount descending (largest first),
-        limited to max_samples tables.
-
-        Returns:
-            Dict mapping table_id -> CSV string.
-        """
-
-        # Storage API may return rowsCount=None for empty/newly-created tables
-        # on some backends; dict.get() does not coerce None to the default value.
-        def _rows(t: dict[str, Any]) -> int:
-            return t.get("rowsCount") or 0
-
-        # Sort by rows count desc, pick top N
-        sorted_tables = sorted(
-            [t for t in tables if _rows(t) > 0],
-            key=_rows,
-            reverse=True,
-        )[:max_samples]
-
-        # Storage API sync export limit
-        max_sync_columns = 30
-
-        samples: dict[str, str] = {}
-        for t in sorted_tables:
-            table_id = t.get("id", "")
-            if not table_id:
-                continue
-            try:
-                # Limit columns to max_sync_columns to avoid API 400 error
-                all_columns = t.get("columns", [])
-                columns = (
-                    all_columns[:max_sync_columns] if len(all_columns) > max_sync_columns else None
-                )
-                csv_data = client.get_table_data_preview(
-                    table_id, limit=sample_limit, columns=columns
-                )
-                samples[table_id] = csv_data
-            except Exception:
-                logger.warning("Failed to fetch sample for %s", table_id, exc_info=True)
-
-        return samples
-
-    @staticmethod
-    def _mask_encrypted_columns(csv_data: str) -> str:
-        """Mask encrypted column values in CSV data.
-
-        Encrypted columns in Keboola start with '#' in the column name.
-        Their values are replaced with the masked placeholder.
-        """
-        if not csv_data:
-            return csv_data
-
-        lines = csv_data.split("\n")
-        if not lines:
-            return csv_data
-
-        # Parse header to find encrypted column indices
-        import csv
-        import io
-
-        reader = csv.reader(io.StringIO(lines[0]))
-        try:
-            header = next(reader)
-        except StopIteration:
-            return csv_data
-
-        encrypted_indices = [
-            i for i, col in enumerate(header) if col.startswith(ENCRYPTED_COLUMN_PREFIX)
-        ]
-        if not encrypted_indices:
-            return csv_data
-
-        # Rewrite CSV with masked values
-        output = io.StringIO()
-        writer = csv.writer(output)
-        full_reader = csv.reader(io.StringIO(csv_data))
-        for row_idx, row in enumerate(full_reader):
-            if row_idx == 0:
-                writer.writerow(row)  # header unchanged
-            else:
-                for idx in encrypted_indices:
-                    if idx < len(row):
-                        row[idx] = ENCRYPTED_COLUMN_MASK
-                writer.writerow(row)
-
-        return output.getvalue()
 
     def _write_config_file(self, config_dir: Path, config_data: dict[str, Any]) -> str:
         """Write a ``_config.yml`` file and return its SHA256 hash.
