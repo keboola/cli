@@ -76,6 +76,18 @@ class View(Enum):
     TABLE_DETAIL = auto()
 
 
+@dataclass(frozen=True)
+class PreviewData:
+    """Parsed CSV data preview: the header row and the data rows, named.
+
+    A dataclass (not a bare tuple) because the two lists are semantically
+    distinct -- see CONTRIBUTING.md "Code Quality Patterns".
+    """
+
+    header: list[str]
+    rows: list[list[str]]
+
+
 @dataclass
 class TableDetail:
     """Parsed, render-ready table detail for the deepest view."""
@@ -164,22 +176,22 @@ def _column_names(detail: dict[str, Any]) -> list[str]:
     return [str(item) for item in columns] if isinstance(columns, list) else []
 
 
-def parse_preview_csv(csv_text: str, max_columns: int) -> tuple[list[str], list[list[str]]]:
+def parse_preview_csv(csv_text: str, max_columns: int) -> PreviewData:
     """Parse a Storage data-preview CSV string into a header row and data rows.
 
     Uses the stdlib ``csv`` module (the preview comes back as a CSV string).
     Columns are capped to ``max_columns`` so a wide table still fits the grid.
-    Returns ``([], [])`` for empty input.
+    Returns an empty :class:`PreviewData` for empty input.
     """
     if not csv_text.strip():
-        return [], []
+        return PreviewData(header=[], rows=[])
     reader = csv.reader(io.StringIO(csv_text))
     rows = list(reader)
     if not rows:
-        return [], []
+        return PreviewData(header=[], rows=[])
     header = rows[0][:max_columns]
     data_rows = [row[:max_columns] for row in rows[1:]]
-    return header, data_rows
+    return PreviewData(header=header, rows=data_rows)
 
 
 def build_table_detail(
@@ -200,13 +212,13 @@ def build_table_detail(
     created = detail.get("created")
     if created:
         info_lines.append(f"Created  : {created}")
-    header, preview_rows = parse_preview_csv(preview_csv, max_columns)
+    preview = parse_preview_csv(preview_csv, max_columns)
     return TableDetail(
         title=f"Table: {name}",
         info_lines=info_lines,
         columns=columns,
-        preview_header=header,
-        preview_rows=preview_rows,
+        preview_header=preview.header,
+        preview_rows=preview.rows,
     )
 
 
