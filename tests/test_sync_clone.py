@@ -15,6 +15,7 @@ import yaml
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError
 from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.services._sync_bindings import resolve_flow_task_bindings
 from keboola_agent_cli.services.sync_service import CreatedConfig, SyncService
 from keboola_agent_cli.sync.clone import (
     apply_bucket_map,
@@ -307,7 +308,8 @@ class TestResolveFlowTaskBindings:
         created = [CreatedConfig("keboola.flow", "flow-new", flow_dir)]
         created_id_map = {("keboola.ex-http", "ext-golden"): "ext-new"}
 
-        result = svc._resolve_flow_task_bindings(
+        result = resolve_flow_task_bindings(
+            svc,
             client,
             created_configs=created,
             created_id_map=created_id_map,
@@ -360,7 +362,8 @@ class TestResolveFlowTaskBindings:
         )
         client = MagicMock()
         svc = _service(tmp_config_dir, client)
-        result = svc._resolve_flow_task_bindings(
+        result = resolve_flow_task_bindings(
+            svc,
             client,
             created_configs=[CreatedConfig("keboola.flow", "flow-new", flow_dir)],
             created_id_map={("keboola.ex-http", "other-golden"): "x"},
