@@ -1235,3 +1235,59 @@ class TestMcpPrereleaseOptIn:
         assert expected_flag in upgrade_command, (
             f"{method} upgrade_command missing {expected_flag}: {upgrade_command!r}"
         )
+
+
+class TestComposeUpdateSummary:
+    """The one-line summary must distinguish up-to-date from a FAILED update.
+
+    Regression for the #424 rename breakage: a self-update that failed (e.g.
+    `Executable already exists: kbagent`) was rendered as `already up to date`,
+    so users had no signal the upgrade never happened.
+    """
+
+    def test_kbagent_failure_is_surfaced_not_masked(self) -> None:
+        kbagent = {
+            "updated": False,
+            "current_version": "0.62.0",
+            "latest_version": "0.63.1",
+            "message": (
+                "Update failed: Resolved 46 packages\n"
+                "error: Executable already exists: kbagent (use `--force` to overwrite)"
+            ),
+        }
+        mcp = {"updated": False, "up_to_date": True, "current_version": "1.66.0"}
+
+        summary = VersionService._compose_update_summary(kbagent, mcp)
+
+        assert "update FAILED" in summary
+        assert "Executable already exists: kbagent" in summary
+        # The masking bug: a failure must NOT be reported as up to date.
+        assert "(already up to date)" not in summary.split("|")[0]
+
+    def test_kbagent_up_to_date_renders_up_to_date(self) -> None:
+        kbagent = {
+            "updated": False,
+            "up_to_date": True,
+            "current_version": "0.63.1",
+            "latest_version": "0.63.1",
+        }
+        mcp = {"updated": False, "up_to_date": True, "current_version": "1.66.0"}
+
+        summary = VersionService._compose_update_summary(kbagent, mcp)
+
+        assert "kbagent v0.63.1 (already up to date)" in summary
+        assert "FAILED" not in summary
+
+    def test_kbagent_upgraded_renders_arrow(self) -> None:
+        kbagent = {"updated": True, "current_version": "0.62.0", "latest_version": "0.63.1"}
+        mcp = {"updated": False, "up_to_date": True, "current_version": "1.66.0"}
+
+        summary = VersionService._compose_update_summary(kbagent, mcp)
+
+        assert "kbagent v0.62.0 -> v0.63.1" in summary
+
+    def test_failure_tail_is_last_nonempty_line(self) -> None:
+        msg = "Update failed: line one\n\n  error: the real reason  \n"
+        assert VersionService._summarize_failure_tail(msg) == "error: the real reason"
+        assert VersionService._summarize_failure_tail("") == "update failed"
+        assert VersionService._summarize_failure_tail(None) == "update failed"

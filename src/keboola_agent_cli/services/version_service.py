@@ -821,22 +821,46 @@ class VersionService:
         }
 
     @staticmethod
-    def _compose_update_summary(kbagent_result: dict[str, Any], mcp_result: dict[str, Any]) -> str:
-        """Build a one-line summary of the two-stage update result."""
+    def _summarize_failure_tail(message: str | None) -> str:
+        """Compress a multi-line failure message to its last non-empty line.
+
+        Subprocess failures embed the whole uv/pip transcript; the actionable
+        line (e.g. ``error: Executable already exists: kbagent``) is last. We
+        surface only that tail in the one-line summary -- the full transcript
+        stays in the result's ``output`` for ``--json`` / ``--verbose``.
+        """
+        lines = [ln.strip() for ln in (message or "").splitlines() if ln.strip()]
+        return lines[-1] if lines else "update failed"
+
+    @classmethod
+    def _compose_update_summary(
+        cls, kbagent_result: dict[str, Any], mcp_result: dict[str, Any]
+    ) -> str:
+        """Build a one-line summary of the two-stage update result.
+
+        A non-upgraded stage is only "already up to date" when it explicitly
+        reports ``up_to_date``. Any other ``updated=False`` means the upgrade
+        was ATTEMPTED and FAILED -- surface it instead of masking it as
+        success (the silent-failure bug behind the #424 rename: a failed
+        self-update was reported as "already up to date").
+        """
         parts: list[str] = []
         if kbagent_result.get("updated"):
             parts.append(
                 f"kbagent v{kbagent_result.get('current_version')}"
                 f" -> v{kbagent_result.get('latest_version')}"
             )
-        elif kbagent_result.get("current_version") and kbagent_result.get("latest_version"):
+        elif kbagent_result.get("up_to_date"):
             parts.append(f"kbagent v{kbagent_result.get('current_version')} (already up to date)")
+        elif kbagent_result.get("current_version"):
+            tail = cls._summarize_failure_tail(kbagent_result.get("message"))
+            parts.append(f"kbagent v{kbagent_result.get('current_version')} update FAILED: {tail}")
 
         if mcp_result.get("updated"):
             current = mcp_result.get("current_version") or "unknown"
             latest = mcp_result.get("latest_version") or "?"
             parts.append(f"keboola-mcp-server v{current} -> v{latest}")
-        elif mcp_result.get("updated") is False and mcp_result.get("current_version"):
+        elif mcp_result.get("up_to_date"):
             parts.append(
                 f"keboola-mcp-server v{mcp_result.get('current_version')} (already up to date)"
             )
@@ -865,6 +889,7 @@ class VersionService:
         if up_to_date is True:
             return {
                 "updated": False,
+                "up_to_date": True,
                 "current_version": old_version,
                 "latest_version": kbagent_latest,
                 "message": f"kbagent v{old_version} is already up to date.",
@@ -943,6 +968,7 @@ class VersionService:
         if up_to_date is True:
             return {
                 "updated": False,
+                "up_to_date": True,
                 "current_version": local_version,
                 "latest_version": latest_version,
                 "install_method": method,

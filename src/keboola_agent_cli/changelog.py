@@ -24,6 +24,25 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.63.1": [
+        "Fix (#424): self-update is repaired for users still on <=0.62.0. The PyPI rename "
+        "`keboola-agent-cli` -> `keboola-cli` broke `kbagent update` for every already-installed "
+        "client: the immutable pre-0.63 code probes the release for the OLD wheel name "
+        "`keboola_agent_cli-<version>-py3-none-any.whl`, which the renamed release no longer "
+        "carried (404), then falls back to a `git+` build that uv aborts with `Executable already "
+        "exists: kbagent`. The release workflow now ALSO ships a legacy-named compat wheel "
+        "(`keboola_agent_cli-<version>-py3-none-any.whl`, identical code, distribution name "
+        "unchanged) so those clients find their asset and upgrade in place. `APP_NAME` is now "
+        "resolved dynamically (prefers `keboola-cli`, falls back to `keboola-agent-cli`) so "
+        "`kbagent version` and the User-Agent keep working under either distribution. The on-disk "
+        "config dir (`~/.config/keboola-agent-cli/`) is deliberately unchanged.",
+        "Fix: a FAILED `kbagent update` is no longer reported as `already up to date`. "
+        "`_compose_update_summary` masked any non-upgraded stage as success, so the self-update "
+        "breakage above surfaced to users as `kbagent vX (already up to date)` while `kbagent "
+        "version` correctly showed a newer release available. Failures now render as "
+        "`kbagent vX update FAILED: <reason>` (full transcript stays in `--json` / `--verbose` "
+        "output); only an explicit `up_to_date` short-circuit prints the up-to-date line.",
+    ],
     "0.63.0": [
         "New (#428): the importable SDK is now statically typed -- a PEP 561 `py.typed` "
         "marker ships in the wheel and the high-traffic facade operations return typed "
