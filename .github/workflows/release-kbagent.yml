@@ -1,0 +1,381 @@
+# Release & distribution pipeline for kbagent — see docs/adr/0003-release-distribution-cicd.md
+#
+# Ships a SELF-CONTAINED NATIVE BINARY (no Python / no uv at the user's end), packaged
+# for brew / apt / dnf / apk / chocolatey / winget — the same UX the legacy Go `kbc`
+# delivered. The Python app is frozen with PyInstaller (proven: `env -i kbagent
+# --version` works), then packaged with nfpm (deb/rpm/apk) and wrapped for Homebrew /
+# Chocolatey / WinGet. GoReleaser is NOT used (it builds Go); nothing depends on the
+# deprecated keboola-as-code repo.
+#
+# Steps are REAL, not stubbed. Jobs that push to external repos/S3 run under the
+# protected `release` environment and need its secrets; the freeze + nfpm + GitHub
+# Release jobs produce installable artifacts on their own.
+name: release-kbagent
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  # Manual dispatch is a DRY RUN only: it freezes + signs + packages so the build and
+  # the signing creds get exercised, but every external-publish job (PyPI, S3 repo,
+  # Homebrew, Chocolatey, WinGet, GitHub Release) is gated on `refs/tags/*`, so a
+  # dispatch from an arbitrary ref can never ship an untagged build. Real publishing
+  # happens only on a pushed `v*.*.*` tag.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build for a DRY RUN (PEP 440, e.g. 0.43.0b1 / 0.58.0). Freezes + signs + packages only; external publishing happens exclusively on a pushed v*.*.* tag."
+        required: true
+
+env:
+  PKG_NAME: keboola-cli2
+  BIN_NAME: kbagent
+  BASE_URL: https://cli-dist.keboola.com
+  S3_PREFIX: keboola-cli2
+  AWS_BUCKET_NAME: cli-dist-keboola-com
+  AWS_REGION: us-east-1
+  # Pin the interpreter uv uses across all jobs for reproducible release builds
+  # (project requires-python >=3.12; CI gates on 3.12).
+  UV_PYTHON: "3.12"
+
+permissions:
+  contents: write # create the GitHub Release
+  id-token: write # PyPI Trusted Publishing + AWS OIDC
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      VERSION: ${{ steps.v.outputs.VERSION }}
+      # "true" for a pre-release tag (has a -suffix, e.g. v0.0.1-dev.1). Pre-releases
+      # build + package + sign + GitHub pre-release ONLY; all external publishing
+      # (PyPI, S3 repo index, Homebrew, Chocolatey, WinGet) is skipped.
+      IS_PRERELEASE: ${{ steps.v.outputs.IS_PRERELEASE }}
+    steps:
+      - id: v
+        env:
+          REF: ${{ github.ref_name }}
+          INPUT: ${{ github.event.inputs.version }}
+        run: |
+          RAW="${INPUT:-$REF}"
+          # PEP 440 (the repo's convention, see CONTRIBUTING.md): X.Y.Z, X.Y.Z{a,b,rc}N,
+          # X.Y.Z.devN/.postN — plus the SemVer -suffix.N form for dev tags.
+          VERSION=$(printf '%s' "$RAW" | sed -n -E 's:^v?([0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+|\.dev[0-9]+|\.post[0-9]+|-[a-z]+\.[0-9]+)?)$:\1:p')
+          [ -z "$VERSION" ] && { echo "not a PEP 440 / semver version: $RAW"; exit 1; }
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          # Pre-release = any a/b/rc/.dev/-suffix marker (.post is a real release).
+          if printf '%s' "$VERSION" | grep -Eq '(a|b|rc)[0-9]+$|\.dev[0-9]+$|-'; then PRE=true; else PRE=false; fi
+          echo "IS_PRERELEASE=$PRE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION prerelease=$PRE"
+
+  # Reuse the per-PR gates against the tagged commit, plus changelog-check.
+  gate:
+    needs: [version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Fail before any publish if the tag/input version drifts from pyproject.toml —
+      # otherwise we'd ship artifacts labelled vX.Y.Z that self-report a different
+      # version, and only test-install (which greps for the tag) would catch it later.
+      - name: Tag matches pyproject version
+        env:
+          VERSION: ${{ needs.version.outputs.VERSION }}
+        run: |
+          PY=$(sed -n -E 's/^version = "([^"]+)"/\1/p' pyproject.toml | head -1)
+          [ "$PY" = "$VERSION" ] || { echo "::error::tag v$VERSION does not match pyproject version $PY"; exit 1; }
+      - uses: astral-sh/setup-uv@v7
+        with: { version: "0.11.16" }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: uv sync --extra server
+      - run: uv run ruff check src/ tests/ scripts/
+      - run: uv run ruff format . --check
+      - run: uv run ty check
+      - run: uv run pytest tests/ -m "not integration and not e2e" -q
+      # Same silent-drift gates ci.yml enforces, so a tag pushed directly can't bypass them.
+      - run: uv run python scripts/check_command_sync.py
+      - run: uv run python scripts/check_error_codes.py
+      - name: SKILL.md + version drift
+        run: |
+          uv run python scripts/generate_skill.py > /dev/null 2>&1
+          uv run python scripts/sync_version.py > /dev/null 2>&1
+          git diff --exit-code plugins/kbagent/skills/kbagent/SKILL.md plugins/kbagent/.claude-plugin/plugin.json .claude-plugin/marketplace.json uv.lock
+      - name: changelog-check (skipped on pre-releases)
+        if: needs.version.outputs.IS_PRERELEASE == 'false'
+        run: uv run python scripts/generate_changelog.py --check
+
+  # ── Build the prebuilt wheel and publish to PyPI (for the `uv`/`pipx` audience).
+  #    This is ADDITIONAL to the native binary, not the primary install path.
+  pypi:
+    needs: [version, gate]
+    if: needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-build
+      - run: uv build
+      - run: uv run python scripts/check_wheel_ui.py --expect-ui
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # ── Freeze a self-contained native binary per OS/arch (PyInstaller).
+  freeze:
+    needs: [version, gate]
+    strategy:
+      fail-fast: false
+      matrix:
+        # `platform` is the OS name baked into artifact/zip filenames (darwin/linux/
+        # windows) — Homebrew/Chocolatey/WinGet URLs depend on these exact values.
+        include:
+          - { os: ubuntu-latest, platform: linux, arch: amd64 }
+          - { os: ubuntu-24.04-arm, platform: linux, arch: arm64 }
+          # Single macOS environment (Apple Silicon). PyInstaller can't cross-compile,
+          # so there's no Intel leg; Intel Macs use `uv tool install`. Re-add a
+          # `{ os: macos-13, platform: darwin, arch: amd64 }` entry if native Intel is needed.
+          - { os: macos-latest, platform: darwin, arch: arm64 }
+          - { os: windows-latest, platform: windows, arch: amd64 }
+    runs-on: ${{ matrix.os }}
+    environment: release # so APPLE_*/WINDOWS_* signing secrets resolve
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-build
+
+      # Populate src/keboola_agent_cli/_ui_dist via the hatch build hook (needs Node),
+      # so `kbagent serve --ui` works from the frozen binary. `uv build` runs the hook.
+      - name: Build SPA into the package (for serve --ui)
+        run: uv build --wheel
+
+      - name: Freeze with PyInstaller
+        shell: bash
+        run: |
+          uv run --with "pyinstaller==6.11.1" pyinstaller --onefile \
+            --name "$BIN_NAME" \
+            --collect-all keboola_agent_cli \
+            --distpath dist \
+            build/package/entry.py
+
+      # macOS: sign + notarize. On a pre-release tag this runs as a NON-FATAL
+      # signature check (continue-on-error) so a dev tag verifies the Apple creds
+      # without blocking the build; on a real tag it is required.
+      - name: Sign & notarize (macOS)
+        if: ${{ matrix.platform == 'darwin' }}
+        continue-on-error: ${{ needs.version.outputs.IS_PRERELEASE == 'true' }}
+        env:
+          APPLE_DEVELOPER_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
+          APPLE_DEVELOPER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+          APPLE_ACCOUNT_PASSWORD: ${{ secrets.APPLE_ACCOUNT_PASSWORD }}
+          APPLE_ACCOUNT_USERNAME: apple@keboola.com
+          APPLE_TEAM_ID: 46P6KJ65M2
+        run: bash build/package/macos/sign_notarize.sh "dist/$BIN_NAME"
+
+      # Windows: Authenticode sign the .exe. Non-fatal on pre-release (signature
+      # check only); required on a real tag.
+      - name: Sign (Windows, Azure Key Vault)
+        if: ${{ matrix.platform == 'windows' }}
+        continue-on-error: ${{ needs.version.outputs.IS_PRERELEASE == 'true' }}
+        shell: bash
+        env:
+          WINDOWS_SIGNING_TENANT_ID: ${{ secrets.WINDOWS_SIGNING_TENANT_ID }}
+          WINDOWS_SIGNING_CLIENT_ID: ${{ secrets.WINDOWS_SIGNING_CLIENT_ID }}
+          WINDOWS_SIGNING_CLIENT_SECRET: ${{ secrets.WINDOWS_SIGNING_CLIENT_SECRET }}
+        run: bash build/package/windows/sign.sh "dist/${BIN_NAME}.exe"
+
+      - name: Zip the binary
+        shell: bash
+        run: bash build/package/zip_binary.sh "$PKG_NAME" "$VERSION" "${{ matrix.platform }}" "${{ matrix.arch }}" "$BIN_NAME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+            dist/${{ env.BIN_NAME }}*
+
+  # ── Package the Linux binaries into deb/rpm/apk with nfpm (language-agnostic).
+  package-linux:
+    needs: [version, freeze]
+    runs-on: ubuntu-latest
+    environment: release # so DEB/RPM/APK signing keys resolve
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install nfpm
+        run: |
+          curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v2.41.1/nfpm_2.41.1_amd64.deb" -o /tmp/nfpm.deb
+          echo "0a188f8bcf4ba4ba6414a514bc1f1d59f5cc92ba86160462d7aa7dab5930d327  /tmp/nfpm.deb" | sha256sum -c -
+          sudo dpkg -i /tmp/nfpm.deb
+      - uses: actions/download-artifact@v4
+        with: { pattern: bin-linux-*, path: artifacts }
+      - name: Write package signing keys
+        env:
+          # DEB/RPM are signed with GPG keys; APK with an abuild RSA key.
+          DEB_KEY_PRIVATE: ${{ secrets.DEB_KEY_PRIVATE }}
+          RPM_KEY_PRIVATE: ${{ secrets.RPM_KEY_PRIVATE }}
+          APK_KEY_PRIVATE: ${{ secrets.APK_KEY_PRIVATE }}
+        run: |
+          mkdir -p /tmp/keys
+          for k in DEB_KEY_PRIVATE RPM_KEY_PRIVATE APK_KEY_PRIVATE; do
+            [ -n "${!k}" ] || { echo "::error::$k is empty — refusing to build unsigned/garbage-signed packages"; exit 1; }
+          done
+          printf '%s' "$DEB_KEY_PRIVATE" > /tmp/keys/deb.key && chmod 600 /tmp/keys/deb.key
+          printf '%s' "$RPM_KEY_PRIVATE" > /tmp/keys/rpm.key && chmod 600 /tmp/keys/rpm.key
+          printf '%s' "$APK_KEY_PRIVATE" > /tmp/keys/apk.key && chmod 600 /tmp/keys/apk.key
+      - name: Build deb/rpm/apk for each arch
+        run: bash build/package/linux/build_packages.sh "$VERSION" artifacts
+      - uses: actions/upload-artifact@v4
+        with: { name: linux-packages, path: dist/* }
+
+  # ── Create the GitHub Release with every binary + package attached (directly
+  #    installable: `dpkg -i keboola-cli2_*.deb`, unzip the binary, etc.).
+  github-release:
+    needs: [version, freeze, package-linux]
+    # Only on a real tag push. A workflow_dispatch run has no tag, so creating a
+    # GitHub Release for v${VERSION} would fail or fabricate an unexpected release.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - name: Collect release assets
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.zip' -o -name '*.sha256' -o -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) -exec cp {} release/ \;
+          ls -al release/
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          files: release/*
+          prerelease: ${{ needs.version.outputs.IS_PRERELEASE == 'true' }}
+
+  # ── Publish to S3 (cli-dist.keboola.com/keboola-cli2/) and index the apt/rpm/apk
+  #    repos so `apt-get install keboola-cli2` works. Real; needs AWS + GPG secrets.
+  publish-s3:
+    needs: [version, freeze, package-linux]
+    if: needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment: release
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Upload versioned assets
+        run: |
+          mkdir -p up && find artifacts -type f \( -name '*.zip' -o -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.sha256' \) -exec cp {} up/ \;
+          aws s3 sync up/ "s3://${AWS_BUCKET_NAME}/${S3_PREFIX}/v${VERSION}/"
+      - name: Index apt/rpm/apk repos (signed)
+        env:
+          # No DEB_KEY_PUBLIC: the apt keyring is derived (dearmored) from DEB_KEY_PRIVATE.
+          DEB_KEY_PRIVATE: ${{ secrets.DEB_KEY_PRIVATE }}
+          RPM_KEY_PUBLIC: ${{ secrets.RPM_KEY_PUBLIC }}
+          APK_KEY_PRIVATE: ${{ secrets.APK_KEY_PRIVATE }}
+          APK_KEY_PUBLIC: ${{ secrets.APK_KEY_PUBLIC }}
+        run: bash build/package/linux/index.sh "${AWS_BUCKET_NAME}" "${S3_PREFIX}"
+
+  # ── Homebrew: render the formula from the template and push to the kbagent-owned tap.
+  homebrew:
+    needs: [version, freeze, publish-s3]
+    if: needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment: release
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - name: Render formula
+        run: |
+          mkdir -p out/Formula
+          bash build/package/homebrew/render.sh "$VERSION" artifacts > out/Formula/keboola-cli2.rb
+      - name: Push to tap keboola/homebrew-keboola-cli2
+        uses: cpina/github-action-push-to-another-repository@v1.7.2
+        env:
+          API_TOKEN_GITHUB: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        with:
+          source-directory: "out"
+          target-directory: "."
+          destination-github-username: keboola
+          destination-repository-name: homebrew-keboola-cli2
+          target-branch: main
+
+  # ── Chocolatey: wrap the signed Windows .exe and push.
+  chocolatey:
+    needs: [version, freeze, publish-s3]
+    if: needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+    environment: release
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Pack & push
+        shell: pwsh
+        env:
+          CHOCOLATEY_KEY: ${{ secrets.CHOCOLATEY_KEY }}
+        run: |
+          $url = "$env:BASE_URL/$env:S3_PREFIX/v$env:VERSION/keboola-cli2_${env:VERSION}_windows_amd64.zip"
+          $checksum = (Invoke-WebRequest "$url.sha256").Content.Split(" ")[0]
+          $push = "build/package/chocolatey"
+          (Get-Content "$push/keboola-cli2.nuspec" -Raw).Replace('{VERSION}', $env:VERSION) | Set-Content "$push/keboola-cli2.nuspec"
+          (Get-Content "$push/tools/chocolateyinstall.ps1" -Raw).Replace('{URL}', $url).Replace('{CHECKSUM}', $checksum) | Set-Content "$push/tools/chocolateyinstall.ps1"
+          cd $push
+          choco pack keboola-cli2.nuspec
+          choco apikey -k $env:CHOCOLATEY_KEY -s https://push.chocolatey.org/
+          choco push "keboola-cli2.$env:VERSION.nupkg" -s https://push.chocolatey.org
+
+  # ── WinGet: submit a PR to microsoft/winget-pkgs via wingetcreate.
+  winget:
+    needs: [version, chocolatey, publish-s3]
+    if: needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+    environment: release
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    steps:
+      - name: Submit to winget-pkgs
+        shell: bash
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          url="${BASE_URL}/${S3_PREFIX}/v${VERSION}/keboola-cli2_${VERSION}_windows_amd64.zip"
+          curl -fLSs https://aka.ms/wingetcreate/latest -o wingetcreate.exe
+          # Verify it's validly Authenticode-signed by Microsoft before executing.
+          powershell -Command '$s = Get-AuthenticodeSignature wingetcreate.exe; if ($s.Status -ne "Valid" -or $s.SignerCertificate.Subject -notmatch "Microsoft") { Write-Error "wingetcreate.exe signature not valid/Microsoft: $($s.Status)"; exit 1 }'
+          ./wingetcreate.exe update -v "$VERSION" -u "$url" -t "$WINGET_TOKEN" Keboola.KeboolaCLI2 -s
+
+  # ── Smoke-test the real install paths end to end.
+  test-install:
+    needs: [version, publish-s3, homebrew]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    steps:
+      - name: apt (Ubuntu)
+        run: |
+          docker run --rm ubuntu bash -c '
+            set -eo pipefail
+            apt-get update -y && apt-get install -y wget ca-certificates gnupg
+            wget -P /etc/apt/trusted.gpg.d https://cli-dist.keboola.com/${{ env.S3_PREFIX }}/deb/keboola.gpg
+            echo "deb https://cli-dist.keboola.com/${{ env.S3_PREFIX }}/deb /" > /etc/apt/sources.list.d/keboola.list
+            apt-get update && apt-get install -y keboola-cli2
+            kbagent --version | grep -q "${{ env.VERSION }}"
+          '
+      - name: Homebrew (Linux)
+        run: |
+          docker run --rm homebrew/brew bash -c '
+            set -e
+            brew tap keboola/keboola-cli2 https://github.com/keboola/homebrew-keboola-cli2
+            brew install keboola-cli2
+            kbagent --version | grep -q "${{ env.VERSION }}"
+          '

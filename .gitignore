@@ -6,7 +6,10 @@ __pycache__/
 
 # Distribution / packaging
 dist/
-build/
+# Ignore build artifacts, but NOT build/package/ (release packaging config = source).
+# Must be `build/*` (not `build/`) so the re-include below can take effect.
+build/*
+!build/package/
 *.egg-info/
 *.egg
 

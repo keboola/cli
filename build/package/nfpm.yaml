@@ -1,0 +1,38 @@
+# nfpm config — packages the frozen `kbagent` binary into deb / rpm / apk.
+#
+# nfpm (https://nfpm.goreleaser.com) is a standalone, language-agnostic packager.
+# We do NOT use goreleaser (it builds Go); the binary is produced by PyInstaller in
+# the release workflow's `freeze` matrix, and nfpm only wraps that prebuilt binary.
+#
+# The ${...} placeholders are NOT expanded by nfpm — build_packages.sh renders this
+# file with `envsubst` first. Env vars: VERSION, PKG_ARCH (amd64|arm64), BIN_PATH.
+name: keboola-cli2
+arch: ${PKG_ARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: "Keboola <dev@keboola.com>"
+description: |
+  AI-friendly CLI for managing Keboola projects (kbagent).
+  Self-contained native binary; no Python runtime required.
+vendor: "Keboola"
+homepage: "https://github.com/keboola/cli"
+license: "MIT"
+
+contents:
+  - src: ${BIN_PATH}
+    dst: /usr/bin/kbagent
+    file_info:
+      mode: 0755
+
+# Signing keys are written by the workflow to /tmp/keys/* (org GPG keys, repo secrets).
+deb:
+  signature:
+    key_file: /tmp/keys/deb.key
+rpm:
+  signature:
+    key_file: /tmp/keys/rpm.key
+apk:
+  signature:
+    key_file: /tmp/keys/apk.key
