@@ -36,6 +36,11 @@ env:
   # Pin the interpreter uv uses across all jobs for reproducible release builds
   # (project requires-python >=3.12; CI gates on 3.12).
   UV_PYTHON: "3.12"
+  # Apple notarization identifiers — public (not secret); kept here so rotating the
+  # account/team is a one-line change rather than editing the freeze step's env. The
+  # macOS sign step inherits these; the actual secrets stay in that step.
+  APPLE_ACCOUNT_USERNAME: apple@keboola.com
+  APPLE_TEAM_ID: "46P6KJ65M2"
 
 # Least-privilege default: every job is read-only unless it overrides this with the
 # narrower scope it actually needs (see the per-job `permissions:` below). Only three
@@ -172,8 +177,7 @@ jobs:
           APPLE_DEVELOPER_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
           APPLE_DEVELOPER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
           APPLE_ACCOUNT_PASSWORD: ${{ secrets.APPLE_ACCOUNT_PASSWORD }}
-          APPLE_ACCOUNT_USERNAME: apple@keboola.com
-          APPLE_TEAM_ID: 46P6KJ65M2
+          # APPLE_ACCOUNT_USERNAME / APPLE_TEAM_ID inherited from the workflow-level env.
         run: bash build/package/macos/sign_notarize.sh "dist/$BIN_NAME"
 
       # Windows: Authenticode sign the .exe. Non-fatal on pre-release (signature
@@ -311,7 +315,10 @@ jobs:
           mkdir -p out/Formula
           bash build/package/homebrew/render.sh "$VERSION" artifacts > out/Formula/keboola-cli2.rb
       - name: Push to tap keboola/homebrew-keboola-cli2
-        uses: cpina/github-action-push-to-another-repository@v1.7.2
+        # SHA-pinned (not a mutable tag): this action receives HOMEBREW_TAP_TOKEN, a
+        # write-scoped PAT to the tap repo, so a re-pointed tag would be a supply-chain
+        # foothold. Bump the SHA and the trailing version comment together on upgrade.
+        uses: cpina/github-action-push-to-another-repository@07c4d7b3def0a8ebe788a8f2c843a4e1de4f6900 # v1.7.2
         env:
           API_TOKEN_GITHUB: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         with:

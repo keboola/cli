@@ -66,10 +66,19 @@ index_apk() {
 # deb: index_deb writes its own (dearmored) keboola.gpg, so pass no pub-key content.
 publish_repo deb index_deb "" ""
 publish_repo rpm index_rpm keboola.gpg "${RPM_KEY_PUBLIC:-}"
-if [ -n "${APK_KEY_PRIVATE:-}" ] && command -v abuild-sign >/dev/null 2>&1 && command -v apk >/dev/null 2>&1; then
+if [ -z "${APK_KEY_PRIVATE:-}" ]; then
+  # No apk signing key configured — the apk index is genuinely opt-out, so skip it.
+  echo "::warning::APK_KEY_PRIVATE not set — skipping apk index (deb/rpm done)."
+elif command -v abuild-sign >/dev/null 2>&1 && command -v apk >/dev/null 2>&1; then
   publish_repo apk index_apk keboola.rsa.pub "${APK_KEY_PUBLIC:-}"
 else
-  echo "::warning::APK_KEY_PRIVATE, abuild-sign or apk not available — skipping apk index (deb/rpm done)."
+  # Key IS set, so apk publishing is intended — but the tooling is missing (the
+  # `apk-tools abuild` apt install above fell back to the slimmer package set).
+  # publish-s3 only runs on real (non-pre-release) tags, so silently skipping here
+  # would ship a release with no apk index. Fail loudly — same policy as the
+  # DEB_KEY_PRIVATE guard at the top of this script.
+  echo "::error::APK_KEY_PRIVATE is set but abuild-sign/apk is unavailable — refusing to ship a real release without a signed apk index (check the 'apk-tools abuild' apt install above)."
+  exit 1
 fi
 
 echo "Repositories indexed and published under s3://$BUCKET/$PREFIX/{deb,rpm,apk}/"
