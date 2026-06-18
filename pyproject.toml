@@ -26,8 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 server = [
-    # Cap <0.137: fastapi 0.137 drops auth on serve --ui protected endpoints (GHSA-ffpq-prmh-3gx2).
-    "fastapi>=0.115,<0.137",
+    "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "sse-starlette>=2.1",
     "python-multipart>=0.0.31",
