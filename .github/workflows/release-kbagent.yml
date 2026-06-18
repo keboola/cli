@@ -37,9 +37,13 @@ env:
   # (project requires-python >=3.12; CI gates on 3.12).
   UV_PYTHON: "3.12"
 
+# Least-privilege default: every job is read-only unless it overrides this with the
+# narrower scope it actually needs (see the per-job `permissions:` below). Only three
+# jobs get an elevated token — pypi + publish-s3 (id-token for OIDC) and github-release
+# (contents: write to create the Release). version/gate/freeze/package-linux/homebrew/
+# chocolatey/winget/test-install all stay read-only.
 permissions:
-  contents: write # create the GitHub Release
-  id-token: write # PyPI Trusted Publishing + AWS OIDC
+  contents: read
 
 jobs:
   version:
@@ -110,6 +114,9 @@ jobs:
     if: needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     environment: release
+    permissions:
+      contents: read # actions/checkout
+      id-token: write # PyPI Trusted Publishing (OIDC)
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-build
@@ -236,6 +243,8 @@ jobs:
     # GitHub Release for v${VERSION} would fail or fabricate an unexpected release.
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # softprops/action-gh-release creates the GitHub Release
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     steps:
@@ -259,6 +268,9 @@ jobs:
     if: needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     environment: release
+    permissions:
+      contents: read # actions/checkout
+      id-token: write # AWS OIDC (configure-aws-credentials assumes the role)
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     steps:
