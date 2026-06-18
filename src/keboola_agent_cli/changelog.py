@@ -24,6 +24,29 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.63.4": [
+        "Fix: the interactive REPL `help` command and tab-completion again list every "
+        "command instead of only `help`/`exit`. `_build_command_tree` guarded its walk "
+        "with `isinstance(x, click.Group)`; Typer >=0.25 vendors its own Click "
+        "(`typer._click`), so the `TyperGroup` from `typer.main.get_command` is not a "
+        "standalone `click.Group` subclass and the guard collapsed the tree to empty. "
+        "Replaced with a structural `_is_group()` TypeGuard; the previously swallowed "
+        "tree-build error is now written to stderr.",
+        "Fix: invalid `--mode`/`--poll-strategy` (`job run`), `--role`/`--default-role` "
+        "(`project invite`), `--role` (`project member-set-role`) and `--role-hint` "
+        "(`dev-portal identity add/edit`) values again fail with a clean exit-2 usage "
+        "error instead of an uncaught traceback. The options passed a standalone "
+        "`click.Choice` into Typer; under a Click-vendoring Typer (>=0.25) the "
+        "`BadParameter` it raises is a different class than the one Typer's parser "
+        "catches, so it escaped unhandled. Replaced the `click.Choice` options with "
+        "`StrEnum` types so Typer builds and validates the choice with its own Click. "
+        "Valid values and `--help` were unaffected.",
+        "Security: cap `fastapi<0.137` in the `[server]` extra. With fastapi 0.137 "
+        "`serve --ui` stops requiring a token on protected endpoints -- `/doctor`, "
+        "`/version`, `/changelog`, `/agents` become reachable unauthenticated, reopening "
+        "GHSA-ffpq-prmh-3gx2 (fixed in an earlier release). Held until the `serve --ui` "
+        "auth check is updated for the newer fastapi.",
+    ],
     "0.63.3": [
         "Fix: `kbagent context` no longer renders API path templates as "
         "`/apps/<built-in function id>/logs/tail`. `AGENT_CONTEXT` is an f-string (it "
