@@ -147,6 +147,30 @@ class TestReplCli:
         assert result.exit_code == 0
         assert "Commands" in result.output or "kbagent" in result.output
 
+    def test_help_command_lists_command_groups(self, monkeypatch, tmp_path, capsys) -> None:
+        """Typing `help` in the REPL prints the command list, not just help/exit."""
+        from keboola_agent_cli.commands import repl as repl_module
+
+        monkeypatch.setattr(repl_module, "_get_history_path", lambda: tmp_path / "hist")
+
+        class _FakeSession:
+            def __init__(self, **_kwargs) -> None:
+                self._replies = iter(["help"])
+
+            def prompt(self, _text):
+                try:
+                    return next(self._replies)
+                except StopIteration as exc:
+                    raise EOFError from exc
+
+        monkeypatch.setattr(repl_module, "PromptSession", _FakeSession)
+        repl_module._run_repl(json_mode=False, verbose=False, no_color=True, config_dir=None)
+
+        err = capsys.readouterr().err
+        assert "Available commands:" in err
+        assert "project" in err  # a top-level group
+        assert "config list" in err  # a second-level command
+
 
 class TestReplFirewallPropagation:
     """REPL must forward --deny-writes / --deny-destructive to every inner command.
