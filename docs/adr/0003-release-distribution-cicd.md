@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Date
 
@@ -46,7 +46,8 @@ Add a **tag-triggered release pipeline** (`.github/workflows/release-kbagent.yml
    OIDC Trusted Publishing** (no stored token).
 3. **Freezes** native `kbagent` binaries with **PyInstaller** (`--onefile`,
    `--collect-all keboola_agent_cli`, entry `build/package/entry.py`) across a matrix
-   (linux amd64/arm64, macOS amd64/arm64, windows amd64), then **signs/notarizes**
+   (linux amd64/arm64, macOS arm64, windows amd64 — macOS is Apple Silicon only;
+   Intel Macs fall back to `uv tool install`), then **signs/notarizes**
    (Apple `notarytool`, Windows Authenticode via `jsign`). **Verified:** a frozen
    Linux binary runs in a stripped env — `env -i kbagent --version` → `kbagent v0.58.0`
    — with no Python/uv present. This is the **primary install path**; `uv`/`pipx` is
@@ -96,7 +97,7 @@ retiring the git-HEAD risk.
 | `APPLE_ACCOUNT_PASSWORD` | Notarization | App-specific password for the Apple ID (account/team are literals in the workflow) |
 | `WINDOWS_SIGNING_TENANT_ID` / `WINDOWS_SIGNING_CLIENT_ID` / `WINDOWS_SIGNING_CLIENT_SECRET` | Authenticode via Azure Key Vault | service principal with Key Vault access |
 | `AWS_ROLE_ARN` | Upload to `cli-dist.keboola.com` | IAM role trusting GitHub OIDC |
-| `DEB_KEY_PRIVATE` / `DEB_KEY_PUBLIC`, `RPM_KEY_PRIVATE` / `RPM_KEY_PUBLIC` | Sign deb/rpm packages + repo metadata | GPG keypair (passphrase-less) |
+| `DEB_KEY_PRIVATE` (apt keyring exported inline from it by `index.sh`; no `DEB_KEY_PUBLIC`), `RPM_KEY_PRIVATE` / `RPM_KEY_PUBLIC` | Sign deb/rpm packages + repo metadata | GPG keypair (passphrase-less) |
 | `APK_KEY_PRIVATE` / `APK_KEY_PUBLIC` | Sign the apk index | abuild RSA keypair |
 
 Set with `gh secret set <NAME> --env release --repo keboola/cli` piping the value via
