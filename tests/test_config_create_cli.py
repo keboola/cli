@@ -14,8 +14,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from click.testing import Result
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore

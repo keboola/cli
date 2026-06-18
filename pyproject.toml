@@ -21,7 +21,7 @@ dependencies = [
     "prompt-toolkit>=3.0",
     "kai-client>=0.11.0",
     "croniter>=2.0",
-    "cryptography>=46",
+    "cryptography>=48.0.1",
 ]
 
 [project.optional-dependencies]
