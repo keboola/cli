@@ -51,6 +51,7 @@ import typer.main
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.commands.context import AGENT_CONTEXT
+from keboola_agent_cli.commands.repl import _is_group
 from keboola_agent_cli.permissions import OPERATION_REGISTRY
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -83,7 +84,7 @@ def _walk(
         if cmd is None or getattr(cmd, "hidden", False):
             continue
         path = (*prefix, name)
-        if isinstance(cmd, click.Group):
+        if _is_group(cmd):
             groups.append(path)
             with click.Context(cmd, parent=ctx) as sub_ctx:
                 sub_leaves, sub_groups = _walk(cmd, sub_ctx, path)
@@ -97,7 +98,7 @@ def _walk(
 def collect_commands() -> tuple[list[CommandPath], list[CommandPath]]:
     """Return (leaf_paths, group_paths) for the live CLI command tree."""
     click_app = typer.main.get_command(app)
-    assert isinstance(click_app, click.Group)
+    assert _is_group(click_app)
     with click.Context(click_app) as ctx:
         return _walk(click_app, ctx)
 

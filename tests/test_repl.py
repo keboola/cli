@@ -5,7 +5,6 @@ import stat
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import click
 import platformdirs
 import pytest
 import typer.main
@@ -14,6 +13,7 @@ from keboola_agent_cli.commands.repl import (
     KbagentCompleter,
     _build_command_tree,
     _get_history_path,
+    _is_group,
 )
 
 
@@ -25,7 +25,7 @@ class TestBuildCommandTree:
         from keboola_agent_cli.cli import app
 
         click_app = typer.main.get_command(app)
-        assert isinstance(click_app, click.Group)
+        assert _is_group(click_app)
         tree = _build_command_tree(click_app)
 
         # Should contain top-level groups and their subcommands
@@ -40,7 +40,7 @@ class TestBuildCommandTree:
         from keboola_agent_cli.cli import app
 
         click_app = typer.main.get_command(app)
-        assert isinstance(click_app, click.Group)
+        assert _is_group(click_app)
         tree = _build_command_tree(click_app)
 
         # At least some commands should have help text
@@ -52,13 +52,26 @@ class TestBuildCommandTree:
         from keboola_agent_cli.cli import app
 
         click_app = typer.main.get_command(app)
-        assert isinstance(click_app, click.Group)
+        assert _is_group(click_app)
         tree = _build_command_tree(click_app)
 
         assert "doctor" in tree
         assert "context" in tree
         assert "version" in tree
         assert "repl" in tree
+
+    def test_tree_not_collapsed_to_empty(self) -> None:
+        """Guard the vendored-Click regression: tree must reach groups + subcommands."""
+        from keboola_agent_cli.cli import app
+
+        click_app = typer.main.get_command(app)
+        assert _is_group(click_app), "root app not detected as a command group"
+        tree = _build_command_tree(click_app)
+
+        top_level = [name for name in tree if " " not in name]
+        second_level = [name for name in tree if name.count(" ") == 1]
+        assert len(top_level) > 20, f"too few top-level commands: {len(top_level)}"
+        assert len(second_level) > 50, f"subcommands not walked: {len(second_level)}"
 
 
 class TestKbagentCompleter:
