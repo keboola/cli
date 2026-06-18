@@ -5,10 +5,10 @@ No business logic belongs here.
 """
 
 import sys
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-import click
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -30,6 +30,16 @@ from ._helpers import (
     resolve_manage_token,
 )
 from ._metadata_input import resolve_text_input
+
+
+class ProjectRole(StrEnum):
+    """Project membership role."""
+
+    admin = "admin"
+    guest = "guest"
+    readOnly = "readOnly"
+    share = "share"
+
 
 project_app = typer.Typer(help="Manage connected Keboola projects")
 
@@ -890,11 +900,10 @@ def project_invite(
     email: str | None = typer.Option(
         None, "--email", "-e", help="Email address of the user to invite"
     ),
-    role: str | None = typer.Option(
+    role: ProjectRole | None = typer.Option(
         None,
         "--role",
         "-r",
-        click_type=click.Choice(list(PROJECT_ROLES)),
         help="Role to grant: " + " | ".join(PROJECT_ROLES),
     ),
     reason: str | None = typer.Option(
@@ -905,10 +914,9 @@ def project_invite(
         "--from-csv",
         help="CSV file with columns email, project (alias or numeric ID), role[, reason]",
     ),
-    default_role: str | None = typer.Option(
+    default_role: ProjectRole | None = typer.Option(
         None,
         "--default-role",
-        click_type=click.Choice(list(PROJECT_ROLES)),
         help="Role to apply when a CSV row has no role column",
     ),
     workers: int = typer.Option(
@@ -1145,11 +1153,10 @@ def project_member_set_role(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     email: str = typer.Option(..., "--email", "-e", help="Email of the member to update"),
-    role: str = typer.Option(
+    role: ProjectRole = typer.Option(
         ...,
         "--role",
         "-r",
-        click_type=click.Choice(list(PROJECT_ROLES)),
         help="New role: " + " | ".join(PROJECT_ROLES),
     ),
 ) -> None:
