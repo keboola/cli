@@ -4,7 +4,8 @@ Thin CLI layer: parses arguments, calls JobService, formats output.
 No business logic belongs here.
 """
 
-import click
+from enum import StrEnum
+
 import typer
 from rich.markup import escape
 
@@ -18,8 +19,6 @@ from ..constants import (
     KILLABLE_JOB_STATUSES,
     MAX_JOB_LIMIT,
     MAX_LOG_TAIL_LINES,
-    VALID_JOB_MODES,
-    VALID_POLL_STRATEGIES,
     VALID_STATUSES,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
@@ -33,6 +32,21 @@ from ._helpers import (
     resolve_branch,
     validate_branch_requires_project,
 )
+
+
+class JobMode(StrEnum):
+    """Queue API job mode."""
+
+    run = "run"
+    debug = "debug"
+
+
+class PollStrategy(StrEnum):
+    """Polling cadence for --wait."""
+
+    exponential = "exponential"
+    fixed = "fixed"
+
 
 job_app = typer.Typer(help="Browse job history and run jobs")
 
@@ -183,10 +197,9 @@ def job_run(
         "--branch",
         help="Dev branch ID (overrides active branch)",
     ),
-    mode: str = typer.Option(
-        DEFAULT_JOB_MODE,
+    mode: JobMode = typer.Option(
+        JobMode(DEFAULT_JOB_MODE),
         "--mode",
-        click_type=click.Choice(sorted(VALID_JOB_MODES)),
         help=(
             "Queue API job mode. 'run' (default) executes the component "
             "normally and writes to mapped output tables. 'debug' executes "
@@ -216,10 +229,9 @@ def job_run(
             "--variable-values-id."
         ),
     ),
-    poll_strategy: str = typer.Option(
-        DEFAULT_POLL_STRATEGY,
+    poll_strategy: PollStrategy = typer.Option(
+        PollStrategy(DEFAULT_POLL_STRATEGY),
         "--poll-strategy",
-        click_type=click.Choice(sorted(VALID_POLL_STRATEGIES)),
         help=(
             "Polling cadence used with --wait. 'exponential' (default) "
             "starts at 2s and relaxes toward 15s as a job runs long "

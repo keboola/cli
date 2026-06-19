@@ -10,6 +10,7 @@ import os
 import shlex
 import sys
 from pathlib import Path
+from typing import TypeGuard
 
 import click
 import platformdirs
@@ -21,6 +22,11 @@ from prompt_toolkit.history import FileHistory
 
 from .. import __version__
 from ._helpers import get_formatter
+
+
+def _is_group(cmd: object) -> TypeGuard[click.Group]:
+    """True if ``cmd`` is a command group (duck-typed; Typer >=0.25 vendors Click)."""
+    return callable(getattr(cmd, "list_commands", None))
 
 
 def _build_command_tree(click_group: click.Group, prefix: str = "") -> dict:
@@ -35,10 +41,11 @@ def _build_command_tree(click_group: click.Group, prefix: str = "") -> dict:
                 full_name = f"{prefix}{name}"
                 help_text = cmd.get_short_help_str(limit=80)
                 tree[full_name] = help_text
-                if isinstance(cmd, click.Group):
+                if _is_group(cmd):
                     tree.update(_build_command_tree(cmd, f"{full_name} "))
-    except Exception:
-        pass
+    except Exception as exc:
+        # Report rather than degrade silently to an empty tree.
+        sys.stderr.write(f"kbagent: failed to build REPL command tree: {exc!r}\n")
     return tree
 
 
@@ -110,9 +117,7 @@ def _run_repl(
 
     # Build command tree for completion
     click_app = typer.main.get_command(typer_app)
-    # typer.main.get_command returns a click.Group for multi-command Typer apps.
-    # The isinstance guard narrows the type and gracefully handles test mocks.
-    command_tree = _build_command_tree(click_app) if isinstance(click_app, click.Group) else {}
+    command_tree = _build_command_tree(click_app) if _is_group(click_app) else {}
 
     # Add REPL-specific commands
     command_tree["help"] = "Show available commands"

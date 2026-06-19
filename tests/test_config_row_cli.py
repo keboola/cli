@@ -5,8 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from click.testing import Result
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from helpers import setup_single_project
 from keboola_agent_cli.cli import app

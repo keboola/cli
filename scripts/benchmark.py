@@ -369,7 +369,7 @@ def run_benchmarks(project: str, runs: int = 1, run_multi: bool = False):
         status = "ok" if all_ok else "FAIL"
 
         # Calculate vs stdio
-        stdio_total = stdio_results[i]["total"]
+        stdio_total = float(stdio_results[i]["total"])
         vs_stdio = ((avg_total - stdio_total) / stdio_total) * 100
 
         http_results.append(

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import getpass
 import sys
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-import click
 import typer
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
@@ -28,15 +28,19 @@ from ._helpers import (
     resolve_identity_alias,
 )
 
+
 # CLI-layer enforcement of the role_hint enum. The Pydantic validator on
 # DeveloperPortalIdentity intentionally silent-downgrades unknown values to
 # "vendor" for backwards compatibility with pre-0.51.1 config.json files
 # that may carry arbitrary free-text strings. That tolerance is wrong at the
 # CLI surface, where the user just typed a value RIGHT NOW -- a typo should
 # fail loudly, not silently land as "vendor" and confuse the next operation.
-# Wiring `click.Choice` here gives the Typer-level rejection (exit 2 + usage
-# error) before any model construction.
-_ROLE_HINT_CHOICES = ["vendor", "admin"]
+# A StrEnum option type gives the Typer-level rejection (exit 2 + usage error)
+# before any model construction.
+class RoleHint(StrEnum):
+    vendor = "vendor"
+    admin = "admin"
+
 
 dev_portal_app = typer.Typer(
     help="Keboola Developer Portal — multi-identity, production-safe writes.",
@@ -98,10 +102,9 @@ def identity_add(
         "--password-stdin",
         help="Read password from stdin. On a TTY this is a hidden prompt (Enter to confirm); on a pipe it reads until EOF (e.g. `echo $PASS | … --password-stdin`).",
     ),
-    role_hint: str = typer.Option(
-        "vendor",
+    role_hint: RoleHint = typer.Option(
+        RoleHint.vendor,
         "--role-hint",
-        click_type=click.Choice(_ROLE_HINT_CHOICES),
         help="Identity role: 'vendor' (default) or 'admin'. Routes write commands to different apps-api endpoints -- admin uses PATCH /admin/apps/{app} which accepts complexity/categories/forwardToken/processTimeout/etc. that the vendor endpoint forbids.",
     ),
     vendor: str | None = typer.Option(None, "--vendor"),
@@ -178,10 +181,9 @@ def identity_edit(
     username: str | None = typer.Option(None, "--username"),
     password: str | None = typer.Option(None, "--password"),
     password_stdin: bool = typer.Option(False, "--password-stdin"),
-    role_hint: str | None = typer.Option(
+    role_hint: RoleHint | None = typer.Option(
         None,
         "--role-hint",
-        click_type=click.Choice(_ROLE_HINT_CHOICES),
     ),
     vendor: str | None = typer.Option(None, "--vendor"),
     new_alias: str | None = typer.Option(None, "--new-alias"),

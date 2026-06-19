@@ -20,6 +20,7 @@ import click
 import typer.main
 
 from keboola_agent_cli.cli import app
+from keboola_agent_cli.commands.repl import _is_group
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -67,11 +68,13 @@ def _format_param(param: click.Parameter) -> str:
     Required params get a placeholder value (e.g. --alias NAME).
     Optional params are omitted from the compact command string.
     """
-    if isinstance(param, click.Argument):
+    # Use param_type_name (not isinstance against click.Argument/Option): Typer >=0.25
+    # vendors its own Click, so a command's params are not standalone click.* instances.
+    if param.param_type_name == "argument":
         human_name = (param.name or "").upper().replace("_", "-")
         return f"<{human_name}>" if param.required else f"[{human_name}]"
 
-    if isinstance(param, click.Option):
+    if param.param_type_name == "option":
         if not param.required:
             return ""
         # Use the longest option string (e.g. --alias over -a)
@@ -79,7 +82,7 @@ def _format_param(param: click.Parameter) -> str:
         # Convert underscores to hyphens for display
         opt_str = opt_str.replace("_", "-")
         human_name = param.human_readable_name.upper().replace("_", "-")
-        if param.is_flag:
+        if getattr(param, "is_flag", False):
             return opt_str
         return f"{opt_str} {human_name}"
 
@@ -104,7 +107,7 @@ def _collect_commands(
 
         full_name = f"{prefix} {name}".strip() if prefix else name
 
-        if isinstance(cmd, click.Group):
+        if _is_group(cmd):
             # If the group has invoke_without_command and its own non-trivial
             # params, it acts as a standalone command too (e.g. `explorer`
             # has --project, --output-dir, etc.). Groups whose callback is
@@ -116,7 +119,7 @@ def _collect_commands(
                     p
                     for p in cmd.params
                     if p.name not in ("help", "ctx")
-                    and not (isinstance(p, click.Option) and p.name == "help")
+                    and not (p.param_type_name == "option" and p.name == "help")
                 ]
                 if own_params:
                     help_text = cmd.help or ""
@@ -199,7 +202,7 @@ def main() -> None:
     """Entry point: introspect CLI, generate table, inject into SKILL.md."""
     click_app = typer.main.get_command(app)
 
-    assert isinstance(click_app, click.Group)
+    assert _is_group(click_app)
     with click.Context(click_app) as ctx:
         commands = _collect_commands(click_app, ctx)
 
