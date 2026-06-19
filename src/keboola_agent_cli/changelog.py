@@ -24,6 +24,35 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.64.0": [
+        "New: data-app git-repo introspection + managed-repo credentials -- five `data-app "
+        "git-*` commands over the sandboxes-service `/apps/{id}/git-repo/*` endpoints. "
+        "`git-repo` shows the clone URLs + a managed flag, `git-branches` lists remote branches "
+        "with commit metadata, `git-entrypoints` lists root-level `.py` files, `git-credentials` "
+        "lists managed-repo credentials, and `git-credentials-create` mints an SSH key or HTTP "
+        "token (a one-time secret for `http_token`). Mirrored 1:1 on the `kbagent serve` REST "
+        "API. The read trio needs only the project storage token; the credential pair is "
+        "managed-repo only (admin token). Gotcha: the introspection endpoints return 409 until "
+        "the app has been deployed at least once -- the git block syncs from the Storage config "
+        "into the Data Science app record at deploy time (first tagged 0.63.3, #414).",
+        "Security: `kbagent serve --ui` now decides which paths require auth via the router "
+        "match protocol and fails closed, fixing a fastapi-0.137 nested-router bypass that "
+        "served `/doctor`, `/version`, `/changelog`, and `/agents` unauthenticated "
+        "(GHSA-ffpq-prmh-3gx2); the temporary `fastapi<0.137` cap is lifted (0.63.4).",
+        "Fix: invalid `--mode` / `--poll-strategy` (`job run`), `--role` / `--default-role` "
+        "(`project invite`, `member-set-role`) and `--role-hint` (`dev-portal identity`) values "
+        "fail with a clean exit-2 usage error again instead of an uncaught traceback -- they "
+        "regressed under Typer >=0.25's vendored Click, so the choice options now use `StrEnum`. "
+        "The interactive REPL `help` and tab-completion again list every command (0.63.4).",
+        "Change: kbagent now ships as a self-contained native binary via Homebrew / apt / dnf / "
+        "apk / Chocolatey / WinGet (PyInstaller + nfpm release pipeline), alongside the existing "
+        "pip / uv install (#405).",
+        "Internal: the data-app command and service layers were split into sibling modules "
+        "(`commands/_data_app_git.py`, `commands/_data_app_runtime.py`, "
+        "`services/data_app_git_service.py`) to keep `data_app.py` under the file-size budget -- "
+        "no behavior change (#423). Dependency bumps: cryptography 48, starlette 1.3, "
+        "python-multipart 0.0.31, pyjwt 2.13.",
+    ],
     "0.63.4": [
         "Fix: the interactive REPL `help` command and tab-completion again list every "
         "command instead of only `help`/`exit`. `_build_command_tree` guarded its walk "
