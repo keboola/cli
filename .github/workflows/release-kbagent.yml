@@ -110,6 +110,8 @@ jobs:
           git diff --exit-code plugins/kbagent/skills/kbagent/SKILL.md plugins/kbagent/.claude-plugin/plugin.json .claude-plugin/marketplace.json uv.lock
       - name: changelog-check (skipped on pre-releases)
         if: needs.version.outputs.IS_PRERELEASE == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}  # gh release list needs auth; contents:read is enough scope
         run: uv run python scripts/generate_changelog.py --check
 
   # ── Build the prebuilt wheel and publish to PyPI (for the `uv`/`pipx` audience).
