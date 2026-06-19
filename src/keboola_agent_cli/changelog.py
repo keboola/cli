@@ -46,6 +46,13 @@ CHANGELOG: dict[str, list[str]] = {
         "`/version`, `/changelog`, `/agents` become reachable unauthenticated, reopening "
         "GHSA-ffpq-prmh-3gx2 (fixed in an earlier release). Held until the `serve --ui` "
         "auth check is updated for the newer fastapi.",
+        "Security: `serve --ui` now decides which paths need auth by asking the router's "
+        "match protocol whether a GET resolves to a real endpoint, instead of scanning "
+        "`app.routes` as a flat list -- and it fails closed (any error -> path treated as "
+        "protected). fastapi 0.137 nests included routers into a lazy tree, so the old flat "
+        "scan missed nested endpoints and served `/doctor`, `/version`, `/changelog`, "
+        "`/agents` unauthenticated (GHSA-ffpq-prmh-3gx2). With the predicate fixed, the "
+        "temporary `fastapi<0.137` cap above is lifted -- fastapi is back on the latest release.",
     ],
     "0.63.3": [
         "Fix: `kbagent context` no longer renders API path templates as "

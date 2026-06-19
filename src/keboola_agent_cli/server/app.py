@@ -723,38 +723,40 @@ def _allow_static_through_auth(app: FastAPI) -> None:
     favicons, and the SPA's client-side routes (which resolve to index.html via
     the StaticFiles ``html=True`` fallback) to load without a token.
 
-    Route-aware (GHSA-ffpq-prmh-3gx2): instead of a hand-maintained prefix
-    deny-list -- which silently went stale and let ``GET /doctor`` / ``/stream``
-    / ``/version`` / ``/changelog`` bypass auth in ``--ui`` mode -- we derive the
-    protected set from the app's *actually-registered* routes. All routers are
-    included before this runs (and before the StaticFiles mount is appended), so
-    any GET that resolves to a real endpoint must authenticate, and only genuine
-    client-side SPA routes fall through to the public index.html shell. New API
-    routes are protected automatically, with no list to keep in sync.
+    Route-aware (GHSA-ffpq-prmh-3gx2): a real endpoint must authenticate; only
+    genuine client-side SPA routes fall through to the public index.html shell.
+    We ask the router whether a GET resolves to a registered route via the
+    routing match protocol, NOT a flat scan of ``app.routes``: fastapi >=0.137
+    nests included routers into a lazy tree (``_IncludedRouter``), so a flat scan
+    misses nested endpoints and would serve them unauthenticated. ``matches()``
+    is the same resolution a real request uses, so it cannot miss a live
+    endpoint. Fails CLOSED -- any error treats the path as protected, never
+    silently public.
 
-    Implemented by stashing a predicate on ``app.state`` that the auth
-    middleware consults; we don't import-cycle by editing the auth module here.
+    Stashed on ``app.state`` for the auth middleware to consult (avoids an
+    import cycle with the auth module).
     """
-    from starlette.routing import Route
+    from starlette.routing import Match
 
-    # Snapshot the real endpoints once. The StaticFiles mount (added by the
-    # caller AFTER this function) is a ``Mount``, not a ``Route``, so it is
-    # correctly excluded -- otherwise it would match every path and break the
-    # SPA fallback.
-    api_route_patterns = [r.path_regex for r in app.routes if isinstance(r, Route)]
     static_paths = frozenset({"/", "/index.html", "/favicon.svg", "/favicon.ico", "/manifest.json"})
 
     def _is_ui_public(method: str, path: str) -> bool:
         if method != "GET":
             return False
-        # SPA shell + built assets are always public (they carry no secrets) so
-        # the browser can bootstrap and pick up the session cookie.
+        # SPA shell + built assets are always public so the browser can bootstrap.
         if path in static_paths or path.startswith("/assets/"):
             return True
-        # A path that resolves to a registered route is a real endpoint and
-        # MUST go through auth. Anything else is a client-side SPA route served
-        # by the public StaticFiles shell, so skipping auth there leaks nothing.
-        return not any(pattern.match(path) for pattern in api_route_patterns)
+        try:
+            scope = {"type": "http", "method": "GET", "path": path, "headers": []}
+            for route in app.router.routes:
+                if getattr(route, "name", None) == "ui":  # the SPA StaticFiles catch-all
+                    continue
+                match, _ = route.matches(scope)
+                if match is not Match.NONE:
+                    return False  # resolves to a real endpoint -> require auth
+            return True  # no endpoint matched -> genuine SPA client route
+        except Exception:
+            return False  # fail closed
 
     app.state.is_ui_public = _is_ui_public
 
