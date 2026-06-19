@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chocolatey package for kbagent (id: keboola-cli2). Wraps the signed PyInstaller
+     .exe downloaded from cli-dist.keboola.com — no Python required. {VERSION} is
+     substituted by the release workflow. -->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>keboola-cli2</id>
+    <version>{VERSION}</version>
+    <title>Keboola Agent CLI (kbagent)</title>
+    <authors>Keboola</authors>
+    <projectUrl>https://github.com/keboola/cli</projectUrl>
+    <licenseUrl>https://github.com/keboola/cli/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <summary>AI-friendly CLI for managing Keboola projects.</summary>
+    <description>Self-contained native CLI for managing Keboola Connection projects. No Python runtime required.</description>
+    <tags>keboola cli kbagent</tags>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

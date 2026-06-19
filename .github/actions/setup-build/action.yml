@@ -1,0 +1,22 @@
+name: setup-build
+description: Pin uv (and optionally Node 20) for kbagent build/release jobs.
+inputs:
+  node:
+    description: Install Node 20 (needed for the React SPA build hook).
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v7
+      with:
+        version: "0.11.16"
+    # Pin the interpreter explicitly (matches ci.yml / release.yml). Without it a job
+    # could run on whatever Python the runner ships, which may not satisfy >=3.12.
+    - uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+    - if: ${{ inputs.node == 'true' }}
+      uses: actions/setup-node@v6
+      with:
+        node-version: "20"
+        package-manager-cache: false
