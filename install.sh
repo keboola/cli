@@ -9,19 +9,21 @@
 # from `git+` recompiles the bundled React SPA via npm on every install, which
 # takes 2-4 minutes on WSL2. A prebuilt wheel is a few-seconds download instead.
 #
-# Requirements: `uv` (the install backend) and `curl`. The guide installs uv a
-# couple of steps before this. If no wheel asset exists for the latest release
-# yet (older releases predate the release workflow), this falls back to the
-# `git+` source build so the install still succeeds.
+# Requirements: `curl`. `uv` (the install backend) is auto-installed from its
+# official source if missing -- opt out with KBAGENT_NO_UV_BOOTSTRAP=1 to manage uv
+# yourself. If no wheel asset exists for the latest release yet (older releases
+# predate the release workflow), this falls back to the `git+` source build.
 #
 # Env knobs:
-#   KBAGENT_NO_SERVER=1       install CLI-only (skip the [server] extras: FastAPI/
-#                             uvicorn for `kbagent serve`). Default bundles them so
-#                             `kbagent serve --ui` works out of the box.
-#   KBAGENT_INSTALL_VERBOSE=1 show the full `uv tool install` output (the resolved
-#                             dependency list) instead of a single progress line.
-#                             Also enabled with the --verbose / -v argument.
-#   NO_COLOR=1                disable ANSI colour (https://no-color.org).
+#   KBAGENT_NO_SERVER=1        install CLI-only (skip the [server] extras: FastAPI/
+#                              uvicorn for `kbagent serve`). Default bundles them so
+#                              `kbagent serve --ui` works out of the box.
+#   KBAGENT_NO_UV_BOOTSTRAP=1  do NOT auto-install uv when missing; print the manual
+#                              install command and exit instead.
+#   KBAGENT_INSTALL_VERBOSE=1  show the full `uv tool install` output (the resolved
+#                              dependency list) instead of a single progress line.
+#                              Also enabled with the --verbose / -v argument.
+#   NO_COLOR=1                 disable ANSI colour (https://no-color.org).
 
 set -eu
 
@@ -61,9 +63,10 @@ fi
 # the banner never renders as mojibake on a legacy terminal.
 UTF8=0
 case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *UTF-8* | *utf-8* | *UTF8* | *utf8*) UTF8=1 ;; esac
-if [ "$UTF8" -eq 1 ]; then CHECK='✓'; CROSS='✗'; else CHECK='OK'; CROSS='x'; fi
+if [ "$UTF8" -eq 1 ]; then CHECK='✓'; CROSS='✗'; ARROW='→'; else CHECK='OK'; CROSS='x'; ARROW='->'; fi
 
 LOG_FILE=$(mktemp 2>/dev/null || echo "/tmp/kbagent-install.$$.log")
+_BG_PID="" # pid of the currently-backgrounded step, for interrupt cleanup
 
 # Fractional sleep is not guaranteed by POSIX; probe once and fall back to 1s
 # so the spinner never busy-loops on a shell whose `sleep` rejects "0.1".
@@ -117,8 +120,10 @@ run_step() {
   fi
   "$@" >"$LOG_FILE" 2>&1 &
   _pid=$!
+  _BG_PID=$_pid
   _spin "$_pid" "$_msg"
   if wait "$_pid"; then _rc=0; else _rc=$?; fi
+  _BG_PID=""
   if [ "$_rc" -eq 0 ]; then
     printf '\r  %s%s%s %s            \n' "$GREEN" "$CHECK" "$RESET" "$_msg" >&2
   else
@@ -134,16 +139,61 @@ dump_log() {
   sed 's/^/    /' "$LOG_FILE" >&2 2>/dev/null || cat "$LOG_FILE" >&2
 }
 
-cleanup() { rm -f "$LOG_FILE" 2>/dev/null || true; }
+cleanup() {
+  # On Ctrl+C during a step, kill the backgrounded child (e.g. `uv tool install`)
+  # so it doesn't keep running orphaned; then remove the temp log.
+  [ -n "$_BG_PID" ] && kill "$_BG_PID" 2>/dev/null || true
+  rm -f "$LOG_FILE" 2>/dev/null || true
+}
 trap cleanup EXIT
+trap 'cleanup; exit 130' INT TERM
 
 banner
 
-# --- preconditions --------------------------------------------------------
-if ! command -v uv >/dev/null 2>&1; then
-  info "${RED}error:${RESET} 'uv' was not found on PATH. Install it first, then re-run:"
-  info "  curl -LsSf https://astral.sh/uv/install.sh | sh"
-  info "  source \$HOME/.local/bin/env   # or restart your shell"
+# --- ensure uv (the install backend) --------------------------------------
+# uv is required. If missing, auto-install it from the official source (the same
+# command we'd otherwise ask you to run) and put it on PATH for the rest of this
+# script. Opt out with KBAGENT_NO_UV_BOOTSTRAP=1 to manage uv yourself.
+ensure_uv() {
+  command -v uv >/dev/null 2>&1 && return 0
+
+  if [ "${KBAGENT_NO_UV_BOOTSTRAP:-}" = "1" ]; then
+    info "${RED}error:${RESET} 'uv' not found and KBAGENT_NO_UV_BOOTSTRAP=1 is set."
+    info "  Install uv then re-run:  curl -LsSf https://astral.sh/uv/install.sh | sh"
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    info "${RED}error:${RESET} need 'uv' or 'curl' on PATH to bootstrap; found neither."
+    return 1
+  fi
+
+  info "${DIM}'uv' not found -- installing it (one-time, from astral.sh)...${RESET}"
+  if ! run_step "Installing uv (the install backend)" \
+    sh -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'; then
+    info "${RED}error:${RESET} could not install uv automatically."
+    info "  Install it manually then re-run:  curl -LsSf https://astral.sh/uv/install.sh | sh"
+    return 1
+  fi
+
+  # uv installs into ~/.local/bin (with an env file); make it visible to THIS shell.
+  [ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env" 2>/dev/null || true
+  case ":$PATH:" in
+  *":$HOME/.local/bin:"*) : ;;
+  *) PATH="$HOME/.local/bin:$PATH" && export PATH ;;
+  esac
+
+  # Fresh uv install: prefer uv-managed Python so a wrong-arch system Python can't
+  # break the build (UT-4281 "Bad CPU type"). Overridable; set only on bootstrap so
+  # users who already have uv keep their existing Python selection.
+  : "${UV_PYTHON_PREFERENCE:=only-managed}"
+  export UV_PYTHON_PREFERENCE
+
+  command -v uv >/dev/null 2>&1
+}
+
+if ! ensure_uv; then
+  info ""
+  info "${RED}Cannot continue without uv.${RESET} See https://docs.astral.sh/uv/ to install it."
   exit 1
 fi
 
@@ -204,7 +254,7 @@ ver_str=$(kbagent --version 2>/dev/null || echo "kbagent installed")
 bin_path=$(command -v kbagent 2>/dev/null || echo "~/.local/bin/kbagent")
 
 info ""
-printf '  %s%s%s %s%s%s  →  %s\n' "$GREEN" "$CHECK" "$RESET" "$BOLD" "$ver_str" "$RESET" "$bin_path" >&2
+printf '  %s%s%s %s%s%s  %s  %s\n' "$GREEN" "$CHECK" "$RESET" "$BOLD" "$ver_str" "$RESET" "$ARROW" "$bin_path" >&2
 printf '  %sno sudo required · keboola-mcp-server bundled & auto-updating%s\n' "$DIM" "$RESET" >&2
 info ""
 printf '  %sNext steps%s\n' "$BOLD" "$RESET" >&2
@@ -216,3 +266,4 @@ info ""
 
 if ! command -v kbagent >/dev/null 2>&1; then
   info "${DIM}Note: open a new shell (or 'source \$HOME/.local/bin/env') so 'kbagent' is on PATH.${RESET}"
+fi
