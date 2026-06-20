@@ -25,9 +25,8 @@ if [ -z "${DEB_KEY_PRIVATE:-}" ]; then
 fi
 
 sudo apt-get update -y
-# apk-tools + abuild are needed for the apk repo index; tolerate their absence.
-sudo apt-get install -y dpkg-dev apt-utils createrepo-c gnupg apk-tools abuild || \
-  sudo apt-get install -y dpkg-dev apt-utils createrepo-c gnupg
+# Only deb/rpm tooling on the host; the apk index is built in Alpine (see index_apk).
+sudo apt-get install -y dpkg-dev apt-utils createrepo-c gnupg
 
 # Import GPG signing key (deb + rpm metadata).
 printf '%s' "$DEB_KEY_PRIVATE" | gpg --batch --import
@@ -59,8 +58,12 @@ index_deb() {
 index_rpm() { createrepo_c .; }
 index_apk() {
   printf '%s' "$APK_KEY_PRIVATE" > "$WORK/apk_index.rsa" && chmod 600 "$WORK/apk_index.rsa"
-  apk index -o APKINDEX.tar.gz ./*.apk
-  abuild-sign -k "$WORK/apk_index.rsa" APKINDEX.tar.gz
+  # apk/abuild-sign are Alpine-only (not in Ubuntu apt), so sign the index in Alpine.
+  # $PWD is the per-format work dir (publish_repo cd's into it); mount it + the key.
+  docker run --rm -v "$PWD:/work" -v "$WORK/apk_index.rsa:/key.rsa:ro" -w /work alpine:3 \
+    sh -ceu 'apk add --no-cache abuild >/dev/null
+             apk index -o APKINDEX.tar.gz ./*.apk
+             abuild-sign -k /key.rsa APKINDEX.tar.gz'
 }
 
 # deb: index_deb writes its own (dearmored) keboola.gpg, so pass no pub-key content.
@@ -69,16 +72,10 @@ publish_repo rpm index_rpm keboola.gpg "${RPM_KEY_PUBLIC:-}"
 if [ -z "${APK_KEY_PRIVATE:-}" ]; then
   # No apk signing key configured — the apk index is genuinely opt-out, so skip it.
   echo "::warning::APK_KEY_PRIVATE not set — skipping apk index (deb/rpm done)."
-elif command -v abuild-sign >/dev/null 2>&1 && command -v apk >/dev/null 2>&1; then
-  publish_repo apk index_apk keboola.rsa.pub "${APK_KEY_PUBLIC:-}"
 else
-  # Key IS set, so apk publishing is intended — but the tooling is missing (the
-  # `apk-tools abuild` apt install above fell back to the slimmer package set).
-  # publish-s3 only runs on real (non-pre-release) tags, so silently skipping here
-  # would ship a release with no apk index. Fail loudly — same policy as the
-  # DEB_KEY_PRIVATE guard at the top of this script.
-  echo "::error::APK_KEY_PRIVATE is set but abuild-sign/apk is unavailable — refusing to ship a real release without a signed apk index (check the 'apk-tools abuild' apt install above)."
-  exit 1
+  # Key set → apk publishing intended. If Docker is somehow absent (it isn't on
+  # ubuntu-latest), index_apk's `docker run` fails loud under set -e — fine.
+  publish_repo apk index_apk keboola.rsa.pub "${APK_KEY_PUBLIC:-}"
 fi
 
 echo "Repositories indexed and published under s3://$BUCKET/$PREFIX/{deb,rpm,apk}/"
