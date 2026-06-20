@@ -130,6 +130,10 @@ jobs:
       - run: uv build
       - run: uv run python scripts/check_wheel_ui.py --expect-ui
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Idempotent: a re-tag / re-run after a downstream (signing) failure
+          # must not fail just because this version is already on PyPI.
+          skip-existing: true
 
   # ── Freeze a self-contained native binary per OS/arch (PyInstaller).
   freeze:

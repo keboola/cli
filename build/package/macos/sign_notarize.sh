@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Code-sign + notarize + staple a macOS binary. Required Apple secrets:
+# Code-sign + notarize a macOS binary (no staple -- see the note by the staple
+# step: a bare CLI binary cannot be stapled and does not need to be). Required Apple secrets:
 #   APPLE_DEVELOPER_CERTIFICATE_P12_BASE64  (Developer ID Application cert, base64 .p12)
 #   APPLE_DEVELOPER_CERTIFICATE_PASSWORD    (.p12 password)
 #   APPLE_ACCOUNT_USERNAME                  (Apple ID email, e.g. apple@keboola.com)
@@ -35,8 +36,14 @@ xcrun notarytool submit "$ZIP" \
   --password "$APPLE_ACCOUNT_PASSWORD" \
   --team-id "$APPLE_TEAM_ID" \
   --wait
-# Staple must succeed on a real release (an unstapled binary needs online
-# notarization checks → worse offline install UX). Pre-release tags mark the
-# whole signing step continue-on-error, so a hard failure here is safe there.
-xcrun stapler staple "$BIN"
+# Do NOT staple: `xcrun stapler staple` only supports bundles (.app / .dmg /
+# .pkg) -- a bare Mach-O CLI binary cannot be stapled and returns "Error 73"
+# (per the stapler(1) man page: "works only with UDIF disk images, signed
+# 'flat' installer packages, and certain code-signed executable bundles").
+# The binary IS Developer-ID-signed (hardened runtime) and notarized
+# (notarytool returned Accepted above), so Gatekeeper validates it ONLINE via
+# Apple's notarization catalog keyed by the code-directory hash. Stapling only
+# matters for OFFLINE first-run of a *bundle*, which this is not -- so a signed
+# + notarized standalone CLI binary is safe to ship unstapled.
+echo "Skipping stapler: a bare CLI binary is notarized; Gatekeeper checks it online."
 codesign --verify --verbose "$BIN"

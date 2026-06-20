@@ -26,11 +26,17 @@ TOKEN=$(curl -sf -X POST "https://login.microsoftonline.com/${WINDOWS_SIGNING_TE
 
 curl -fsSL -o /tmp/jsign.jar https://github.com/ebourg/jsign/releases/download/6.0/jsign-6.0.jar
 echo "05ca18d4ab7b8c2183289b5378d32860f0ea0f3bdab1f1b8cae5894fb225fa8a  /tmp/jsign.jar" | sha256sum -c -
+# Timestamping hits a public RFC3161/Authenticode TSA, which occasionally times
+# out (seen as `SocketTimeoutException: Connect timed out`). jsign accepts a
+# comma-separated --tsaurl list it falls back across, plus per-URL retries, so a
+# single flaky TSA no longer fails the whole signed release.
 java -jar /tmp/jsign.jar \
   --storetype AZUREKEYVAULT \
   --keystore "$KEYVAULT" \
   --alias "$ALIAS" \
   --storepass "$TOKEN" \
-  --tsaurl https://timestamp.digicert.com \
+  --tsaurl "https://timestamp.digicert.com,http://timestamp.sectigo.com,http://ts.ssl.com" \
+  --tsretries 5 \
+  --tsretrywait 15 \
   --replace \
   "$EXE"
