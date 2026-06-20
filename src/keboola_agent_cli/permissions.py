@@ -154,6 +154,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.detail": "read",
     "data-app.password": "read",
     "data-app.logs": "read",
+    "data-app.runs": "read",
     "data-app.create": "write",
     "data-app.deploy": "write",
     "data-app.start": "write",
@@ -171,6 +172,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.git-entrypoints": "read",
     "data-app.git-credentials": "read",
     "data-app.git-credentials-create": "write",
+    "data-app.git-bind-credential": "write",
     # Developer Portal — identity sub-app leaves (composed by the
     # identity_app callback as "dev-portal.identity.<subcommand>")
     "dev-portal.identity.add": "write",

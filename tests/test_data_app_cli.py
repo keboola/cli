@@ -144,6 +144,93 @@ class TestDataAppCreateValidation:
         assert body["error"]["code"] == "USAGE_ERROR"
         mock.create_data_app.assert_not_called()
 
+    def test_managed_and_git_repo_mutually_exclusive(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        result = _invoke(
+            [
+                "--json",
+                "data-app",
+                "create",
+                "--project",
+                "prod",
+                "--name",
+                "App",
+                "--slug",
+                "my-app",
+                "--use-managed-git-repo",
+                "--git-repo",
+                "https://github.com/o/r",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 2, result.output
+        body = json.loads(result.output)
+        assert body["error"]["code"] == "USAGE_ERROR"
+        mock.create_data_app.assert_not_called()
+
+    def test_no_git_source_rejected(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        result = _invoke(
+            [
+                "--json",
+                "data-app",
+                "create",
+                "--project",
+                "prod",
+                "--name",
+                "App",
+                "--slug",
+                "my-app",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 2, result.output
+        body = json.loads(result.output)
+        assert body["error"]["code"] == "USAGE_ERROR"
+        mock.create_data_app.assert_not_called()
+
+    def test_managed_repo_passes_flag_to_service(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.create_data_app.return_value = {
+            "dry_run": True,
+            "project_alias": "prod",
+            "use_managed_git_repo": True,
+            "requests": {"post_apps": {}, "put_storage_config": {}, "patch_apps": {}},
+            "message": "Dry run -- no API calls made.",
+        }
+        result = _invoke(
+            [
+                "data-app",
+                "create",
+                "--project",
+                "prod",
+                "--name",
+                "App",
+                "--slug",
+                "my-app",
+                "--use-managed-git-repo",
+                "--auth",
+                "public",
+                "--dry-run",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        assert mock.create_data_app.call_args.kwargs["use_managed_git_repo"] is True
+        assert mock.create_data_app.call_args.kwargs["git_repo"] == ""
+
     def test_missing_pat_env_var_rejected(self, tmp_path: Path, monkeypatch) -> None:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
@@ -644,4 +731,71 @@ class TestDataAppLogs:
         assert result.exit_code == 0, result.output
         mock.get_app_logs.assert_called_once_with(
             alias="prod", app_id="42", lines=None, since="2026-05-21T13:00:00+00:00"
+        )
+
+
+class TestDataAppRuns:
+    def test_runs_json(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.list_app_runs.return_value = {
+            "project_alias": "prod",
+            "app_id": "42",
+            "count": 1,
+            "runs": [
+                {
+                    "id": "run-1",
+                    "state": "failed",
+                    "failure_reason": {"reason": "StartupProbeFailed", "message": "clone failed"},
+                }
+            ],
+        }
+        result = _invoke(
+            ["--json", "data-app", "runs", "--project", "prod", "--app-id", "42", "--limit", "3"],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        assert body["data"]["runs"][0]["failure_reason"]["reason"] == "StartupProbeFailed"
+        mock.list_app_runs.assert_called_once_with("prod", "42", limit=3)
+
+
+class TestDataAppGitBindCredential:
+    def test_bind_credential_json(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.bind_managed_credential.return_value = {
+            "project_alias": "prod",
+            "app_id": "42",
+            "repository": "https://git.example.com/keboola/app-42.git",
+            "branch": "main",
+            "permissions": "readOnly",
+            "config_version": "9",
+            "git": {"#password": "<encrypted>"},
+            "message": "Wired a managed-repo credential into data app 42.",
+        }
+        result = _invoke(
+            [
+                "--json",
+                "data-app",
+                "git-bind-credential",
+                "--project",
+                "prod",
+                "--app-id",
+                "42",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        # The one-time token is never echoed -- only the redacted ciphertext marker.
+        assert body["data"]["git"]["#password"] == "<encrypted>"
+        mock.bind_managed_credential.assert_called_once_with(
+            "prod", "42", branch="main", permissions="readOnly"
         )

@@ -424,13 +424,26 @@ kbagent workspace from-transformation --project ALIAS --component-id ID --config
 
 kbagent data-app list [--project NAME ...] [--branch ID]
 kbagent data-app detail --project NAME --app-id ID [--branch ID]
-kbagent data-app create --project ALIAS --name NAME --slug SLUG --git-repo URL [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
+kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
+# Exactly one git source is required: --git-repo URL (external) OR --use-managed-git-repo (0.65.0+).
+# --use-managed-git-repo provisions an EMPTY Keboola-hosted repo (POST useManagedGitRepo:true), writes
+#   NO parameters.dataApp.git block, and forces --no-deploy (nothing to run yet). Mutually exclusive with
+#   --git-repo and all --git-*/PAT auth flags. Full flow to a RUNNING managed-repo app (0.65.0+):
+#   (1) create --use-managed-git-repo -> (2) `git-credentials-create --type http_token --permissions
+#   readWrite` + `git push` code to the managed repo URL (from `git-repo`) -> (3) `data-app
+#   git-bind-credential` (mints an http_token ON the app, encrypts it under the project KMS, and writes
+#   parameters.dataApp.git so the runtime's `git clone` can authenticate -- required on stacks that do NOT
+#   inject managed-repo creds at deploy time) -> (4) `data-app deploy`. deploy pins the LATEST
+#   configVersion when a git block is present and omits it for a PURE managed repo (deploys from
+#   managedGitRepoId). Use `data-app runs` to debug a deploy that reverts to stopped (setup-phase
+#   failures, e.g. git-clone "could not read Username", produce no container logs).
 kbagent data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID]
 kbagent data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app delete --project NAME --app-id ID [--yes]
 kbagent data-app password --project NAME --app-id ID
 kbagent data-app logs --project NAME --app-id ID [--lines N] [--since ISO8601]
+kbagent data-app runs --project NAME --app-id ID [--limit N]
 kbagent data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE' [--secret ...] [--secrets-file PATH] [--branch ID] [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]
 kbagent data-app secrets-list --project ALIAS --app-id ID [--branch ID] [--show-fingerprint]
 kbagent data-app secrets-get --project ALIAS --app-id ID --key 'KEY' [--branch ID]   # '#' optional; plain values return their value, encrypted return metadata only
@@ -441,6 +454,7 @@ kbagent data-app git-branches --project NAME --app-id ID
 kbagent data-app git-entrypoints --project NAME --app-id ID
 kbagent data-app git-credentials --project NAME --app-id ID
 kbagent data-app git-credentials-create --project NAME --app-id ID --type ssh_key|http_token --permissions readOnly|readWrite [--public-key KEY | --public-key-file PATH] [--name LABEL] [--yes]
+kbagent data-app git-bind-credential --project NAME --app-id ID [--branch-name main] [--permissions readOnly|readWrite]
 # git-repo/git-branches/git-entrypoints introspect the deployed-from git repo (sandboxes-service /apps/{id}/git-repo/*); they return 409 "no Git repository configured" until the app has been DEPLOYED at least once (git config syncs Storage->DS record at deploy). git-credentials* manage credentials for a MANAGED repo only; apps from `data-app create --git-repo` are external => git-credentials-create returns 409. http_token mints a ONE-TIME secret (shown once); credentials endpoints need an admin storage token.
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]

@@ -341,3 +341,55 @@ def register_git_commands(app: typer.Typer) -> None:
                 )
 
         formatter.output(result, _human)
+
+    @app.command("git-bind-credential")
+    def data_app_git_bind_credential(
+        ctx: typer.Context,
+        project: str = typer.Option(..., "--project", help="Project alias"),
+        app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
+        branch: str = typer.Option(
+            "main", "--branch-name", help="Managed-repo branch to deploy from (default main)."
+        ),
+        permissions: str = typer.Option(
+            "readOnly",
+            "--permissions",
+            help="Credential access level: readOnly (default) | readWrite.",
+        ),
+    ) -> None:
+        """Make a MANAGED-repo app deployable by wiring a credential into its config.
+
+        A `--use-managed-git-repo` app owns an empty Keboola-hosted repo but its
+        Storage config has no git block. On stacks that do NOT inject managed-repo
+        credentials at deploy time, the runtime's `git clone` of the managed repo
+        fails ("could not read Username") and the deploy reverts to stopped. This
+        command mints a fresh `http_token` ON the app, encrypts it under the
+        project KMS, and writes `parameters.dataApp.git` (repository + placeholder
+        username + encrypted `#password` + branch) so the next `data-app deploy`
+        can clone. The token is encrypted in-place and never printed.
+        """
+        formatter = get_formatter(ctx)
+        service = get_service(ctx, "data_app_service")
+        try:
+            result = service.bind_managed_credential(
+                project, app_id, branch=branch, permissions=permissions
+            )
+        except KeboolaApiError as exc:
+            formatter.error(
+                message=exc.message,
+                error_code=exc.error_code,
+                retryable=exc.retryable,
+                details=exc.details,
+            )
+            raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+        except ConfigError as exc:
+            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+            raise typer.Exit(code=5) from None
+
+        def _human(c: Console, d: dict) -> None:
+            c.print(f"[bold green]Success:[/bold green] {d['message']}")
+            c.print(f"  [bold]Repository:[/bold] {d.get('repository', '')}")
+            c.print(f"  [bold]Branch:[/bold] {d.get('branch', '')}")
+            c.print(f"  [bold]Permissions:[/bold] {d.get('permissions', '')}")
+            c.print(f"  [bold]Config version:[/bold] {d.get('config_version', '')}")
+
+        formatter.output(result, _human)

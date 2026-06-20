@@ -727,7 +727,8 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Full merged view: state, desiredState, url, deployed configVersion, slug,
     runtime size, git settings (PAT redacted as <encrypted>).
 
-  kbagent data-app create --project ALIAS --name NAME --slug SLUG --git-repo URL
+  kbagent data-app create --project ALIAS --name NAME --slug SLUG
+    (--git-repo URL | --use-managed-git-repo)
     [--description STR | --description-file PATH] [--git-branch main]
     [--git-public/--no-git-public] [--git-username USER]
     [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...]
@@ -740,6 +741,13 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Pre-encrypted PATs MUST start with KBC::Project (project-scoped KMS).
     Cleanup-in-finally if PUT or initial deploy fails (orphan shell deleted
     by default; --keep-on-failure preserves it for forensics).
+    --use-managed-git-repo (0.65.0+) provisions an EMPTY Keboola-hosted repo
+    instead of cloning an external one; writes no git block, forces --no-deploy,
+    mutually exclusive with --git-repo and all --git-*/PAT flags. Managed deploy
+    works via: create --use-managed-git-repo -> git-credentials-create
+    --type http_token + push code to the managed repo URL ->
+    `data-app git-bind-credential` (wires an encrypted credential into the
+    config) -> deploy.
 
   kbagent data-app deploy --project NAME --app-id ID [--config-version N]
     [--wait] [--timeout SECONDS] [--branch ID]
@@ -782,6 +790,13 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     capture a healthy spin-up). The log buffer can echo runtime secrets
     the app printed to stdout/stderr -- consider hygiene before piping
     --json output into AI agent context.
+
+  kbagent data-app runs --project NAME --app-id ID [--limit N]
+    List deployment attempts (runs) newest-first with failure_reason +
+    startup_logs, including setup-phase failures (e.g. git-clone errors)
+    that produce no container logs. Works on never-started/failed apps
+    where 'data-app logs' returns HTTP 400 -- the canonical way to find
+    WHY a deploy reverted to stopped. Project storage token only.
 
   kbagent data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE'
         [--secret '#KEY2=VALUE2' ...] [--secrets-file PATH] [--branch ID]
@@ -865,6 +880,15 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     an admin storage token. Apps created via `data-app create --git-repo`
     are EXTERNAL (not managed) -> 409 "no managed Git repository".
     Confirmation prompt unless --yes or --json.
+
+  kbagent data-app git-bind-credential --project NAME --app-id ID
+        [--branch-name main] [--permissions readOnly|readWrite]
+    Mint an http_token ON the app's MANAGED repo, encrypt it under the
+    project KMS, and wire it into parameters.dataApp.git (repository +
+    placeholder username + encrypted #password + branch) so the runtime can
+    `git clone` the managed repo at deploy time. Needed on stacks that do
+    NOT inject managed-repo credentials at deploy (clone fails with "could
+    not read Username"). The token is encrypted in-place and never printed.
 
 ### Project Sync
 

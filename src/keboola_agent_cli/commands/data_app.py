@@ -211,7 +211,24 @@ def data_app_create(
     slug: str = typer.Option(
         ..., "--slug", help="URL slug (lowercase alphanumeric, hyphens; 2-64 chars)"
     ),
-    git_repo: str = typer.Option(..., "--git-repo", help="GitHub repository URL"),
+    git_repo: str = typer.Option(
+        "",
+        "--git-repo",
+        help=(
+            "External git repository URL to deploy from. Required unless "
+            "--use-managed-git-repo is set (mutually exclusive with it)."
+        ),
+    ),
+    use_managed_git_repo: bool = typer.Option(
+        False,
+        "--use-managed-git-repo",
+        help=(
+            "Provision an empty Keboola-managed git repository for the app "
+            "instead of cloning an external one. Mints code via "
+            "`data-app git-credentials-create`, then push + deploy. "
+            "Mutually exclusive with --git-repo and all --git-* auth flags."
+        ),
+    ),
     git_branch: str = typer.Option("main", "--git-branch", help="Git branch to clone"),
     git_public: bool = typer.Option(
         False,
@@ -310,6 +327,23 @@ def data_app_create(
             )
             raise typer.Exit(code=2) from None
 
+    # Source-of-code selection: exactly one of an external --git-repo or a
+    # Keboola --use-managed-git-repo. Catch the two obvious mistakes at the CLI
+    # boundary with a clean usage error (the service re-checks the full flag
+    # matrix defensively for non-CLI callers).
+    if use_managed_git_repo and git_repo:
+        formatter.error(
+            message="--use-managed-git-repo is mutually exclusive with --git-repo.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+    if not use_managed_git_repo and not git_repo:
+        formatter.error(
+            message="One of --git-repo or --use-managed-git-repo is required.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+
     # Mutual exclusion of git PAT input modes (CLI layer).
     pat_inputs_set = sum(1 for v in (git_pat_env, git_pat_file, git_pat_encrypted) if v is not None)
     if pat_inputs_set > 1:
@@ -342,6 +376,7 @@ def data_app_create(
             git_username=git_username,
             git_pat_plaintext=pat_plaintext,
             git_pat_encrypted=git_pat_encrypted,
+            use_managed_git_repo=use_managed_git_repo,
             auth=auth,
             size=size,
             auto_suspend_after_seconds=auto_suspend,
@@ -377,6 +412,9 @@ def data_app_create(
             )
             formatter.console.print(f"  [bold]App ID:[/bold] {result['app_id']}")
             formatter.console.print(f"  [bold]Config ID:[/bold] {result['config_id']}")
+            if result.get("use_managed_git_repo"):
+                repo_id = result.get("managed_git_repo_id") or "(provisioning)"
+                formatter.console.print(f"  [bold]Managed git repo:[/bold] {repo_id}")
             if result.get("url"):
                 formatter.console.print(f"  [bold]URL:[/bold] {result['url']}")
             formatter.console.print(
@@ -724,6 +762,67 @@ def data_app_logs(
         c.print(d["text"], markup=False, highlight=False, end="")
 
     formatter.output(result, _print_logs)
+
+
+@data_app_app.command("runs")
+def data_app_runs(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
+    limit: int = typer.Option(5, "--limit", help="Max runs to return (newest first)."),
+) -> None:
+    """List a data app's recent deployment attempts (runs), newest first.
+
+    Unlike ``data-app logs`` (which needs a running container), ``runs`` works on
+    never-started / failed apps and surfaces the ``failure_reason`` +
+    ``startup_logs`` the platform records for each attempt -- including
+    setup-phase failures (e.g. a git-clone error during ``app_setup``) that
+    produce no container logs. This is the way to find out *why* a deploy
+    reverted to ``stopped`` without the app ever serving.
+
+    Auth: project Storage token only.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "data_app_service")
+    try:
+        result = service.list_app_runs(project, app_id, limit=limit)
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+
+    def _human(c: Console, d: dict) -> None:
+        runs = d.get("runs", [])
+        if not runs:
+            c.print("[dim]No runs found.[/dim]")
+            return
+        c.print(
+            f"\n[bold]{d['count']} run(s)[/bold] for data app "
+            f"[cyan]{escape(str(d['app_id']))}[/cyan] in "
+            f"[magenta]{escape(d['project_alias'])}[/magenta]"
+        )
+        for r in runs:
+            state = r.get("state", "")
+            color = "green" if state in ("running", "finished") else "red"
+            c.print(
+                f"  [{color}]{state}[/{color}] {r.get('id', '')} (created {r.get('created_at')})"
+            )
+            fr = r.get("failure_reason")
+            if fr:
+                reason = fr.get("reason", "") if isinstance(fr, dict) else str(fr)
+                message = fr.get("message", "") if isinstance(fr, dict) else ""
+                c.print(f"    [red]reason:[/red] {escape(reason)}")
+                if message:
+                    c.print(f"    [dim]{escape(message)}[/dim]", markup=True, highlight=False)
+
+    formatter.output(result, _human)
 
 
 # ---------------------------------------------------------------------------

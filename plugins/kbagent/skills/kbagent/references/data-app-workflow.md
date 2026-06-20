@@ -179,11 +179,55 @@ kbagent data-app git-credentials-create \
 ```
 
 Credential management applies **only to managed git repos**
-(`app.managedGitRepoId` set, typically provisioned in the UI). Apps created via
+(`app.managedGitRepoId` set, provisioned in the UI or via
+`data-app create --use-managed-git-repo`). Apps created via
 `data-app create --git-repo <url>` are **external**, so `git-credentials-create`
 returns 409 "no managed Git repository" for them. Both credential commands also
 need an **admin** storage token (`CanManageAppRepoCredentials`), unlike the read
 trio above which need only the ordinary project storage token.
+
+### Create an app on a Keboola-MANAGED git repo (since v0.65.0)
+
+```bash
+# 1. Provision the app + an EMPTY Keboola-hosted repo (no external URL).
+#    Writes no git block; forces --no-deploy (nothing to run yet).
+kbagent --json data-app create \
+  --project prod --name "My App" --slug my-app \
+  --use-managed-git-repo --type python-js --auth public
+
+# 2. Mint a readWrite HTTP token (one-time secret, admin storage token needed).
+kbagent --json data-app git-credentials-create \
+  --project prod --app-id 12345678 \
+  --type http_token --permissions readWrite --name deploy --yes
+
+# 3. Read the managed repo URL and push your code to its default branch (main).
+kbagent --json data-app git-repo --project prod --app-id 12345678   # -> https_url
+#    The token from step 2 authenticates as the username (Gitea-style), or as
+#    the password with any username:
+git push "https://<token>@<managed-host>/keboola/app-12345678.git" HEAD:main
+
+# 4. Wire an encrypted credential into the config so the runtime can clone.
+#    Mints an http_token ON the app, encrypts it under the project KMS, and
+#    writes parameters.dataApp.git (repository + username "kbagent" + #password
+#    + branch). The token is never printed. Needs an admin storage token.
+kbagent data-app git-bind-credential --project prod --app-id 12345678
+
+# 5. Deploy.
+kbagent data-app deploy --project prod --app-id 12345678 --wait
+```
+
+`--use-managed-git-repo` is mutually exclusive with `--git-repo` and every
+`--git-*`/PAT flag (managed repos carry no credentials in the config). This flow
+is **verified working** -- a tic-tac-toe app deployed and serves from a
+Keboola-managed repo.
+
+**Step 4 is required on stacks that do NOT inject managed-repo credentials at
+deploy time.** Without the wired credential the runtime's `git clone` fails
+`could not read Username` and the deploy reverts to stopped. On stacks that
+inject creds automatically you can skip step 4 -- but if `data-app deploy`
+reverts to stopped with a "could not read Username" error (surfaced by
+`data-app runs`'s `failure_reason` / `startup_logs`), run `git-bind-credential`
+then redeploy.
 
 ### Manage app-runtime secrets (since v0.29.0)
 
@@ -311,6 +355,7 @@ yours at runtime.
 | `DELETE` | `data-science.<stack>/apps/{id}` | `data-app delete` (cascades to Storage) |
 | `GET` | `data-science.<stack>/apps/{id}/password` | `data-app password` (needs Manage) |
 | `GET` | `data-science.<stack>/apps/{id}/logs/tail` | `data-app logs` (since 0.43.8; `lines` / `since` mutex) |
+| `GET` | `data-science.<stack>/apps/{id}/runs` | `data-app runs` (since 0.65.0; deployment attempts + failure_reason / startup_logs) |
 | `POST` | `encryption.<stack>/encrypt` | `data-app create` step 2 (private repo) |
 | `PUT` | `connection.<stack>/v2/storage/.../keboola.data-apps/configs/{id}` | `data-app create` step 3, also `config update` |
 | `GET` | `connection.<stack>/v2/storage/.../keboola.data-apps/configs/{id}` | `data-app detail` (latest version), `data-app deploy` (read latest) |
