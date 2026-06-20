@@ -276,6 +276,22 @@ def _redact_git_block(git: dict[str, Any]) -> dict[str, Any]:
     return redacted
 
 
+def _coerce_config_dict(configuration: Any) -> dict[str, Any]:
+    """Return a Storage config's ``configuration`` as a dict.
+
+    ``get_config_detail`` parses the whole response via ``response.json()`` so
+    ``configuration`` is normally already a dict, but some Storage payloads echo
+    it as a JSON string. Mirror the defensive handling in ``get_data_app`` so a
+    string never crashes the chained ``.get()`` lookups downstream.
+    """
+    if isinstance(configuration, str):
+        try:
+            configuration = json.loads(configuration)
+        except (ValueError, TypeError):
+            return {}
+    return configuration if isinstance(configuration, dict) else {}
+
+
 def _redact_secrets_block(secrets: dict[str, Any]) -> dict[str, Any]:
     """Return a copy of ``parameters.dataApp.secrets`` with each ciphertext redacted.
 
@@ -797,9 +813,8 @@ class DataAppService(BaseService):
                     DATA_APP_COMPONENT_ID, config_id, branch_id=branch_id
                 )
                 latest_version = str(storage_config.get("version", "") or "")
-                data_app_cfg = (
-                    (storage_config.get("configuration") or {}).get("parameters") or {}
-                ).get("dataApp") or {}
+                configuration = _coerce_config_dict(storage_config.get("configuration"))
+                data_app_cfg = (configuration.get("parameters") or {}).get("dataApp") or {}
                 is_managed = bool(app.get("hasManagedGitRepo"))
                 has_git_block = bool(data_app_cfg.get("git"))
                 if is_managed and not has_git_block:
@@ -873,6 +888,14 @@ class DataAppService(BaseService):
         in-place and only the ``KBC::...`` ciphertext is persisted. ``username``
         is a non-secret placeholder the git-service ignores. After binding, call
         ``deploy_data_app`` to start the app.
+
+        Known limitation: the credential is minted BEFORE it is encrypted and
+        written to the config. If the encryption or ``update_config`` step fails,
+        the minted credential stays registered on the managed repo but its config
+        write never lands -- the one-time secret is lost and the credential is
+        orphaned (a harmless leaked slot). There is no rollback (the credential
+        DELETE endpoint is not wired here); re-running the command simply mints a
+        fresh credential and overwrites the git block.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -948,7 +971,7 @@ class DataAppService(BaseService):
             detail = storage_client.get_config_detail(
                 DATA_APP_COMPONENT_ID, config_id, branch_id=branch_id
             )
-            configuration = dict(detail.get("configuration") or {})
+            configuration = _coerce_config_dict(detail.get("configuration"))
             parameters = dict(configuration.get("parameters") or {})
             data_app = dict(parameters.get("dataApp") or {})
             data_app["git"] = git_block

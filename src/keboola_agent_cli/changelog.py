@@ -56,7 +56,9 @@ CHANGELOG: dict[str, list[str]] = {
         "message. A managed-repo clone-auth failure (`could not read Username`) adds an actionable "
         "hint to run `data-app git-bind-credential`. The diagnostic is best-effort and never masks "
         "the original error.",
-        "All of the above are mirrored on the `kbagent serve` REST API and the Python SDK.",
+        "All of the above are mirrored 1:1 on the `kbagent serve` REST API "
+        "(`/data-app/.../runs`, `/data-app/.../git-repo/bind-credential`, and the "
+        "`use_managed_git_repo` field on create).",
     ],
     "0.64.0": [
         "New: data-app git-repo introspection + managed-repo credentials -- five `data-app "
