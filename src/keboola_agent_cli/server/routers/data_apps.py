@@ -94,6 +94,7 @@ class GitBindCredential(BaseModel):
     branch: str = "main"
     permissions: str = "readOnly"
     branch_id: int | None = None
+    dry_run: bool = False
 
 
 @router.get("", summary="List data apps across projects")
@@ -435,4 +436,5 @@ def git_bind_credential(
         branch=body.branch,
         permissions=body.permissions,
         branch_id=body.branch_id,
+        dry_run=body.dry_run,
     )

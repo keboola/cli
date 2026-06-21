@@ -867,6 +867,7 @@ class DataAppService(BaseService):
         branch: str = DEFAULT_MANAGED_GIT_BRANCH,
         permissions: str = "readOnly",
         branch_id: int | None = None,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         """Make a managed-repo app deployable by wiring a credential into its config.
 
@@ -936,6 +937,26 @@ class DataAppService(BaseService):
                     error_code=ErrorCode.API_ERROR,
                     retryable=False,
                 )
+
+            if dry_run:
+                # Show exactly what WOULD be wired without minting a credential
+                # (which is one-time and would orphan if not written) or touching
+                # the Storage config. All validation above has already run.
+                return {
+                    "dry_run": True,
+                    "project_alias": alias,
+                    "app_id": str(app_id),
+                    "config_id": config_id,
+                    "repository": https_url,
+                    "branch": branch,
+                    "permissions": permissions,
+                    "username": MANAGED_GIT_CREDENTIAL_USERNAME,
+                    "message": (
+                        f"Dry run -- no credential minted, config unchanged. Would mint an "
+                        f"http_token ({permissions}) on app {app_id} and write "
+                        f"parameters.dataApp.git -> {https_url} (branch {branch})."
+                    ),
+                }
 
             # Mint a credential ON the app's managed repo. The one-time secret is
             # consumed immediately by the encryption step below and never returned.

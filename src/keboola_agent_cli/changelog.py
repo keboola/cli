@@ -38,7 +38,8 @@ CHANGELOG: dict[str, list[str]] = {
         "encrypted `#password` + branch). Required on stacks that do not inject managed-repo "
         "credentials at deploy time -- without it the runtime's `git clone` of the managed repo "
         "fails `could not read Username` and the deploy reverts to stopped. The token is encrypted "
-        "in place and never printed.",
+        "in place and never printed; `--dry-run` previews what would be wired without minting the "
+        "one-time credential or touching the config.",
         "New: `data-app runs --project P --app-id ID [--limit N]` lists a data app's recent "
         "deployment attempts with `failure_reason` + `startup_logs`, including setup-phase failures "
         "(e.g. a git-clone error during `app_setup`) that produce no container logs. It works on "

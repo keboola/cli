@@ -797,5 +797,36 @@ class TestDataAppGitBindCredential:
         # The one-time token is never echoed -- only the redacted ciphertext marker.
         assert body["data"]["git"]["#password"] == "<encrypted>"
         mock.bind_managed_credential.assert_called_once_with(
-            "prod", "42", branch="main", permissions="readOnly"
+            "prod", "42", branch="main", permissions="readOnly", dry_run=False
         )
+
+    def test_bind_credential_dry_run_passes_flag(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.bind_managed_credential.return_value = {
+            "dry_run": True,
+            "project_alias": "prod",
+            "app_id": "42",
+            "repository": "https://git.example.com/keboola/app-42.git",
+            "branch": "main",
+            "permissions": "readOnly",
+            "message": "Dry run -- no credential minted, config unchanged.",
+        }
+        result = _invoke(
+            [
+                "data-app",
+                "git-bind-credential",
+                "--project",
+                "prod",
+                "--app-id",
+                "42",
+                "--dry-run",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        assert "DRY RUN" in result.output
+        assert mock.bind_managed_credential.call_args.kwargs["dry_run"] is True

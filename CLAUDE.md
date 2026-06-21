@@ -454,7 +454,7 @@ kbagent data-app git-branches --project NAME --app-id ID
 kbagent data-app git-entrypoints --project NAME --app-id ID
 kbagent data-app git-credentials --project NAME --app-id ID
 kbagent data-app git-credentials-create --project NAME --app-id ID --type ssh_key|http_token --permissions readOnly|readWrite [--public-key KEY | --public-key-file PATH] [--name LABEL] [--yes]
-kbagent data-app git-bind-credential --project NAME --app-id ID [--branch-name main] [--permissions readOnly|readWrite]
+kbagent data-app git-bind-credential --project NAME --app-id ID [--branch-name main] [--permissions readOnly|readWrite] [--dry-run]
 # git-repo/git-branches/git-entrypoints introspect the deployed-from git repo (sandboxes-service /apps/{id}/git-repo/*); they return 409 "no Git repository configured" until the app has been DEPLOYED at least once (git config syncs Storage->DS record at deploy). git-credentials* manage credentials for a MANAGED repo only; apps from `data-app create --git-repo` are external => git-credentials-create returns 409. http_token mints a ONE-TIME secret (shown once); credentials endpoints need an admin storage token.
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]

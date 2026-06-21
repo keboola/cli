@@ -882,7 +882,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Confirmation prompt unless --yes or --json.
 
   kbagent data-app git-bind-credential --project NAME --app-id ID
-        [--branch-name main] [--permissions readOnly|readWrite]
+        [--branch-name main] [--permissions readOnly|readWrite] [--dry-run]
     Mint an http_token ON the app's MANAGED repo, encrypt it under the
     project KMS, and wire it into parameters.dataApp.git (repository +
     placeholder username + encrypted #password + branch) so the runtime can

@@ -355,6 +355,11 @@ def register_git_commands(app: typer.Typer) -> None:
             "--permissions",
             help="Credential access level: readOnly (default) | readWrite.",
         ),
+        dry_run: bool = typer.Option(
+            False,
+            "--dry-run",
+            help="Preview what would be wired (repo/branch/permissions) WITHOUT minting a credential or editing the config.",
+        ),
     ) -> None:
         """Make a MANAGED-repo app deployable by wiring a credential into its config.
 
@@ -366,12 +371,16 @@ def register_git_commands(app: typer.Typer) -> None:
         project KMS, and writes `parameters.dataApp.git` (repository + placeholder
         username + encrypted `#password` + branch) so the next `data-app deploy`
         can clone. The token is encrypted in-place and never printed.
+
+        `--dry-run` validates the app + resolves the managed repo URL but mints
+        nothing and leaves the config untouched -- the http_token is one-time, so
+        a real run that you abort would orphan it.
         """
         formatter = get_formatter(ctx)
         service = get_service(ctx, "data_app_service")
         try:
             result = service.bind_managed_credential(
-                project, app_id, branch=branch, permissions=permissions
+                project, app_id, branch=branch, permissions=permissions, dry_run=dry_run
             )
         except KeboolaApiError as exc:
             formatter.error(
@@ -386,6 +395,12 @@ def register_git_commands(app: typer.Typer) -> None:
             raise typer.Exit(code=5) from None
 
         def _human(c: Console, d: dict) -> None:
+            if d.get("dry_run"):
+                c.print("[bold]DRY RUN -- no credential minted, config unchanged.[/bold]")
+                c.print(f"  [bold]Repository:[/bold] {d.get('repository', '')}")
+                c.print(f"  [bold]Branch:[/bold] {d.get('branch', '')}")
+                c.print(f"  [bold]Permissions:[/bold] {d.get('permissions', '')}")
+                return
             c.print(f"[bold green]Success:[/bold green] {d['message']}")
             c.print(f"  [bold]Repository:[/bold] {d.get('repository', '')}")
             c.print(f"  [bold]Branch:[/bold] {d.get('branch', '')}")

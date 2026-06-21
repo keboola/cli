@@ -866,6 +866,24 @@ class TestDataAppBindManagedCredential:
         assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
         ds_mock.create_git_credential.assert_not_called()
 
+    def test_dry_run_mints_nothing_and_leaves_config_untouched(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, encrypt_mock = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        ds_mock.get_git_repo.return_value = {
+            "httpsUrl": "https://git.example.com/keboola/app-42.git",
+            "isManagedGitRepo": True,
+        }
+
+        result = service.bind_managed_credential("prod", "42", branch="main", dry_run=True)
+
+        assert result["dry_run"] is True
+        assert result["repository"] == "https://git.example.com/keboola/app-42.git"
+        # No credential minted, nothing encrypted, config left untouched.
+        ds_mock.create_git_credential.assert_not_called()
+        encrypt_mock.encrypt.assert_not_called()
+        storage_mock.update_config.assert_not_called()
+
 
 class TestDataAppRuns:
     def test_normalizes_runs_and_failure_reason(self, tmp_path: Path) -> None:

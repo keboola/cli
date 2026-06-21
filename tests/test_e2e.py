@@ -11473,3 +11473,134 @@ class TestE2EConfigSecretEncryption:
         )["data"]
         new_pw = data["new_configuration"]["parameters"]["#password"]
         assert new_pw == "e2e-canary-dryrun", f"dry-run encrypted the diff: {new_pw!r}"
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EDataAppManagedRepo:
+    """End-to-end tests for the managed-repo data-app commands (0.65.0):
+    `data-app create --use-managed-git-repo`, `git-bind-credential` (dry-run),
+    and `data-app runs`. Creates a real managed app and cleans it up.
+
+    The bind step is exercised with `--dry-run` so the run mints no one-time
+    credential (which cannot be rolled back); the real bind + deploy path is
+    covered by unit tests and manual verification.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-dataapp"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        self._created_app_ids: list[str] = []
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        yield
+
+        import contextlib
+
+        for app_id in self._created_app_ids:
+            with contextlib.suppress(Exception):
+                self._run(
+                    "data-app", "delete", "--project", self.alias, "--app-id", app_id, "--yes"
+                )
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_managed_repo_lifecycle(self) -> None:
+        """create --use-managed-git-repo -> git-repo -> git-bind-credential
+        --dry-run -> runs, then delete."""
+        slug = f"e2e-managed-{int(time.time())}"
+
+        _step(1, "create a managed-repo data app (empty repo, forced --no-deploy)")
+        created = self._run_ok(
+            "data-app",
+            "create",
+            "--project",
+            self.alias,
+            "--name",
+            f"E2E Managed {RUN_ID}",
+            "--slug",
+            slug,
+            "--use-managed-git-repo",
+            "--type",
+            "python-js",
+            "--auth",
+            "public",
+        )["data"]
+        app_id = str(created["app_id"])
+        self._created_app_ids.append(app_id)
+        assert created["use_managed_git_repo"] is True
+        assert created["deployed"] is False  # managed forces --no-deploy
+        assert created["git"] == {}  # no git block written for a managed repo
+
+        _step(2, "git-repo resolves the managed clone URLs immediately (no deploy needed)")
+        repo = self._run_ok("data-app", "git-repo", "--project", self.alias, "--app-id", app_id)[
+            "data"
+        ]
+        assert repo["is_managed_git_repo"] is True
+        assert repo["https_url"], f"expected an https clone URL, got {repo}"
+
+        _step(3, "git-bind-credential --dry-run previews without minting a credential")
+        preview = self._run_ok(
+            "data-app",
+            "git-bind-credential",
+            "--project",
+            self.alias,
+            "--app-id",
+            app_id,
+            "--dry-run",
+        )["data"]
+        assert preview["dry_run"] is True
+        assert preview["repository"] == repo["https_url"]
+
+        _step(4, "runs lists deployment attempts (empty for a never-deployed app)")
+        runs = self._run_ok(
+            "data-app", "runs", "--project", self.alias, "--app-id", app_id, "--limit", "5"
+        )["data"]
+        assert "runs" in runs
+        assert isinstance(runs["runs"], list)
+        assert runs["count"] == len(runs["runs"])
+
+        _step(5, "delete the managed app (cascades the managed repo)")
+        self._run_ok("data-app", "delete", "--project", self.alias, "--app-id", app_id, "--yes")
+        self._created_app_ids.remove(app_id)
+
+    def test_create_requires_a_git_source(self) -> None:
+        """Neither --git-repo nor --use-managed-git-repo -> exit-2 usage error,
+        no app created."""
+        result = self._run(
+            "data-app",
+            "create",
+            "--project",
+            self.alias,
+            "--name",
+            "E2E No Source",
+            "--slug",
+            f"e2e-nosrc-{int(time.time())}",
+        )
+        assert result.exit_code == 2, result.output
+        body = json.loads(result.output)
+        assert body["error"]["code"] == "USAGE_ERROR"
