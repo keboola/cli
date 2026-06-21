@@ -218,6 +218,44 @@ class TestDataAppCreateValidation:
         result = self._create(service, description="line one\nline two\n\ttabbed")
         assert result["dry_run"] is True
 
+    def test_managed_repo_rejects_external_url(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, *_ = _make_service(store)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            self._create(
+                service,
+                use_managed_git_repo=True,
+                git_repo="https://github.com/o/r",
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_managed_repo_rejects_git_public(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, *_ = _make_service(store)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            self._create(
+                service,
+                use_managed_git_repo=True,
+                git_repo="",
+                git_public=True,
+                git_username=None,
+                git_pat_plaintext=None,
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_managed_repo_rejects_credentials(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, *_ = _make_service(store)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            self._create(
+                service,
+                use_managed_git_repo=True,
+                git_repo="",
+                git_username="user",
+                git_pat_plaintext="ghp_xxxxxxxxxxxxxxxxxxxx",
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
     def test_description_rejects_nul_byte(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, *_ = _make_service(store)
@@ -497,6 +535,89 @@ class TestDataAppCreate:
         )
         ds_mock.patch_app.assert_not_called()
 
+    def test_managed_repo_happy_path(self, tmp_path: Path) -> None:
+        """Managed repo: useManagedGitRepo on POST, NO git block in PUT,
+        no encryption, deploy forced off even when caller asks for it."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, encrypt_mock = _make_service(store)
+        ds_mock.create_app.return_value = {
+            "id": "43676897",
+            "configId": "01kvj0rwjr3g6tf10nc0xcvyyg",
+            "managedGitRepoId": "repo-77",
+        }
+        storage_mock.update_config.return_value = {"version": "4"}
+
+        result = service.create_data_app(
+            alias="prod",
+            name="Managed App",
+            description="long form",
+            slug="managed-app",
+            git_repo="",
+            git_public=False,
+            git_username=None,
+            git_pat_plaintext=None,
+            use_managed_git_repo=True,
+            auth="public",
+            size="tiny",
+            auto_suspend_after_seconds=900,
+            type_="python-js",
+            deploy=True,  # caller asks to deploy; managed must force it off
+            wait=True,
+            dry_run=False,
+        )
+
+        # 1. POST /apps carries the managed flag.
+        create_kwargs = ds_mock.create_app.call_args.kwargs
+        assert create_kwargs["use_managed_git_repo"] is True
+
+        # 2. No PAT encryption for a managed repo.
+        encrypt_mock.encrypt.assert_not_called()
+
+        # 3. Storage config omits parameters.dataApp.git entirely.
+        body = storage_mock.update_config.call_args.kwargs["configuration"]
+        assert body["parameters"]["dataApp"]["slug"] == "managed-app"
+        assert "git" not in body["parameters"]["dataApp"]
+
+        # 4. Deploy is forced off -- empty repo has nothing to run yet.
+        ds_mock.patch_app.assert_not_called()
+
+        assert result["use_managed_git_repo"] is True
+        assert result["managed_git_repo_id"] == "repo-77"
+        assert result["deployed"] is False
+        assert result["git"] == {}
+
+    def test_managed_repo_dry_run(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, encrypt_mock = _make_service(store)
+        result = service.create_data_app(
+            alias="prod",
+            name="Managed App",
+            description="",
+            slug="managed-app",
+            git_repo="",
+            git_public=False,
+            git_username=None,
+            git_pat_plaintext=None,
+            use_managed_git_repo=True,
+            auth="public",
+            size="tiny",
+            auto_suspend_after_seconds=900,
+            type_="python-js",
+            deploy=True,
+            wait=False,
+            dry_run=True,
+        )
+        assert result["dry_run"] is True
+        assert result["use_managed_git_repo"] is True
+        post = result["requests"]["post_apps"]
+        assert post["useManagedGitRepo"] is True
+        # PUT preview omits the git block; PATCH is empty (no deploy).
+        assert "git" not in result["requests"]["put_storage_config"]["parameters"]["dataApp"]
+        assert result["requests"]["patch_apps"] == {}
+        ds_mock.create_app.assert_not_called()
+        storage_mock.update_config.assert_not_called()
+        encrypt_mock.encrypt.assert_not_called()
+
     def test_public_repo_skips_encryption(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, ds_mock, storage_mock, encrypt_mock = _make_service(store)
@@ -666,6 +787,124 @@ class TestDataAppDeploy:
         kwargs = ds_mock.patch_app.call_args.kwargs
         assert "config" not in kwargs
 
+    def test_deploy_pure_managed_omits_config_version(self, tmp_path: Path) -> None:
+        """A managed-repo app with NO git block deploys from managedGitRepoId,
+        so configVersion is omitted (matches keboola-mcp-server)."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},  # no git block
+        }
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        service.deploy_data_app(alias="prod", app_id="42")
+
+        kwargs = ds_mock.patch_app.call_args.kwargs
+        assert kwargs["config_version"] is None  # omitted
+
+    def test_deploy_managed_with_git_block_pins_latest(self, tmp_path: Path) -> None:
+        """Once a credential is wired (parameters.dataApp.git present), the source
+        pointer lives in Storage, so the latest configVersion is pinned."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 9,
+            "configuration": {
+                "parameters": {"dataApp": {"slug": "x", "git": {"repository": "https://g/r"}}}
+            },
+        }
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        service.deploy_data_app(alias="prod", app_id="42")
+
+        kwargs = ds_mock.patch_app.call_args.kwargs
+        assert kwargs["config_version"] == "9"  # pinned
+
+
+class TestDataAppBindManagedCredential:
+    def test_wires_encrypted_git_block(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, encrypt_mock = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        ds_mock.get_git_repo.return_value = {
+            "httpsUrl": "https://git.example.com/keboola/app-42.git",
+            "isManagedGitRepo": True,
+        }
+        ds_mock.create_git_credential.return_value = {"id": "cred-1", "secret": "tok-xyz"}
+        storage_mock.get_config_detail.return_value = {
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}}
+        }
+        storage_mock.update_config.return_value = {"version": "9"}
+
+        result = service.bind_managed_credential("prod", "42", branch="main")
+
+        # Minted an http_token on the app
+        cred_kwargs = ds_mock.create_git_credential.call_args.kwargs
+        assert cred_kwargs["type_"] == "http_token"
+        # Encrypted the minted secret (never written plaintext)
+        enc_kwargs = encrypt_mock.encrypt.call_args.kwargs
+        assert enc_kwargs["input_data"] == {"#password": "tok-xyz"}
+        # Wrote an encrypted git block into the config
+        cfg = storage_mock.update_config.call_args.kwargs["configuration"]
+        git = cfg["parameters"]["dataApp"]["git"]
+        assert git["repository"] == "https://git.example.com/keboola/app-42.git"
+        assert git["#password"].startswith("KBC::Project")
+        assert git["private"] is True
+        # Result redacts the ciphertext
+        assert result["git"]["#password"] == "<encrypted>"
+        assert result["repository"].endswith("app-42.git")
+
+    def test_rejects_non_managed_app(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": False}
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.bind_managed_credential("prod", "42")
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+        ds_mock.create_git_credential.assert_not_called()
+
+    def test_dry_run_mints_nothing_and_leaves_config_untouched(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, encrypt_mock = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        ds_mock.get_git_repo.return_value = {
+            "httpsUrl": "https://git.example.com/keboola/app-42.git",
+            "isManagedGitRepo": True,
+        }
+
+        result = service.bind_managed_credential("prod", "42", branch="main", dry_run=True)
+
+        assert result["dry_run"] is True
+        assert result["repository"] == "https://git.example.com/keboola/app-42.git"
+        # No credential minted, nothing encrypted, config left untouched.
+        ds_mock.create_git_credential.assert_not_called()
+        encrypt_mock.encrypt.assert_not_called()
+        storage_mock.update_config.assert_not_called()
+
+
+class TestDataAppRuns:
+    def test_normalizes_runs_and_failure_reason(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.list_app_runs.return_value = [
+            {
+                "id": "run-1",
+                "state": "failed",
+                "createdAt": "2026-06-20T10:00:00Z",
+                "failureReason": {"reason": "StartupProbeFailed", "message": "clone failed"},
+                "startupLogs": "Cloning into '/app'...",
+            }
+        ]
+        result = service.list_app_runs("prod", "42", limit=3)
+        assert result["count"] == 1
+        run = result["runs"][0]
+        assert run["state"] == "failed"
+        assert run["failure_reason"]["reason"] == "StartupProbeFailed"
+        ds_mock.list_app_runs.assert_called_once_with("42", limit=3)
+
 
 class TestDataAppStartStop:
     def test_start_does_not_send_config_version(self, tmp_path: Path) -> None:
@@ -763,6 +1002,67 @@ class TestDataAppPoll:
                 "42",
                 target_desired_state="running",
                 timeout_seconds=1.0,
+            )
+        assert excinfo.value.error_code == ErrorCode.DATA_APP_DEPLOY_TIMEOUT
+
+    def test_timeout_surfaces_managed_clone_failure_and_hint(self, tmp_path: Path) -> None:
+        """On timeout, the latest run's failure_reason is fetched and, for a
+        managed-repo clone-auth failure, an actionable git-bind-credential hint
+        is appended."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {
+            "state": "stopped",
+            "desiredState": "stopped",
+            "hasManagedGitRepo": True,
+        }
+        ds_mock.list_app_runs.return_value = [
+            {
+                "id": "run-1",
+                "state": "failed",
+                "failureReason": {
+                    "reason": "StartupProbeFailed",
+                    "message": (
+                        "app_setup\nCloning into '/app'...\n"
+                        "fatal: could not read Username for 'https://git.example.com'"
+                    ),
+                },
+            }
+        ]
+        with (
+            patch("keboola_agent_cli.services.data_app_service.time.sleep", lambda _: None),
+            patch(
+                "keboola_agent_cli.services.data_app_service.time.monotonic",
+                side_effect=[0.0, 100.0, 200.0],
+            ),
+            pytest.raises(KeboolaApiError) as excinfo,
+        ):
+            service._poll_until_terminal(
+                ds_mock, "42", target_desired_state="running", timeout_seconds=1.0
+            )
+        exc = excinfo.value
+        assert exc.error_code == ErrorCode.DATA_APP_DEPLOY_TIMEOUT
+        assert "StartupProbeFailed" in exc.message
+        assert "could not read Username" in exc.message
+        assert "git-bind-credential" in exc.message
+        assert exc.details["failure_reason"]["reason"] == "StartupProbeFailed"
+
+    def test_diagnostic_is_best_effort(self, tmp_path: Path) -> None:
+        """A failing runs fetch must NOT mask the original timeout error."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"state": "starting", "desiredState": "running"}
+        ds_mock.list_app_runs.side_effect = RuntimeError("network down")
+        with (
+            patch("keboola_agent_cli.services.data_app_service.time.sleep", lambda _: None),
+            patch(
+                "keboola_agent_cli.services.data_app_service.time.monotonic",
+                side_effect=[0.0, 100.0, 200.0],
+            ),
+            pytest.raises(KeboolaApiError) as excinfo,
+        ):
+            service._poll_until_terminal(
+                ds_mock, "42", target_desired_state="running", timeout_seconds=1.0
             )
         assert excinfo.value.error_code == ErrorCode.DATA_APP_DEPLOY_TIMEOUT
 

@@ -24,6 +24,43 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.65.0": [
+        "New: deploy a data app from a Keboola-MANAGED git repository end-to-end. "
+        "`data-app create --use-managed-git-repo` provisions an EMPTY Keboola-hosted repo (POST "
+        "`useManagedGitRepo:true`, no `parameters.dataApp.git` block, forces `--no-deploy`; "
+        "mutually exclusive with `--git-repo` and every `--git-*`/PAT flag). The full flow to a "
+        "running app: create -> `git-credentials-create --type http_token --permissions readWrite` "
+        "+ `git push` to the managed URL -> `data-app git-bind-credential` -> `data-app deploy`. "
+        "Verified live (tic-tac-toe serving from a managed repo).",
+        "New: `data-app git-bind-credential --project P --app-id ID [--branch-name main] "
+        "[--permissions readOnly|readWrite]` mints an `http_token` ON the app, encrypts it under "
+        "the project KMS, and writes `parameters.dataApp.git` (repository + placeholder username + "
+        "encrypted `#password` + branch). Required on stacks that do not inject managed-repo "
+        "credentials at deploy time -- without it the runtime's `git clone` of the managed repo "
+        "fails `could not read Username` and the deploy reverts to stopped. The token is encrypted "
+        "in place and never printed; `--dry-run` previews what would be wired without minting the "
+        "one-time credential or touching the config.",
+        "New: `data-app runs --project P --app-id ID [--limit N]` lists a data app's recent "
+        "deployment attempts with `failure_reason` + `startup_logs`, including setup-phase failures "
+        "(e.g. a git-clone error during `app_setup`) that produce no container logs. It works on "
+        "never-started / failed apps where `data-app logs` returns HTTP 400 -- the canonical way to "
+        "find out why a deploy reverted to `stopped` without the app ever serving.",
+        "Fix: `data-app deploy` now resolves the deployed `configVersion` by source location -- it "
+        "pins the latest Storage version when a git block is present (external repos AND a "
+        "credential-wired managed repo) so the operator reads the current source, and omits "
+        "`configVersion` only for a pure managed repo (deploys from `app.managedGitRepoId`). "
+        "Previously it always pinned, which pointed managed-repo deploys at a config snapshot with "
+        "no git source and made them silently revert to stopped.",
+        "UX: when `data-app deploy --wait` times out or the app reaches state=error, the error now "
+        "auto-fetches the latest run's `failure_reason` (via /apps/{id}/runs) and includes it inline "
+        '-- including setup-phase failures with no container logs -- instead of a bare "timed out" '
+        "message. A managed-repo clone-auth failure (`could not read Username`) adds an actionable "
+        "hint to run `data-app git-bind-credential`. The diagnostic is best-effort and never masks "
+        "the original error.",
+        "All of the above are mirrored 1:1 on the `kbagent serve` REST API "
+        "(`/data-app/.../runs`, `/data-app/.../git-repo/bind-credential`, and the "
+        "`use_managed_git_repo` field on create).",
+    ],
     "0.64.0": [
         "New: data-app git-repo introspection + managed-repo credentials -- five `data-app "
         "git-*` commands over the sandboxes-service `/apps/{id}/git-repo/*` endpoints. "

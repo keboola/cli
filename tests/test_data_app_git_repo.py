@@ -575,6 +575,58 @@ class TestGitRepoClient:
             payload = client.list_git_credentials("42")
         assert payload["credentials"][0]["id"] == "u1"
 
+    def test_create_app_managed_sends_flag(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps",
+            method="POST",
+            json={"id": "99", "configId": "ulid", "hasManagedGitRepo": True},
+            status_code=200,
+        )
+        with self._client() as client:
+            client.create_app(
+                type_="python-js",
+                name="App",
+                description="",
+                config={"parameters": {}},
+                use_managed_git_repo=True,
+            )
+        sent = json.loads(httpx_mock.get_requests()[0].content)
+        assert sent["useManagedGitRepo"] is True
+
+    def test_create_app_external_omits_flag(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps",
+            method="POST",
+            json={"id": "99", "configId": "ulid"},
+            status_code=200,
+        )
+        with self._client() as client:
+            client.create_app(
+                type_="python-js",
+                name="App",
+                description="",
+                config={"parameters": {}},
+            )
+        sent = json.loads(httpx_mock.get_requests()[0].content)
+        assert "useManagedGitRepo" not in sent
+
+    def test_list_app_runs_returns_array_with_failure_reason(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps/42/runs?limit=5&offset=0",
+            json=[
+                {
+                    "id": "run-1",
+                    "state": "failed",
+                    "failureReason": {"reason": "StartupProbeFailed", "message": "clone failed"},
+                }
+            ],
+            status_code=200,
+        )
+        with self._client() as client:
+            runs = client.list_app_runs("42")
+        assert runs[0]["state"] == "failed"
+        assert runs[0]["failureReason"]["reason"] == "StartupProbeFailed"
+
     def test_create_ssh_key_sends_public_key(self, httpx_mock) -> None:
         httpx_mock.add_response(
             url=f"{self.DATA_SCIENCE_BASE}/apps/42/git-repo/credentials",

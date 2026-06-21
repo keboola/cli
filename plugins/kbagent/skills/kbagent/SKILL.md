@@ -36,6 +36,11 @@ description: >
   secrets-list, secrets-get, secrets-remove, encrypt app secret,
   app environment variable, validate repo, validate-repo,
   data-app golden rule, pre-flight repo check, repo structure check,
+  managed git repo, use-managed-git-repo, Keboola-hosted repo,
+  git-credentials, git-credentials-create, git-bind-credential, git-repo,
+  git-branches, git-entrypoints, deploy from git, managed repository,
+  data app runs, deploy attempts, deploy failure reason, why deploy stopped,
+  could not read Username, bind credential, wire git credential,
   local workspace, project directory, kbagent init,
   invite user, invite member, project invitation, manage members,
   list members, remove member, change role, project role,
@@ -167,19 +172,21 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Requires master token. | `kbagent config oauth-url --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | List data apps across one or more registered projects | `kbagent data-app list` |
 | Show merged Data Science + Storage detail for one data app | `kbagent data-app detail --project PROJECT --app-id APP-ID` |
-| Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy) | `kbagent data-app create --project PROJECT --name NAME --slug SLUG --git-repo GIT-REPO` |
+| Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy) | `kbagent data-app create --project PROJECT --name NAME --slug SLUG` |
 | Deploy the latest Storage config (the §9 redeploy contract) | `kbagent data-app deploy --project PROJECT --app-id APP-ID` |
 | Wake an auto-suspended data app at its currently-pinned configVersion | `kbagent data-app start --project PROJECT --app-id APP-ID` |
 | Stop a running data app (preserves the URL and Storage config) | `kbagent data-app stop --project PROJECT --app-id APP-ID` |
 | Delete the deployment AND the Storage config (cascade, irreversible) | `kbagent data-app delete --project PROJECT --app-id APP-ID` |
 | Retrieve the simpleAuth password for a password-gated data app | `kbagent data-app password --project PROJECT --app-id APP-ID` |
 | Tail the container logs for a deployed data app | `kbagent data-app logs --project PROJECT --app-id APP-ID` |
+| List a data app's recent deployment attempts (runs), newest first | `kbagent data-app runs --project PROJECT --app-id APP-ID` |
 | Pre-flight check that a git repo follows the Keboola data-app Golden Rule | `kbagent data-app validate-repo --git-repo GIT-REPO` |
 | Show the clone URLs of a data app's configured git repository | `kbagent data-app git-repo --project PROJECT --app-id APP-ID` |
 | List the remote branches of a data app's git repository | `kbagent data-app git-branches --project PROJECT --app-id APP-ID` |
 | List root-level .py entrypoint files of a data app's git repository | `kbagent data-app git-entrypoints --project PROJECT --app-id APP-ID` |
 | List the credentials of a data app's MANAGED git repository | `kbagent data-app git-credentials --project PROJECT --app-id APP-ID` |
 | Create a git credential (SSH key or HTTP token) for a MANAGED repo | `kbagent data-app git-credentials-create --project PROJECT --app-id APP-ID --type CRED-TYPE --permissions PERMISSIONS` |
+| Make a MANAGED-repo app deployable by wiring a credential into its config | `kbagent data-app git-bind-credential --project PROJECT --app-id APP-ID` |
 | Encrypt and write app-runtime secrets to the linked Storage config | `kbagent data-app secrets-set --project PROJECT --app-id APP-ID` |
 | List the keys in parameters.dataApp.secrets, with derived runtime env-var names | `kbagent data-app secrets-list --project PROJECT --app-id APP-ID` |
 | Show ONE key from parameters.dataApp.secrets | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |

@@ -2638,6 +2638,55 @@ Other behaviors of this family:
   `data-app password`); the `git-credentials` list never returns it. `--type
   ssh_key` requires a `--public-key` / `--public-key-file` and returns no secret.
 
+## `data-app create --use-managed-git-repo`: deploy needs a credential wired in (since v0.65.0)
+
+`--use-managed-git-repo` provisions an **empty** Keboola-hosted git repo
+(POST `useManagedGitRepo:true`) linked to the app via `app.managedGitRepoId`. It
+writes **no** `parameters.dataApp.git` block at create and **forces `--no-deploy`**
+(an empty repo has nothing to run). It is mutually exclusive with `--git-repo` and
+every `--git-*`/PAT flag.
+
+The end-to-end flow that is **verified to deploy and serve** (tic-tac-toe on
+`data-science.us-east4.gcp`):
+
+1. `data-app create --use-managed-git-repo` -> app + empty repo.
+2. `data-app git-credentials-create --type http_token --permissions readWrite`
+   -> one-time secret (needs an admin storage token).
+3. `git push https://<token>@<managed-host>/.../app-<id>.git <local>:main`
+   (token authenticates as the username, Gitea-style; or as the password with any
+   username).
+4. `data-app git-repo` / `git-branches` / `git-entrypoints` introspect the repo
+   immediately -- **unlike external repos, no prior deploy is needed** (managed
+   resolves via `managedGitRepoId`, returns `is_managed_git_repo: true` + URLs).
+5. **`data-app git-bind-credential`** -> mints an `http_token` ON the app,
+   encrypts it under the project KMS, and writes `parameters.dataApp.git`
+   (repository + placeholder username + encrypted `#password` + branch). Required
+   on stacks that do **not** inject managed-repo credentials at deploy time --
+   without it the runtime's `git clone` fails `could not read Username` and the
+   deploy reverts to `stopped`. The token is encrypted in-place, never printed.
+6. `data-app deploy` -> clones + builds + runs.
+
+Two non-obvious mechanics behind this:
+
+- **configVersion at deploy depends on the source location.** `data-app deploy`
+  pins the **latest** Storage configVersion when a git block is present (external
+  repos AND a credential-wired managed repo) so the operator reads the current
+  git block; it **omits** configVersion only for a *pure* managed repo (no git
+  block) which deploys from `managedGitRepoId`. (Pinning a no-git-block config is
+  what made the early managed deploys silently revert -- the operator had no
+  source. Fixed in 0.65.0.)
+- **Diagnose a stopped-reverting deploy with `data-app runs`**, not `data-app
+  logs`. `runs` returns each attempt's `failure_reason` + `startup_logs` --
+  including setup-phase failures like the `app_setup` git-clone error -- and works
+  on never-started apps (where `logs` returns HTTP 400 "App is not running").
+  Since 0.65.0 `data-app deploy --wait` does this for you: on timeout or
+  state=error it appends the latest run's `failure_reason` to the error (and, for
+  a managed clone-auth failure, a `git-bind-credential` hint), so you usually do
+  not need to call `runs` by hand.
+- Do **not** hand-write a plaintext token into the config git block. Use
+  `git-bind-credential`, which encrypts it (`#password = KBC::...`) the same way
+  external private repos are handled.
+
 ## Core platform gotchas (version-independent)
 
 These are Keboola-platform behaviors, not kbagent features, so they carry no

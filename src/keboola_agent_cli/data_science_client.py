@@ -89,6 +89,26 @@ class DataScienceClient(BaseHttpClient):
         response = self._do_request("GET", f"/apps/{quote(str(app_id), safe='')}")
         return response.json()
 
+    def list_app_runs(
+        self, app_id: str, *, limit: int = 5, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """List deployment attempts (runs) of a data app, newest first.
+
+        Each run carries ``state`` (starting/running/finished/failed) plus a
+        ``failureReason`` and ``startupLogs`` for unsuccessful attempts --
+        including setup-phase failures (e.g. a clone/build error) that never
+        produce container logs and so are invisible to ``/apps/{id}/logs/tail``.
+        This is the canonical way to find out *why* a deploy reverted to
+        ``stopped`` without the app ever serving.
+        """
+        response = self._do_request(
+            "GET",
+            f"/apps/{quote(str(app_id), safe='')}/runs",
+            params={"limit": limit, "offset": offset},
+        )
+        payload = response.json()
+        return payload if isinstance(payload, list) else payload.get("runs", [])
+
     def create_app(
         self,
         *,
@@ -97,6 +117,7 @@ class DataScienceClient(BaseHttpClient):
         description: str,
         config: dict[str, Any],
         branch_id: int | None = None,
+        use_managed_git_repo: bool = False,
     ) -> dict[str, Any]:
         """Create the deployment shell + linked Storage config in one call.
 
@@ -111,6 +132,14 @@ class DataScienceClient(BaseHttpClient):
         possible but the encryption step depends on knowing
         ``config_id`` first, so the canonical flow is:
         ``create_app`` -> encrypt secrets -> ``update_config``.
+
+        ``use_managed_git_repo`` -> POST ``useManagedGitRepo: true`` so the
+        sandboxes-service provisions a *managed* git repository on the Git
+        Service and links it to the app (``managedGitRepoId``). The repo
+        starts empty -- the caller mints a credential
+        (``create_git_credential``), pushes code, then deploys. Repo
+        creation failure aborts app creation server-side; the repo is
+        deleted when the app is deleted.
         """
         payload: dict[str, Any] = {
             "branchId": branch_id,
@@ -119,6 +148,8 @@ class DataScienceClient(BaseHttpClient):
             "description": description,
             "config": config,
         }
+        if use_managed_git_repo:
+            payload["useManagedGitRepo"] = True
         response = self._do_request(
             "POST",
             "/apps",
@@ -146,6 +177,14 @@ class DataScienceClient(BaseHttpClient):
         ``desired_state="running"`` + ``config_version=<N>``
         + ``restart_if_running=True`` together when bumping the deployed
         config version; sending ``config_version`` alone yields HTTP 422.
+
+        EXCEPTION (python-js managed repos): a *pure* managed-repo app
+        (``useManagedGitRepo``, no ``parameters.dataApp.git`` block) deploys its
+        source from ``app.managedGitRepoId``, not from a Storage configVersion,
+        so the caller passes ``config_version=None`` and this PATCH omits the
+        field entirely -- payload ``{desiredState, restartIfRunning}``. This
+        matches keboola-mcp-server / Kai behavior; see
+        ``DataAppService.deploy_data_app`` for the source-location branch.
         """
         payload: dict[str, Any] = {}
         if desired_state is not None:

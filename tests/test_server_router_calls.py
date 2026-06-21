@@ -813,3 +813,62 @@ def test_flows_update_drops_component_id(tmp_path: Path) -> None:
     assert res.status_code == 200, res.text
     flow_svc.update_flow.assert_called_once()
     assert "component_id" not in flow_svc.update_flow.call_args.kwargs
+
+
+# ---------------------------------------------------------------------------
+# data_apps.py  managed-repo REST parity (0.65.0)
+# ---------------------------------------------------------------------------
+
+
+def test_data_app_create_passes_use_managed_git_repo(tmp_path: Path) -> None:
+    """POST /data-apps/{p} must forward use_managed_git_repo to the service."""
+    data_app_svc = MagicMock()
+    data_app_svc.create_data_app.return_value = {"app_id": "9", "use_managed_git_repo": True}
+    registry = _mock_registry(data_app=data_app_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/data-apps/{PROJECT}",
+            headers=AUTH,
+            json={"name": "App", "slug": "app", "use_managed_git_repo": True},
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = data_app_svc.create_data_app.call_args.kwargs
+    assert kwargs.get("use_managed_git_repo") is True
+    assert kwargs.get("git_repo") == ""
+
+
+def test_data_app_runs_endpoint_calls_service(tmp_path: Path) -> None:
+    """GET /data-apps/{p}/{app}/runs must call DataAppService.list_app_runs."""
+    data_app_svc = MagicMock()
+    data_app_svc.list_app_runs.return_value = {"count": 0, "runs": []}
+    registry = _mock_registry(data_app=data_app_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(f"/data-apps/{PROJECT}/{APP_ID}/runs?limit=3", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    data_app_svc.list_app_runs.assert_called_once_with(PROJECT, APP_ID, limit=3)
+
+
+def test_data_app_git_bind_credential_endpoint_calls_service(tmp_path: Path) -> None:
+    """POST /data-apps/{p}/{app}/git-repo/bind-credential must call bind_managed_credential."""
+    data_app_svc = MagicMock()
+    data_app_svc.bind_managed_credential.return_value = {"git": {"#password": "<encrypted>"}}
+    registry = _mock_registry(data_app=data_app_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/data-apps/{PROJECT}/{APP_ID}/git-repo/bind-credential",
+            headers=AUTH,
+            json={"branch": "main", "permissions": "readOnly"},
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = data_app_svc.bind_managed_credential.call_args.kwargs
+    assert kwargs.get("branch") == "main"
+    assert kwargs.get("permissions") == "readOnly"
