@@ -60,6 +60,11 @@ CHANGELOG: dict[str, list[str]] = {
         "All of the above are mirrored 1:1 on the `kbagent serve` REST API "
         "(`/data-app/.../runs`, `/data-app/.../git-repo/bind-credential`, and the "
         "`use_managed_git_repo` field on create).",
+        "New (#446): the `install.sh` bootstrap got a first-run onboarding pass -- it "
+        "auto-installs `uv` when it is missing (opt out with `KBAGENT_NO_UV_BOOTSTRAP=1`), quiets "
+        "the install output behind tidy step lines, and finishes with a Keboola banner plus a "
+        "'next steps' footer (`kbagent project add`, `kbagent --help`) so first-time users know "
+        "what to run next.",
     ],
     "0.64.0": [
         "New: data-app git-repo introspection + managed-repo credentials -- five `data-app "
