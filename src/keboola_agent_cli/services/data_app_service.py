@@ -87,13 +87,6 @@ MAX_GIT_REPO_LENGTH = 1024
 MAX_GIT_BRANCH_LENGTH = 255
 MAX_GIT_USERNAME_LENGTH = 255
 
-# Placeholder HTTPS basic-auth username written into a managed-repo git block.
-# The Keboola git-service ignores the username and only validates the token
-# (RFC: managed_repo_data_apps_mvp), so any non-secret value works; we never
-# put the token itself in this plaintext field.
-MANAGED_GIT_CREDENTIAL_USERNAME = "kbagent"
-DEFAULT_MANAGED_GIT_BRANCH = "main"
-
 POLL_INTERVAL_SECONDS = 5.0
 TERMINAL_ERROR_STATE = "error"
 RUNNING_STATE = "running"
@@ -792,18 +785,17 @@ class DataAppService(BaseService):
             # configVersion resolution depends on where the app's *source*
             # lives, which we infer from the latest Storage config:
             #
-            #  * Streamlit / external-git / a managed repo with a wired
-            #    credential block (parameters.dataApp.git present) -> the source
-            #    pointer lives IN the Storage config, so we PIN the latest
-            #    version. This stack resolves an omitted configVersion to the
-            #    previously-DEPLOYED snapshot, not the latest, so pinning is the
-            #    only way the operator reads a freshly-wired git block.
-            #  * A pure managed repo (useManagedGitRepo, NO git block) -> the
-            #    source resolves via app.managedGitRepoId, not a Storage
-            #    configVersion; we OMIT it (matches keboola-mcp-server / Kai).
-            #    NOTE: such apps only deploy on stacks where the platform injects
-            #    managed-repo credentials; otherwise wire one first with
-            #    `data-app git-bind-credential` (see gotchas.md).
+            #  * Streamlit / external-git (parameters.dataApp.git present) -> the
+            #    source pointer lives IN the Storage config, so we PIN the latest
+            #    version so the operator reads the current git block.
+            #  * A managed repo (useManagedGitRepo, NO git block) -> the source
+            #    resolves via app.managedGitRepoId and the platform injects the
+            #    clone credentials at deploy time, so we OMIT configVersion
+            #    (matches keboola-mcp-server / Kai and the sandboxes-service
+            #    `testManagedGitRepo.sh` contract). Pinning a managed app's
+            #    no-git-block config instead makes the runtime demand
+            #    `dataApp.git.repository` and the deploy fails -- that was the
+            #    pre-0.65.0 bug this branch fixes.
             #
             # An explicit --config-version always wins as an escape hatch.
             effective_version: str | None = config_version
@@ -854,173 +846,6 @@ class DataAppService(BaseService):
                 poll_result=poll_result,
                 config_version=effective_version or "",
             )
-        finally:
-            ds_client.close()
-            if storage_client is not None:
-                storage_client.close()
-
-    def bind_managed_credential(
-        self,
-        alias: str,
-        app_id: str,
-        *,
-        branch: str = DEFAULT_MANAGED_GIT_BRANCH,
-        permissions: str = "readOnly",
-        branch_id: int | None = None,
-        dry_run: bool = False,
-    ) -> dict[str, Any]:
-        """Make a managed-repo app deployable by wiring a credential into its config.
-
-        A managed-repo (``useManagedGitRepo``) app owns an empty Keboola-hosted
-        git repo but carries no ``parameters.dataApp.git`` block. On stacks where
-        the platform injects managed-repo credentials at deploy time that is
-        enough; on stacks that do not, the data-app runtime's ``git clone`` of
-        the managed repo fails with ``could not read Username`` and the deploy
-        reverts to ``stopped``. This method closes that gap the same way Kai's
-        dev-twin flow does (RFC: managed_repo_data_apps_mvp): it
-
-        1. resolves the managed repo's HTTPS clone URL (``get_git_repo``),
-        2. mints a fresh ``http_token`` credential ON the app (``create_git_credential``),
-        3. encrypts that token under the project KMS (``_build_git_block``), and
-        4. writes ``parameters.dataApp.git = {repository, username, '#password', branch}``
-           into the Storage config.
-
-        The minted token never leaves this process in plaintext: it is encrypted
-        in-place and only the ``KBC::...`` ciphertext is persisted. ``username``
-        is a non-secret placeholder the git-service ignores. After binding, call
-        ``deploy_data_app`` to start the app.
-
-        Known limitation: the credential is minted BEFORE it is encrypted and
-        written to the config. If the encryption or ``update_config`` step fails,
-        the minted credential stays registered on the managed repo but its config
-        write never lands -- the one-time secret is lost and the credential is
-        orphaned (a harmless leaked slot). There is no rollback (the credential
-        DELETE endpoint is not wired here); re-running the command simply mints a
-        fresh credential and overwrites the git block.
-        """
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
-        ds_client = self._ds_client_factory(project.stack_url, project.token)
-        storage_client: Any | None = None
-        try:
-            app = ds_client.get_app(app_id)
-            if not app.get("hasManagedGitRepo"):
-                raise KeboolaApiError(
-                    message=(
-                        f"Data app {app_id} has no managed git repository. "
-                        "bind-managed-credential only applies to apps created with "
-                        "--use-managed-git-repo; external repos already carry their "
-                        "own credentials."
-                    ),
-                    status_code=0,
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    retryable=False,
-                )
-            config_id = str(app.get("configId") or "")
-            if not config_id:
-                raise KeboolaApiError(
-                    message=f"Data app {app_id} has no associated configId",
-                    status_code=500,
-                    error_code=ErrorCode.API_ERROR,
-                    retryable=False,
-                )
-
-            repo = ds_client.get_git_repo(app_id)
-            https_url = str(repo.get("httpsUrl") or "")
-            if not https_url:
-                raise KeboolaApiError(
-                    message=(
-                        f"Managed git repo for app {app_id} returned no HTTPS clone "
-                        "URL; cannot wire an HTTPS credential."
-                    ),
-                    status_code=0,
-                    error_code=ErrorCode.API_ERROR,
-                    retryable=False,
-                )
-
-            if dry_run:
-                # Show exactly what WOULD be wired without minting a credential
-                # (which is one-time and would orphan if not written) or touching
-                # the Storage config. All validation above has already run.
-                return {
-                    "dry_run": True,
-                    "project_alias": alias,
-                    "app_id": str(app_id),
-                    "config_id": config_id,
-                    "repository": https_url,
-                    "branch": branch,
-                    "permissions": permissions,
-                    "username": MANAGED_GIT_CREDENTIAL_USERNAME,
-                    "message": (
-                        f"Dry run -- no credential minted, config unchanged. Would mint an "
-                        f"http_token ({permissions}) on app {app_id} and write "
-                        f"parameters.dataApp.git -> {https_url} (branch {branch})."
-                    ),
-                }
-
-            # Mint a credential ON the app's managed repo. The one-time secret is
-            # consumed immediately by the encryption step below and never returned.
-            credential = ds_client.create_git_credential(
-                app_id,
-                type_="http_token",
-                permissions=permissions,
-                name="kbagent-managed-deploy",
-            )
-            secret = str(credential.get("secret") or "")
-            if not secret:
-                raise KeboolaApiError(
-                    message=(
-                        "create_git_credential returned no one-time secret for the "
-                        "http_token; cannot wire the managed-repo credential."
-                    ),
-                    status_code=500,
-                    error_code=ErrorCode.API_ERROR,
-                    retryable=False,
-                )
-
-            git_block = self._build_git_block(
-                alias=alias,
-                git_repo=https_url,
-                git_branch=branch,
-                git_public=False,
-                git_username=MANAGED_GIT_CREDENTIAL_USERNAME,
-                git_pat_plaintext=secret,
-                git_pat_encrypted=None,
-            )
-
-            storage_client = self._client_factory(project.stack_url, project.token)
-            detail = storage_client.get_config_detail(
-                DATA_APP_COMPONENT_ID, config_id, branch_id=branch_id
-            )
-            configuration = _coerce_config_dict(detail.get("configuration"))
-            parameters = dict(configuration.get("parameters") or {})
-            data_app = dict(parameters.get("dataApp") or {})
-            data_app["git"] = git_block
-            parameters["dataApp"] = data_app
-            configuration["parameters"] = parameters
-
-            updated = storage_client.update_config(
-                component_id=DATA_APP_COMPONENT_ID,
-                config_id=config_id,
-                configuration=configuration,
-                change_description="Bind managed git credential for deploy (kbagent)",
-                branch_id=branch_id,
-            )
-            return {
-                "project_alias": alias,
-                "app_id": str(app_id),
-                "config_id": config_id,
-                "repository": https_url,
-                "branch": branch,
-                "permissions": permissions,
-                "credential_id": str(credential.get("id") or ""),
-                "config_version": str(updated.get("version", "") or ""),
-                "git": _redact_git_block(git_block),
-                "message": (
-                    f"Wired a managed-repo credential into data app {app_id}. "
-                    "Run `kbagent data-app deploy` to start it."
-                ),
-            }
         finally:
             ds_client.close()
             if storage_client is not None:
@@ -2304,18 +2129,14 @@ class DataAppService(BaseService):
         self,
         ds_client: DataScienceClient,
         app_id: str,
-        *,
-        is_managed: bool,
     ) -> tuple[str, dict[str, Any]]:
         """Best-effort: fetch the latest run's ``failureReason`` to enrich a deploy
         error message. Returns ``(message_suffix, details)``; NEVER raises -- a
         diagnostic fetch failure must not mask the original deploy error.
 
-        Setup-phase failures (e.g. a managed-repo git-clone auth error) produce
-        no container logs, so ``data-app logs`` cannot show them; the run record
-        is the only place the reason surfaces. We also turn the most common
-        managed-repo failure (``could not read Username``) into an actionable
-        hint pointing at ``git-bind-credential``.
+        Setup-phase failures (e.g. a git-clone error) produce no container logs,
+        so ``data-app logs`` cannot show them; the run record is the only place
+        the reason surfaces.
         """
         try:
             runs = ds_client.list_app_runs(app_id, limit=1)
@@ -2337,14 +2158,6 @@ class DataAppService(BaseService):
         if detail_line:
             suffix += f": {detail_line}"
         suffix += ". See `kbagent data-app runs` for the full startup log."
-        lowered = raw_message.lower()
-        if is_managed and (
-            "could not read username" in lowered or "authentication failed" in lowered
-        ):
-            suffix += (
-                " This managed-repo app cannot authenticate its git clone -- wire a"
-                " credential with `kbagent data-app git-bind-credential` and redeploy."
-            )
         details = {
             "run_id": run.get("id"),
             "run_state": run.get("state"),
@@ -2377,11 +2190,8 @@ class DataAppService(BaseService):
         while True:
             last_record = ds_client.get_app(app_id)
             state = str(last_record.get("state", ""))
-            is_managed = bool(last_record.get("hasManagedGitRepo"))
             if state == TERMINAL_ERROR_STATE:
-                suffix, details = self._deploy_failure_diagnostic(
-                    ds_client, app_id, is_managed=is_managed
-                )
+                suffix, details = self._deploy_failure_diagnostic(ds_client, app_id)
                 raise KeboolaApiError(
                     message=(
                         f"Data app {app_id} reached state=error during deploy.{suffix}"
@@ -2400,9 +2210,7 @@ class DataAppService(BaseService):
             if state == target_desired_state:
                 return last_record
             if time.monotonic() >= deadline:
-                suffix, details = self._deploy_failure_diagnostic(
-                    ds_client, app_id, is_managed=is_managed
-                )
+                suffix, details = self._deploy_failure_diagnostic(ds_client, app_id)
                 raise KeboolaApiError(
                     message=(
                         f"Timed out after {timeout_seconds:.0f}s waiting for data app "
@@ -2457,16 +2265,14 @@ class DataAppService(BaseService):
         if use_managed_git_repo:
             # Managed repos are provisioned empty -- there is no code to deploy
             # yet. Spell out the follow-up steps so the operator (human or agent)
-            # knows the create call is only step one. Step 3 (git-bind-credential)
-            # is what makes the runtime able to clone on stacks that do not inject
-            # managed-repo credentials at deploy time.
+            # knows the create call is only step one. The platform injects the
+            # clone credentials at deploy time, so no credential wiring is needed.
             return (
                 f"Data app '{name}' created with an empty Keboola-managed Git "
                 "repository. Next: 1) `kbagent data-app git-credentials-create "
                 "--type http_token --permissions readWrite` + push your code to the "
-                "managed repo (`data-app git-repo` shows the URL), 2) `kbagent "
-                "data-app git-bind-credential` to wire a deploy credential, then "
-                "3) `kbagent data-app deploy`."
+                "managed repo (`data-app git-repo` shows the URL), then "
+                "2) `kbagent data-app deploy`."
             )
         if not deployed:
             return (

@@ -114,7 +114,7 @@ a critical failure.
 | Delete a config row | `kbagent config row-delete --project P --component-id C --config-id K --row-id R [--yes]` (0.30.0+) -- destructive (gated behind `--allow-destructive`); branch-aware | `tool call delete_config_row` | `DELETE /v2/storage/components/C/configs/K/rows/R` (raw REST) |
 | Get OAuth authorization URL | `kbagent config oauth-url --project P --component-id C --config-id K` (0.30.0+) -- returns URL to open in browser to complete OAuth flow | -- | raw `GET /v2/storage/components/C/configs/K/oauth/authorize` |
 | Inventory data apps | `kbagent data-app list --project P` (0.27.0+; 0.43.9+ skips sandboxes) | `tool call get_configs --component_id keboola.data-apps` (Storage view only -- no state/URL/configVersion) | per-project `tool call` joined to Data Science |
-| Bring a new data app online from a git repo | `kbagent data-app create --project P --name N --slug S --git-repo URL [--git-pat-env VAR \| --git-public]` (0.27.0+) -- OR `--use-managed-git-repo` (0.65.0+) for an empty Keboola-hosted repo instead of `--git-repo` (mutually exclusive; forces --no-deploy; deploy flow = create -> git-credentials-create + push -> `git-bind-credential` -> deploy; see gotchas) | `tool call create_config keboola.data-apps` + manual `kbagent encrypt values` + raw `POST /apps` -- only for custom shapes | raw `POST data-science/apps` then `PATCH desiredState=running` without `configVersion + restartIfRunning` (the §9 footgun -- pins to v2 empty shell, errors `dataApp.git.repository is required`) |
+| Bring a new data app online from a git repo | `kbagent data-app create --project P --name N --slug S --git-repo URL [--git-pat-env VAR \| --git-public]` (0.27.0+) -- OR `--use-managed-git-repo` (0.65.0+) for an empty Keboola-hosted repo instead of `--git-repo` (mutually exclusive; forces --no-deploy; deploy flow = create -> git-credentials-create + push -> deploy; platform injects clone creds; see gotchas) | `tool call create_config keboola.data-apps` + manual `kbagent encrypt values` + raw `POST /apps` -- only for custom shapes | raw `POST data-science/apps` then `PATCH desiredState=running` without `configVersion + restartIfRunning` (the §9 footgun -- pins to v2 empty shell, errors `dataApp.git.repository is required`) |
 | Roll out a new code or config version on a data app | `kbagent data-app deploy --project P --app-id N --wait` (0.27.0+) -- always sends the §9 trio | -- | `tool call update_config` then `tool call run_component` (data apps are not jobs -- the queue runner does not deploy them) |
 | Wake an auto-suspended data app | `kbagent data-app start --project P --app-id N` (0.27.0+) -- does NOT bump configVersion | hitting the app's URL (auto-restart, 30-60s cold boot) | `kbagent data-app deploy` (overkill -- bumps configVersion) |
 | Pause a running data app | `kbagent data-app stop --project P --app-id N` (0.27.0+) | -- | `kbagent data-app delete` (irreversible; cascades to Storage config) |
@@ -269,13 +269,10 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
 - **`--use-managed-git-repo`** (0.65.0+): provisions an EMPTY Keboola-hosted repo
   instead of `--git-repo` (mutually exclusive; no git block; forces --no-deploy).
   Verified deploy flow: create -> `git-credentials-create --type http_token
-  --permissions readWrite` + push to the managed URL -> **`git-bind-credential`**
-  -> `deploy`. `git-bind-credential` (0.65.0+) mints+encrypts a credential and
-  writes `parameters.dataApp.git` so the runtime can clone; REQUIRED on stacks
-  that don't inject managed-repo creds (else deploy reverts to stopped with
-  `could not read Username`). `deploy` pins the latest configVersion when a git
-  block is present, omits it for a pure managed repo. Token is encrypted, never
-  printed.
+  --permissions readWrite` + push to the managed URL -> `deploy`. The platform
+  injects the clone credentials at deploy time, so no credential wiring is
+  needed. `deploy` pins the latest configVersion when a git block is present,
+  and omits it for a pure managed repo (deploys from `managedGitRepoId`).
 - **`runs`** (0.65.0+): `data-app runs --app-id ID` lists deploy attempts with
   `failure_reason` + `startup_logs` (incl. setup-phase git-clone errors); works on
   failed/never-started apps where `data-app logs` 400s. Use it to see WHY a deploy

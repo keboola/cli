@@ -24,6 +24,21 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.65.1": [
+        "Removed `data-app git-bind-credential` (and its `kbagent serve` endpoint). It shipped in "
+        "0.65.0 on a misdiagnosis: managed-repo deploys were failing and we believed the platform "
+        "did not inject the git-clone credential, so the command wired an encrypted credential into "
+        "`parameters.dataApp.git`. A clean reproduction on `data-science.us-east4.gcp` confirmed the "
+        "platform DOES inject the clone credential at deploy time (matching the sandboxes-service "
+        "`testManagedGitRepo.sh` contract) -- the command was unnecessary. The real fix was the "
+        "0.65.0 `configVersion`-omit change; pinning a managed app's no-git-block config is what made "
+        "the runtime demand `dataApp.git.repository` and revert the deploy to stopped.",
+        "Corrected the managed-repo guidance everywhere: the canonical flow is `data-app create "
+        "--use-managed-git-repo` -> `git-credentials-create --type http_token --permissions readWrite` "
+        "+ `git push` your code -> `data-app deploy`. No credential wiring is needed. The earlier "
+        "'platform does not inject credentials' / `could not read Username` framing was wrong "
+        "(GitHub issue #454 closed as not-a-bug).",
+    ],
     "0.65.0": [
         "New: deploy a data app from a Keboola-MANAGED git repository end-to-end. "
         "`data-app create --use-managed-git-repo` provisions an EMPTY Keboola-hosted repo (POST "

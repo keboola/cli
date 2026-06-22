@@ -196,6 +196,7 @@ kbagent --json data-app create \
   --use-managed-git-repo --type python-js --auth public
 
 # 2. Mint a readWrite HTTP token (one-time secret, admin storage token needed).
+#    This token authenticates YOUR push in step 3 -- nothing else.
 kbagent --json data-app git-credentials-create \
   --project prod --app-id 12345678 \
   --type http_token --permissions readWrite --name deploy --yes
@@ -206,28 +207,21 @@ kbagent --json data-app git-repo --project prod --app-id 12345678   # -> https_u
 #    the password with any username:
 git push "https://<token>@<managed-host>/keboola/app-12345678.git" HEAD:main
 
-# 4. Wire an encrypted credential into the config so the runtime can clone.
-#    Mints an http_token ON the app, encrypts it under the project KMS, and
-#    writes parameters.dataApp.git (repository + username "kbagent" + #password
-#    + branch). The token is never printed. Needs an admin storage token.
-kbagent data-app git-bind-credential --project prod --app-id 12345678
-
-# 5. Deploy.
+# 4. Deploy. The platform injects the clone credentials at deploy time, so no
+#    credential is wired into the config.
 kbagent data-app deploy --project prod --app-id 12345678 --wait
 ```
 
 `--use-managed-git-repo` is mutually exclusive with `--git-repo` and every
 `--git-*`/PAT flag (managed repos carry no credentials in the config). This flow
 is **verified working** -- a tic-tac-toe app deployed and serves from a
-Keboola-managed repo.
+Keboola-managed repo with no credential wiring.
 
-**Step 4 is required on stacks that do NOT inject managed-repo credentials at
-deploy time.** Without the wired credential the runtime's `git clone` fails
-`could not read Username` and the deploy reverts to stopped. On stacks that
-inject creds automatically you can skip step 4 -- but if `data-app deploy`
-reverts to stopped with a "could not read Username" error (surfaced by
-`data-app runs`'s `failure_reason` / `startup_logs`), run `git-bind-credential`
-then redeploy.
+**No credential wiring is needed.** The platform injects the `git clone`
+credentials at deploy time (the sandboxes-service `testManagedGitRepo.sh`
+contract), so `data-app deploy` on a pure managed repo deploys straight from
+`app.managedGitRepoId`. If a deploy ever reverts to stopped, diagnose it with
+`data-app runs` (`failure_reason` + `startup_logs`).
 
 ### Manage app-runtime secrets (since v0.29.0)
 

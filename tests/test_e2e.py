@@ -11479,12 +11479,8 @@ class TestE2EConfigSecretEncryption:
 @pytest.mark.e2e
 class TestE2EDataAppManagedRepo:
     """End-to-end tests for the managed-repo data-app commands (0.65.0):
-    `data-app create --use-managed-git-repo`, `git-bind-credential` (dry-run),
-    and `data-app runs`. Creates a real managed app and cleans it up.
-
-    The bind step is exercised with `--dry-run` so the run mints no one-time
-    credential (which cannot be rolled back); the real bind + deploy path is
-    covered by unit tests and manual verification.
+    `data-app create --use-managed-git-repo`, `data-app git-repo`, and
+    `data-app runs`. Creates a real managed app and cleans it up.
     """
 
     @pytest.fixture(autouse=True)
@@ -11530,8 +11526,7 @@ class TestE2EDataAppManagedRepo:
         return _json_ok(self._run(*args))
 
     def test_managed_repo_lifecycle(self) -> None:
-        """create --use-managed-git-repo -> git-repo -> git-bind-credential
-        --dry-run -> runs, then delete."""
+        """create --use-managed-git-repo -> git-repo -> runs, then delete."""
         slug = f"e2e-managed-{int(time.time())}"
 
         _step(1, "create a managed-repo data app (empty repo, forced --no-deploy)")
@@ -11563,20 +11558,7 @@ class TestE2EDataAppManagedRepo:
         assert repo["is_managed_git_repo"] is True
         assert repo["https_url"], f"expected an https clone URL, got {repo}"
 
-        _step(3, "git-bind-credential --dry-run previews without minting a credential")
-        preview = self._run_ok(
-            "data-app",
-            "git-bind-credential",
-            "--project",
-            self.alias,
-            "--app-id",
-            app_id,
-            "--dry-run",
-        )["data"]
-        assert preview["dry_run"] is True
-        assert preview["repository"] == repo["https_url"]
-
-        _step(4, "runs lists deployment attempts (empty for a never-deployed app)")
+        _step(3, "runs lists deployment attempts (empty for a never-deployed app)")
         runs = self._run_ok(
             "data-app", "runs", "--project", self.alias, "--app-id", app_id, "--limit", "5"
         )["data"]
@@ -11584,7 +11566,7 @@ class TestE2EDataAppManagedRepo:
         assert isinstance(runs["runs"], list)
         assert runs["count"] == len(runs["runs"])
 
-        _step(5, "delete the managed app (cascades the managed repo)")
+        _step(4, "delete the managed app (cascades the managed repo)")
         self._run_ok("data-app", "delete", "--project", self.alias, "--app-id", app_id, "--yes")
         self._created_app_ids.remove(app_id)
 
