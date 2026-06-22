@@ -255,6 +255,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # softprops/action-gh-release creates the GitHub Release
+      actions: write # dispatch release.yml (the wheel-attach workflow) below
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     steps:
@@ -270,6 +271,37 @@ jobs:
           tag_name: v${{ env.VERSION }}
           files: release/*
           prerelease: ${{ needs.version.outputs.IS_PRERELEASE == 'true' }}
+      # Attach the pip/uv wheel too. release.yml builds + uploads it (the asset that
+      # auto-update and install.sh download) on `release: published`. A release this
+      # job creates with GITHUB_TOKEN does NOT emit that event, so when no one
+      # published the release by hand the wheel never got attached -- this broke
+      # v0.64.0. workflow_dispatch is the documented exception to the GITHUB_TOKEN
+      # no-trigger rule, so dispatch release.yml directly; that runs it no matter who
+      # or what created the release. The release already exists (created above), so
+      # the upload lands.
+      - name: Attach the pip/uv wheel (dispatch release.yml)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }} # required: no checkout in this job, gh can't read the repo from git
+        run: gh workflow run release.yml -f tag="v${VERSION}"
+      # gh workflow run is fire-and-forget: it returns once GitHub accepts the
+      # dispatch, not when release.yml finishes. Poll the release for the wheel so a
+      # failed release.yml turns THIS run red instead of silently shipping no wheel.
+      - name: Confirm the wheel was attached
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          for _ in $(seq 1 30); do
+            sleep 20
+            names="$(gh release view "v${VERSION}" --json assets --jq '.assets[].name')"
+            if grep -qx "keboola_cli-${VERSION}-py3-none-any.whl" <<<"$names" \
+               && grep -qx "keboola_agent_cli-${VERSION}-py3-none-any.whl" <<<"$names"; then
+              echo "both wheels attached"; exit 0
+            fi
+          done
+          echo "::error::wheel(s) still missing 10 min after dispatching release.yml for v${VERSION} -- check that run"
+          exit 1
 
   # ── Publish to S3 (cli-dist.keboola.com/keboola-cli2/) and index the apt/rpm/apk
   #    repos so `apt-get install keboola-cli2` works. Real; needs AWS + GPG secrets.
