@@ -54,7 +54,9 @@ CHANGELOG: dict[str, list[str]] = {
         "credentials at deploy time -- without it the runtime's `git clone` of the managed repo "
         "fails `could not read Username` and the deploy reverts to stopped. The token is encrypted "
         "in place and never printed; `--dry-run` previews what would be wired without minting the "
-        "one-time credential or touching the config.",
+        "one-time credential or touching the config. (Removed in 0.65.1 -- this was based on a "
+        "misdiagnosis; the platform does inject the clone credential, so the command was "
+        "unnecessary. See the 0.65.1 notes.)",
         "New: `data-app runs --project P --app-id ID [--limit N]` lists a data app's recent "
         "deployment attempts with `failure_reason` + `startup_logs`, including setup-phase failures "
         "(e.g. a git-clone error during `app_setup`) that produce no container logs. It works on "

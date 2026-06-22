@@ -760,3 +760,4 @@ class TestDataAppRuns:
         assert result.exit_code == 0, result.output
         body = json.loads(result.output)
         assert body["data"]["runs"][0]["failure_reason"]["reason"] == "StartupProbeFailed"
+        mock.list_app_runs.assert_called_once_with("prod", "42", limit=3)

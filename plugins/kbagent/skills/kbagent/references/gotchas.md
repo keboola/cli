@@ -2638,7 +2638,7 @@ Other behaviors of this family:
   `data-app password`); the `git-credentials` list never returns it. `--type
   ssh_key` requires a `--public-key` / `--public-key-file` and returns no secret.
 
-## `data-app` managed-repo deploy: omit configVersion (the platform injects clone creds) (since v0.65.0)
+## `data-app` managed-repo deploy: omit configVersion (the platform injects clone creds) (since v0.65.0; guidance corrected v0.65.1 -- no credential wiring needed)
 
 `--use-managed-git-repo` provisions an **empty** Keboola-hosted git repo
 (POST `useManagedGitRepo:true`) linked to the app via `app.managedGitRepoId`. It

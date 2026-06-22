@@ -196,7 +196,8 @@ kbagent --json data-app create \
   --use-managed-git-repo --type python-js --auth public
 
 # 2. Mint a readWrite HTTP token (one-time secret, admin storage token needed).
-#    This token authenticates YOUR push in step 3 -- nothing else.
+#    this token authenticates your push in step 3 -- nothing else; the deploy
+#    uses the platform's injected credentials.
 kbagent --json data-app git-credentials-create \
   --project prod --app-id 12345678 \
   --type http_token --permissions readWrite --name deploy --yes
