@@ -276,8 +276,9 @@ jobs:
       # job creates with GITHUB_TOKEN does NOT emit that event, so when no one
       # published the release by hand the wheel never got attached -- this broke
       # v0.64.0. workflow_dispatch is the documented exception to the GITHUB_TOKEN
-      # no-trigger rule, so dispatch release.yml directly; it runs whoever created
-      # the release. The release already exists (created above), so the upload lands.
+      # no-trigger rule, so dispatch release.yml directly; that runs it no matter who
+      # or what created the release. The release already exists (created above), so
+      # the upload lands.
       - name: Attach the pip/uv wheel (dispatch release.yml)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -293,12 +294,13 @@ jobs:
         run: |
           for _ in $(seq 1 30); do
             sleep 20
-            if gh release view "v${VERSION}" --json assets --jq '.assets[].name' \
-                 | grep -qx "keboola_cli-${VERSION}-py3-none-any.whl"; then
-              echo "wheel attached"; exit 0
+            names="$(gh release view "v${VERSION}" --json assets --jq '.assets[].name')"
+            if grep -qx "keboola_cli-${VERSION}-py3-none-any.whl" <<<"$names" \
+               && grep -qx "keboola_agent_cli-${VERSION}-py3-none-any.whl" <<<"$names"; then
+              echo "both wheels attached"; exit 0
             fi
           done
-          echo "::error::wheel still missing 10 min after dispatching release.yml for v${VERSION} -- check that run"
+          echo "::error::wheel(s) still missing 10 min after dispatching release.yml for v${VERSION} -- check that run"
           exit 1
 
   # ── Publish to S3 (cli-dist.keboola.com/keboola-cli2/) and index the apt/rpm/apk
