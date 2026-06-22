@@ -156,6 +156,66 @@ class TestUiAuthRouteAwareBypass:
         )
 
 
+class TestCorsCredentialsGuard:
+    """GHSA-5mh2-6xgr-rf89: allow_credentials=True must never pair with a
+    wildcard or malformed CORS origin (Starlette would reflect any Origin and
+    return Access-Control-Allow-Credentials: true). create_app rejects such a
+    config at startup so the unsafe combination can never ship."""
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            ["*"],
+            ["http://localhost:5173", "*"],
+            ["evil.com"],
+            ["http://evil.com/path"],
+            ["ws://x"],
+        ],
+    )
+    def test_unsafe_cors_origins_rejected(self, tmp_path: Path, bad: list[str]) -> None:
+        from keboola_agent_cli.errors import ConfigError
+
+        with pytest.raises(ConfigError):
+            create_app(config_dir=str(tmp_path / "cfg"), auth_token="t", cors_origins=bad)
+
+    @pytest.mark.parametrize(
+        "good",
+        [
+            None,
+            ["http://localhost:5173"],
+            ["https://app.example.com", "http://127.0.0.1:8000"],
+        ],
+    )
+    def test_safe_cors_origins_accepted(self, tmp_path: Path, good: list[str] | None) -> None:
+        app = create_app(config_dir=str(tmp_path / "cfg"), auth_token="t", cors_origins=good)
+        assert app is not None
+
+    def test_is_valid_cors_origin_predicate(self) -> None:
+        from keboola_agent_cli.server.app import _is_valid_cors_origin
+
+        assert _is_valid_cors_origin("http://localhost:5173")
+        assert _is_valid_cors_origin("https://app.example.com")
+        assert _is_valid_cors_origin("http://127.0.0.1:8000")
+        assert not _is_valid_cors_origin("*")
+        assert not _is_valid_cors_origin("example.com")  # no scheme
+        assert not _is_valid_cors_origin("http://x/path")  # carries a path
+        assert not _is_valid_cors_origin("ws://x")  # wrong scheme
+        assert not _is_valid_cors_origin("http://user:pass@evil.com")  # userinfo
+
+    def test_serve_cli_rejects_wildcard_cors_origin(self, monkeypatch) -> None:
+        # NB: the CLI layer must surface an unsafe --cors-origin as a clean
+        # usage error (exit 2 from typer.BadParameter), not a traceback, and
+        # must not start the server -- validation runs before create_app /
+        # uvicorn.run, so the wildcard case fails fast without binding a port.
+        monkeypatch.setenv("KBAGENT_AUTO_UPDATE", "false")
+        from typer.testing import CliRunner
+
+        from keboola_agent_cli.cli import app as cli_app
+
+        result = CliRunner().invoke(cli_app, ["serve", "--cors-origin", "*"])
+        assert result.exit_code == 2, result.output
+
+
 class TestCookieAuth:
     """Cookie path: ``GET /`` sets the cookie, subsequent requests use it.
 
