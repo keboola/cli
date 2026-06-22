@@ -255,6 +255,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # softprops/action-gh-release creates the GitHub Release
+      actions: write # dispatch release.yml (the wheel-attach workflow) below
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     steps:
@@ -270,6 +271,18 @@ jobs:
           tag_name: v${{ env.VERSION }}
           files: release/*
           prerelease: ${{ needs.version.outputs.IS_PRERELEASE == 'true' }}
+      # Attach the pip/uv wheel too. release.yml builds + uploads it (the asset that
+      # auto-update and install.sh download) on `release: published` -- but a release
+      # created above with GITHUB_TOKEN does NOT emit that event, so on a bot-cut
+      # release the wheel never got attached (this is what broke v0.64.0).
+      # workflow_dispatch is the documented exception to the GITHUB_TOKEN no-cascade
+      # rule, so dispatch release.yml directly; it fires no matter who cut the release.
+      # The release already exists (created above), so release.yml's upload lands.
+      - name: Attach the pip/uv wheel (dispatch release.yml)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run release.yml -f tag="v${VERSION}"
 
   # ── Publish to S3 (cli-dist.keboola.com/keboola-cli2/) and index the apt/rpm/apk
   #    repos so `apt-get install keboola-cli2` works. Real; needs AWS + GPG secrets.
