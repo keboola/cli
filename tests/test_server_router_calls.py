@@ -852,23 +852,3 @@ def test_data_app_runs_endpoint_calls_service(tmp_path: Path) -> None:
 
     assert res.status_code == 200, res.text
     data_app_svc.list_app_runs.assert_called_once_with(PROJECT, APP_ID, limit=3)
-
-
-def test_data_app_git_bind_credential_endpoint_calls_service(tmp_path: Path) -> None:
-    """POST /data-apps/{p}/{app}/git-repo/bind-credential must call bind_managed_credential."""
-    data_app_svc = MagicMock()
-    data_app_svc.bind_managed_credential.return_value = {"git": {"#password": "<encrypted>"}}
-    registry = _mock_registry(data_app=data_app_svc)
-    app = _make_app_with_registry(tmp_path, registry)
-
-    with TestClient(app) as client:
-        res = client.post(
-            f"/data-apps/{PROJECT}/{APP_ID}/git-repo/bind-credential",
-            headers=AUTH,
-            json={"branch": "main", "permissions": "readOnly"},
-        )
-
-    assert res.status_code == 200, res.text
-    kwargs = data_app_svc.bind_managed_credential.call_args.kwargs
-    assert kwargs.get("branch") == "main"
-    assert kwargs.get("permissions") == "readOnly"

@@ -745,9 +745,9 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     instead of cloning an external one; writes no git block, forces --no-deploy,
     mutually exclusive with --git-repo and all --git-*/PAT flags. Managed deploy
     works via: create --use-managed-git-repo -> git-credentials-create
-    --type http_token + push code to the managed repo URL ->
-    `data-app git-bind-credential` (wires an encrypted credential into the
-    config) -> deploy.
+    --type http_token --permissions readWrite + push code to the managed repo
+    URL -> deploy. The platform injects the clone credentials at deploy time,
+    so no credential wiring is needed.
 
   kbagent data-app deploy --project NAME --app-id ID [--config-version N]
     [--wait] [--timeout SECONDS] [--branch ID]
@@ -880,15 +880,6 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     an admin storage token. Apps created via `data-app create --git-repo`
     are EXTERNAL (not managed) -> 409 "no managed Git repository".
     Confirmation prompt unless --yes or --json.
-
-  kbagent data-app git-bind-credential --project NAME --app-id ID
-        [--branch-name main] [--permissions readOnly|readWrite] [--dry-run]
-    Mint an http_token ON the app's MANAGED repo, encrypt it under the
-    project KMS, and wire it into parameters.dataApp.git (repository +
-    placeholder username + encrypted #password + branch) so the runtime can
-    `git clone` the managed repo at deploy time. Needed on stacks that do
-    NOT inject managed-repo credentials at deploy (clone fails with "could
-    not read Username"). The token is encrypted in-place and never printed.
 
 ### Project Sync
 

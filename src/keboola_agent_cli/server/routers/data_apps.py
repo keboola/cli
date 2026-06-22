@@ -90,13 +90,6 @@ class GitCredentialCreate(BaseModel):
     name: str | None = None
 
 
-class GitBindCredential(BaseModel):
-    branch: str = "main"
-    permissions: str = "readOnly"
-    branch_id: int | None = None
-    dry_run: bool = False
-
-
 @router.get("", summary="List data apps across projects")
 def list_apps(
     project: list[str] | None = Query(None),
@@ -410,31 +403,3 @@ def runs(
     logs endpoint returns HTTP 400.
     """
     return registry.data_app.list_app_runs(project, app_id, limit=limit)
-
-
-@router.post(
-    "/{project}/{app_id}/git-repo/bind-credential",
-    summary="Wire a managed-repo credential into a data app's config",
-)
-def git_bind_credential(
-    project: str,
-    app_id: str,
-    body: GitBindCredential,
-    registry: ServiceRegistry = Depends(get_registry),
-) -> dict[str, Any]:
-    """Make a MANAGED-repo app deployable by wiring a credential into its config.
-
-    Mirrors `kbagent data-app git-bind-credential`. Mints an `http_token` on the
-    app, encrypts it under the project KMS, and writes `parameters.dataApp.git`
-    so the runtime can clone the managed repo at deploy. The token is encrypted
-    in place and never returned. Needs an admin storage token; non-managed apps
-    are rejected.
-    """
-    return registry.data_app.bind_managed_credential(
-        project,
-        app_id,
-        branch=body.branch,
-        permissions=body.permissions,
-        branch_id=body.branch_id,
-        dry_run=body.dry_run,
-    )
