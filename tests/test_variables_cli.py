@@ -362,6 +362,64 @@ class TestVariablesSet:
         assert "year_start" in output
         assert "2016" in output
 
+    def test_human_mode_warns_when_plaintext_written(self, tmp_path: Path) -> None:
+        """GHSA-7jrf: an allowed plaintext-on-encrypt-failure fallback must surface
+        a human-mode warning naming the leaked key-PATHS (never the values).
+
+        ``--json`` carries ``plaintext_written`` on the envelope; this locks the
+        paired human-mode stderr warning so the leak is never silent.
+        """
+        store = _setup_config(tmp_path / "config")
+        mock_vars = MagicMock()
+        mock_vars.set_variables.return_value = {
+            "project_alias": "prod",
+            "parent_component_id": "keboola.x",
+            "parent_config_id": "cfg-1",
+            "variables_id": "vars-1",
+            "values_id": "row-1",
+            "action": "updated",
+            "values": {"#api_token": "super-secret-value"},
+            "encrypted_keys": ["#api_token"],
+            # Encryption API was down + --allow-plaintext-on-encrypt-failure set,
+            # so the secret landed in plaintext; the service reports the key-path.
+            "plaintext_written": ["#values.[0].#api_token"],
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProj,
+            patch("keboola_agent_cli.cli.VariablesService") as MockVars,
+        ):
+            MockStore.return_value = store
+            MockProj.return_value = ProjectService(config_store=store)
+            MockVars.return_value = mock_vars
+
+            result = runner.invoke(
+                app,
+                [
+                    "config",
+                    "variables-set",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.x",
+                    "--config-id",
+                    "cfg-1",
+                    "--var",
+                    "#api_token=super-secret-value",
+                    "--allow-plaintext-on-encrypt-failure",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        # The warning lands on stderr; Rich soft-wraps at width 80, so collapse
+        # whitespace before substring matching.
+        combined = _strip_ansi(result.stdout + result.stderr)
+        normalized = re.sub(r"\s+", " ", combined)
+        assert "were written in PLAINTEXT" in normalized
+        assert "#values.[0].#api_token" in normalized  # the key PATH is named
+        assert "super-secret-value" not in normalized  # the value is NEVER shown
+
 
 class TestVariablesGet:
     def test_json_returns_linked_payload(self, tmp_path: Path) -> None:

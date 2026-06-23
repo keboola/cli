@@ -284,12 +284,13 @@ class VariablesService(BaseService):
         )
         variables_id = new_var_cfg["id"]
 
-        row_config, plaintext_written = self._build_encrypted_row_configuration(
+        row_config = self._build_encrypted_row_configuration(
             client=client,
             project_id=project_id,
             variables=variables,
             allow_plaintext_fallback=allow_plaintext_fallback,
         )
+        plaintext_written = find_plaintext_secret_keys(row_config)
 
         new_row = client.create_config_row(
             component_id=VARIABLES_COMPONENT_ID,
@@ -325,12 +326,13 @@ class VariablesService(BaseService):
 
         if target_row is None:
             # Linked variables_id exists but no values row -- create the default.
-            row_config, plaintext_written = self._build_encrypted_row_configuration(
+            row_config = self._build_encrypted_row_configuration(
                 client=client,
                 project_id=project_id,
                 variables=variables,
                 allow_plaintext_fallback=allow_plaintext_fallback,
             )
+            plaintext_written = find_plaintext_secret_keys(row_config)
             new_row = client.create_config_row(
                 component_id=VARIABLES_COMPONENT_ID,
                 config_id=variables_id,
@@ -358,12 +360,13 @@ class VariablesService(BaseService):
 
         # Encrypt only the NEW values -- existing #-keys are already KBC::-
         # prefixed and collect_secrets skips already-encrypted entries.
-        row_config, plaintext_written = self._build_encrypted_row_configuration(
+        row_config = self._build_encrypted_row_configuration(
             client=client,
             project_id=project_id,
             variables=final_values,
             allow_plaintext_fallback=allow_plaintext_fallback,
         )
+        plaintext_written = find_plaintext_secret_keys(row_config)
 
         client.update_config_row(
             component_id=VARIABLES_COMPONENT_ID,
@@ -389,7 +392,7 @@ class VariablesService(BaseService):
         project_id: int,
         variables: dict[str, str],
         allow_plaintext_fallback: bool,
-    ) -> tuple[dict[str, Any], list[str]]:
+    ) -> dict[str, Any]:
         """Shape a ``{values: [...]}`` row config and encrypt ``#``-prefixed entries.
 
         ``#``-prefixed names keep the prefix (the Encryption API and the
@@ -397,9 +400,9 @@ class VariablesService(BaseService):
         recognizes the ``{name, value}`` list shape directly, so no pre-flatten
         dance is needed.
 
-        Returns the encrypted row config plus the flattened key-paths still in
-        plaintext after encryption -- ``[]`` when encryption succeeded, the
-        leaked key-paths after an allowed plaintext fallback (never the values).
+        Returns the encrypted row config. Callers surface any plaintext-fallback
+        leak by passing the returned config to :func:`find_plaintext_secret_keys`
+        (key-paths only, never the values).
         """
         row_config: dict[str, Any] = {
             "values": [{"name": k, "value": v} for k, v in variables.items()],
@@ -411,7 +414,7 @@ class VariablesService(BaseService):
             row_config,
             allow_plaintext_fallback=allow_plaintext_fallback,
         )
-        return row_config, find_plaintext_secret_keys(row_config)
+        return row_config
 
     @staticmethod
     def _resolve_values_row(
