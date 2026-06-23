@@ -187,8 +187,10 @@ class TestBundleUiBug1NpmInvocation:
         assert _target(root).is_dir()
 
     def test_passes_resolved_npm_path_not_bare_name(self, tmp_path: Path) -> None:
-        """Root-cause fix: the resolved ``shutil.which`` path (``npm.cmd`` on
-        Windows) is handed to subprocess, never the bare string ``"npm"``."""
+        """Two regressions guarded here: (1) the resolved ``shutil.which`` path
+        (``npm.cmd`` on Windows) is handed to subprocess, never the bare string
+        ``"npm"``; (2) ``npm ci`` carries ``--ignore-scripts`` (GHSA-pfvh) while
+        ``npm run build`` intentionally does NOT."""
         root = _make_repo(tmp_path)
         resolved = "C:\\Program Files\\nodejs\\npm.cmd"
         with (
@@ -203,7 +205,15 @@ class TestBundleUiBug1NpmInvocation:
         assert ci_cmd[0] == resolved
         assert build_cmd[0] == resolved
         assert ci_cmd[1] == "ci"
+        # GHSA-pfvh: dependency lifecycle scripts must NOT run at wheel-build /
+        # `git+` install time (install-time RCE surface). Verified non-breaking
+        # against the real `tsc -b && vite build`.
+        assert "--ignore-scripts" in ci_cmd
+        # Intentional asymmetry: `--ignore-scripts` gates the dependency INSTALL
+        # (`npm ci`). `npm run build` runs our OWN build script and must NOT
+        # carry the flag -- do not "fix" the asymmetry by adding it there.
         assert build_cmd[1:] == ["run", "build"]
+        assert "--ignore-scripts" not in build_cmd
 
     def test_successful_npm_build_is_bundled(self, tmp_path: Path) -> None:
         """When npm produces dist/index.html, it gets copied into _ui_dist/."""
