@@ -57,15 +57,22 @@ index_deb() {
 }
 index_rpm() { createrepo_c .; }
 index_apk() {
-  printf '%s' "$APK_KEY_PRIVATE" > "$WORK/apk_index.rsa" && chmod 600 "$WORK/apk_index.rsa"
-  # apk/abuild-sign are Alpine-only (not in Ubuntu apt), so sign the index in Alpine.
-  # $PWD is the per-format work dir (publish_repo cd's into it); mount it + the key.
-  # --allow-untrusted: the .apk packages are signed by our own key (nfpm), which the
-  # throwaway container doesn't trust; indexing only reads metadata, so skip the check.
-  docker run --rm -v "$PWD:/work" -v "$WORK/apk_index.rsa:/key.rsa:ro" -w /work alpine:3 \
+  # Everything agrees on the name "keboola": nfpm signs each package as
+  # .SIGN.RSA.keboola.rsa.pub (apk.key_name in nfpm.yaml), so importing the pubkey as
+  # /etc/apk/keys/keboola.rsa.pub makes the container trust the packages (no
+  # --allow-untrusted), and signing the index with keboola.rsa yields a signature
+  # clients verify against the published keboola.rsa.pub. apk/abuild-sign are
+  # Alpine-only (not in Ubuntu apt), so index + sign inside Alpine.
+  printf '%s' "$APK_KEY_PRIVATE" > "$WORK/keboola.rsa" && chmod 600 "$WORK/keboola.rsa"
+  printf '%s' "$APK_KEY_PUBLIC"  > "$WORK/keboola.rsa.pub"
+  docker run --rm \
+    -v "$PWD:/work" \
+    -v "$WORK/keboola.rsa:/keboola.rsa:ro" \
+    -v "$WORK/keboola.rsa.pub:/etc/apk/keys/keboola.rsa.pub:ro" \
+    -w /work alpine:3 \
     sh -ceu 'apk add --no-cache abuild >/dev/null
-             apk index --allow-untrusted -o APKINDEX.tar.gz ./*.apk
-             abuild-sign -k /key.rsa APKINDEX.tar.gz'
+             apk index -o APKINDEX.tar.gz ./*.apk
+             abuild-sign -k /keboola.rsa APKINDEX.tar.gz'
 }
 
 # deb: index_deb writes its own (dearmored) keboola.gpg, so pass no pub-key content.

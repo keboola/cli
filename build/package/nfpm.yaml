@@ -35,4 +35,8 @@ rpm:
     key_file: /tmp/keys/rpm.key
 apk:
   signature:
+    # key_name must match the pubkey filename clients trust (keboola.rsa.pub) and the
+    # abuild-sign key in build/package/linux/index.sh — see that file. nfpm signs the
+    # package as .SIGN.RSA.<key_name>.rsa.pub, so all three must agree on "keboola".
+    key_name: keboola
     key_file: /tmp/keys/apk.key
