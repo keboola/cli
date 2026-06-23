@@ -269,8 +269,8 @@ class VariablesService(BaseService):
     ) -> tuple[str, str, dict[str, str], list[str]]:
         """Auto-create path: new variables config + default row, parent not yet linked.
 
-        The 4th tuple element is the plaintext-fallback leak (key-paths only,
-        ``[]`` when encryption succeeded).
+        The 4th tuple element is ``plaintext_written`` -- leaked secret key-paths
+        (``[]`` when encryption succeeded, never the values).
         """
         var_name = (parent_name or parent_config_id) + "-vars"
         schema = [{"name": k, "type": "string"} for k in variables]
@@ -316,8 +316,8 @@ class VariablesService(BaseService):
     ) -> tuple[str, dict[str, str], list[str]]:
         """Update path: parent already linked (or explicit --variables-id). Merge or replace.
 
-        The 3rd tuple element is the plaintext-fallback leak (key-paths only,
-        ``[]`` when encryption succeeded).
+        The 3rd tuple element is ``plaintext_written`` -- leaked secret key-paths
+        (``[]`` when encryption succeeded, never the values).
         """
         vars_cfg = client.get_config_detail(
             VARIABLES_COMPONENT_ID, variables_id, branch_id=branch_id
