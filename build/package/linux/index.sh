@@ -51,7 +51,11 @@ index_deb() {
   # dpkg-scanpackages dedups on name+version IGNORING architecture, so the amd64 and
   # arm64 debs collide and one is dropped ("is repeat; ignored"), leaving apt on the
   # other arch with no install candidate. -m emits a stanza per file (both arches).
-  dpkg-scanpackages -m . /dev/null > Packages && gzip -kf Packages
+  # Strip the leading "./" from Filename: apt would fetch <repo>/deb/./pkg.deb, and S3
+  # (behind CloudFront) treats the literal "/./" as a missing key -> 404. A clean
+  # Filename: pkg.deb yields <repo>/deb/pkg.deb, which exists.
+  dpkg-scanpackages -m . /dev/null | sed -E 's|^Filename: \./|Filename: |' > Packages
+  gzip -kf Packages
   apt-ftparchive release . > Release
   gpg --batch --yes --default-key "$KEYID" -abs -o Release.gpg Release
   gpg --batch --yes --default-key "$KEYID" --clearsign -o InRelease Release
@@ -78,7 +82,14 @@ publish_apk() {
     deb_arch="${pair%%:*}"; apk_arch="${pair##*:}"
     mkdir -p "$root/$apk_arch"
     aws s3 sync "s3://$BUCKET/$PREFIX/apk/$apk_arch/" "$root/$apk_arch/" --exclude '*' --include '*.apk' || true
-    find . -path ./.git -prune -o -name "*_linux_${deb_arch}.apk" -exec cp {} "$root/$apk_arch/" \;
+    # apk clients fetch <repo>/<arch>/<name>-<version>.apk, so the file on disk must be
+    # named that way — NOT nfpm's deb-style keboola-cli2_<ver>_linux_<arch>.apk (which
+    # apk index records as P/V but the client then 404s on). Rename on copy.
+    local f base ver
+    for f in $(find . -path ./.git -prune -o -name "*_linux_${deb_arch}.apk" -print); do
+      base="${f##*/}"; ver="${base#keboola-cli2_}"; ver="${ver%_linux_${deb_arch}.apk}"
+      cp "$f" "$root/$apk_arch/keboola-cli2-${ver}.apk"
+    done
   done
   # Publish the pubkey at the apk root; clients install it into /etc/apk/keys/keboola.rsa.pub.
   printf '%s' "$APK_KEY_PUBLIC" > "$root/keboola.rsa.pub"

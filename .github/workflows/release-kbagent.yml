@@ -332,6 +332,16 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+      - name: Wipe dev prefix (pre-release only)
+        # Dev tags reuse the keboola-cli2-dev prefix; clear it so each dev run is a clean
+        # slate and version resolution isn't confused by leftover packages from a prior
+        # dev tag. NEVER runs for the prod prefix (guarded on the -dev suffix).
+        if: needs.version.outputs.IS_PRERELEASE == 'true'
+        run: |
+          case "$PUBLISH_PREFIX" in
+            *-dev) aws s3 rm --recursive "s3://${AWS_BUCKET_NAME}/${PUBLISH_PREFIX}/" || true ;;
+            *) echo "refusing to wipe non-dev prefix '$PUBLISH_PREFIX'"; exit 1 ;;
+          esac
       - name: Upload versioned assets
         run: |
           mkdir -p up && find artifacts -type f \( -name '*.zip' -o -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.sha256' \) -exec cp {} up/ \;
