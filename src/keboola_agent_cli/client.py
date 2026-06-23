@@ -2295,6 +2295,7 @@ class KeboolaClient(BaseHttpClient):
         provider = file_detail.get("provider", "")
         downloader = _CloudDownloader.create(file_detail)
 
+        _assert_safe_download_url(file_detail["url"])
         with httpx.Client(timeout=FILE_DOWNLOAD_TIMEOUT) as http:
             resp = http.get(file_detail["url"])
             resp.raise_for_status()
@@ -2393,6 +2394,7 @@ class KeboolaClient(BaseHttpClient):
         import gzip
         import shutil
 
+        _assert_safe_download_url(url)
         out_path = Path(output_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         is_gzipped = url.rstrip("?").split("?")[0].endswith(".gz")
@@ -3101,6 +3103,70 @@ def _build_abs_upload_url(abs_params: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _assert_safe_download_url(url: str) -> None:
+    """Reject a download URL whose host resolves to a non-public address.
+
+    A malicious or compromised Storage API response can return a download URL
+    pointing at the cloud instance-metadata endpoint (169.254.169.254) or
+    localhost; because these fetches carry no Storage token and don't follow
+    redirects, the residual SSRF still writes internal/credential data into the
+    user's download file (GHSA-hjhx-mx7m-8xx2). We resolve the host and allow
+    ONLY globally-routable (public) addresses plus the explicit BYOC private
+    ranges below; everything else -- loopback, link-local (incl. the
+    169.254.169.254 metadata endpoint), CGNAT 100.64.0.0/10, reserved,
+    multicast, unspecified -- is refused.
+
+    RFC1918 + IPv6-ULA *private* ranges are deliberately ALLOWED: BYOC /
+    private-tenant Keboola deployments legitimately serve storage from private
+    endpoints, and the high-value SSRF target (instance metadata) is link-local,
+    not private. An allow-list (public OR explicit private) rather than a
+    block-list of `ipaddress` predicates avoids gaps like CGNAT, which none of
+    `is_loopback/is_link_local/is_reserved/is_multicast/is_unspecified` catch.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    byoc_private = (
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+        ipaddress.ip_network("fc00::/7"),  # IPv6 unique-local
+    )
+
+    host = urlparse(url).hostname
+    if not host:
+        raise KeboolaApiError(
+            message=f"Refusing to download: URL has no host ({url!r}).",
+            status_code=0,
+            error_code=ErrorCode.INVALID_ARGUMENT,
+            retryable=False,
+        )
+    try:
+        resolved = {info[4][0] for info in socket.getaddrinfo(host, None)}
+    except socket.gaierror:
+        # DNS failure is surfaced by the real fetch; don't mask it here.
+        return
+    for addr in resolved:
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if ip.is_global or any(ip in net for net in byoc_private):
+            continue  # public host, or a BYOC private endpoint -- allowed
+        raise KeboolaApiError(
+            message=(
+                f"Refusing to download from {host} -> {addr}: non-public address "
+                f"(not a public host nor a BYOC private range). This indicates a "
+                f"malicious or compromised Storage API response (possible SSRF, "
+                f"e.g. the cloud instance-metadata endpoint)."
+            ),
+            status_code=0,
+            error_code=ErrorCode.INVALID_ARGUMENT,
+            retryable=False,
+        )
+
+
 class _IterBytesReader:
     """Adapt an httpx iter_bytes() iterator to a .read(n) file-like interface.
 
@@ -3299,6 +3365,7 @@ class _CloudDownloader:
         import gzip
         import shutil
 
+        _assert_safe_download_url(url)
         headers = self._request_headers(url)
         dest_path = Path(dest)
         with (

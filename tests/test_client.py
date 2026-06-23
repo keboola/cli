@@ -3658,3 +3658,47 @@ class TestSetTableMetadata:
             )
         body = httpx_mock.get_request().content.decode().replace("%5B", "[").replace("%5D", "]")
         assert "KBC.column.city.description" in body
+
+
+class TestAssertSafeDownloadUrl:
+    """GHSA-hjhx-mx7m-8xx2: a download URL from a (possibly malicious) Storage
+    API response must not be fetched when its host resolves to a non-public
+    address -- SSRF guard against the cloud metadata endpoint and localhost.
+    All inputs are IP literals / localhost so the resolution stays offline."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://169.254.169.254/latest/meta-data/iam/security-credentials/",  # metadata
+            "http://127.0.0.1/secret",  # loopback v4
+            "http://localhost/secret",  # loopback by name
+            "http://[::1]/secret",  # loopback v6
+            "http://0.0.0.0/x",  # unspecified
+            "http://100.64.0.1/file",  # CGNAT (RFC 6598) -- not global, not RFC1918
+        ],
+    )
+    def test_rejects_non_public_hosts(self, url: str) -> None:
+        from keboola_agent_cli.client import _assert_safe_download_url
+
+        with pytest.raises(KeboolaApiError):
+            _assert_safe_download_url(url)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://93.184.216.34/file.csv",  # public IP literal
+            "https://10.1.2.3/file.csv",  # RFC1918 -- ALLOWED for BYOC
+            "http://192.168.1.5/file.csv",  # RFC1918 -- ALLOWED for BYOC
+            "http://172.16.0.9/file.csv",  # RFC1918 -- ALLOWED for BYOC
+        ],
+    )
+    def test_allows_public_and_private_byoc_hosts(self, url: str) -> None:
+        from keboola_agent_cli.client import _assert_safe_download_url
+
+        _assert_safe_download_url(url)  # must not raise
+
+    def test_rejects_url_without_host(self) -> None:
+        from keboola_agent_cli.client import _assert_safe_download_url
+
+        with pytest.raises(KeboolaApiError):
+            _assert_safe_download_url("file:///etc/passwd")
