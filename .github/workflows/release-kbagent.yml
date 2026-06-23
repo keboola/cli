@@ -59,6 +59,10 @@ jobs:
       # build + package + sign + GitHub pre-release ONLY; all external publishing
       # (PyPI, S3 repo index, Homebrew, Chocolatey, WinGet) is skipped.
       IS_PRERELEASE: ${{ steps.v.outputs.IS_PRERELEASE }}
+      # S3 prefix to publish under: prod (`keboola-cli2`) for real releases, a separate
+      # `keboola-cli2-dev` for pre-releases so a dev tag can exercise the full S3 publish
+      # + client install test without touching the prod apt/rpm/apk repos.
+      PUBLISH_PREFIX: ${{ steps.v.outputs.PUBLISH_PREFIX }}
     steps:
       - id: v
         env:
@@ -74,7 +78,9 @@ jobs:
           # Pre-release = any a/b/rc/.dev/-suffix marker (.post is a real release).
           if printf '%s' "$VERSION" | grep -Eq '(a|b|rc)[0-9]+$|\.dev[0-9]+$|-'; then PRE=true; else PRE=false; fi
           echo "IS_PRERELEASE=$PRE" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION prerelease=$PRE"
+          # Pre-releases publish to a separate dev prefix (see PUBLISH_PREFIX output above).
+          if [ "$PRE" = true ]; then echo "PUBLISH_PREFIX=${S3_PREFIX}-dev"; else echo "PUBLISH_PREFIX=${S3_PREFIX}"; fi >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION prerelease=$PRE prefix=${S3_PREFIX}$([ "$PRE" = true ] && echo -dev)"
 
   # Reuse the per-PR gates against the tagged commit, plus changelog-check.
   gate:
@@ -307,7 +313,9 @@ jobs:
   #    repos so `apt-get install keboola-cli2` works. Real; needs AWS + GPG secrets.
   publish-s3:
     needs: [version, freeze, package-linux]
-    if: needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
+    # Runs on every tag. Pre-releases publish under the dev prefix (PUBLISH_PREFIX), so a
+    # dev tag exercises the full publish + client install test without touching prod repos.
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -315,6 +323,7 @@ jobs:
       id-token: write # AWS OIDC (configure-aws-credentials assumes the role)
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
+      PUBLISH_PREFIX: ${{ needs.version.outputs.PUBLISH_PREFIX }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
@@ -326,7 +335,7 @@ jobs:
       - name: Upload versioned assets
         run: |
           mkdir -p up && find artifacts -type f \( -name '*.zip' -o -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.sha256' \) -exec cp {} up/ \;
-          aws s3 sync up/ "s3://${AWS_BUCKET_NAME}/${S3_PREFIX}/v${VERSION}/"
+          aws s3 sync up/ "s3://${AWS_BUCKET_NAME}/${PUBLISH_PREFIX}/v${VERSION}/"
       - name: Index apt/rpm/apk repos (signed)
         env:
           # No DEB_KEY_PUBLIC: the apt keyring is derived (dearmored) from DEB_KEY_PRIVATE.
@@ -334,7 +343,7 @@ jobs:
           RPM_KEY_PUBLIC: ${{ secrets.RPM_KEY_PUBLIC }}
           APK_KEY_PRIVATE: ${{ secrets.APK_KEY_PRIVATE }}
           APK_KEY_PUBLIC: ${{ secrets.APK_KEY_PUBLIC }}
-        run: bash build/package/linux/index.sh "${AWS_BUCKET_NAME}" "${S3_PREFIX}"
+        run: bash build/package/linux/index.sh "${AWS_BUCKET_NAME}" "${PUBLISH_PREFIX}"
 
   # ── Homebrew: render the formula from the template and push to the kbagent-owned tap.
   homebrew:
@@ -411,28 +420,56 @@ jobs:
           powershell -Command '$s = Get-AuthenticodeSignature wingetcreate.exe; if ($s.Status -ne "Valid" -or $s.SignerCertificate.Subject -notmatch "Microsoft") { Write-Error "wingetcreate.exe signature not valid/Microsoft: $($s.Status)"; exit 1 }'
           ./wingetcreate.exe update -v "$VERSION" -u "$url" -t "$WINGET_TOKEN" Keboola.KeboolaCLI2 -s
 
-  # ── Smoke-test the real install paths end to end.
+  # ── Smoke-test the real install paths end to end. Runs on every tag (incl. dev tags,
+  #    against PUBLISH_PREFIX); the Homebrew leg is prod-only since the tap isn't pushed
+  #    for pre-releases. always() so it still runs when homebrew is skipped on a dev tag.
   test-install:
     needs: [version, publish-s3, homebrew]
+    if: always() && needs.publish-s3.result == 'success'
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
+      PREFIX: ${{ needs.version.outputs.PUBLISH_PREFIX }}
     steps:
       - name: apt (Ubuntu)
         run: |
-          docker run --rm ubuntu bash -c '
+          docker run --rm -e PREFIX -e VERSION ubuntu bash -c '
             set -eo pipefail
             apt-get update -y && apt-get install -y wget ca-certificates gnupg
-            wget -P /etc/apt/trusted.gpg.d https://cli-dist.keboola.com/${{ env.S3_PREFIX }}/deb/keboola.gpg
-            echo "deb https://cli-dist.keboola.com/${{ env.S3_PREFIX }}/deb /" > /etc/apt/sources.list.d/keboola.list
+            wget -P /etc/apt/trusted.gpg.d "https://cli-dist.keboola.com/${PREFIX}/deb/keboola.gpg"
+            echo "deb https://cli-dist.keboola.com/${PREFIX}/deb /" > /etc/apt/sources.list.d/keboola.list
             apt-get update && apt-get install -y keboola-cli2
-            kbagent --version | grep -q "${{ env.VERSION }}"
+            kbagent --version | grep -q "${VERSION}"
+          '
+      - name: apk (Alpine)
+        run: |
+          docker run --rm -e PREFIX -e VERSION alpine sh -c '
+            set -eu
+            wget -O /etc/apk/keys/keboola.rsa.pub "https://cli-dist.keboola.com/${PREFIX}/apk/keboola.rsa.pub"
+            echo "https://cli-dist.keboola.com/${PREFIX}/apk" >> /etc/apk/repositories
+            apk update
+            apk add keboola-cli2
+            kbagent --version | grep -q "${VERSION}"
+          '
+      - name: rpm (Fedora)
+        run: |
+          docker run --rm -e PREFIX -e VERSION fedora bash -c '
+            set -eo pipefail
+            rpm --import "https://cli-dist.keboola.com/${PREFIX}/rpm/keboola.gpg"
+            printf "%s\n" "[keboola]" "name=keboola" \
+              "baseurl=https://cli-dist.keboola.com/${PREFIX}/rpm" \
+              "enabled=1" "gpgcheck=1" \
+              "gpgkey=https://cli-dist.keboola.com/${PREFIX}/rpm/keboola.gpg" \
+              > /etc/yum.repos.d/keboola.repo
+            dnf install -y keboola-cli2
+            kbagent --version | grep -q "${VERSION}"
           '
       - name: Homebrew (Linux)
+        if: needs.version.outputs.IS_PRERELEASE == 'false' && needs.homebrew.result == 'success'
         run: |
-          docker run --rm homebrew/brew bash -c '
+          docker run --rm -e VERSION homebrew/brew bash -c '
             set -e
             brew tap keboola/keboola-cli2 https://github.com/keboola/homebrew-keboola-cli2
             brew install keboola-cli2
-            kbagent --version | grep -q "${{ env.VERSION }}"
+            kbagent --version | grep -q "${VERSION}"
           '
