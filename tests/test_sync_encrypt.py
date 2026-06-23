@@ -104,9 +104,12 @@ class TestEncryptSecretsWarnsWithFallback:
         assert result["parameters"]["#apiToken"] == original_token
         assert result["parameters"]["nested"]["#password"] == "super-secret"
 
-        # Warning was logged
-        assert any("Failed to encrypt secrets" in record.message for record in caplog.records)
-        assert any("plaintext fallback allowed" in record.message for record in caplog.records)
+        # Warning now names the leaked key-paths written in PLAINTEXT
+        # (GHSA-7jrf) -- never the secret values.
+        assert "Encryption FAILED" in caplog.text
+        assert "PLAINTEXT" in caplog.text
+        assert "#parameters.#apiToken" in caplog.text
+        assert "super-secret" not in caplog.text
 
 
 class TestEncryptSecretsSuccess:

@@ -182,10 +182,29 @@ def encrypt_secrets_in_config(
         logger.info("Encrypted %d secret value(s) for %s", len(encrypted), component_id)
     except Exception as exc:
         if allow_plaintext_fallback:
+            # The user opted into --allow-plaintext-on-encrypt-failure, but the
+            # actual plaintext write is otherwise silent (GHSA-7jrf-xc86-8wf6).
+            # Name the exact secret key-paths now persisted in PLAINTEXT (never
+            # the values) so the leak is visible and actionable rather than a
+            # vague "fallback allowed" log line.
+            leaked = find_plaintext_secret_keys(configuration)
+            # An HTTP client's exception message can echo the request body (the
+            # plaintext secrets we just sent to encrypt_values), so redact every
+            # secret value from the logged exception -- the warning that exists
+            # to flag a plaintext leak must not itself leak a credential.
+            safe_exc = str(exc)
+            for secret_value in secrets.values():
+                if secret_value:
+                    safe_exc = safe_exc.replace(secret_value, "***")
             logger.warning(
-                "Failed to encrypt secrets for %s: %s (plaintext fallback allowed)",
+                "Encryption FAILED for %s (%s). --allow-plaintext-on-encrypt-failure "
+                "is set, so %d secret value(s) are being written in PLAINTEXT: %s. "
+                "Rotate these credentials and re-encrypt once the Encryption API is "
+                "reachable -- config version history retains the plaintext copy.",
                 component_id,
-                exc,
+                safe_exc,
+                len(leaked),
+                ", ".join(leaked) or "(unable to enumerate)",
             )
         else:
             raise KeboolaApiError(

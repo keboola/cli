@@ -177,6 +177,55 @@ class TestEncryptSecretsInConfigNameValueShape:
         # plaintext must not be in the config after the raise path either
         # (it's in place, but the caller must not push it — that's the contract)
 
+    def test_plaintext_fallback_warning_names_leaked_keys(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # GHSA-7jrf: with --allow-plaintext-on-encrypt-failure AND a failing
+        # Encryption API, the (otherwise silent) plaintext write must be
+        # surfaced -- naming the exact leaked key-PATHS, never the values.
+        client = MagicMock()
+        client.encrypt_values.side_effect = RuntimeError("api down")
+        config = {"parameters": {"#api_key": "s3cr3t-value"}}
+
+        with caplog.at_level("WARNING"):
+            encrypt_secrets_in_config(
+                client=client,
+                project_id=901,
+                component_id="keboola.ex-generic",
+                configuration=config,
+                allow_plaintext_fallback=True,
+            )
+
+        msg = caplog.text
+        assert "PLAINTEXT" in msg
+        assert "#parameters.#api_key" in msg  # the key PATH is named
+        assert "s3cr3t-value" not in msg  # the secret VALUE is NEVER logged
+
+    def test_plaintext_fallback_redacts_secret_value_echoed_in_exception(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # GHSA-7jrf (Devin follow-up): even if the encryption client's exception
+        # message echoes the request body, the warning must redact the secret
+        # VALUE -- str(exc) is the remaining transitive leak vector.
+        client = MagicMock()
+        client.encrypt_values.side_effect = RuntimeError(
+            "400 Bad Request while sending {'#api_key': 's3cr3t-value'}"
+        )
+        config = {"parameters": {"#api_key": "s3cr3t-value"}}
+
+        with caplog.at_level("WARNING"):
+            encrypt_secrets_in_config(
+                client=client,
+                project_id=901,
+                component_id="keboola.ex-generic",
+                configuration=config,
+                allow_plaintext_fallback=True,
+            )
+
+        assert "s3cr3t-value" not in caplog.text  # value redacted out of exc
+        assert "***" in caplog.text  # redaction marker present
+        assert "#parameters.#api_key" in caplog.text  # key path still named
+
     def test_noop_when_no_secrets(self) -> None:
         client = MagicMock()
         config = {"values": [{"name": "regular", "value": "public"}]}
