@@ -47,7 +47,11 @@ publish_repo() {
 }
 
 index_deb() {
-  dpkg-scanpackages . /dev/null > Packages && gzip -kf Packages
+  # -m/--multiversion: keep ALL packages, not just the newest per name. Without it
+  # dpkg-scanpackages dedups on name+version IGNORING architecture, so the amd64 and
+  # arm64 debs collide and one is dropped ("is repeat; ignored"), leaving apt on the
+  # other arch with no install candidate. -m emits a stanza per file (both arches).
+  dpkg-scanpackages -m . /dev/null > Packages && gzip -kf Packages
   apt-ftparchive release . > Release
   gpg --batch --yes --default-key "$KEYID" -abs -o Release.gpg Release
   gpg --batch --yes --default-key "$KEYID" --clearsign -o InRelease Release

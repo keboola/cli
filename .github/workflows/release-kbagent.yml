@@ -442,6 +442,7 @@ jobs:
             kbagent --version | grep -q "${VERSION}"
           '
       - name: apk (Alpine)
+        if: ${{ !cancelled() }}   # run even if an earlier leg failed, so one run shows all results
         run: |
           docker run --rm -e PREFIX -e VERSION alpine sh -c '
             set -eu
@@ -452,6 +453,7 @@ jobs:
             kbagent --version | grep -q "${VERSION}"
           '
       - name: rpm (Fedora)
+        if: ${{ !cancelled() }}   # run even if an earlier leg failed, so one run shows all results
         run: |
           docker run --rm -e PREFIX -e VERSION fedora bash -c '
             set -eo pipefail
@@ -465,7 +467,7 @@ jobs:
             kbagent --version | grep -q "${VERSION}"
           '
       - name: Homebrew (Linux)
-        if: needs.version.outputs.IS_PRERELEASE == 'false' && needs.homebrew.result == 'success'
+        if: ${{ !cancelled() && needs.version.outputs.IS_PRERELEASE == 'false' && needs.homebrew.result == 'success' }}
         run: |
           docker run --rm -e VERSION homebrew/brew bash -c '
             set -e
