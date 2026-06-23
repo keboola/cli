@@ -60,9 +60,11 @@ index_apk() {
   printf '%s' "$APK_KEY_PRIVATE" > "$WORK/apk_index.rsa" && chmod 600 "$WORK/apk_index.rsa"
   # apk/abuild-sign are Alpine-only (not in Ubuntu apt), so sign the index in Alpine.
   # $PWD is the per-format work dir (publish_repo cd's into it); mount it + the key.
+  # --allow-untrusted: the .apk packages are signed by our own key (nfpm), which the
+  # throwaway container doesn't trust; indexing only reads metadata, so skip the check.
   docker run --rm -v "$PWD:/work" -v "$WORK/apk_index.rsa:/key.rsa:ro" -w /work alpine:3 \
     sh -ceu 'apk add --no-cache abuild >/dev/null
-             apk index -o APKINDEX.tar.gz ./*.apk
+             apk index --allow-untrusted -o APKINDEX.tar.gz ./*.apk
              abuild-sign -k /key.rsa APKINDEX.tar.gz'
 }
 
