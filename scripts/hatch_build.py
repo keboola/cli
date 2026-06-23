@@ -138,7 +138,19 @@ def _bundle_ui(repo_root: Path, log: Callable[[str], None] = print) -> None:
     log("no prebuilt dist found; running npm build")
     try:
         subprocess.check_call(
-            [npm, "ci", "--prefer-offline", "--no-audit", "--no-fund"],
+            # --ignore-scripts: do NOT run npm lifecycle scripts from the
+            # (transitive) dependency tree at wheel-build / `git+` install time.
+            # Without it, a compromised dependency's postinstall would execute
+            # arbitrary code on the user's machine during install (GHSA-pfvh).
+            # Verified non-breaking: `tsc -b && vite build` needs no dependency
+            # install-scripts -- vite 8 (rolldown) ships prebuilt platform
+            # binaries rather than fetching them via a postinstall.
+            # NOTE: this also suppresses any *root* web/frontend/package.json
+            # prepare/postinstall script (there is none today). If one is ever
+            # added AND required for the build, invoke it explicitly here rather
+            # than dropping --ignore-scripts, which would re-open the dependency
+            # lifecycle-script RCE surface.
+            [npm, "ci", "--prefer-offline", "--no-audit", "--no-fund", "--ignore-scripts"],
             cwd=frontend_dir,
         )
         subprocess.check_call([npm, "run", "build"], cwd=frontend_dir)
