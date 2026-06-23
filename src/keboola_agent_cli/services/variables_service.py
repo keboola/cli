@@ -18,7 +18,7 @@ import logging
 from typing import Any
 
 from ..errors import ConfigError, KeboolaApiError
-from ._encryption import encrypt_secrets_in_config
+from ._encryption import encrypt_secrets_in_config, find_plaintext_secret_keys
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
@@ -148,6 +148,7 @@ class VariablesService(BaseService):
                     linked_vars_id,
                     linked_values_id,
                     final_values,
+                    plaintext_written,
                 ) = self._create_linked_variables(
                     client=client,
                     project_id=project_id,
@@ -160,7 +161,11 @@ class VariablesService(BaseService):
                 )
                 action = "created"
             else:
-                linked_values_id, final_values = self._update_linked_variables(
+                (
+                    linked_values_id,
+                    final_values,
+                    plaintext_written,
+                ) = self._update_linked_variables(
                     client=client,
                     project_id=project_id,
                     variables_id=linked_vars_id,
@@ -196,6 +201,9 @@ class VariablesService(BaseService):
                 "action": action,
                 "values": final_values,
                 "encrypted_keys": encrypted_keys,
+                # Empty unless an allowed plaintext-on-encrypt-failure fallback
+                # left secret key-paths unencrypted in the row that was written.
+                "plaintext_written": plaintext_written,
             }
         finally:
             client.close()
@@ -258,8 +266,12 @@ class VariablesService(BaseService):
         variables: dict[str, str],
         branch_id: int | None,
         allow_plaintext_fallback: bool,
-    ) -> tuple[str, str, dict[str, str]]:
-        """Auto-create path: new variables config + default row, parent not yet linked."""
+    ) -> tuple[str, str, dict[str, str], list[str]]:
+        """Auto-create path: new variables config + default row, parent not yet linked.
+
+        The 4th tuple element is the plaintext-fallback leak (key-paths only,
+        ``[]`` when encryption succeeded).
+        """
         var_name = (parent_name or parent_config_id) + "-vars"
         schema = [{"name": k, "type": "string"} for k in variables]
 
@@ -272,7 +284,7 @@ class VariablesService(BaseService):
         )
         variables_id = new_var_cfg["id"]
 
-        row_config = self._build_encrypted_row_configuration(
+        row_config, plaintext_written = self._build_encrypted_row_configuration(
             client=client,
             project_id=project_id,
             variables=variables,
@@ -287,7 +299,7 @@ class VariablesService(BaseService):
             description="Auto-created default row by kbagent",
             branch_id=branch_id,
         )
-        return variables_id, new_row["id"], dict(variables)
+        return variables_id, new_row["id"], dict(variables), plaintext_written
 
     def _update_linked_variables(
         self,
@@ -300,8 +312,12 @@ class VariablesService(BaseService):
         replace: bool,
         branch_id: int | None,
         allow_plaintext_fallback: bool,
-    ) -> tuple[str, dict[str, str]]:
-        """Update path: parent already linked (or explicit --variables-id). Merge or replace."""
+    ) -> tuple[str, dict[str, str], list[str]]:
+        """Update path: parent already linked (or explicit --variables-id). Merge or replace.
+
+        The 3rd tuple element is the plaintext-fallback leak (key-paths only,
+        ``[]`` when encryption succeeded).
+        """
         vars_cfg = client.get_config_detail(
             VARIABLES_COMPONENT_ID, variables_id, branch_id=branch_id
         )
@@ -309,7 +325,7 @@ class VariablesService(BaseService):
 
         if target_row is None:
             # Linked variables_id exists but no values row -- create the default.
-            row_config = self._build_encrypted_row_configuration(
+            row_config, plaintext_written = self._build_encrypted_row_configuration(
                 client=client,
                 project_id=project_id,
                 variables=variables,
@@ -329,7 +345,7 @@ class VariablesService(BaseService):
                 variables=variables,
                 branch_id=branch_id,
             )
-            return new_row["id"], dict(variables)
+            return new_row["id"], dict(variables), plaintext_written
 
         existing_values = target_row.get("configuration", {}).get("values", [])
         existing_dict = {v["name"]: v["value"] for v in existing_values}
@@ -342,7 +358,7 @@ class VariablesService(BaseService):
 
         # Encrypt only the NEW values -- existing #-keys are already KBC::-
         # prefixed and collect_secrets skips already-encrypted entries.
-        row_config = self._build_encrypted_row_configuration(
+        row_config, plaintext_written = self._build_encrypted_row_configuration(
             client=client,
             project_id=project_id,
             variables=final_values,
@@ -364,7 +380,7 @@ class VariablesService(BaseService):
             variables=final_values,
             branch_id=branch_id,
         )
-        return target_row["id"], final_values
+        return target_row["id"], final_values, plaintext_written
 
     @staticmethod
     def _build_encrypted_row_configuration(
@@ -373,13 +389,17 @@ class VariablesService(BaseService):
         project_id: int,
         variables: dict[str, str],
         allow_plaintext_fallback: bool,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], list[str]]:
         """Shape a ``{values: [...]}`` row config and encrypt ``#``-prefixed entries.
 
         ``#``-prefixed names keep the prefix (the Encryption API and the
         transformation runner both key off it). :func:`encrypt_secrets_in_config`
         recognizes the ``{name, value}`` list shape directly, so no pre-flatten
         dance is needed.
+
+        Returns the encrypted row config plus the flattened key-paths still in
+        plaintext after encryption -- ``[]`` when encryption succeeded, the
+        leaked key-paths after an allowed plaintext fallback (never the values).
         """
         row_config: dict[str, Any] = {
             "values": [{"name": k, "value": v} for k, v in variables.items()],
@@ -391,7 +411,7 @@ class VariablesService(BaseService):
             row_config,
             allow_plaintext_fallback=allow_plaintext_fallback,
         )
-        return row_config
+        return row_config, find_plaintext_secret_keys(row_config)
 
     @staticmethod
     def _resolve_values_row(
