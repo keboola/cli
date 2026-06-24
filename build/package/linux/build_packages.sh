@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build deb/rpm/apk for each Linux arch from the frozen binaries, using nfpm.
+# Build deb/rpm for each Linux arch from the frozen binaries, using nfpm.
+# (No apk: the glibc-linked PyInstaller binary won't run on musl Alpine.)
 # nfpm does not reliably expand ${...} in its config, so we render it with envsubst.
 # Usage: build_packages.sh <version> [artifacts-dir]
 set -euo pipefail
@@ -17,7 +18,7 @@ for arch in amd64 arm64; do
 
   export VERSION PKG_ARCH="$arch" BIN_PATH="$BIN"
   envsubst '${VERSION} ${PKG_ARCH} ${BIN_PATH}' < build/package/nfpm.yaml > /tmp/nfpm.yaml
-  for fmt in deb rpm apk; do
+  for fmt in deb rpm; do
     nfpm package -f /tmp/nfpm.yaml -p "$fmt" -t "dist/keboola-cli2_${VERSION}_linux_${arch}.${fmt}"
   done
 done

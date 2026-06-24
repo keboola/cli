@@ -1,4 +1,5 @@
-# nfpm config — packages the frozen `kbagent` binary into deb / rpm / apk.
+# nfpm config — packages the frozen `kbagent` binary into deb / rpm.
+# (No apk: the glibc-linked PyInstaller binary won't run on musl Alpine.)
 #
 # nfpm (https://nfpm.goreleaser.com) is a standalone, language-agnostic packager.
 # We do NOT use goreleaser (it builds Go); the binary is produced by PyInstaller in
@@ -33,6 +34,3 @@ deb:
 rpm:
   signature:
     key_file: /tmp/keys/rpm.key
-apk:
-  signature:
-    key_file: /tmp/keys/apk.key
