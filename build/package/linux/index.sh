@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Build/refresh the SIGNED apt(deb), yum(rpm) and apk repositories on the CLI dist
+# Build/refresh the SIGNED apt(deb) and yum(rpm) repositories on the CLI dist
 # S3 bucket so `apt-get install keboola-cli2` (etc.) works out of the box.
+# (No apk: the frozen binary is glibc-linked and won't run on musl Alpine.)
 #
 # Signing keys (separate per format):
 #   DEB_KEY_PRIVATE   — GPG, signs the apt repo. The public keyring apt downloads is
 #                       derived from it (dearmored binary), so there's no DEB_KEY_PUBLIC.
 #   RPM_KEY_PUBLIC    — public half of the SEPARATE rpm signing key (nfpm signs the rpm
 #                       packages with RPM_KEY_PRIVATE); published for yum clients.
-#   APK_KEY_PRIVATE / APK_KEY_PUBLIC   — abuild RSA keypair, signs the apk index
 # Requires AWS creds already configured (OIDC).
-# Usage: index.sh <s3-bucket> <prefix>   →  s3://<bucket>/<prefix>/{deb,rpm,apk}/
+# Usage: index.sh <s3-bucket> <prefix>   →  s3://<bucket>/<prefix>/{deb,rpm}/
 set -euo pipefail
 BUCKET="$1"
 PREFIX="$2"
@@ -25,7 +25,6 @@ if [ -z "${DEB_KEY_PRIVATE:-}" ]; then
 fi
 
 sudo apt-get update -y
-# Only deb/rpm tooling on the host; the apk index is built in Alpine (see index_apk).
 sudo apt-get install -y dpkg-dev apt-utils createrepo-c gnupg
 
 # Import GPG signing key (deb + rpm metadata).
@@ -70,58 +69,8 @@ index_deb() {
 }
 index_rpm() { createrepo_c .; }
 
-# apk has its own publisher (not publish_repo): repos are PER-ARCH — clients fetch
-# <repo>/<arch>/APKINDEX.tar.gz — so packages + signed index live under apk/<arch>/
-# (deb arch name -> apk arch name). Everything agrees on the name "keboola": nfpm signs
-# each package as .SIGN.RSA.keboola.rsa.pub (apk.key_name in nfpm.yaml); importing the
-# pubkey as /etc/apk/keys/keboola.rsa.pub makes the container trust the packages (no
-# --allow-untrusted); signing each index with keboola.rsa yields a signature clients
-# verify against the published keboola.rsa.pub. apk/abuild-sign are Alpine-only (not in
-# Ubuntu apt), so index + sign inside Alpine.
-publish_apk() {
-  local root="$WORK/apk"
-  printf '%s' "$APK_KEY_PRIVATE" > "$WORK/keboola.rsa" && chmod 600 "$WORK/keboola.rsa"
-  printf '%s' "$APK_KEY_PUBLIC"  > "$WORK/keboola.rsa.pub"
-  local pair deb_arch apk_arch
-  for pair in amd64:x86_64 arm64:aarch64; do
-    deb_arch="${pair%%:*}"; apk_arch="${pair##*:}"
-    mkdir -p "$root/$apk_arch"
-    aws s3 sync "s3://$BUCKET/$PREFIX/apk/$apk_arch/" "$root/$apk_arch/" --exclude '*' --include '*.apk' || true
-    # apk clients fetch <repo>/<arch>/<name>-<version>.apk, so the file on disk must be
-    # named that way — NOT nfpm's deb-style keboola-cli2_<ver>_linux_<arch>.apk (which
-    # apk index records as P/V but the client then 404s on). Rename on copy.
-    local f base ver
-    for f in $(find . -path ./.git -prune -o -name "*_linux_${deb_arch}.apk" -print); do
-      base="${f##*/}"; ver="${base#keboola-cli2_}"; ver="${ver%_linux_${deb_arch}.apk}"
-      cp "$f" "$root/$apk_arch/keboola-cli2-${ver}.apk"
-    done
-  done
-  # Publish the pubkey at the apk root; clients install it into /etc/apk/keys/keboola.rsa.pub.
-  printf '%s' "$APK_KEY_PUBLIC" > "$root/keboola.rsa.pub"
-  docker run --rm \
-    -v "$root:/work" \
-    -v "$WORK/keboola.rsa:/keboola.rsa:ro" \
-    -v "$WORK/keboola.rsa.pub:/etc/apk/keys/keboola.rsa.pub:ro" \
-    -w /work alpine:3 \
-    sh -ceu 'apk add --no-cache abuild >/dev/null
-             for d in */; do
-               ls "$d"*.apk >/dev/null 2>&1 || continue
-               ( cd "$d" && apk index -o APKINDEX.tar.gz ./*.apk && abuild-sign -k /keboola.rsa APKINDEX.tar.gz )
-             done'
-  # As in publish_repo: APKINDEX.tar.gz + pubkey live at stable paths -> no-cache so
-  # CloudFront doesn't serve a stale index; the .apk packages are version-named -> immutable.
-  aws s3 sync "$root/" "s3://$BUCKET/$PREFIX/apk/" --exclude "*.apk" --cache-control "no-cache"
-  aws s3 sync "$root/" "s3://$BUCKET/$PREFIX/apk/" --exclude "*" --include "*.apk" --cache-control "public, max-age=31536000, immutable"
-}
-
 # deb: index_deb writes its own (dearmored) keboola.gpg, so pass no pub-key content.
 publish_repo deb index_deb "" ""
 publish_repo rpm index_rpm keboola.gpg "${RPM_KEY_PUBLIC:-}"
-if [ -z "${APK_KEY_PRIVATE:-}" ]; then
-  # No apk signing key configured — the apk index is genuinely opt-out, so skip it.
-  echo "::warning::APK_KEY_PRIVATE not set — skipping apk index (deb/rpm done)."
-else
-  publish_apk
-fi
 
-echo "Repositories indexed and published under s3://$BUCKET/$PREFIX/{deb,rpm,apk}/"
+echo "Repositories indexed and published under s3://$BUCKET/$PREFIX/{deb,rpm}/"

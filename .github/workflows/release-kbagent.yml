@@ -1,9 +1,9 @@
 # Release & distribution pipeline for kbagent — see docs/adr/0003-release-distribution-cicd.md
 #
 # Ships a SELF-CONTAINED NATIVE BINARY (no Python / no uv at the user's end), packaged
-# for brew / apt / dnf / apk / chocolatey / winget — the same UX the legacy Go `kbc`
+# for brew / apt / dnf / chocolatey / winget — the same UX the legacy Go `kbc`
 # delivered. The Python app is frozen with PyInstaller (proven: `env -i kbagent
-# --version` works), then packaged with nfpm (deb/rpm/apk) and wrapped for Homebrew /
+# --version` works), then packaged with nfpm (deb/rpm) and wrapped for Homebrew /
 # Chocolatey / WinGet. GoReleaser is NOT used (it builds Go); nothing depends on the
 # deprecated keboola-as-code repo.
 #
@@ -61,7 +61,7 @@ jobs:
       IS_PRERELEASE: ${{ steps.v.outputs.IS_PRERELEASE }}
       # S3 prefix to publish under: prod (`keboola-cli2`) for real releases, a separate
       # `keboola-cli2-dev` for pre-releases so a dev tag can exercise the full S3 publish
-      # + client install test without touching the prod apt/rpm/apk repos.
+      # + client install test without touching the prod apt/rpm repos.
       PUBLISH_PREFIX: ${{ steps.v.outputs.PUBLISH_PREFIX }}
     steps:
       - id: v
@@ -216,11 +216,11 @@ jobs:
             dist/*.sha256
             dist/${{ env.BIN_NAME }}*
 
-  # ── Package the Linux binaries into deb/rpm/apk with nfpm (language-agnostic).
+  # ── Package the Linux binaries into deb/rpm with nfpm (language-agnostic).
   package-linux:
     needs: [version, freeze]
     runs-on: ubuntu-latest
-    environment: release # so DEB/RPM/APK signing keys resolve
+    environment: release # so DEB/RPM signing keys resolve
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     steps:
@@ -234,19 +234,17 @@ jobs:
         with: { pattern: bin-linux-*, path: artifacts }
       - name: Write package signing keys
         env:
-          # DEB/RPM are signed with GPG keys; APK with an abuild RSA key.
+          # DEB/RPM are signed with GPG keys.
           DEB_KEY_PRIVATE: ${{ secrets.DEB_KEY_PRIVATE }}
           RPM_KEY_PRIVATE: ${{ secrets.RPM_KEY_PRIVATE }}
-          APK_KEY_PRIVATE: ${{ secrets.APK_KEY_PRIVATE }}
         run: |
           mkdir -p /tmp/keys
-          for k in DEB_KEY_PRIVATE RPM_KEY_PRIVATE APK_KEY_PRIVATE; do
+          for k in DEB_KEY_PRIVATE RPM_KEY_PRIVATE; do
             [ -n "${!k}" ] || { echo "::error::$k is empty — refusing to build unsigned/garbage-signed packages"; exit 1; }
           done
           printf '%s' "$DEB_KEY_PRIVATE" > /tmp/keys/deb.key && chmod 600 /tmp/keys/deb.key
           printf '%s' "$RPM_KEY_PRIVATE" > /tmp/keys/rpm.key && chmod 600 /tmp/keys/rpm.key
-          printf '%s' "$APK_KEY_PRIVATE" > /tmp/keys/apk.key && chmod 600 /tmp/keys/apk.key
-      - name: Build deb/rpm/apk for each arch
+      - name: Build deb/rpm for each arch
         run: bash build/package/linux/build_packages.sh "$VERSION" artifacts
       - uses: actions/upload-artifact@v4
         with: { name: linux-packages, path: dist/* }
@@ -270,7 +268,7 @@ jobs:
       - name: Collect release assets
         run: |
           mkdir -p release
-          find artifacts -type f \( -name '*.zip' -o -name '*.sha256' -o -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) -exec cp {} release/ \;
+          find artifacts -type f \( -name '*.zip' -o -name '*.sha256' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} release/ \;
           ls -al release/
       - uses: softprops/action-gh-release@v2
         with:
@@ -309,7 +307,7 @@ jobs:
           echo "::error::wheel(s) still missing 10 min after dispatching release.yml for v${VERSION} -- check that run"
           exit 1
 
-  # ── Publish to S3 (cli-dist.keboola.com/keboola-cli2/) and index the apt/rpm/apk
+  # ── Publish to S3 (cli-dist.keboola.com/keboola-cli2/) and index the apt/rpm
   #    repos so `apt-get install keboola-cli2` works. Real; needs AWS + GPG secrets.
   publish-s3:
     needs: [version, freeze, package-linux]
@@ -344,15 +342,13 @@ jobs:
           esac
       - name: Upload versioned assets
         run: |
-          mkdir -p up && find artifacts -type f \( -name '*.zip' -o -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.sha256' \) -exec cp {} up/ \;
+          mkdir -p up && find artifacts -type f \( -name '*.zip' -o -name '*.deb' -o -name '*.rpm' -o -name '*.sha256' \) -exec cp {} up/ \;
           aws s3 sync up/ "s3://${AWS_BUCKET_NAME}/${PUBLISH_PREFIX}/v${VERSION}/"
-      - name: Index apt/rpm/apk repos (signed)
+      - name: Index apt/rpm repos (signed)
         env:
           # No DEB_KEY_PUBLIC: the apt keyring is derived (dearmored) from DEB_KEY_PRIVATE.
           DEB_KEY_PRIVATE: ${{ secrets.DEB_KEY_PRIVATE }}
           RPM_KEY_PUBLIC: ${{ secrets.RPM_KEY_PUBLIC }}
-          APK_KEY_PRIVATE: ${{ secrets.APK_KEY_PRIVATE }}
-          APK_KEY_PUBLIC: ${{ secrets.APK_KEY_PUBLIC }}
         run: bash build/package/linux/index.sh "${AWS_BUCKET_NAME}" "${PUBLISH_PREFIX}"
 
   # ── Homebrew: render the formula from the template and push to the kbagent-owned tap.
@@ -449,17 +445,6 @@ jobs:
             wget -P /etc/apt/trusted.gpg.d "https://cli-dist.keboola.com/${PREFIX}/deb/keboola.gpg"
             echo "deb https://cli-dist.keboola.com/${PREFIX}/deb /" > /etc/apt/sources.list.d/keboola.list
             apt-get update && apt-get install -y keboola-cli2
-            kbagent --version | grep -q "${VERSION}"
-          '
-      - name: apk (Alpine)
-        if: ${{ !cancelled() }}   # run even if an earlier leg failed, so one run shows all results
-        run: |
-          docker run --rm -e PREFIX -e VERSION alpine sh -c '
-            set -eu
-            wget -O /etc/apk/keys/keboola.rsa.pub "https://cli-dist.keboola.com/${PREFIX}/apk/keboola.rsa.pub"
-            echo "https://cli-dist.keboola.com/${PREFIX}/apk" >> /etc/apk/repositories
-            apk update
-            apk add keboola-cli2
             kbagent --version | grep -q "${VERSION}"
           '
       - name: rpm (Fedora)
