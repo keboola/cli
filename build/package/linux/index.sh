@@ -43,7 +43,12 @@ publish_repo() {
   find . -path ./.git -prune -o -name "*.$fmt" -exec cp {} "$dir/" \;
   ( cd "$dir" && "$indexer" )
   [ -n "$pub_content" ] && printf '%s' "$pub_content" > "$dir/$pub_file"
-  aws s3 sync "$dir/" "s3://$BUCKET/$PREFIX/$fmt/"
+  # Index/metadata files (Packages, Release, repodata/*, keyrings) sit at STABLE paths
+  # that are overwritten each release, so they must NOT be cached long by CloudFront
+  # (default_ttl is 24h) or clients install stale versions. Upload them no-cache; the
+  # packages themselves have version-unique names, so cache them immutably.
+  aws s3 sync "$dir/" "s3://$BUCKET/$PREFIX/$fmt/" --exclude "*.$fmt" --cache-control "no-cache"
+  aws s3 sync "$dir/" "s3://$BUCKET/$PREFIX/$fmt/" --exclude "*" --include "*.$fmt" --cache-control "public, max-age=31536000, immutable"
 }
 
 index_deb() {
@@ -103,7 +108,10 @@ publish_apk() {
                ls "$d"*.apk >/dev/null 2>&1 || continue
                ( cd "$d" && apk index -o APKINDEX.tar.gz ./*.apk && abuild-sign -k /keboola.rsa APKINDEX.tar.gz )
              done'
-  aws s3 sync "$root/" "s3://$BUCKET/$PREFIX/apk/"
+  # As in publish_repo: APKINDEX.tar.gz + pubkey live at stable paths -> no-cache so
+  # CloudFront doesn't serve a stale index; the .apk packages are version-named -> immutable.
+  aws s3 sync "$root/" "s3://$BUCKET/$PREFIX/apk/" --exclude "*.apk" --cache-control "no-cache"
+  aws s3 sync "$root/" "s3://$BUCKET/$PREFIX/apk/" --exclude "*" --include "*.apk" --cache-control "public, max-age=31536000, immutable"
 }
 
 # deb: index_deb writes its own (dearmored) keboola.gpg, so pass no pub-key content.
