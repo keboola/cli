@@ -56,8 +56,9 @@ jobs:
     outputs:
       VERSION: ${{ steps.v.outputs.VERSION }}
       # "true" for a pre-release tag (has a -suffix, e.g. v0.0.1-dev.1). Pre-releases
-      # build + package + sign + GitHub pre-release ONLY; all external publishing
-      # (PyPI, S3 repo index, Homebrew, Chocolatey, WinGet) is skipped.
+      # build + package + sign, publish to S3 under the dev prefix (PUBLISH_PREFIX), and
+      # run test-install + a GitHub pre-release. The user-facing publishers (PyPI,
+      # Homebrew, Chocolatey, WinGet) are skipped — only real tags reach those.
       IS_PRERELEASE: ${{ steps.v.outputs.IS_PRERELEASE }}
       # S3 prefix to publish under: prod (`keboola-cli2`) for real releases, a separate
       # `keboola-cli2-dev` for pre-releases so a dev tag can exercise the full S3 publish
@@ -79,8 +80,9 @@ jobs:
           if printf '%s' "$VERSION" | grep -Eq '(a|b|rc)[0-9]+$|\.dev[0-9]+$|-'; then PRE=true; else PRE=false; fi
           echo "IS_PRERELEASE=$PRE" >> "$GITHUB_OUTPUT"
           # Pre-releases publish to a separate dev prefix (see PUBLISH_PREFIX output above).
-          if [ "$PRE" = true ]; then echo "PUBLISH_PREFIX=${S3_PREFIX}-dev"; else echo "PUBLISH_PREFIX=${S3_PREFIX}"; fi >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION prerelease=$PRE prefix=${S3_PREFIX}$([ "$PRE" = true ] && echo -dev)"
+          if [ "$PRE" = true ]; then PUBLISH_PREFIX="${S3_PREFIX}-dev"; else PUBLISH_PREFIX="${S3_PREFIX}"; fi
+          echo "PUBLISH_PREFIX=$PUBLISH_PREFIX" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION prerelease=$PRE prefix=$PUBLISH_PREFIX"
 
   # Reuse the per-PR gates against the tagged commit, plus changelog-check.
   gate:
@@ -314,6 +316,12 @@ jobs:
     # Runs on every tag. Pre-releases publish under the dev prefix (PUBLISH_PREFIX), so a
     # dev tag exercises the full publish + client install test without touching prod repos.
     if: startsWith(github.ref, 'refs/tags/')
+    # Serialize per prefix: the wipe + index steps mutate a shared repo prefix, so two
+    # concurrent tag runs (e.g. two dev tags) could delete/overwrite each other mid-publish.
+    # Queue (don't cancel) so an in-flight publish always finishes intact.
+    concurrency:
+      group: publish-s3-${{ needs.version.outputs.PUBLISH_PREFIX }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: release
     permissions:

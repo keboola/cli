@@ -17,10 +17,9 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT  # clean up temp dir + any key material on exit/failure
 
 if [ -z "${DEB_KEY_PRIVATE:-}" ]; then
-  # publish-s3 only runs on real (non-pre-release) tags, where the repo + key must
-  # exist for the downstream test-install job. Fail loudly rather than silently
-  # skipping and leaving test-install to fail with an obscure root cause.
-  echo "::error::DEB_KEY_PRIVATE not set — cannot sign/index the apt repo for a real release."
+  # Fail loudly: the key is required in the `release` environment for any tag (publish-s3
+  # runs on every tag now — real under the prod prefix, pre-release under the dev prefix).
+  echo "::error::DEB_KEY_PRIVATE not set — signing environment is misconfigured."
   exit 1
 fi
 
