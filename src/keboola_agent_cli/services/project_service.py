@@ -133,10 +133,11 @@ class ProjectService(BaseService):
         for alias in ordered:
             try:
                 if dry_run:
-                    # Validate existence (and the ephemeral guard) without
-                    # mutating: a missing alias has no persisted project.
-                    if self._config_store.get_project(alias) is None:
-                        raise ConfigError(f"Project '{alias}' not found.")
+                    # Apply the SAME validation as the live remove (missing
+                    # alias + ephemeral `__env__` guard) without mutating, so a
+                    # dry-run never reports an alias as removable that the real
+                    # run would reject.
+                    self._config_store.ensure_removable(alias)
                     removed.append(alias)
                 else:
                     self._config_store.remove_project(alias)

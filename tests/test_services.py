@@ -257,6 +257,30 @@ class TestBulkRemoveProjects:
         assert result["removed"] == ["a"]
         assert result["failed"] == []
 
+    def test_dry_run_rejects_ephemeral_env_project(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A dry-run must reject an ephemeral `__env__` project, matching the
+        live remove path (which raises ConfigError). Regression for the
+        dry-run-skipped-the-ephemeral-guard bug flagged in review."""
+        monkeypatch.setenv("KBAGENT_PROJECT_FROM_ENV", "1")
+        monkeypatch.setenv("KBC_TOKEN", "901-99999-fakeHeadlessTokenDoNotUseXXXXX")
+        monkeypatch.setenv("KBC_STORAGE_API_URL", "https://connection.keboola.com")
+        store = ConfigStore(config_dir=tmp_config_dir)
+        service = ProjectService(
+            config_store=store,
+            client_factory=lambda _u, _t: make_mock_client(),
+        )
+        # The env-synthesized project exists in memory...
+        assert store.get_project("__env__") is not None
+
+        result = service.bulk_remove_projects(["__env__"], dry_run=True)
+
+        # ...but must not be reported as removable.
+        assert result["removed"] == []
+        assert [f["alias"] for f in result["failed"]] == ["__env__"]
+        assert "environment" in result["failed"][0]["error"].lower()
+
 
 class TestEditProject:
     """Tests for ProjectService.edit_project()."""

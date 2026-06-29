@@ -21,6 +21,8 @@ export function ProjectsPage() {
   const [selectedAliases, setSelectedAliases] = useState<Set<string>>(new Set());
   // Aliases pending a remove-confirmation (single trash button or bulk action).
   const [confirmAliases, setConfirmAliases] = useState<string[] | null>(null);
+  // Inline banner for remove failures (partial or total request error).
+  const [removeNotice, setRemoveNotice] = useState<string | null>(null);
 
   const projectsQ = useQuery<{ projects: Project[] }>({
     queryKey: ["projects"],
@@ -49,11 +51,22 @@ export function ProjectsPage() {
       api.post<BulkDeleteResult>("/projects/bulk-delete", { aliases }),
     onSuccess: (res) => {
       setSelectedAliases(new Set());
+      // The detail pane may be showing a project that was just removed.
+      if (selected && res.removed.includes(selected.alias)) setSelected(null);
       qc.invalidateQueries({ queryKey: ["projects"] });
       if (res.failed.length > 0) {
-        const lines = res.failed.map((f) => `• ${f.alias}: ${f.error}`).join("\n");
-        alert(`Removed ${res.removed.length}; ${res.failed.length} failed:\n${lines}`);
+        const lines = res.failed.map((f) => `${f.alias} (${f.error})`).join(", ");
+        setRemoveNotice(
+          `Removed ${res.removed.length}; ${res.failed.length} failed: ${lines}`,
+        );
+      } else {
+        setRemoveNotice(null);
       }
+    },
+    onError: (err) => {
+      // A total request failure (network / 5xx) would otherwise be silent --
+      // the modal closes via onSettled with no feedback.
+      setRemoveNotice(err instanceof ApiError ? err.message : (err as Error).message);
     },
   });
 
@@ -87,6 +100,7 @@ export function ProjectsPage() {
 
   const confirmRemove = () => {
     if (!confirmAliases) return;
+    setRemoveNotice(null);
     bulkDeleteMu.mutate(confirmAliases, {
       onSettled: () => setConfirmAliases(null),
     });
@@ -129,6 +143,19 @@ export function ProjectsPage() {
           </>
         }
       />
+
+      {removeNotice ? (
+        <div className="flex items-start justify-between gap-2">
+          <ErrorBox message={removeNotice} />
+          <button
+            type="button"
+            className="nerd-btn text-xs shrink-0"
+            onClick={() => setRemoveNotice(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       {showAdd ? (
         <AddProject

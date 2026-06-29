@@ -5,8 +5,9 @@ import type { ReactNode } from "react";
 /**
  * Lightweight confirmation dialog matching the app's modal style (see
  * ManageTokenModal). Replaces the native ``window.confirm()`` for actions that
- * deserve a clearer, on-brand prompt. Esc or a backdrop click cancels; the
- * confirm button is focused on open so Enter confirms.
+ * deserve a clearer, on-brand prompt. Esc or a backdrop click cancels. On open
+ * we focus Cancel for ``danger`` modals (so a stray Enter does NOT fire the
+ * destructive action) and the confirm button otherwise.
  */
 export function ConfirmModal({
   title,
@@ -31,15 +32,18 @@ export function ConfirmModal({
   onCancel: () => void;
 }) {
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    confirmRef.current?.focus();
+    // Danger modals focus Cancel so a stray Enter cannot fire the destructive
+    // action; non-danger modals focus Confirm for fast keyboard confirmation.
+    (danger ? cancelRef : confirmRef).current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !busy) onCancel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onCancel]);
+  }, [danger, busy, onCancel]);
 
   return (
     <div
@@ -81,7 +85,13 @@ export function ConfirmModal({
         ) : null}
 
         <div className="flex gap-2 justify-end">
-          <button type="button" className="nerd-btn text-xs" onClick={onCancel} disabled={busy}>
+          <button
+            ref={cancelRef}
+            type="button"
+            className="nerd-btn text-xs"
+            onClick={onCancel}
+            disabled={busy}
+          >
             {cancelLabel}
           </button>
           <button
