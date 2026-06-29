@@ -302,3 +302,44 @@ Rules:
   exchanged on return. Real swaps observed at ~10s on Snowflake.
 - The swap is symmetric; there is no rollback besides swapping again
   (or aborting the dev branch).
+
+## BigQuery repartition via `create-table --source-table-id` (since 0.66.0)
+
+On **BigQuery** you can produce the repartitioned/re-clustered copy in a
+single call instead of hand-writing a CTAS transformation: `create-table`
+copies an existing table's data into a new partition/clustering layout,
+then `swap-tables` flips it into place.
+
+```bash
+# 1. Copy in.c-main.events into a new DAY-partitioned, tenant-clustered table.
+#    Schema (columns, NOT NULL) is derived from the source -> NO --column.
+kbagent storage create-table --project prod --bucket-id in.c-main \
+  --name events_repart --source-table-id in.c-main.events \
+  --time-partitioning-type DAY --time-partitioning-field created_at \
+  --clustering-field tenant_id --primary-key id
+
+# 2. Inspect the copy, then swap it into the original's place.
+kbagent storage table-detail --project prod --table-id in.c-main.events_repart
+kbagent storage swap-tables --project prod --table-id in.c-main.events \
+  --target-table-id in.c-main.events_repart --branch <DEFAULT_BRANCH_ID> --yes
+```
+
+Rules:
+- **BigQuery only.** `--source-table-id` and the partition/clustering flags
+  (`--time-partitioning-*`, `--range-partitioning-*`, `--clustering-field`)
+  are rejected on a non-BigQuery project by a one-call backend pre-flight
+  (exit 2) before the create is issued. The connection API also rejects
+  them server-side (422) as a backstop.
+- **`--column` XOR `--source-table-id`.** The two are mutually exclusive;
+  the schema in source mode is derived from the source, so `--column` /
+  `--not-null` / `--default` must not be supplied.
+- **Partitioning shapes.** Time partitioning needs `--time-partitioning-type`
+  (DAY/HOUR/MONTH/YEAR); range partitioning needs all of
+  `--range-partitioning-field/-start/-end/-interval` (bounds are strings).
+  Time and range partitioning are mutually exclusive.
+- **Sources.** Regular tables, linked-bucket tables, and persisted aliases
+  (materialized views) are valid copy sources. A non-persisted alias is
+  rejected 422.
+- The partition/clustering flags also work on a plain `--column` create
+  (same BigQuery-only rule) when you want a fresh empty table in a specific
+  layout rather than a copy.

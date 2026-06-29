@@ -345,7 +345,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     time. Response includes `legacy_branch_storage: true` and human mode prints a
     warning when this applies. See storage-types-workflow.md.
 
-  kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME --column col:TYPE[(length)] [...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--branch ID] [--if-not-exists]
+  kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME [--column col:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
     Create a typed table. --column repeatable.
     - --if-not-exists (since 0.47.0): opt-in idempotency. On a duplicate-display-name failure,
       probe get-table-detail at the expected id and, if the table really exists, return
@@ -359,6 +359,20 @@ remain branch-aware because modifying a dev branch is the expected intent.
       The API validates type/length per backend; e.g. INTEGER(10) is rejected with "'10' is not valid length for INTEGER".
     - --not-null COL marks a column NOT NULL (nullable=false). Must match a defined --column name.
     - --default NAME=VALUE sets a DEFAULT expression. Booleans must be lowercase (true/false).
+    - --source-table-id (since 0.66.0, BigQuery only): create the table by COPYING an existing
+      table's data into the requested partition/clustering layout instead of from --column specs.
+      The schema is derived from the source, so --column (and --not-null/--default) must NOT be used;
+      the two are mutually exclusive. --source-branch-id resolves the source in another branch.
+      This is the supported way to repartition a populated BigQuery table -- then promote it with
+      `storage swap-tables`. Aliases and linked-bucket tables are valid sources.
+    - Partition/clustering layout (since 0.66.0, BigQuery only; works in BOTH --column and
+      --source-table-id mode): --time-partitioning-type (DAY/HOUR/MONTH/YEAR; required when any
+      --time-partitioning-* is set) + optional --time-partitioning-field/-expiration-ms; OR
+      --range-partitioning-field/-start/-end/-interval (all four required together; range bounds
+      are strings). Time and range partitioning are mutually exclusive. --clustering-field repeatable.
+    - BigQuery pre-flight guard: when any source/partition/clustering flag is used, create-table
+      verifies the project backend first and fails fast (exit 2) on a non-BigQuery project before
+      issuing the create. Plain --column creates are unaffected.
     - In a dev branch, the bucket is auto-materialized if it has not yet been written to in the branch
       (response includes auto_created_bucket=true). Mirrors the official Keboola Go CLI's EnsureBucketExists.
     - Auto-materialized buckets get KBC.createdBy.branch.id system metadata stamped on them,
@@ -371,6 +385,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Branch-aware. Examples:
       --column pk:VARCHAR(40) --column amount:NUMERIC(18,2) --not-null pk --default amount=0
       --column ts:TIMESTAMP_TZ --column meta:VARIANT
+      # BigQuery repartition: copy a populated table into a new layout, then swap it in place
+      --name events_repart --source-table-id in.c-main.events --time-partitioning-type DAY \\
+        --time-partitioning-field created_at --clustering-field tenant_id --primary-key id
+      then: kbagent storage swap-tables --table-id in.c-main.events --target-table-id in.c-main.events_repart --branch ID
 
   kbagent storage upload-table --project NAME --table-id TABLE_ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--branch ID]
     Upload CSV into a table. Auto-creates bucket and table if missing (columns inferred as STRING from CSV header).

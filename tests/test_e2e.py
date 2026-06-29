@@ -471,6 +471,13 @@ class TestFullE2E:
         _step(15, "storage load-file", "upload CSV as file then load into table")
         self._test_load_file(table_id)
 
+        _step(
+            "15.1",
+            "storage create-table --source-table-id + swap-tables",
+            "BigQuery repartition workflow (backend-aware)",
+        )
+        self._test_create_table_from_source(bucket_id, table_id)
+
         # ==============================================================
         # PHASE 4: Config operations (create via API, test via CLI)
         # ==============================================================
@@ -834,6 +841,83 @@ class TestFullE2E:
         table_id = data["data"]["table_id"]
         assert table_id
         return table_id
+
+    def _test_create_table_from_source(self, bucket_id: str, source_table_id: str) -> None:
+        """create-table --source-table-id (+ swap-tables). BigQuery-only feature.
+
+        On a BigQuery project: copy the populated source into a new table with a
+        clustering layout, then swap the two. On any other backend: assert the
+        pre-flight guard rejects the request (exit 2) before issuing the create.
+        """
+        detail = self._run_ok(
+            "storage", "bucket-detail", "--project", self.alias, "--bucket-id", bucket_id
+        )["data"]
+        backend = (detail.get("backend") or detail.get("sql_dialect") or "").lower()
+
+        repart_name = f"{RUN_ID.replace('-', '_')}_repart"
+        repart_id = f"{bucket_id}.{repart_name}"
+
+        if backend != "bigquery":
+            # Pre-flight guard: a non-BigQuery backend fails fast with exit 2 and
+            # never issues the create (no table is left behind).
+            result = self._run(
+                "storage",
+                "create-table",
+                "--project",
+                self.alias,
+                "--bucket-id",
+                bucket_id,
+                "--name",
+                repart_name,
+                "--source-table-id",
+                source_table_id,
+                "--clustering-field",
+                "id",
+            )
+            assert result.exit_code == 2, (
+                f"Expected exit 2 from BigQuery guard, got {result.exit_code}:\n{result.output}"
+            )
+            assert "BigQuery" in result.output
+            return
+
+        # BigQuery: create the repartitioned copy from the populated source.
+        created = self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            repart_name,
+            "--source-table-id",
+            source_table_id,
+            "--clustering-field",
+            "id",
+            "--primary-key",
+            "id",
+        )["data"]
+        assert created["table_id"] == repart_id
+        assert created["source_table_id"] == source_table_id
+
+        # Swap the repartitioned copy into the original table's place. Storage
+        # swap requires a branch; the default branch works.
+        branch_id = self._run_ok("branch", "list", "--project", self.alias)["data"]["branches"][0][
+            "id"
+        ]
+        self._run_ok(
+            "storage",
+            "swap-tables",
+            "--project",
+            self.alias,
+            "--table-id",
+            source_table_id,
+            "--target-table-id",
+            repart_id,
+            "--branch",
+            str(branch_id),
+            "--yes",
+        )
 
     def _test_upload_table(self, table_id: str) -> None:
         """Upload CSV data to the table."""

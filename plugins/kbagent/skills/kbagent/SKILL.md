@@ -198,7 +198,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List storage tables from one or more projects | `kbagent storage tables` |
 | Show detailed table info including columns and types | `kbagent storage table-detail --project PROJECT --table-id TABLE-ID` |
 | Create a new storage bucket | `kbagent storage create-bucket --project PROJECT --stage STAGE --name NAME` |
-| Create a new storage table with typed columns | `kbagent storage create-table --project PROJECT --bucket-id BUCKET-ID --name NAME --column COLUMN` |
+| Create a new storage table with typed columns | `kbagent storage create-table --project PROJECT --bucket-id BUCKET-ID --name NAME` |
 | Upload a CSV file into a storage table | `kbagent storage upload-table --project PROJECT --table-id TABLE-ID --file FILE` |
 | Export a storage table to a local CSV file | `kbagent storage download-table --project PROJECT --table-id TABLE-ID` |
 | Delete one or more storage tables | `kbagent storage delete-table --project PROJECT --table-id TABLE-ID` |

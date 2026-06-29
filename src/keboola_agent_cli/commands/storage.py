@@ -527,14 +527,15 @@ def storage_create_table(
         "--name",
         help="Table name",
     ),
-    column: list[str] = typer.Option(
-        ...,
+    column: list[str] | None = typer.Option(
+        None,
         "--column",
         help=(
             "Column as 'name:TYPE' or 'name:TYPE(length)'. Repeatable. Base types: "
             "STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP. Native types "
             "are passed through to the Storage API (e.g. 'pk:VARCHAR(40)', "
-            "'amount:NUMERIC(18,2)', 'ts:TIMESTAMP_TZ', 'meta:VARIANT')."
+            "'amount:NUMERIC(18,2)', 'ts:TIMESTAMP_TZ', 'meta:VARIANT'). Required "
+            "unless --source-table-id is given; the two are mutually exclusive."
         ),
     ),
     primary_key: list[str] | None = typer.Option(
@@ -554,6 +555,61 @@ def storage_create_table(
             "Column default as 'name=value'. Can be repeated. Boolean values must be "
             "lowercase ('true'/'false') per Keboola API validation."
         ),
+    ),
+    source_table_id: str | None = typer.Option(
+        None,
+        "--source-table-id",
+        help=(
+            "Create the table by copying an existing table's data into the "
+            "requested partition/clustering layout (BigQuery only). The column "
+            "definition is derived from the source, so --column must not be used. "
+            "Pair with 'swap-tables' to repartition a populated table in place."
+        ),
+    ),
+    source_branch_id: int | None = typer.Option(
+        None,
+        "--source-branch-id",
+        help="Branch ID the source table is resolved in (defaults to the request branch).",
+    ),
+    time_partitioning_type: str | None = typer.Option(
+        None,
+        "--time-partitioning-type",
+        help="BigQuery time partitioning type, e.g. DAY, HOUR, MONTH, YEAR.",
+    ),
+    time_partitioning_field: str | None = typer.Option(
+        None,
+        "--time-partitioning-field",
+        help="Column used for time partitioning (defaults to ingestion time if omitted).",
+    ),
+    time_partitioning_expiration_ms: str | None = typer.Option(
+        None,
+        "--time-partitioning-expiration-ms",
+        help="Milliseconds to keep storage for a partition (BigQuery).",
+    ),
+    range_partitioning_field: str | None = typer.Option(
+        None,
+        "--range-partitioning-field",
+        help="Column used for integer-range partitioning (BigQuery).",
+    ),
+    range_partitioning_start: str | None = typer.Option(
+        None,
+        "--range-partitioning-start",
+        help="Start of the range partitioning, inclusive (required with other range flags).",
+    ),
+    range_partitioning_end: str | None = typer.Option(
+        None,
+        "--range-partitioning-end",
+        help="End of the range partitioning, exclusive (required with other range flags).",
+    ),
+    range_partitioning_interval: str | None = typer.Option(
+        None,
+        "--range-partitioning-interval",
+        help="Width of each range interval (required with other range flags).",
+    ),
+    clustering_field: list[str] | None = typer.Option(
+        None,
+        "--clustering-field",
+        help="Column used for clustering (BigQuery). Repeatable.",
     ),
     branch: int | None = typer.Option(
         None,
@@ -593,6 +649,14 @@ def storage_create_table(
             --column ts:TIMESTAMP_TZ --column is_paid:BOOLEAN \\
             --primary-key pk --not-null pk --not-null amount \\
             --default amount=0 --default is_paid=false
+
+        # BigQuery: repartition a populated table by copying it into a new
+        # layout, then swap it into place (no --column -- schema derives from
+        # the source):
+        kbagent storage create-table --project p --bucket-id in.c-main \\
+            --name events_repart --source-table-id in.c-main.events \\
+            --time-partitioning-type DAY --time-partitioning-field created_at \\
+            --clustering-field tenant_id --primary-key id --branch 123
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
@@ -610,6 +674,16 @@ def storage_create_table(
             not_null_columns=not_null,
             defaults=default,
             if_not_exists=if_not_exists,
+            source_table_id=source_table_id,
+            source_branch_id=source_branch_id,
+            time_partitioning_type=time_partitioning_type,
+            time_partitioning_field=time_partitioning_field,
+            time_partitioning_expiration_ms=time_partitioning_expiration_ms,
+            range_partitioning_field=range_partitioning_field,
+            range_partitioning_start=range_partitioning_start,
+            range_partitioning_end=range_partitioning_end,
+            range_partitioning_interval=range_partitioning_interval,
+            clustering_fields=clustering_field,
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
@@ -648,9 +722,23 @@ def storage_create_table(
                     f"  [yellow]Note:[/yellow] bucket {result['bucket_id']} was "
                     f"auto-materialized in this branch."
                 )
+            if result.get("source_table_id"):
+                formatter.console.print(f"  Copied from: {result['source_table_id']}")
             if result["primary_key"]:
                 formatter.console.print(f"  Primary key: {', '.join(result['primary_key'])}")
-            formatter.console.print(f"  Columns: {', '.join(result['columns'])}")
+            if result.get("columns"):
+                formatter.console.print(f"  Columns: {', '.join(result['columns'])}")
+            time_partitioning = result.get("time_partitioning")
+            if time_partitioning:
+                field = time_partitioning.get("field")
+                suffix = f" on {field}" if field else " (ingestion time)"
+                formatter.console.print(f"  Time partitioning: {time_partitioning['type']}{suffix}")
+            range_partitioning = result.get("range_partitioning")
+            if range_partitioning:
+                formatter.console.print(f"  Range partitioning: {range_partitioning['field']}")
+            clustering = result.get("clustering")
+            if clustering:
+                formatter.console.print(f"  Clustering: {', '.join(clustering['fields'])}")
             if result.get("legacy_branch_storage"):
                 formatter.console.print(_LEGACY_BRANCH_STORAGE_WARNING)
 
