@@ -909,12 +909,18 @@ class StorageService(BaseService):
         Raises:
             ValueError: Malformed column spec or ``--default`` assignment;
                 ``--not-null`` / ``--default`` references an unknown column;
-                ``columns`` and ``source`` both/neither given; incomplete or
-                conflicting partitioning flags; or BigQuery-only features
-                requested on a non-BigQuery backend.
+                ``columns`` and ``source`` both/neither given;
+                ``source_branch_id`` given without ``source_table_id``;
+                incomplete or conflicting partitioning flags; or BigQuery-only
+                features requested on a non-BigQuery backend.
         """
         not_null_set = set(not_null_columns or [])
         defaults_map = _parse_default_assignments(defaults)
+
+        # --source-branch-id only qualifies a source table; on its own it would
+        # be silently dropped (source mode never activates). Fail fast instead.
+        if source_branch_id is not None and source_table_id is None:
+            raise ValueError("--source-branch-id requires --source-table-id.")
 
         source = _build_source(source_table_id, source_branch_id)
         time_partitioning, range_partitioning, clustering = _build_bigquery_layout(
@@ -1063,6 +1069,14 @@ class StorageService(BaseService):
                             ),
                             "action": "skipped",
                             "skip_reason": "table already exists",
+                            # Keep the JSON envelope shape identical to the
+                            # "created" path; the existing table's layout is not
+                            # re-derived here, so the source/layout keys are null.
+                            "source_table_id": None,
+                            "source_branch_id": None,
+                            "time_partitioning": None,
+                            "range_partitioning": None,
+                            "clustering": None,
                         }
                 raise
             legacy_branch_storage = _detect_legacy_branch_storage(client, branch_id)

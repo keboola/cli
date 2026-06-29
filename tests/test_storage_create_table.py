@@ -193,6 +193,17 @@ class TestCreateTableServiceValidation:
                 defaults=["id=0"],
             )
 
+    def test_source_branch_id_without_source_table_rejected(self, tmp_path: Path) -> None:
+        service = _make_service(_make_store(tmp_path), MagicMock())
+        with pytest.raises(ValueError, match="--source-branch-id requires --source-table-id"):
+            service.create_table(
+                alias="test",
+                bucket_id="in.c-main",
+                name="t",
+                columns=["id:INTEGER"],
+                source_branch_id=42,
+            )
+
     def test_incomplete_range_partitioning_rejected(self, tmp_path: Path) -> None:
         service = _make_service(_make_store(tmp_path), MagicMock())
         with pytest.raises(ValueError, match="--range-partitioning requires all"):

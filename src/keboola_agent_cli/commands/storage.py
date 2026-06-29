@@ -735,7 +735,16 @@ def storage_create_table(
                 formatter.console.print(f"  Time partitioning: {time_partitioning['type']}{suffix}")
             range_partitioning = result.get("range_partitioning")
             if range_partitioning:
-                formatter.console.print(f"  Range partitioning: {range_partitioning['field']}")
+                bounds = range_partitioning.get("range") or {}
+                bounds_suffix = ""
+                if bounds:
+                    bounds_suffix = (
+                        f" [{bounds.get('start')}, {bounds.get('end')})"
+                        f" step {bounds.get('interval')}"
+                    )
+                formatter.console.print(
+                    f"  Range partitioning: {range_partitioning['field']}{bounds_suffix}"
+                )
             clustering = result.get("clustering")
             if clustering:
                 formatter.console.print(f"  Clustering: {', '.join(clustering['fields'])}")

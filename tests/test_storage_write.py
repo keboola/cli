@@ -1092,6 +1092,13 @@ class TestCreateTableIfNotExists:
         assert result["action"] == "skipped"
         assert result["skip_reason"] == "table already exists"
         assert result["table_id"] == "in.c-b.users"
+        # The skipped envelope carries the same source/layout keys as the
+        # "created" path (null here) so the JSON schema stays consistent.
+        assert result["source_table_id"] is None
+        assert result["source_branch_id"] is None
+        assert result["time_partitioning"] is None
+        assert result["range_partitioning"] is None
+        assert result["clustering"] is None
         mock_client.get_table_detail.assert_called_once_with("in.c-b.users", branch_id=None)
         mock_client.close.assert_called_once()
 
