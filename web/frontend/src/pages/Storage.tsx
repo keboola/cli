@@ -334,7 +334,7 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
   const effectiveBranchId = branchId ?? defaultBranch?.id ?? null;
   const isProduction = branchId === null;
 
-  const [mode, setMode] = useState<"time" | "range">("time");
+  const [mode, setMode] = useState<"time" | "range" | "none">("time");
   const [timeType, setTimeType] = useState("DAY");
   const [timeField, setTimeField] = useState("");
   const [timeExpirationMs, setTimeExpirationMs] = useState("");
@@ -355,7 +355,9 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
   const [swapFailed, setSwapFailed] = useState(false);
 
   const rangeComplete = !!(rangeField && rangeStart && rangeEnd && rangeInterval);
-  const layoutValid = mode === "time" ? !!timeType : rangeComplete;
+  // "none" => no partitioning (de-partition; clustering optional) and is always
+  // valid on its own. Time needs a type; range needs all four bounds.
+  const layoutValid = mode === "none" ? true : mode === "time" ? !!timeType : rangeComplete;
   const branchReady = effectiveBranchId !== null;
   const canSubmit = !!project && branchReady && layoutValid && phase === "idle";
 
@@ -385,12 +387,14 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
         createBody.time_partitioning_type = timeType;
         if (timeField) createBody.time_partitioning_field = timeField;
         if (timeExpirationMs) createBody.time_partitioning_expiration_ms = timeExpirationMs;
-      } else {
+      } else if (mode === "range") {
         createBody.range_partitioning_field = rangeField;
         createBody.range_partitioning_start = rangeStart;
         createBody.range_partitioning_end = rangeEnd;
         createBody.range_partitioning_interval = rangeInterval;
       }
+      // mode === "none": no partitioning fields -- the copy is unpartitioned
+      // (clustering, if any, still applies).
       await api.post(`/storage/tables/${encodeURIComponent(project!)}`, createBody);
 
       // 2) Swap the new-layout copy into the original's place. If this fails the
@@ -532,7 +536,7 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
       <div className="space-y-2">
         <div className="text-[10px] uppercase tracking-wider text-zinc-500">Partitioning</div>
         <div className="flex gap-2">
-          {(["time", "range"] as const).map((m) => (
+          {(["time", "range", "none"] as const).map((m) => (
             <button
               key={m}
               type="button"
@@ -542,12 +546,17 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
               disabled={busy}
               onClick={() => setMode(m)}
             >
-              {m === "time" ? "Time" : "Range (integer)"}
+              {m === "time" ? "Time" : m === "range" ? "Range (integer)" : "None"}
             </button>
           ))}
         </div>
 
-        {mode === "time" ? (
+        {mode === "none" ? (
+          <div className="text-xs text-zinc-500">
+            No partitioning — the table is copied unpartitioned (clustering below still
+            applies). Use this to remove an existing partition layout.
+          </div>
+        ) : mode === "time" ? (
           <div className="grid grid-cols-3 gap-2">
             <label className="space-y-1">
               <span className="text-[10px] text-zinc-500">Type</span>
