@@ -26,12 +26,27 @@ class CreateBucket(BaseModel):
 class CreateTable(BaseModel):
     bucket_id: str
     name: str
-    columns: list[str]
+    # Optional: exactly one of `columns` / `source_table_id` is required, mirroring
+    # the CLI. Source mode derives the schema from an existing (BigQuery) table.
+    columns: list[str] | None = None
     primary_key: list[str] | None = None
     not_null_columns: list[str] | None = None
     defaults: list[str] | None = None
     branch_id: int | None = None
     if_not_exists: bool = False
+    # Source-copy + BigQuery partition/clustering layout. BigQuery-only; the
+    # service applies a pre-flight backend guard. Shapes mirror
+    # `kbagent storage create-table` (see services.storage_service.create_table).
+    source_table_id: str | None = None
+    source_branch_id: int | None = None
+    time_partitioning_type: str | None = None
+    time_partitioning_field: str | None = None
+    time_partitioning_expiration_ms: str | None = None
+    range_partitioning_field: str | None = None
+    range_partitioning_start: str | None = None
+    range_partitioning_end: str | None = None
+    range_partitioning_interval: str | None = None
+    clustering_fields: list[str] | None = None
 
 
 class DescribeBucket(BaseModel):
@@ -267,6 +282,16 @@ def create_table(
         not_null_columns=body.not_null_columns,
         defaults=body.defaults,
         if_not_exists=body.if_not_exists,
+        source_table_id=body.source_table_id,
+        source_branch_id=body.source_branch_id,
+        time_partitioning_type=body.time_partitioning_type,
+        time_partitioning_field=body.time_partitioning_field,
+        time_partitioning_expiration_ms=body.time_partitioning_expiration_ms,
+        range_partitioning_field=body.range_partitioning_field,
+        range_partitioning_start=body.range_partitioning_start,
+        range_partitioning_end=body.range_partitioning_end,
+        range_partitioning_interval=body.range_partitioning_interval,
+        clustering_fields=body.clustering_fields,
     )
 
 

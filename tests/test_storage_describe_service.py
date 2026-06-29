@@ -747,3 +747,45 @@ class TestGetTableDetailDescriptionExtraction:
 
         assert result["rows_count"] == 0
         assert result["data_size_bytes"] == 0
+
+    def test_backend_surfaced_from_bucket(self, tmp_path: Path) -> None:
+        """The owning bucket's backend is exposed so the web UI can gate
+        BigQuery-only features (repartition) on it."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {
+            "id": "in.c-sales.orders",
+            "name": "orders",
+            "displayName": "orders",
+            "bucket": {"id": "in.c-sales", "backend": "bigquery"},
+            "columns": ["a"],
+            "primaryKey": [],
+            "columnMetadata": {},
+            "metadata": [],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        assert result["backend"] == "bigquery"
+
+    def test_backend_defaults_to_empty_when_absent(self, tmp_path: Path) -> None:
+        """A bucket object without a backend key yields an empty string, not a
+        KeyError -- the UI simply hides the BigQuery-only tab."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {
+            "id": "in.c-sales.orders",
+            "name": "orders",
+            "displayName": "orders",
+            "bucket": {"id": "in.c-sales"},
+            "columns": ["a"],
+            "primaryKey": [],
+            "columnMetadata": {},
+            "metadata": [],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        assert result["backend"] == ""

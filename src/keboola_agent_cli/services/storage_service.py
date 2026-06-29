@@ -696,6 +696,9 @@ class StorageService(BaseService):
             "name": table.get("name", ""),
             "display_name": table.get("displayName", ""),
             "bucket_id": table.get("bucket", {}).get("id", ""),
+            # Storage backend of the owning bucket (e.g. "snowflake", "bigquery").
+            # The web UI keys BigQuery-only features (repartition) off this.
+            "backend": table.get("bucket", {}).get("backend", ""),
             "description": description,
             "columns": columns,
             "column_details": column_details,
