@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from ..dependencies import ServiceRegistry, get_registry
 
@@ -47,6 +47,22 @@ class CreateTable(BaseModel):
     range_partitioning_end: str | None = None
     range_partitioning_interval: str | None = None
     clustering_fields: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _columns_xor_source(self) -> CreateTable:
+        """Enforce the columns/source XOR at the request boundary so a bad body
+        returns a clean 422 instead of bubbling up as a 500 from the service.
+
+        This mirrors the first two checks in ``StorageService.create_table``;
+        the service stays the source of truth for the full ruleset (not-null /
+        default placement, partitioning completeness, the BigQuery backend
+        guard) and for the CLI path, so a small overlap here is deliberate.
+        """
+        if self.columns and self.source_table_id:
+            raise ValueError("columns and source_table_id are mutually exclusive")
+        if not self.columns and not self.source_table_id:
+            raise ValueError("one of columns or source_table_id is required")
+        return self
 
 
 class DescribeBucket(BaseModel):

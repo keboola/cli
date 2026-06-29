@@ -297,7 +297,11 @@ function tabsFor(d: TableDetail | undefined): DrawerTab[] {
 }
 
 const repartInputCls =
-  "w-full bg-transparent border border-zinc-200 dark:border-zinc-800 rounded px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300 focus:outline-none focus:border-keboola";
+  "w-full bg-transparent border border-zinc-200 dark:border-zinc-800 rounded px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300 focus:outline-none focus:border-keboola disabled:opacity-50 disabled:cursor-not-allowed";
+
+// BigQuery allows at most 4 clustering fields. We cap the picker so the server
+// never has to reject an over-long list with a less obvious error.
+const MAX_CLUSTERING_FIELDS = 4;
 
 // Repartition a (BigQuery) table into a new partition/clustering layout.
 //
@@ -345,6 +349,10 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [phase, setPhase] = useState<"idle" | "creating" | "swapping" | "done">("idle");
   const [error, setError] = useState<string | null>(null);
+  // True once the copy exists but the swap failed: the sibling table is left
+  // behind, so we offer an explicit cleanup. (The copy itself is idempotent via
+  // if_not_exists, so plain "Repartition" also safely retries just the swap.)
+  const [swapFailed, setSwapFailed] = useState(false);
 
   const rangeComplete = !!(rangeField && rangeStart && rangeEnd && rangeInterval);
   const layoutValid = mode === "time" ? !!timeType : rangeComplete;
@@ -357,13 +365,19 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
   const run = useMutation({
     mutationFn: async () => {
       setError(null);
+      setSwapFailed(false);
       // 1) Create the new-layout copy from the source (original) table.
+      //    if_not_exists makes this idempotent: if a previous attempt already
+      //    created the copy (e.g. the swap then failed), the retry skips the
+      //    create and proceeds straight to the swap instead of erroring with
+      //    "table already exists".
       setPhase("creating");
       const createBody: Record<string, unknown> = {
         bucket_id: d.bucket_id,
         name: tempName,
         source_table_id: d.table_id,
         branch_id: effectiveBranchId,
+        if_not_exists: true,
         primary_key: d.primary_key.length ? d.primary_key : undefined,
         clustering_fields: clustering.length ? clustering : undefined,
       };
@@ -379,12 +393,18 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
       }
       await api.post(`/storage/tables/${encodeURIComponent(project!)}`, createBody);
 
-      // 2) Swap the new-layout copy into the original's place.
+      // 2) Swap the new-layout copy into the original's place. If this fails the
+      //    copy is left behind, so flag it for the cleanup affordance.
       setPhase("swapping");
-      await api.post(
-        `/storage/tables/${encodeURIComponent(project!)}/${encodeURIComponent(d.table_id)}/swap`,
-        { target_table_id: tempTableId, branch_id: effectiveBranchId },
-      );
+      try {
+        await api.post(
+          `/storage/tables/${encodeURIComponent(project!)}/${encodeURIComponent(d.table_id)}/swap`,
+          { target_table_id: tempTableId, branch_id: effectiveBranchId },
+        );
+      } catch (e) {
+        setSwapFailed(true);
+        throw e;
+      }
       setPhase("done");
     },
     onError: (e) => {
@@ -411,6 +431,24 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tables"] });
       onClose();
+    },
+  });
+
+  // Cleanup after a failed swap: remove the leftover copy and return to the
+  // form so the user can adjust and try again (does not close the drawer).
+  const cleanup = useMutation({
+    mutationFn: () =>
+      api.delete(`/storage/tables/${encodeURIComponent(project!)}`, {
+        query: {
+          table_id: tempTableId,
+          branch_id: effectiveBranchId ?? undefined,
+          force: true,
+        },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tables"] });
+      setSwapFailed(false);
+      setError(null);
     },
   });
 
@@ -498,7 +536,10 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
             <button
               key={m}
               type="button"
-              className={`nerd-btn text-xs ${mode === m ? "border-keboola text-keboola" : ""}`}
+              className={`nerd-btn text-xs disabled:opacity-50 disabled:cursor-not-allowed ${
+                mode === m ? "border-keboola text-keboola" : ""
+              }`}
+              disabled={busy}
               onClick={() => setMode(m)}
             >
               {m === "time" ? "Time" : "Range (integer)"}
@@ -513,6 +554,7 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
               <select
                 className={repartInputCls}
                 value={timeType}
+                disabled={busy}
                 onChange={(e) => setTimeType(e.target.value)}
               >
                 {["DAY", "HOUR", "MONTH", "YEAR"].map((t) => (
@@ -527,6 +569,7 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
               <select
                 className={repartInputCls}
                 value={timeField}
+                disabled={busy}
                 onChange={(e) => setTimeField(e.target.value)}
               >
                 <option value="">(ingestion time)</option>
@@ -542,6 +585,7 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
               <input
                 className={repartInputCls}
                 value={timeExpirationMs}
+                disabled={busy}
                 onChange={(e) => setTimeExpirationMs(e.target.value)}
                 placeholder="e.g. 7776000000"
               />
@@ -554,6 +598,7 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
               <select
                 className={repartInputCls}
                 value={rangeField}
+                disabled={busy}
                 onChange={(e) => setRangeField(e.target.value)}
               >
                 <option value="">(select)</option>
@@ -569,6 +614,7 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
               <input
                 className={repartInputCls}
                 value={rangeStart}
+                disabled={busy}
                 onChange={(e) => setRangeStart(e.target.value)}
                 placeholder="0"
               />
@@ -578,6 +624,7 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
               <input
                 className={repartInputCls}
                 value={rangeEnd}
+                disabled={busy}
                 onChange={(e) => setRangeEnd(e.target.value)}
                 placeholder="100000"
               />
@@ -587,6 +634,7 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
               <input
                 className={repartInputCls}
                 value={rangeInterval}
+                disabled={busy}
                 onChange={(e) => setRangeInterval(e.target.value)}
                 placeholder="1000"
               />
@@ -598,17 +646,21 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
       {/* Clustering */}
       <div className="space-y-2">
         <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-          Clustering fields (optional, ordered by selection)
+          Clustering fields (optional, ordered by selection, max {MAX_CLUSTERING_FIELDS})
         </div>
         <div className="flex flex-wrap gap-1.5">
           {d.columns.map((c) => {
             const idx = clustering.indexOf(c);
             const on = idx !== -1;
+            const atLimit = !on && clustering.length >= MAX_CLUSTERING_FIELDS;
             return (
               <button
                 key={c}
                 type="button"
-                className={`nerd-btn text-xs ${on ? "border-keboola text-keboola" : ""}`}
+                className={`nerd-btn text-xs disabled:opacity-50 disabled:cursor-not-allowed ${
+                  on ? "border-keboola text-keboola" : ""
+                }`}
+                disabled={busy || atLimit}
                 onClick={() => toggleCluster(c)}
               >
                 {on ? `${idx + 1}. ` : ""}
@@ -620,6 +672,32 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
       </div>
 
       {error ? <ErrorBox message={error} /> : null}
+
+      {swapFailed ? (
+        <div className="flex items-start gap-2 rounded border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <div className="space-y-2">
+            <div>
+              The copy <span className="font-mono">{tempTableId}</span> was created but the swap
+              failed. Click <strong>Repartition</strong> to retry just the swap, or delete the
+              leftover copy.
+            </div>
+            <button
+              type="button"
+              className="nerd-btn text-xs flex items-center gap-1 hover:text-red-600 dark:hover:text-red-400"
+              disabled={cleanup.isPending}
+              onClick={() => cleanup.mutate()}
+            >
+              {cleanup.isPending ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <Trash2 className="w-3 h-3" />
+              )}
+              Delete leftover {tempName}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {confirmOpen ? (
         <div className="flex items-start gap-2 rounded border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">

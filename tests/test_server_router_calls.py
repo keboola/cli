@@ -284,6 +284,46 @@ def test_storage_create_table_columns_optional(tmp_path: Path) -> None:
     assert res.status_code == 200, res.text
 
 
+def test_storage_create_table_columns_and_source_is_422(tmp_path: Path) -> None:
+    """Both columns and source_table_id given -> clean 422 at the request
+    boundary (not a 500 from the service)."""
+    storage_svc = MagicMock()
+    registry = _mock_registry(storage=storage_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/tables/{PROJECT}",
+            headers=AUTH,
+            json={
+                "bucket_id": "in.c-main",
+                "name": "t",
+                "columns": ["id:INTEGER"],
+                "source_table_id": "in.c-main.src",
+            },
+        )
+
+    assert res.status_code == 422, res.text
+    storage_svc.create_table.assert_not_called()
+
+
+def test_storage_create_table_neither_columns_nor_source_is_422(tmp_path: Path) -> None:
+    """Neither columns nor source_table_id -> clean 422, service untouched."""
+    storage_svc = MagicMock()
+    registry = _mock_registry(storage=storage_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/tables/{PROJECT}",
+            headers=AUTH,
+            json={"bucket_id": "in.c-main", "name": "t"},
+        )
+
+    assert res.status_code == 422, res.text
+    storage_svc.create_table.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # storage.py  GET /{p}/{fid}/file-download
 # Service: storage.download_file(output_path=...)  (was output_dir= in broken version)
