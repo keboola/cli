@@ -24,6 +24,15 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.66.0": [
+        "New: bulk-remove projects from the `kbagent serve` Web UI. The Projects table now has "
+        "per-row checkboxes plus a select-all header, and a `Remove from kbagent` action that "
+        "unregisters several projects at once. A styled confirmation modal lists the affected "
+        "aliases and makes clear this only edits the local kbagent config -- it does NOT delete "
+        "the Keboola projects. Backed by a new `POST /projects/bulk-delete` REST endpoint "
+        "(`ProjectService.bulk_remove_projects`) with per-alias error accumulation and a "
+        "`dry_run` mode; one bad alias never blocks the rest.",
+    ],
     "0.65.1": [
         "BREAKING: Removed `data-app git-bind-credential` (and its `kbagent serve` endpoint). It shipped in "
         "0.65.0 on a misdiagnosis: managed-repo deploys were failing and we believed the platform "
