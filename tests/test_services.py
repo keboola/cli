@@ -183,6 +183,81 @@ class TestRemoveProject:
             service.remove_project("nonexistent")
 
 
+class TestBulkRemoveProjects:
+    """Tests for ProjectService.bulk_remove_projects()."""
+
+    @staticmethod
+    def _service_with_projects(tmp_config_dir: Path, *aliases: str) -> ProjectService:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        mock_client = make_mock_client()
+        service = ProjectService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+        for alias in aliases:
+            service.add_project(
+                alias=alias,
+                stack_url="https://connection.keboola.com",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+            )
+        return service
+
+    def test_removes_all_requested(self, tmp_config_dir: Path) -> None:
+        service = self._service_with_projects(tmp_config_dir, "a", "b", "c")
+
+        result = service.bulk_remove_projects(["a", "c"])
+
+        assert result["removed"] == ["a", "c"]
+        assert result["failed"] == []
+        assert result["dry_run"] is False
+        assert service._config_store.get_project("a") is None
+        assert service._config_store.get_project("c") is None
+        # Untouched alias survives.
+        assert service._config_store.get_project("b") is not None
+
+    def test_partial_failure_accumulates(self, tmp_config_dir: Path) -> None:
+        """A missing alias is recorded under failed; the rest still go."""
+        service = self._service_with_projects(tmp_config_dir, "a", "b")
+
+        result = service.bulk_remove_projects(["a", "ghost", "b"])
+
+        assert result["removed"] == ["a", "b"]
+        assert len(result["failed"]) == 1
+        assert result["failed"][0]["alias"] == "ghost"
+        assert "not found" in result["failed"][0]["error"].lower()
+        assert service._config_store.get_project("a") is None
+        assert service._config_store.get_project("b") is None
+
+    def test_dry_run_does_not_mutate(self, tmp_config_dir: Path) -> None:
+        service = self._service_with_projects(tmp_config_dir, "a", "b")
+
+        result = service.bulk_remove_projects(["a", "b"], dry_run=True)
+
+        assert result["dry_run"] is True
+        assert result["removed"] == ["a", "b"]
+        assert result["failed"] == []
+        # Nothing actually removed.
+        assert service._config_store.get_project("a") is not None
+        assert service._config_store.get_project("b") is not None
+
+    def test_dry_run_reports_missing_as_failed(self, tmp_config_dir: Path) -> None:
+        service = self._service_with_projects(tmp_config_dir, "a")
+
+        result = service.bulk_remove_projects(["a", "ghost"], dry_run=True)
+
+        assert result["removed"] == ["a"]
+        assert [f["alias"] for f in result["failed"]] == ["ghost"]
+        assert service._config_store.get_project("a") is not None
+
+    def test_duplicate_aliases_deduplicated(self, tmp_config_dir: Path) -> None:
+        service = self._service_with_projects(tmp_config_dir, "a")
+
+        result = service.bulk_remove_projects(["a", "a"])
+
+        assert result["removed"] == ["a"]
+        assert result["failed"] == []
+
+
 class TestEditProject:
     """Tests for ProjectService.edit_project()."""
 

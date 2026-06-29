@@ -97,6 +97,55 @@ class ProjectService(BaseService):
         self._config_store.remove_project(alias)
         return {"alias": alias, "message": f"Project '{alias}' removed."}
 
+    def bulk_remove_projects(
+        self,
+        aliases: list[str],
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Remove several projects in one call, accumulating per-alias errors.
+
+        One failing alias (e.g. it does not exist, or is an ephemeral
+        ``__env__`` project that cannot be removed) does not stop the others --
+        the failure is recorded under ``failed`` and the rest proceed. Like the
+        single-remove path this only edits ``config.json`` locally; no remote
+        API call is made.
+
+        Args:
+            aliases: Project aliases to remove. Duplicates are de-duplicated
+                while preserving order.
+            dry_run: When True, validate each alias and report what WOULD be
+                removed without mutating ``config.json``.
+
+        Returns:
+            ``{"removed": [...], "failed": [{"alias", "error"}], "dry_run": bool}``
+            where ``removed`` lists the aliases removed (or that would be
+            removed in dry-run mode).
+        """
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for alias in aliases:
+            if alias not in seen:
+                seen.add(alias)
+                ordered.append(alias)
+
+        removed: list[str] = []
+        failed: list[dict[str, str]] = []
+        for alias in ordered:
+            try:
+                if dry_run:
+                    # Validate existence (and the ephemeral guard) without
+                    # mutating: a missing alias has no persisted project.
+                    if self._config_store.get_project(alias) is None:
+                        raise ConfigError(f"Project '{alias}' not found.")
+                    removed.append(alias)
+                else:
+                    self._config_store.remove_project(alias)
+                    removed.append(alias)
+            except ConfigError as exc:
+                failed.append({"alias": alias, "error": exc.message})
+
+        return {"removed": removed, "failed": failed, "dry_run": dry_run}
+
     def edit_project(
         self,
         alias: str,
