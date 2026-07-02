@@ -15,7 +15,7 @@ import logging
 from typing import Any
 
 from ..constants import GLOBAL_SEARCH_FEATURE
-from ..errors import KeboolaApiError
+from ..errors import ConfigError, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService, sanitize_unexpected_error
 from .config_service import ConfigService
@@ -68,6 +68,7 @@ class SearchService(BaseService):
         item_types: list[str] | None = None,
         search_type: str = "textual",
         limit: int = 50,
+        regex: bool = False,
     ) -> dict[str, Any]:
         """Search for items across one or more projects.
 
@@ -83,19 +84,34 @@ class SearchService(BaseService):
                          endpoint (name-based). ``"config-based"`` scans full
                          config JSON bodies via ConfigService.
             limit: Maximum number of results per project (textual only).
+            regex: When True (textual only), the query is run as a
+                   case-insensitive whole-term regular expression over entity
+                   names (Storage API ``mode=regex``).
 
         Returns:
             Dict with keys:
             - ``"results"``: list of result dicts
             - ``"errors"``: list of per-project error dicts
             - ``"stats"``: dict with ``projects_searched`` and ``results_found``
+
+        Raises:
+            ConfigError: When ``regex=True`` is combined with
+                         ``search_type="config-based"`` (regex exists only on
+                         the global-search endpoint). Validated here so every
+                         caller (CLI, REST ``/search``) inherits the check.
         """
+        if regex and search_type == "config-based":
+            raise ConfigError(
+                "Regex mode is only supported with textual search "
+                "(config-based search does not support regex)."
+            )
+
         projects = self.resolve_projects(aliases)
 
         if search_type == "config-based":
             return self._search_config_based(query, projects, item_types)
 
-        return self._search_textual(query, projects, item_types, limit)
+        return self._search_textual(query, projects, item_types, limit, regex=regex)
 
     # ── Textual search (global-search endpoint) ────────────────────────────
 
@@ -105,6 +121,7 @@ class SearchService(BaseService):
         projects: dict[str, ProjectConfig],
         item_types: list[str] | None,
         limit: int,
+        regex: bool = False,
     ) -> dict[str, Any]:
         """Fan out textual search across projects in parallel."""
         api_types = _resolve_api_types(item_types)
@@ -113,7 +130,7 @@ class SearchService(BaseService):
             alias: str, project: ProjectConfig
         ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, str]]:
             return self._search_project_textual(
-                alias, project, query, api_types, limit, item_types=item_types
+                alias, project, query, api_types, limit, item_types=item_types, regex=regex
             )
 
         successes, errors = self._run_parallel(projects, worker)
@@ -142,6 +159,7 @@ class SearchService(BaseService):
         api_types: list[str],
         limit: int,
         item_types: list[str] | None = None,
+        regex: bool = False,
     ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, str]]:
         """Worker: run textual search against a single project (thread-safe)."""
         client = self._client_factory(project.stack_url, project.token)
@@ -180,6 +198,7 @@ class SearchService(BaseService):
                 project_id=project_id,
                 types=api_types if api_types else None,
                 limit=limit,
+                regex=regex,
             )
             items = raw.get("items", [])
             results = [_normalise_item(alias, item) for item in items]
@@ -256,6 +275,7 @@ class SearchService(BaseService):
                 "component_id": m.get("component_id"),
                 "match_count": m.get("match_count", 0),
                 "match_locations": m.get("match_locations", []),
+                "matched_columns": [],
             }
             for m in raw.get("matches", [])
         ]
@@ -328,4 +348,6 @@ def _normalise_item(alias: str, item: dict[str, Any]) -> dict[str, Any]:
         "component_id": item.get("componentId"),
         "project_id": item.get("projectId"),
         "project_name": item.get("projectName", ""),
+        # Only on `table` items matched via a column name; [] otherwise (DMD-1717).
+        "matched_columns": item.get("matchedColumns") or [],
     }

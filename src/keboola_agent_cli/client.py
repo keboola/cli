@@ -596,6 +596,7 @@ class KeboolaClient(BaseHttpClient):
         branch_id: int | None = None,
         limit: int = 50,
         offset: int = 0,
+        regex: bool = False,
     ) -> dict[str, Any]:
         """Search for items by name across the project using the Storage API global-search endpoint.
 
@@ -614,6 +615,9 @@ class KeboolaClient(BaseHttpClient):
             branch_id: Required when ``branch_type="development"``; ignored otherwise.
             limit: Maximum number of results to return (default 50, max 100).
             offset: Pagination offset (default 0).
+            regex: When True, run the query as a case-insensitive whole-term
+                   regular expression over entity names (Storage API
+                   ``mode=regex``). Omitted from the request otherwise.
 
         Returns:
             Raw API response dict with keys ``"all"`` (total count) and
@@ -630,6 +634,8 @@ class KeboolaClient(BaseHttpClient):
         }
         if types:
             params["types[]"] = types
+        if regex:
+            params["mode"] = "regex"
         if branch_type == "development" and branch_id is not None:
             params["branchTypes[]"] = "development"
             params["branchIds[]"] = branch_id

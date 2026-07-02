@@ -24,6 +24,22 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.67.0": [
+        "New: `kbagent search --regex` opts into regex mode on the global-search endpoint "
+        "(DMD-1716). Forwards `mode=regex` to the Storage API -- a case-insensitive whole-term "
+        "match against ENTITY NAMES only (`report` does not match `monthly_report`; use "
+        "`.*report.*`). Textual-search only: combining it with `--search-type config-based` is a "
+        "usage error. Regex does NOT match column names, so `matched_columns` is always empty "
+        "under `--regex`.",
+        "New: textual search results now report which column names matched (DMD-1717). Table "
+        "results matched via a column name surface the API's `matchedColumns`: a `matched_columns` "
+        "field on every result in `--json` (always present; `[]` when the entity name itself "
+        'matched) and a "Matched columns" column in the human table, shown only when at least one '
+        "result actually matched via a column, so it never adds an empty column.",
+        "Note: the Global Search re-architecture's rebuilt index / ranking upgrade is server-side "
+        "and flows through the CLI unchanged. Both new contracts were verified live against a "
+        "real stack before release.",
+    ],
     "0.66.1": [
         "Fix (#479): `flow schedule` now activates the schedule on the Scheduler Service, so the cron "
         "trigger actually fires. Previously the command only wrote the `keboola.scheduler` Storage "

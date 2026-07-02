@@ -3702,3 +3702,39 @@ class TestAssertSafeDownloadUrl:
 
         with pytest.raises(KeboolaApiError):
             _assert_safe_download_url("file:///etc/passwd")
+
+
+class TestGlobalSearchRegex:
+    """KeboolaClient.global_search() regex mode -- HTTP param wiring."""
+
+    def test_regex_true_sends_mode_param(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            method="GET",
+            json={"all": 0, "items": []},
+            status_code=200,
+        )
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="test-token-12345",
+        )
+        client.global_search(query=".*orders.*", project_id=42, regex=True)
+
+        sent = httpx_mock.get_request()
+        assert b"mode=regex" in sent.url.query
+        client.close()
+
+    def test_regex_false_omits_mode_param(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            method="GET",
+            json={"all": 0, "items": []},
+            status_code=200,
+        )
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="test-token-12345",
+        )
+        client.global_search(query="orders", project_id=42)
+
+        sent = httpx_mock.get_request()
+        assert b"mode" not in sent.url.query
+        client.close()

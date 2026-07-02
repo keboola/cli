@@ -144,6 +144,68 @@ def test_config_search_passes_use_regex_kwarg(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# search.py  GET /search
+# Service: search.search(regex=...)   (DMD-1716 -- must forward the flag)
+# ---------------------------------------------------------------------------
+
+
+def test_global_search_forwards_regex_kwarg(tmp_path: Path) -> None:
+    """Router must forward ``regex=`` to SearchService.search (mirrors kbagent search)."""
+    search_svc = MagicMock()
+    search_svc.search.return_value = {"results": [], "errors": [], "stats": {}}
+    registry = _mock_registry(search=search_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/search",
+            headers=AUTH,
+            params={"query": ".*orders.*", "regex": True},
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = search_svc.search.call_args.kwargs
+    assert kwargs["regex"] is True
+
+
+def test_global_search_regex_defaults_false(tmp_path: Path) -> None:
+    """Without the regex param the router forwards regex=False."""
+    search_svc = MagicMock()
+    search_svc.search.return_value = {"results": [], "errors": [], "stats": {}}
+    registry = _mock_registry(search=search_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/search", headers=AUTH, params={"query": "orders"})
+
+    assert res.status_code == 200, res.text
+    assert search_svc.search.call_args.kwargs["regex"] is False
+
+
+def test_global_search_regex_with_config_based_returns_400(tmp_path: Path) -> None:
+    """SearchService rejects regex + config-based with ConfigError -> HTTP 400 (not silent 200)."""
+    from keboola_agent_cli.errors import ConfigError
+
+    search_svc = MagicMock()
+    search_svc.search.side_effect = ConfigError(
+        "Regex mode is only supported with textual search "
+        "(config-based search does not support regex)."
+    )
+    registry = _mock_registry(search=search_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/search",
+            headers=AUTH,
+            params={"query": ".*orders.*", "search_type": "config-based", "regex": True},
+        )
+
+    assert res.status_code == 400, res.text
+    assert "regex" in res.json()["error"]["message"].lower()
+
+
+# ---------------------------------------------------------------------------
 # configs.py  POST /{p}/{c}  (create config)
 # Service: config.create_config(description="" when body.description is None)
 # ---------------------------------------------------------------------------
