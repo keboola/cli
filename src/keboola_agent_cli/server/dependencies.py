@@ -41,6 +41,7 @@ from ..services.sharing_service import SharingService
 from ..services.storage_service import StorageService
 from ..services.stream_service import StreamService
 from ..services.sync_service import SyncService
+from ..services.token_service import TokenService
 from ..services.variables_service import VariablesService
 from ..services.version_service import VersionService
 from ..services.workspace_service import WorkspaceService
@@ -90,6 +91,7 @@ class ServiceRegistry:
     variables: VariablesService = field(init=False)
     doctor: DoctorService = field(init=False)
     version: VersionService = field(init=False)
+    token: TokenService = field(init=False)
 
     def __post_init__(self) -> None:
         cs = self.config_store
@@ -128,6 +130,7 @@ class ServiceRegistry:
         self.variables = VariablesService(config_store=cs)
         self.doctor = DoctorService(config_store=cs, mcp_service=self.mcp)
         self.version = VersionService()
+        self.token = TokenService(config_store=cs)
 
 
 def install_registry(app: FastAPI, registry: ServiceRegistry) -> None:

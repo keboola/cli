@@ -486,6 +486,21 @@ remain branch-aware because modifying a dev branch is the expected intent.
   provisions the 3 OTLP sinks itself on create-source --type otlp (--no-sinks to opt out). Send
   OTLP/HTTP to <endpoint>/v1/logs|/v1/traces|/v1/metrics; data lands in in.c-otlp-<source>.* tables.
 
+### Scoped Storage Tokens
+
+  kbagent token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]
+    Create a scoped Storage API token (Keboola single-bucket-write pattern). --bucket-write /
+    --bucket-read (repeatable) grant per-bucket write/read; write wins when a bucket is on both.
+    --component-access (repeatable) restricts to named components. The token secret is printed ONCE
+    in a Rich Panel -- store it now, it is never retrievable again. Acting token needs canManageTokens.
+  kbagent token delete --project NAME --token-id ID [--yes]
+    Revoke a token by its numeric id (destructive; confirms unless --yes / --json).
+  kbagent token refresh --project NAME --token-id ID [--yes]
+    Rotate a token's secret (new secret printed ONCE; confirms unless --yes / --json).
+  Notes: uses the per-project Storage token (no manage token); the acting token must have the
+  canManageTokens privilege. The importable SDK (Client(url,token)) mirrors these as
+  create_scoped_token / delete_token / refresh_token (dicts on .raw, typed ScopedTokenResult on the facade).
+
 ### Sharing (Cross-Project)
 
   kbagent sharing list [--project NAME]

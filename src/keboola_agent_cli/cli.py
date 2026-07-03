@@ -35,6 +35,7 @@ from .commands.sharing import sharing_app
 from .commands.storage import storage_app
 from .commands.stream import stream_app
 from .commands.sync import sync_app
+from .commands.token import token_app
 from .commands.tool import tool_app
 from .commands.version import update_command, version_command
 from .commands.workspace import workspace_app
@@ -71,6 +72,7 @@ from .services.sharing_service import SharingService
 from .services.storage_service import StorageService
 from .services.stream_service import StreamService
 from .services.sync_service import SyncService
+from .services.token_service import TokenService
 from .services.variables_service import VariablesService
 from .services.version_service import VersionService
 from .services.workspace_service import WorkspaceService
@@ -98,6 +100,7 @@ _PROJ = "Project Management"
 app.add_typer(project_app, name="project", rich_help_panel=_PROJ)
 app.add_typer(org_app, name="org", rich_help_panel=_PROJ)
 app.add_typer(feature_app, name="feature", rich_help_panel=_PROJ)
+app.add_typer(token_app, name="token", rich_help_panel=_PROJ)
 
 # -- Browse & Inspect --
 _BROWSE = "Browse & Inspect"
@@ -320,6 +323,7 @@ def main(
     search_service = SearchService(config_store=config_store)
     storage_service = StorageService(config_store=config_store)
     stream_service = StreamService(config_store=config_store)
+    token_service = TokenService(config_store=config_store)
     sync_service = SyncService(config_store=config_store)
     variables_service = VariablesService(config_store=config_store)
     encrypt_service = EncryptService(config_store=config_store)
@@ -375,6 +379,7 @@ def main(
     ctx.obj["search_service"] = search_service
     ctx.obj["storage_service"] = storage_service
     ctx.obj["stream_service"] = stream_service
+    ctx.obj["token_service"] = token_service
     ctx.obj["sync_service"] = sync_service
     ctx.obj["variables_service"] = variables_service
     ctx.obj["encrypt_service"] = encrypt_service

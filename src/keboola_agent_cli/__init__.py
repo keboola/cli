@@ -9,6 +9,8 @@ from .result_models import (
     ConfigDetailResult,
     JobResult,
     QueryResult,
+    ScopedTokenResult,
+    StreamSourceResult,
     SyncPushResult,
     UploadTableResult,
 )
@@ -28,6 +30,8 @@ __all__ = [
     "JobIdempotencyStore",
     "JobResult",
     "QueryResult",
+    "ScopedTokenResult",
+    "StreamSourceResult",
     "SyncPushResult",
     "UploadTableResult",
     "__version__",

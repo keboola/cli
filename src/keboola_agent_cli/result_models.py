@@ -269,3 +269,77 @@ class ConfigDetailResult(_ApiResultModel):
     branch_id: int | None = Field(
         default=None, description="Dev branch ID the detail was read from (None = production)."
     )
+
+
+class ScopedTokenResult(_ApiResultModel):
+    """A freshly minted / rotated scoped Storage API token (issue: device enrollment).
+
+    Returned by :meth:`keboola_agent_cli.Client.create_scoped_token` and
+    :meth:`~keboola_agent_cli.Client.refresh_token`. ``token`` is a **one-time**
+    secret reveal -- hand it to the consumer once and persist only ``id`` (for
+    :meth:`~keboola_agent_cli.Client.delete_token` / ``refresh_token``) and
+    ``expires``. The raw grant details (``bucketPermissions``, ``componentAccess``)
+    are preserved as model extras.
+    """
+
+    id: str = Field(default="", description="Token ID (use with delete_token / refresh_token).")
+    token: str = Field(
+        default="", description="The token secret -- revealed once; never persist it."
+    )
+    description: str = Field(default="", description="Human-readable token description.")
+    expires: str | None = Field(
+        default=None, description="ISO expiry timestamp; None = never expires."
+    )
+    can_read_all_file_uploads: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("canReadAllFileUploads", "can_read_all_file_uploads"),
+        description="True if the token may read files uploaded by other tokens.",
+    )
+
+
+class StreamSourceResult(_ApiResultModel):
+    """A per-device Data Streams (OTLP) source (issue: device enrollment).
+
+    Returned by :meth:`keboola_agent_cli.Client.create_stream_source` and
+    :meth:`~keboola_agent_cli.Client.get_stream_source`. ``otlp_url`` embeds the
+    ingest secret **unmasked** -- hand it to the device once, never persist it.
+    ``sink_bucket_id`` is the ``in.c-otlp-<id>`` bucket the auto-provisioned sinks
+    write to (grant a device token ``write`` on it); ``None`` when the source was
+    created with ``provision_sinks=False`` or is not OTLP. The raw Stream source
+    object is preserved under the ``source`` extra.
+    """
+
+    id: str = Field(
+        default="",
+        validation_alias=AliasChoices("id", "sourceId", "source_id"),
+        description="Source ID (per-device; use with get/delete_stream_source).",
+    )
+    source_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("source_id", "sourceId"),
+        description="Source ID (alias of id, as the Stream API names it).",
+    )
+    name: str = Field(default="", description="Human-readable source name.")
+    type: str = Field(default="", description="Source type: otlp | http.")
+    description: str = Field(default="", description="Source description.")
+    branch_id: str = Field(default="default", description="Branch the source lives in.")
+    otlp_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("otlp_url", "otlpUrl"),
+        description="OTLP ingest endpoint URL WITH embedded secret (unmasked; reveal once).",
+    )
+    otlp_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("otlp_secret", "otlpSecret"),
+        description="The ingest secret embedded in otlp_url.",
+    )
+    base_endpoint: str = Field(
+        default="",
+        validation_alias=AliasChoices("base_endpoint", "baseUrl"),
+        description="Secret-free base endpoint.",
+    )
+    sink_bucket_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("sink_bucket_id", "sinkBucketId"),
+        description="in.c-otlp-<id> sink bucket (grant a device token write on it); None if none.",
+    )
