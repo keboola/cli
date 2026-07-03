@@ -47,9 +47,17 @@ from .constants import (
     DEFAULT_JOB_RUN_TIMEOUT,
     DEFAULT_POLL_STRATEGY,
     QUERY_RESULTS_DEFAULT_LIMIT,
+    STREAM_DEFAULT_BRANCH,
 )
 from .errors import ErrorCode, KeboolaApiError
-from .result_models import ConfigDetailResult, JobResult, QueryResult, UploadTableResult
+from .result_models import (
+    ConfigDetailResult,
+    JobResult,
+    QueryResult,
+    ScopedTokenResult,
+    StreamSourceResult,
+    UploadTableResult,
+)
 from .services.job_idempotency_store import JobIdempotencyStore, run_idempotent_job
 
 logger = logging.getLogger(__name__)
@@ -524,6 +532,97 @@ class Client:
                 "warnings": results.get("warnings", []),
             }
         )
+
+    # ------------------------------------------------------------------
+    # Device-enrollment primitives (scoped tokens + per-device streams)
+    # ------------------------------------------------------------------
+
+    def create_scoped_token(
+        self,
+        *,
+        description: str,
+        bucket_permissions: dict[str, str] | None = None,
+        component_access: list[str] | None = None,
+        can_read_all_file_uploads: bool = False,
+        expires_in: int | None = None,
+    ) -> ScopedTokenResult:
+        """Mint a scoped Storage API token as a typed :class:`ScopedTokenResult`.
+
+        Expresses bucket-level grants (unlike the component-only
+        ``raw.create_short_lived_token``): mint the narrow "upload Files + write
+        one sink bucket, expiring" token a capture device needs. The acting token
+        must carry ``canManageTokens``. ``result.token`` is a one-time reveal --
+        persist only ``id`` and ``expires``. See
+        :meth:`KeboolaClient.create_scoped_token` for the permission-model notes.
+        """
+        return ScopedTokenResult.model_validate(
+            self._client.create_scoped_token(
+                description=description,
+                bucket_permissions=bucket_permissions,
+                component_access=component_access,
+                can_read_all_file_uploads=can_read_all_file_uploads,
+                expires_in=expires_in,
+            )
+        )
+
+    def delete_token(self, token_id: str) -> None:
+        """Revoke a Storage API token immediately (active per-device revocation)."""
+        self._client.delete_token(token_id)
+
+    def refresh_token(self, token_id: str) -> ScopedTokenResult:
+        """Rotate a Storage API token -> typed :class:`ScopedTokenResult`.
+
+        Returns the new token value; the old one becomes immediately invalid.
+        """
+        return ScopedTokenResult.model_validate(self._client.refresh_token(token_id))
+
+    def create_stream_source(
+        self,
+        name: str,
+        *,
+        source_type: str = "otlp",
+        description: str = "",
+        branch_id: str = STREAM_DEFAULT_BRANCH,
+        provision_sinks: bool = True,
+    ) -> StreamSourceResult:
+        """Create a per-device OTLP stream source as a typed :class:`StreamSourceResult`.
+
+        Async under the hood (the 202 task is polled to completion). For an
+        ``otlp`` source ``provision_sinks`` (default) also creates the
+        logs/metrics/traces sinks + ``in.c-otlp-<id>`` bucket so data lands and a
+        device token can be scoped to write it (``result.sink_bucket_id``).
+        ``result.otlp_url`` carries the ingest secret **unmasked** -- reveal to
+        the device once, never persist it.
+        """
+        return StreamSourceResult.model_validate(
+            self._client.create_stream_source(
+                name,
+                source_type=source_type,
+                description=description,
+                branch_id=branch_id,
+                provision_sinks=provision_sinks,
+            )
+        )
+
+    def get_stream_source(
+        self, source_id: str, *, branch_id: str = STREAM_DEFAULT_BRANCH
+    ) -> StreamSourceResult:
+        """Fetch one stream source's detail as a typed :class:`StreamSourceResult`."""
+        return StreamSourceResult.model_validate(
+            self._client.get_stream_source(source_id, branch_id=branch_id)
+        )
+
+    def list_stream_sources(
+        self, *, branch_id: str = STREAM_DEFAULT_BRANCH
+    ) -> _list[dict[str, Any]]:
+        """List the project's stream sources (raw source objects; find-or-create by name)."""
+        return self._client.list_stream_sources(branch_id=branch_id)
+
+    def delete_stream_source(
+        self, source_id: str, *, branch_id: str = STREAM_DEFAULT_BRANCH
+    ) -> None:
+        """Delete a stream source (per-device event-plane revocation)."""
+        self._client.delete_stream_source(source_id, branch_id=branch_id)
 
     def close(self) -> None:
         """Close the underlying HTTP client."""

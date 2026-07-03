@@ -62,9 +62,11 @@ import yaml
 from typer.testing import CliRunner
 
 from helpers import metastore_scope_available
+from keboola_agent_cli import Client
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 
 # ---------------------------------------------------------------------------
@@ -11586,3 +11588,237 @@ class TestE2EDataAppManagedRepo:
         assert result.exit_code == 2, result.output
         body = json.loads(result.output)
         assert body["error"]["code"] == "USAGE_ERROR"
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EDeviceEnrollmentPrimitives:
+    """End-to-end coverage for the device-enrollment primitives (0.66.0):
+    scoped Storage token mint/revoke/rotate (``kbagent token create|refresh|
+    delete``) and per-device OTLP stream sources (the ``Client`` facade's
+    ``create_stream_source`` / ``get_stream_source`` / ``list_stream_sources``
+    / ``delete_stream_source``).
+
+    Both capabilities are gated by the acting project: minting a scoped token
+    needs ``canManageTokens`` and Data Streams may be disabled on the stack.
+    When the mint/create fails for an ACCESS_DENIED / permission / not-enabled
+    reason we ``pytest.skip`` -- the test then documents the capability without
+    turning a missing entitlement into a red build. A genuine bug (bad payload,
+    wrong shape, non-permission API error) still fails.
+
+    Security: the minted token's secret value is NEVER printed or logged --
+    only booleans and the token *id* leave this class. Every created resource
+    (token, stream source) is deleted immediately / in teardown so no live
+    credential is ever left behind.
+    """
+
+    # Substrings that mark a *capability* gap (entitlement / permission), as
+    # opposed to a real bug. Matched case-insensitively against the error
+    # message so we catch API phrasings the error_code enum doesn't cover.
+    _CAPABILITY_MSG_MARKERS = (
+        "canmanagetokens",
+        "permission",
+        "not enabled",
+        "not allowed",
+        "not authorized",
+        "forbidden",
+        "disabled",
+        "access denied",
+    )
+    _CAPABILITY_ERROR_CODES = frozenset(
+        {
+            ErrorCode.ACCESS_DENIED,
+            ErrorCode.PERMISSION_DENIED,
+            ErrorCode.MISSING_MASTER_TOKEN,
+            ErrorCode.UNAUTHORIZED,
+        }
+    )
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-devenroll"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        # Best-effort cleanup ledgers (belt-and-braces around inline deletes).
+        self._token_ids: list[str] = []
+        self._stream_source_ids: list[str] = []
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        yield
+
+        # Teardown: revoke any token we somehow left behind, then delete any
+        # stream source. Both are idempotent-ish; suppress everything so a
+        # teardown hiccup never masks the test result.
+        for token_id in self._token_ids:
+            with contextlib.suppress(Exception):
+                _invoke(
+                    self.config_dir,
+                    [
+                        "--json",
+                        "token",
+                        "delete",
+                        "--project",
+                        self.alias,
+                        "--token-id",
+                        token_id,
+                        "--yes",
+                    ],
+                )
+        for source_id in self._stream_source_ids:
+            with (
+                contextlib.suppress(Exception),
+                Client(url=self.url, token=self.token) as kbc,
+            ):
+                kbc.delete_stream_source(source_id)
+
+    # ------------------------------------------------------------------
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def _is_capability_error(self, exc: Exception) -> bool:
+        """True when *exc* signals a missing entitlement (skip), not a bug (fail)."""
+        if not isinstance(exc, KeboolaApiError):
+            return False
+        if exc.error_code in self._CAPABILITY_ERROR_CODES:
+            return True
+        message = str(getattr(exc, "message", "") or exc).lower()
+        return any(marker in message for marker in self._CAPABILITY_MSG_MARKERS)
+
+    def _first_bucket_id(self) -> str | None:
+        """Return an existing bucket id to scope ``--bucket-write`` on, if any."""
+        buckets = self._run_ok("storage", "buckets", "--project", self.alias)["data"]
+        rows = buckets if isinstance(buckets, list) else buckets.get("buckets", [])
+        for bucket in rows:
+            bucket_id = bucket.get("id") if isinstance(bucket, dict) else None
+            if bucket_id:
+                return str(bucket_id)
+        return None
+
+    # ------------------------------------------------------------------
+    def test_scoped_token_mint_rotate_revoke(self) -> None:
+        """`token create` (scoped, expiring) -> `token refresh` -> `token delete`.
+
+        Never prints the secret; deletes the token the moment its shape is
+        verified so no live credential outlives the test.
+        """
+        expires_in = 3600  # 1 hour -- lifetime is capped so a leak self-heals.
+        bucket_id = self._first_bucket_id()
+
+        create_args = [
+            "token",
+            "create",
+            "--project",
+            self.alias,
+            "--description",
+            f"{RUN_ID} e2e device-enrollment token",
+            "--expires-in",
+            str(expires_in),
+        ]
+        if bucket_id is not None:
+            _step(
+                1, "token create", f"scoped: --bucket-write {bucket_id}, --expires-in {expires_in}"
+            )
+            create_args += ["--bucket-write", bucket_id]
+        else:
+            _step(1, "token create", f"minimal scoped token, --expires-in {expires_in}")
+
+        result = self._run(*create_args)
+        if result.exit_code != 0:
+            # The service raised a ConfigError/KeboolaApiError -> structured body.
+            body = json.loads(result.output)
+            code = body.get("error", {}).get("code", "")
+            message = body.get("error", {}).get("message", "")
+            if code in {c.value for c in self._CAPABILITY_ERROR_CODES} or any(
+                marker in message.lower() for marker in self._CAPABILITY_MSG_MARKERS
+            ):
+                pytest.skip(
+                    f"Project token cannot manage tokens (code={code}); "
+                    "scoped-token E2E documents the capability without a live token."
+                )
+            pytest.fail(f"token create failed unexpectedly (exit {result.exit_code}): {code}")
+
+        data = _json_ok(result)["data"]
+        token_id = str(data["id"])
+        # Track BEFORE any further assertion so a failure still triggers cleanup.
+        self._token_ids.append(token_id)
+        assert token_id, "minted token must carry an id"
+        # Booleans only -- never surface the secret value itself.
+        assert bool(data.get("token")), "minted token must reveal a non-empty secret once"
+        assert data.get("alias") == self.alias
+
+        _step(2, "token refresh", "rotate the secret; id is stable, old value dies")
+        refreshed = self._run_ok(
+            "token", "refresh", "--project", self.alias, "--token-id", token_id, "--yes"
+        )["data"]
+        assert bool(refreshed.get("token")), "rotated token must reveal a new non-empty secret"
+
+        _step(3, "token delete", "revoke immediately -- no live credential left behind")
+        deleted = self._run_ok(
+            "token", "delete", "--project", self.alias, "--token-id", token_id, "--yes"
+        )["data"]
+        assert deleted.get("status") == "deleted"
+        assert str(deleted.get("token_id")) == token_id
+        self._token_ids.remove(token_id)
+
+    def test_stream_source_create_and_delete(self) -> None:
+        """`Client.create_stream_source` -> get/list -> `delete_stream_source`.
+
+        Asserts the normalized source carries an id + OTLP ingest URL + sink
+        bucket, then revokes it. Skips cleanly when Data Streams is disabled.
+        """
+        source_name = f"{RUN_ID}-devenroll-src"
+
+        _step(1, "Client.create_stream_source", f"otlp source {source_name!r} + auto sinks")
+        with Client(url=self.url, token=self.token) as kbc:
+            try:
+                source = kbc.create_stream_source(source_name)
+            except KeboolaApiError as exc:
+                if self._is_capability_error(exc):
+                    pytest.skip(
+                        f"Data Streams unavailable on this project ({exc.error_code}); "
+                        "stream-source E2E documents the capability without a live source."
+                    )
+                raise
+
+            source_id = source.id
+            self._stream_source_ids.append(source_id)
+            assert source_id, "created stream source must carry an id"
+            assert source.otlp_url, "otlp source must expose an ingest URL"
+            assert source.sink_bucket_id, "provision_sinks=True must yield a sink bucket"
+            # Do not print otlp_url -- it embeds the ingest secret. Assert the
+            # derived sink-bucket convention instead (id/shape only).
+            assert source.sink_bucket_id == f"in.c-otlp-{source_id}"
+
+            _step(2, "get_stream_source / list_stream_sources", "the source is discoverable")
+            fetched = kbc.get_stream_source(source_id)
+            assert fetched.id == source_id
+            listed = kbc.list_stream_sources()
+            assert any(str(s.get("sourceId") or s.get("id")) == source_id for s in listed), (
+                "created source must appear in list_stream_sources"
+            )
+
+            _step(3, "delete_stream_source", "per-device event-plane revocation")
+            kbc.delete_stream_source(source_id)
+            self._stream_source_ids.remove(source_id)

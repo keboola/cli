@@ -169,6 +169,55 @@ res = kbc.upload_table("in.c-crm.customers", "customers.csv", incremental=True)
 print(res.imported_rows, res.warnings)
 ```
 
+### Device-enrollment primitives (`0.66.0+`)
+
+Seven methods for the "provision an OTLP ingest endpoint, then mint a narrowly-scoped Storage token a device can hold" flow. They live on the facade and delegate straight to `KeboolaClient`; the token/stream ones return the typed models in [§5](#5-typed-result-models).
+
+**Scoped Storage tokens** — mint, revoke, rotate:
+
+- **`create_scoped_token(*, description, bucket_permissions=None, component_access=None, can_read_all_file_uploads=False, expires_in=None) -> ScopedTokenResult`** — `POST /v2/storage/tokens`. `bucket_permissions` is `{bucket_id: "read"|"write"}`; `expires_in` is seconds. The acting token must carry **`canManageTokens`** or the create 403s.
+- **`delete_token(token_id) -> None`** — `DELETE /v2/storage/tokens/{id}` (204, no body). Revokes.
+- **`refresh_token(token_id) -> ScopedTokenResult`** — `POST .../tokens/{id}/refresh`. Rotates the secret in place; the returned `.token` is the new secret.
+
+```python
+tok = kbc.create_scoped_token(
+    description="device-42",
+    bucket_permissions={"in.c-otlp-my-source": "write"},
+    expires_in=3600,
+)
+device_secret = tok.token   # ONE-TIME reveal — see the gotcha below
+```
+
+**Stream (OTLP Data Streams) sources** — provision, read, list, delete:
+
+- **`create_stream_source(name, *, source_type="otlp", description="", branch_id="default", provision_sinks=True) -> StreamSourceResult`** — creates a Data Streams source over the derived `stream.<region>` host. With `source_type="otlp"` and `provision_sinks=True` (default) it auto-provisions the logs/metrics/traces sinks so data actually lands, landing in bucket **`in.c-otlp-<source_id>`** (surfaced as `sink_bucket_id`). Pass `provision_sinks=False` for a bare source.
+- **`get_stream_source(source_id, *, branch_id="default") -> StreamSourceResult`** — normalized shape; `sink_bucket_id` is derived for OTLP sources.
+- **`list_stream_sources(*, branch_id="default") -> list[dict]`** — raw source dicts.
+- **`delete_stream_source(source_id, *, branch_id="default") -> None`** — DELETE (202 task, polled).
+
+**The two-call enrollment example** — provision the endpoint, then mint the device's token scoped to exactly the sink bucket:
+
+```python
+with Client(url=URL, token=TOKEN) as kbc:   # TOKEN must have canManageTokens
+    src = kbc.create_stream_source("my-source")     # StreamSourceResult
+    # hand the device its ingest endpoint:
+    print(src.otlp_url)          # carries the ingest secret in the path — UNMASKED
+    # mint the narrowly-scoped token the device uploads Files with:
+    tok = kbc.create_scoped_token(
+        description="device-42",
+        bucket_permissions={src.sink_bucket_id: "write"},
+        expires_in=3600,
+    )
+    print(tok.id, tok.token)     # persist tok.id + tok.expires; tok.token is one-time
+```
+
+Four gotchas that bite:
+
+- **The token secret is a one-time reveal.** `create_scoped_token` / `refresh_token` return the plaintext secret **once** in `.token`. It is never retrievable again — persist only `.id` (to revoke/refresh later) and `.expires`. If you lose the secret, `refresh_token(id)` mints a new one.
+- **`otlp_url` carries the ingest secret UNMASKED.** Unlike the CLI (`stream detail` masks it unless `--reveal`), the facade returns `otlp_url` / `otlp_secret` in the clear — the SDK caller is trusted. Treat `StreamSourceResult` as sensitive; do not log it.
+- **`sink_bucket_id` is the bucket to grant the device write on.** OTLP data lands in `in.c-otlp-<source_id>`; that is the `bucket_permissions` key a device token needs (`{sink_bucket_id: "write"}`).
+- **Files upload is NOT gated by `component_access` / `can_read_all_file_uploads`.** Any valid Storage token can upload its *own* Files; `can_read_all_file_uploads` only governs *reading other tokens'* uploads, and `component_access` is unrelated to Files entirely. For a device that uploads to a bucket, grant `bucket_permissions` **write** on the sink bucket — that is the load-bearing scope.
+
 ### `files` — Storage Files (`Client.files`)
 
 A `Files` helper bound to the client's project/branch. See [§6](#6-files-storage-files).
@@ -185,7 +234,7 @@ Escape hatch for endpoints the facade omits. See [§7](#7-clientraw-the-escape-h
 
 ## 5. Typed result models
 
-`result_models.py` defines the **stable return shapes** (`JobResult`, `QueryResult`, `UploadTableResult`, `ConfigDetailResult`, `SyncPushResult`, `CloneResult`), all re-exported from the package root. They exist so a downstream consumer types against a **semver-versioned contract** instead of an undocumented `dict[str, Any]` — a contract change then surfaces at *type-check* time, not at runtime against a customer build.
+`result_models.py` defines the **stable return shapes** (`JobResult`, `QueryResult`, `UploadTableResult`, `ConfigDetailResult`, `SyncPushResult`, `CloneResult`, and the `0.66.0+` device-enrollment pair `ScopedTokenResult` / `StreamSourceResult`), all re-exported from the package root. They exist so a downstream consumer types against a **semver-versioned contract** instead of an undocumented `dict[str, Any]` — a contract change then surfaces at *type-check* time, not at runtime against a customer build.
 
 Two design rules every model follows (`_ApiResultModel` base):
 
@@ -200,6 +249,11 @@ Two design rules every model follows (`_ApiResultModel` base):
 - **`populate_by_name=True` — alias-tolerant.** Each model accepts both the snake_case field name and the raw API key (declared via `AliasChoices`), so `Model.model_validate(service_dict)` works directly on a service-layer dict without renaming. `JobResult` reads `isFinished`/`is_finished`, `componentId`/`component`/`component_id`, etc.
 
 Convenience properties carry semantic meaning so callers don't re-derive it: `JobResult.succeeded` / `.failed`, `QueryResult.row_count`, `SyncPushResult.ok`, `CloneResult.ok`.
+
+The two device-enrollment models (`0.66.0+`) commit these named fields:
+
+- **`ScopedTokenResult`** — `id`, `token` (the one-time secret, see the gotcha in §4), `description`, `expires` (`str | None`), `can_read_all_file_uploads` (alias `canReadAllFileUploads`).
+- **`StreamSourceResult`** — `id`, `source_id`, `name`, `type`, `description`, `branch_id` (default `"default"`), `otlp_url` (ingest URL, secret in the path — unmasked), `otlp_secret`, `base_endpoint`, `sink_bucket_id` (`str | None`; the `in.c-otlp-<id>` bucket to grant a device token write on).
 
 > **The committed surface is `__all__`.** Anything exported from `keboola_agent_cli` (`Client`, `Files`, `FileEntry`, the six result models, `JobIdempotencyStore`, `__version__`) is public API under semver. Renaming or removing a named field, or tightening a type, is a breaking change.
 

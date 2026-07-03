@@ -147,6 +147,9 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show feature flags assigned to a user | `kbagent feature user-show --project PROJECT --email EMAIL` |
 | Enable a feature flag on a user | `kbagent feature user-add --project PROJECT --email EMAIL --feature FEATURE` |
 | Disable a feature flag on a user (destructive) | `kbagent feature user-remove --project PROJECT --email EMAIL --feature FEATURE` |
+| Mint a scoped Storage API token (secret shown once) | `kbagent token create --project PROJECT --description DESCRIPTION` |
+| Revoke a Storage API token immediately (destructive; only non-master tokens) | `kbagent token delete --project PROJECT --token-id TOKEN-ID` |
+| Rotate a token: generate a new value and invalidate the old one (secret shown once) | `kbagent token refresh --project PROJECT --token-id TOKEN-ID` |
 | List available components from connected projects | `kbagent component list` |
 | Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
 | List configurations from connected projects | `kbagent config list` |

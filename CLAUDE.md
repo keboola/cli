@@ -385,6 +385,14 @@ kbagent feature user-show --project ALIAS --email EMAIL
 kbagent feature user-add --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
 kbagent feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
 
+# token: scoped Storage tokens (Keboola single-bucket-write pattern; acting token needs canManageTokens; secret shown once).
+kbagent token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]
+kbagent token delete --project NAME --token-id ID [--yes]
+kbagent token refresh --project NAME --token-id ID [--yes]
+# SDK (importable Client(url,token)) now exposes create_scoped_token / delete_token / refresh_token /
+# create_stream_source / get_stream_source / list_stream_sources / delete_stream_source: dicts on .raw,
+# typed ScopedTokenResult / StreamSourceResult on the facade. See docs/sdk.md.
+
 # permissions: session write/destructive firewall. The top-level --deny-writes / --deny-destructive
 # flags are the one-shot form; `permissions set` persists a policy (mode allow|deny + allow/deny patterns
 # like cli:write, cli:destructive, tool:write). The agent guards rails against mistakes; not a sandbox.

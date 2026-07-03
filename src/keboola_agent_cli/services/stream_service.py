@@ -26,15 +26,12 @@ from typing import Any
 
 from ..config_store import ConfigStore
 from ..constants import (
-    OTLP_BUCKET_PREFIX,
     OTLP_PROTOCOL,
     OTLP_SIGNAL_PATHS,
-    OTLP_SINK_COLUMNS,
-    OTLP_SINK_SIGNALS,
     STREAM_DEFAULT_BRANCH,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..stream_client import StreamClient
+from ..stream_client import StreamClient, provision_otlp_sinks, stream_task_source_id
 
 logger = logging.getLogger(__name__)
 
@@ -132,27 +129,11 @@ class StreamService:
     def _provision_otlp_sinks(self, client: StreamClient, branch: str, source_id: str) -> None:
         """Create the standard logs/metrics/traces sinks for an OTLP source.
 
-        Idempotent: only signals without an existing sink are created, so a
-        re-run (or ``--if-not-exists`` against a half-provisioned source) heals
-        the set rather than erroring on a conflict.
+        Delegates to the shared :func:`provision_otlp_sinks` helper so the CLI
+        path and the importable :meth:`KeboolaClient.create_stream_source` stay
+        in lock-step (idempotent: only missing signals are created).
         """
-        existing_signals: set[str] = set()
-        for sink in client.list_sinks(branch, source_id).get("sinks", []):
-            existing_signals.update(sink.get("allowedSignals") or [])
-        columns = [dict(col) for col in OTLP_SINK_COLUMNS]
-        for signal in OTLP_SINK_SIGNALS:
-            if signal in existing_signals:
-                continue
-            table_id = f"{OTLP_BUCKET_PREFIX}{source_id}.{signal}"
-            task = client.create_sink(
-                branch,
-                source_id,
-                name=signal.capitalize(),
-                table_id=table_id,
-                columns=columns,
-                allowed_signals=[signal],
-            )
-            client.wait_for_task(task)
+        provision_otlp_sinks(client, branch, source_id)
 
     def get_source_detail(
         self,
@@ -242,12 +223,7 @@ class StreamService:
     @staticmethod
     def _task_source_id(task: dict[str, Any]) -> str | None:
         """Extract the created sourceId from a finished task's outputs."""
-        outputs = task.get("outputs")
-        if isinstance(outputs, dict):
-            source_id = outputs.get("sourceId")
-            if isinstance(source_id, str):
-                return source_id
-        return None
+        return stream_task_source_id(task)
 
     @staticmethod
     def _summarise_sources(raw: dict[str, Any]) -> list[dict[str, Any]]:

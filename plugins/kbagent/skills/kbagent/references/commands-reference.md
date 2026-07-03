@@ -135,6 +135,12 @@ Uses the per-project Storage token (no manage token). Control plane = `stream.<r
 - `stream detail [SOURCE_ID | --name NAME] --project NAME [--branch ID] [--reveal]` -- base + per-signal endpoints (`/v1/logs|/v1/traces|/v1/metrics`), protocol `http/protobuf`, destination bucket/tables (from sinks). Secret masked unless `--reveal`
 - `stream delete SOURCE_ID --project NAME [--branch ID] [--dry-run] [--yes|--force]` -- delete a source (destructive; async task polled to completion)
 
+## Scoped Storage Tokens (since v0.66.0)
+Mint, revoke, and rotate scoped Storage API tokens (the Keboola single-bucket-write pattern -- a device/component gets a token that can write to exactly one bucket). Uses the per-project Storage token from config (no manage token); the acting token must have the `canManageTokens` privilege. The token secret is displayed **once** on create/refresh and is never retrievable again. The importable SDK `Client(url, token)` mirrors this surface: `create_scoped_token` / `delete_token` / `refresh_token` (plus the stream-source primitives `create_stream_source` / `get_stream_source` / `list_stream_sources` / `delete_stream_source`) -- dicts on `.raw`, typed `ScopedTokenResult` / `StreamSourceResult` on the facade. See `sdk.md`.
+- `token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]` -- create a scoped token. `--bucket-write` / `--bucket-read` (both repeatable) grant per-bucket permissions; permissions are built read-first then write, so a bucket listed in both ends up writable. `--component-access` (repeatable) restricts the token to named components. `--expires-in N` sets a TTL in seconds. The secret is printed ONCE inside a Rich Panel.
+- `token delete --project NAME --token-id ID [--yes]` -- revoke a token by its numeric id (DELETE `/v2/storage/tokens/{id}` -> 204). Destructive; confirms via prompt unless `--yes` or `--json`.
+- `token refresh --project NAME --token-id ID [--yes]` -- rotate a token's secret (POST `.../refresh`); the new secret is printed ONCE. Confirms unless `--yes` or `--json`.
+
 ## Data Lineage
 - `lineage build -d DIR -o FILE [--refresh] [--ai]` -- build column-level lineage graph from sync'd data
 - `lineage show -l FILE --downstream "project:table" [--columns] [-c COL] [--format text|mermaid|html|er]` -- query downstream dependencies from cache
