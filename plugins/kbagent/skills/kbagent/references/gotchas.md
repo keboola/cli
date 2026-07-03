@@ -2675,7 +2675,7 @@ Other behaviors of this family:
   `data-app create --git-repo <url>` are **external**, so
   `git-credentials-create` returns **409 "no managed Git repository"** for them.
   These two endpoints also need an **admin** storage token
-  (`CanManageAppRepoCredentials`), unlike the read trio which need only the
+  (`CanManageAppRepoCredentials`), unlike `git-repo` which needs only the
   ordinary project storage token.
 - For `--type http_token`, the create response carries a **one-time secret**
   that is printed once and can never be retrieved again (mirrors

@@ -176,8 +176,8 @@ Credential management applies **only to managed git repos**
 `data-app create --use-managed-git-repo`). Apps created via
 `data-app create --git-repo <url>` are **external**, so `git-credentials-create`
 returns 409 "no managed Git repository" for them. Both credential commands also
-need an **admin** storage token (`CanManageAppRepoCredentials`), unlike the read
-trio above which need only the ordinary project storage token.
+need an **admin** storage token (`CanManageAppRepoCredentials`), unlike `git-repo`
+above which needs only the ordinary project storage token.
 
 ### Create an app on a Keboola-MANAGED git repo (since v0.65.0)
 
