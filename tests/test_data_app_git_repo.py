@@ -2,8 +2,8 @@
 ``/apps/{id}/git-repo/*``): service-layer orchestration + CLI dual output.
 
 Service tests mock the Data Science client factory and assert the
-camelCase->snake_case translation, the raw-array shapes, the managed-repo
-credential mutex validation, and that the one-time secret surfaces only for
+camelCase->snake_case translation, the managed-repo credential mutex
+validation, and that the one-time secret surfaces only for
 ``http_token`` (and never leaks into the credential *list*). CLI tests patch
 the cli.py service factory and assert exit codes, JSON envelopes, the
 ``--type`` / ``--public-key`` usage validation, and the one-time-secret print.
@@ -98,33 +98,6 @@ class TestGitRepoService:
         assert result["is_managed_git_repo"] is False
         assert result["app_id"] == "42"
         ds.close.assert_called_once()
-
-    def test_list_branches_normalizes_items(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        ds = MagicMock()
-        ds.list_git_branches.return_value = [
-            {
-                "branch": "master",
-                "sha": "8bd2197",
-                "comment": "Make spirals more awesome",
-                "author": {"name": "Thiago", "email": "t@example.com"},
-                "date": "2023-11-02T12:32:17-07:00",
-            }
-        ]
-        result = _make_service(store, ds).list_data_app_git_branches("prod", "42")
-        assert result["count"] == 1
-        branch = result["branches"][0]
-        assert branch["branch"] == "master"
-        assert branch["author"]["name"] == "Thiago"
-        assert branch["author"]["email"] == "t@example.com"
-
-    def test_list_entrypoints_passes_through(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        ds = MagicMock()
-        ds.list_git_entrypoints.return_value = ["streamlit_app.py", "app.py"]
-        result = _make_service(store, ds).list_data_app_git_entrypoints("prod", "42")
-        assert result["entrypoints"] == ["streamlit_app.py", "app.py"]
-        assert result["count"] == 2
 
     def test_list_credentials_never_leaks_secret(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -300,50 +273,6 @@ class TestGitRepoCli:
         assert result.exit_code == 1, result.output
         body = json.loads(result.output)
         assert body["status"] == "error"
-
-    def test_git_branches_human(self, tmp_path: Path) -> None:
-        store = _store(tmp_path)
-        mock = MagicMock()
-        mock.list_data_app_git_branches.return_value = {
-            "project_alias": "prod",
-            "app_id": "42",
-            "branches": [
-                {
-                    "branch": "master",
-                    "sha": "8bd2197",
-                    "comment": "Make spirals more awesome",
-                    "author": {"name": "Thiago", "email": "t@example.com"},
-                    "date": "2023-11-02T12:32:17-07:00",
-                }
-            ],
-            "count": 1,
-        }
-        result = _invoke(
-            ["data-app", "git-branches", "--project", "prod", "--app-id", "42"],
-            store=store,
-            data_app_mock=mock,
-        )
-        assert result.exit_code == 0, result.output
-        assert "master" in result.output
-        assert "8bd2197" in result.output
-
-    def test_git_entrypoints_json(self, tmp_path: Path) -> None:
-        store = _store(tmp_path)
-        mock = MagicMock()
-        mock.list_data_app_git_entrypoints.return_value = {
-            "project_alias": "prod",
-            "app_id": "42",
-            "entrypoints": ["streamlit_app.py"],
-            "count": 1,
-        }
-        result = _invoke(
-            ["--json", "data-app", "git-entrypoints", "--project", "prod", "--app-id", "42"],
-            store=store,
-            data_app_mock=mock,
-        )
-        assert result.exit_code == 0, result.output
-        body = json.loads(result.output)
-        assert body["data"]["entrypoints"] == ["streamlit_app.py"]
 
     def test_git_credentials_empty(self, tmp_path: Path) -> None:
         store = _store(tmp_path)
@@ -543,27 +472,6 @@ class TestGitRepoClient:
         with self._client() as client:
             repo = client.get_git_repo("42")
         assert repo["isManagedGitRepo"] is True
-
-    def test_list_branches_returns_raw_array(self, httpx_mock) -> None:
-        httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps/42/git-repo/branches",
-            json=[{"branch": "master", "sha": "abc", "author": {"name": "x", "email": "y"}}],
-            status_code=200,
-        )
-        with self._client() as client:
-            branches = client.list_git_branches("42")
-        assert isinstance(branches, list)
-        assert branches[0]["branch"] == "master"
-
-    def test_list_entrypoints_returns_raw_string_array(self, httpx_mock) -> None:
-        httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps/42/git-repo/entrypoints",
-            json=["streamlit_app.py", "app.py"],
-            status_code=200,
-        )
-        with self._client() as client:
-            entrypoints = client.list_git_entrypoints("42")
-        assert entrypoints == ["streamlit_app.py", "app.py"]
 
     def test_list_credentials_wrapped(self, httpx_mock) -> None:
         httpx_mock.add_response(

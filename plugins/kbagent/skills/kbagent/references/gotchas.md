@@ -2650,25 +2650,26 @@ forking `kbagent`, and never needs those super-admin credentials. `KBC_TOKEN`
 (storage) is retained, and `cli_command` tasks are unchanged. (Private advisory
 GHSA-wm54-r2hh-cxm9.)
 
-## `data-app git-repo` / `git-branches` / `git-entrypoints` need a deployed app (since v0.63.3)
+## `data-app git-repo` needs a deployed app (since v0.63.3)
 
-The three git-repo introspection commands (sandboxes-service
-`GET /apps/{id}/git-repo`, `/branches`, `/entrypoints`) return **409 "App has no
-Git repository configured"** until the app has been **deployed at least once** --
-even though `data-app create --git-repo <url>` already wrote the git block into
-the Storage config. The git block is synced from the Storage config into the
-Data Science app record at *deploy* time; a `--no-deploy` app has no git repo
-from the service's point of view. Fix: run `kbagent data-app deploy` (the sync
-happens before the container build, so it works even if the build later fails),
-then re-run the git-repo command.
+The git-repo introspection command (sandboxes-service
+`GET /apps/{id}/git-repo`) returns **409 "App has no Git repository
+configured"** until the app has been **deployed at least once** -- even though
+`data-app create --git-repo <url>` already wrote the git block into the Storage
+config. The git block is synced from the Storage config into the Data Science
+app record at *deploy* time; a `--no-deploy` app has no git repo from the
+service's point of view. Fix: run `kbagent data-app deploy` (the sync happens
+before the container build, so it works even if the build later fails), then
+re-run the git-repo command.
+
+> **Removed in v0.66.1:** `data-app git-branches` and `data-app git-entrypoints`
+> were dropped -- the sandboxes-service backend removed the underlying
+> `/git-repo/branches` and `/git-repo/entrypoints` endpoints (they cannot work
+> for managed git repos and will be reworked via git-service). Use `git-repo`
+> for clone-URL introspection.
 
 Other behaviors of this family:
 
-- `git-branches` returns a **raw top-level JSON array** of
-  `{branch, sha, comment, author{...}, date}` (not wrapped in
-  `{branches: [...]}`); `git-entrypoints` returns a **raw `array<string>`** of
-  root-level filenames. The service hardcodes the entrypoint extension to `.py`,
-  so non-Python entrypoints are never listed.
 - `git-credentials` / `git-credentials-create` only apply to a **managed** git
   repo (`app.managedGitRepoId` set). Apps created via
   `data-app create --git-repo <url>` are **external**, so
@@ -2699,9 +2700,9 @@ The end-to-end flow that is **verified to deploy and serve** (tic-tac-toe on
 3. `git push https://<token>@<managed-host>/.../app-<id>.git <local>:main`
    (token authenticates as the username, Gitea-style; or as the password with any
    username).
-4. `data-app git-repo` / `git-branches` / `git-entrypoints` introspect the repo
-   immediately -- **unlike external repos, no prior deploy is needed** (managed
-   resolves via `managedGitRepoId`, returns `is_managed_git_repo: true` + URLs).
+4. `data-app git-repo` introspects the repo immediately -- **unlike external
+   repos, no prior deploy is needed** (managed resolves via `managedGitRepoId`,
+   returns `is_managed_git_repo: true` + URLs).
 5. `data-app deploy` -> clones + builds + runs. **No credential wiring needed:**
    the platform injects the `git clone` credentials at deploy time (per the
    sandboxes-service `tests/e2e/scripts/testManagedGitRepo.sh` contract), so a

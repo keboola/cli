@@ -7,10 +7,10 @@ bottom of ``data_app.py`` -- so they still surface as
 ``kbagent data-app git-*`` and the permission gate
 (``data-app.<subcommand>``) and CLI command-sync checks see them unchanged.
 
-Read trio (git-repo / git-branches / git-entrypoints) needs only the project
-storage token; the credential pair (git-credentials /
-git-credentials-create) needs an admin storage token and targets *managed*
-git repos only. See ``references/gotchas.md`` for the deploy-once precondition.
+``git-repo`` needs only the project storage token; the credential pair
+(git-credentials / git-credentials-create) needs an admin storage token and
+targets *managed* git repos only. See ``references/gotchas.md`` for the
+deploy-once precondition.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import get_formatter, get_service, map_error_to_exit_code
@@ -30,7 +29,7 @@ _GIT_CRED_PERMISSIONS = ("readOnly", "readWrite")
 
 
 def register_git_commands(app: typer.Typer) -> None:
-    """Attach the five ``data-app git-*`` commands to the data-app sub-app."""
+    """Attach the ``data-app git-*`` commands to the data-app sub-app."""
 
     @app.command("git-repo")
     def data_app_git_repo(
@@ -71,91 +70,6 @@ def register_git_commands(app: typer.Typer) -> None:
                 c.print(f"  [bold]HTTPS URL:[/bold] {d.get('https_url') or '-'}"),
             ),
         )
-
-    @app.command("git-branches")
-    def data_app_git_branches(
-        ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
-        app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
-    ) -> None:
-        """List the remote branches of a data app's git repository."""
-        formatter = get_formatter(ctx)
-        service = get_service(ctx, "data_app_git_service")
-        try:
-            result = service.list_data_app_git_branches(alias=project, app_id=app_id)
-        except KeboolaApiError as exc:
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                retryable=exc.retryable,
-                details=exc.details,
-            )
-            raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-        except ConfigError as exc:
-            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-            raise typer.Exit(code=5) from None
-
-        def _human(c: Console, d: dict) -> None:
-            branches = d.get("branches", [])
-            if not branches:
-                c.print("[dim]No branches returned.[/dim]")
-                return
-            c.print(
-                f"\n[bold]{d['count']} branch(es)[/bold] "
-                f"(app {d['app_id']} in {d['project_alias']})"
-            )
-            for b in branches:
-                author = b.get("author", {})
-                c.print(
-                    f"  [bold cyan]{b['branch']}[/bold cyan] "
-                    f"[yellow]{b.get('sha', '')}[/yellow] "
-                    f"[dim]{author.get('name', '')} · {b.get('date', '')}[/dim]"
-                )
-                if b.get("comment"):
-                    c.print(f"      {escape(b['comment'])}")
-
-        formatter.output(result, _human)
-
-    @app.command("git-entrypoints")
-    def data_app_git_entrypoints(
-        ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
-        app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
-    ) -> None:
-        """List root-level .py entrypoint files of a data app's git repository.
-
-        The server only lists Python (.py) files at the repo root on the
-        configured branch (or the repo default).
-        """
-        formatter = get_formatter(ctx)
-        service = get_service(ctx, "data_app_git_service")
-        try:
-            result = service.list_data_app_git_entrypoints(alias=project, app_id=app_id)
-        except KeboolaApiError as exc:
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                retryable=exc.retryable,
-                details=exc.details,
-            )
-            raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-        except ConfigError as exc:
-            formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-            raise typer.Exit(code=5) from None
-
-        def _human(c: Console, d: dict) -> None:
-            entrypoints = d.get("entrypoints", [])
-            if not entrypoints:
-                c.print("[dim]No .py entrypoints found at the repo root.[/dim]")
-                return
-            c.print(
-                f"\n[bold]{d['count']} entrypoint(s)[/bold] "
-                f"(app {d['app_id']} in {d['project_alias']})"
-            )
-            for name in entrypoints:
-                c.print(f"  [cyan]{name}[/cyan]")
-
-        formatter.output(result, _human)
 
     @app.command("git-credentials")
     def data_app_git_credentials(

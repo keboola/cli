@@ -869,17 +869,6 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     config into the Data Science app record at deploy time, so a fresh
     --no-deploy app has no git repo from the service's point of view.
 
-  kbagent data-app git-branches --project NAME --app-id ID
-    List the remote branches of the app's git repository with commit
-    metadata (branch, sha, comment, author name+email, date). Raw
-    top-level array from the server. Same deploy-once precondition as
-    git-repo.
-
-  kbagent data-app git-entrypoints --project NAME --app-id ID
-    List root-level .py entrypoint files of the app's git repository on the
-    configured branch. Extension is hardcoded to py server-side (non-Python
-    entrypoints are not listable). Same deploy-once precondition.
-
   kbagent data-app git-credentials --project NAME --app-id ID
     List the credentials of the app's MANAGED git repository (id, type,
     permissions, name, owner_admin_id, created_at). The secret is NEVER

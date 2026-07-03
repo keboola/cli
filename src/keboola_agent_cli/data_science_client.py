@@ -275,9 +275,9 @@ class DataScienceClient(BaseHttpClient):
     # is deployed from. Ground truth: keboola/sandboxes-service server
     # source + docs/swagger.yaml. Two functional groups:
     #
-    #   * Repo introspection (git-repo, /branches, /entrypoints) -- works
-    #     for ANY configured repo (managed or external); auth = the same
-    #     X-StorageApi-Token, permission CanManageApp.
+    #   * Repo introspection (git-repo) -- works for ANY configured repo
+    #     (managed or external); auth = the same X-StorageApi-Token,
+    #     permission CanManageApp.
     #   * Credential management (/credentials GET + POST) -- ONLY for a
     #     *managed* git repo (app.managedGitRepoId set); a repo configured
     #     via `data-app create --git-repo <url>` is *external*, so these
@@ -285,9 +285,6 @@ class DataScienceClient(BaseHttpClient):
     #     (CanManageAppRepoCredentials).
     #
     # IMPORTANT response-shape gotchas (verified in both sources):
-    #   * /branches returns a RAW top-level JSON array (NOT wrapped in
-    #     {branches: [...]}).
-    #   * /entrypoints returns a RAW top-level array<string>.
     #   * /credentials (GET) IS wrapped: {"credentials": [...]}.
     #   * POST /credentials returns the created credential; the one-time
     #     ``secret`` is present ONLY for type=http_token and ONLY here.
@@ -305,32 +302,6 @@ class DataScienceClient(BaseHttpClient):
         response = self._do_request("GET", f"/apps/{quote(str(app_id), safe='')}/git-repo")
         body = response.json()
         return body if isinstance(body, dict) else {}
-
-    def list_git_branches(self, app_id: str) -> list[dict[str, Any]]:
-        """List the remote branches of the app's configured git repository.
-
-        Returns the server's RAW top-level array of branch objects
-        ``[{"branch", "comment", "sha", "author": {"name", "email"},
-        "date"}]`` (HEAD/origin/HEAD filtered, sorted by name). Works for
-        managed and external repos alike.
-        """
-        response = self._do_request("GET", f"/apps/{quote(str(app_id), safe='')}/git-repo/branches")
-        body = response.json()
-        return body if isinstance(body, list) else []
-
-    def list_git_entrypoints(self, app_id: str) -> list[str]:
-        """List root-level ``.py`` entrypoint files of the app's repo.
-
-        Returns the server's RAW top-level ``array<string>`` of root
-        filenames on the configured branch (or the repo default).
-        Extension is hardcoded to ``py`` server-side, so non-Python
-        entrypoints are not listable here.
-        """
-        response = self._do_request(
-            "GET", f"/apps/{quote(str(app_id), safe='')}/git-repo/entrypoints"
-        )
-        body = response.json()
-        return [str(item) for item in body] if isinstance(body, list) else []
 
     def list_git_credentials(self, app_id: str) -> dict[str, Any]:
         """List the credentials of the app's MANAGED git repository.

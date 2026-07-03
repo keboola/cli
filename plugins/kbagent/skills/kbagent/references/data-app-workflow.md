@@ -142,24 +142,17 @@ GitHub call budget per run is ≤5 (1 tree + ≤4 contents) regardless of repo s
 # Clone URLs + whether the repo is managed by Keboola:
 kbagent data-app git-repo --project prod --app-id 12345678
 #   ssh_url / https_url / is_managed_git_repo
-
-# Remote branches with commit metadata (branch, sha, comment, author, date):
-kbagent data-app git-branches --project prod --app-id 12345678
-
-# Root-level .py entrypoint files on the configured branch:
-kbagent data-app git-entrypoints --project prod --app-id 12345678
 ```
 
-These read the repo *the app is actually deployed from*, via the
-sandboxes-service (`GET /apps/{id}/git-repo`, `/branches`, `/entrypoints`).
-They complement `validate-repo`, which inspects an arbitrary repo URL via the
-GitHub API *before* you create an app; the `git-*` commands inspect the repo of
-an *existing* app server-side.
+This reads the repo *the app is actually deployed from*, via the
+sandboxes-service (`GET /apps/{id}/git-repo`). It complements `validate-repo`,
+which inspects an arbitrary repo URL via the GitHub API *before* you create an
+app; `git-repo` inspects the repo of an *existing* app server-side.
 
 **Precondition:** the app must have been **deployed at least once**. The git
 block is synced from the Storage config into the Data Science app record at
 deploy time, so a fresh `--no-deploy` app returns 409 "no Git repository
-configured" from all three. Run `data-app deploy` first.
+configured". Run `data-app deploy` first.
 
 ### Manage git credentials for a managed repo (since v0.63.3)
 

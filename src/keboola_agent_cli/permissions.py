@@ -173,8 +173,6 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.validate-repo": "read",
     # Data apps - git-repo introspection + managed-repo credentials
     "data-app.git-repo": "read",
-    "data-app.git-branches": "read",
-    "data-app.git-entrypoints": "read",
     "data-app.git-credentials": "read",
     "data-app.git-credentials-create": "write",
     # Developer Portal — identity sub-app leaves (composed by the
