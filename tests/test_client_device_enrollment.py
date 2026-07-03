@@ -274,11 +274,18 @@ class TestCreateStreamSource:
 
 class TestGetStreamSource:
     def test_happy_path(self, httpx_mock) -> None:
-        """get_stream_source flattens the source and derives the OTLP bucket."""
+        """get_stream_source flattens the source and derives the sink bucket from ACTUAL sinks."""
         httpx_mock.add_response(
             url=f"{STREAM_BASE_URL}/v1/branches/default/sources/device-42",
             method="GET",
             json=OTLP_SOURCE,
+        )
+        # sink_bucket_id is derived from the source's real sinks (their table id),
+        # not assumed from the source type.
+        httpx_mock.add_response(
+            url=f"{STREAM_BASE_URL}/v1/branches/default/sources/device-42/sinks",
+            method="GET",
+            json={"sinks": [{"table": {"tableId": "in.c-otlp-device-42.logs"}}]},
         )
 
         client = _make_client()
@@ -290,6 +297,31 @@ class TestGetStreamSource:
         assert result["id"] == "device-42"
         assert result["otlp_secret"] == "S3CRET"
         assert result["sink_bucket_id"] == "in.c-otlp-device-42"
+
+    def test_no_sinks_returns_none_bucket(self, httpx_mock) -> None:
+        """An OTLP source with no provisioned sinks reports sink_bucket_id=None.
+
+        Guards against assuming ``in.c-otlp-<id>`` exists when it does not (a
+        consumer would otherwise scope a device token to a missing bucket).
+        """
+        httpx_mock.add_response(
+            url=f"{STREAM_BASE_URL}/v1/branches/default/sources/device-42",
+            method="GET",
+            json=OTLP_SOURCE,
+        )
+        httpx_mock.add_response(
+            url=f"{STREAM_BASE_URL}/v1/branches/default/sources/device-42/sinks",
+            method="GET",
+            json={"sinks": []},
+        )
+
+        client = _make_client()
+        try:
+            result = client.get_stream_source("device-42")
+        finally:
+            client.close()
+
+        assert result["sink_bucket_id"] is None
 
 
 class TestListStreamSources:

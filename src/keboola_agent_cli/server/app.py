@@ -56,6 +56,7 @@ from .routers import (
     sharing,
     storage,
     stream,
+    token,
     workspaces,
 )
 
@@ -160,6 +161,16 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "delete ingest sources and retrieve their endpoints. The OTLP "
             "URL embeds a secret that is masked unless `reveal=true`. "
             "Mirrors `kbagent stream list|create-source|detail|delete`."
+        ),
+    },
+    {
+        "name": "token",
+        "description": (
+            "**Project Management.** "
+            "Scoped Storage API tokens -- mint (bucket read/write + component "
+            "access + expiry), rotate, and revoke. A minted/rotated token's "
+            "secret is returned ONCE; the acting token needs canManageTokens. "
+            "Mirrors `kbagent token create|delete|refresh`."
         ),
     },
     {
@@ -622,6 +633,7 @@ def create_app(
     app.include_router(components.router)
     app.include_router(storage.router)
     app.include_router(stream.router)
+    app.include_router(token.router)
     app.include_router(jobs.router)
     app.include_router(branches.router)
     app.include_router(workspaces.router)

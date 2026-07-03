@@ -543,17 +543,34 @@ class KeboolaClient(BaseHttpClient):
         source = stream.get_source(branch_id, source_id)
         return self._stream_source_detail(source, branch_id, sink_bucket_id)
 
+    @staticmethod
+    def _sink_bucket_from_sinks(sinks_raw: dict[str, Any]) -> str | None:
+        """Return the bucket of the source's first table sink, or None if it has none.
+
+        Derived from the ACTUAL sinks rather than assumed from the source type,
+        so a source created with ``provision_sinks=False`` (or outside kbagent)
+        truthfully reports ``None`` instead of a bucket that does not exist.
+        """
+        for sink in sinks_raw.get("sinks", []):
+            table_id = (sink.get("table") or {}).get("tableId", "")
+            if "." in table_id:
+                return table_id.rsplit(".", 1)[0]
+        return None
+
     def get_stream_source(
         self, source_id: str, *, branch_id: str = STREAM_DEFAULT_BRANCH
     ) -> dict[str, Any]:
-        """Fetch one stream source's detail (endpoint + secret + sink bucket)."""
-        source = self._get_stream_client().get_source(branch_id, source_id)
-        sink_bucket_id = (
-            f"{OTLP_BUCKET_PREFIX}{source.get('sourceId', source_id)}"
-            if source.get("type") == "otlp"
-            else None
-        )
-        return self._stream_source_detail(source, branch_id, sink_bucket_id)
+        """Fetch one stream source's detail (endpoint + secret + sink bucket).
+
+        ``sink_bucket_id`` reflects the source's ACTUAL sinks (``None`` when it
+        has none -- e.g. created with ``provision_sinks=False`` or outside
+        kbagent), so a caller never scopes a device token to a bucket that does
+        not exist.
+        """
+        stream = self._get_stream_client()
+        source = stream.get_source(branch_id, source_id)
+        sinks = stream.list_sinks(branch_id, source.get("sourceId", source_id))
+        return self._stream_source_detail(source, branch_id, self._sink_bucket_from_sinks(sinks))
 
     def list_stream_sources(
         self, *, branch_id: str = STREAM_DEFAULT_BRANCH

@@ -33,6 +33,7 @@ EXPECTED_ROUTER_PREFIXES = {
     "/components",
     "/storage/buckets",
     "/stream/{project}/list",
+    "/token/{project}/create",
     "/jobs",
     "/branches",
     "/workspaces",
