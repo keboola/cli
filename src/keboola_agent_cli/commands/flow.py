@@ -829,6 +829,16 @@ def flow_schedule(
             f"  Scheduler config: {escape(result.get('schedule_name', ''))} "
             f"[dim](ID: {escape(result.get('schedule_id', ''))})[/dim]"
         )
+        if result.get("activated"):
+            formatter.console.print(
+                "  [green]Activated[/green] in Scheduler Service "
+                f"[dim](schedule ID: {escape(result.get('activated_schedule_id', ''))})[/dim]"
+            )
+        else:
+            formatter.console.print(
+                "  [yellow]Not activated[/yellow] — dev-branch schedules activate on deploy "
+                "to production."
+            )
 
 
 # ---------------------------------------------------------------------------

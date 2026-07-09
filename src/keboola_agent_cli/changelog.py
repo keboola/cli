@@ -24,6 +24,15 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.66.1": [
+        "Fix: `flow schedule` now ACTIVATES the schedule in the Scheduler Service, not just "
+        "writes the keboola.scheduler config. Previously the command created the config with "
+        "state=enabled but never called the Scheduler microservice, so the schedule was never "
+        "registered and never fired -- matching the UI, which does both steps. Activation runs "
+        "only on production (dev-branch schedules activate on deploy). `flow schedule-remove` "
+        "symmetrically deactivates the Scheduler Service registration before deleting the "
+        "config, so removal no longer orphans an activation (and its scheduler token).",
+    ],
     "0.66.0": [
         "New: device-enrollment primitives on the importable library -- a hosted Data App can now mint "
         "per-device credentials in-process (no CLI subprocess, no master token on the device). "

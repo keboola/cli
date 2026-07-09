@@ -174,6 +174,7 @@ class KeboolaClient(BaseHttpClient):
         self._queue_client: httpx.Client | None = None
         self._query_client: httpx.Client | None = None
         self._encrypt_client: httpx.Client | None = None
+        self._scheduler_client: httpx.Client | None = None
         # Lazily built on first Data Streams call (per-device OTLP sources); the
         # Stream control plane is a sibling host reachable from this stack+token.
         self._stream_client: StreamClient | None = None
@@ -196,6 +197,10 @@ class KeboolaClient(BaseHttpClient):
     def _encrypt_base_url(self) -> str:
         return self._derive_service_url(self._stack_url, "encryption")
 
+    @property
+    def _scheduler_base_url(self) -> str:
+        return self._derive_service_url(self._stack_url, "scheduler")
+
     def close(self) -> None:
         """Close the underlying HTTP clients."""
         super().close()
@@ -205,6 +210,8 @@ class KeboolaClient(BaseHttpClient):
             self._query_client.close()
         if self._encrypt_client is not None:
             self._encrypt_client.close()
+        if self._scheduler_client is not None:
+            self._scheduler_client.close()
         if self._stream_client is not None:
             self._stream_client.close()
 
@@ -263,6 +270,69 @@ class KeboolaClient(BaseHttpClient):
         return self._do_request(
             method, path, client=client, base_url=self._encrypt_base_url, **kwargs
         )
+
+    def _scheduler_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """Execute a Scheduler Service API request with retry."""
+        client = self._get_or_create_sub_client("_scheduler_client", self._scheduler_base_url)
+        return self._do_request(
+            method, path, client=client, base_url=self._scheduler_base_url, **kwargs
+        )
+
+    def activate_schedule(
+        self,
+        configuration_id: str,
+        configuration_version_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Activate a keboola.scheduler configuration in the Scheduler Service.
+
+        Creating a keboola.scheduler *configuration* via the Storage API only
+        stores the cron/target JSON -- it does NOT register the schedule with
+        the Scheduler microservice, so the schedule never fires. Activation is
+        the separate step that registers the schedule (and mints its scheduler
+        token) so it actually runs on the cron cadence.
+
+        Args:
+            configuration_id: The keboola.scheduler configuration ID to activate.
+            configuration_version_id: Optional specific configuration version to
+                pin. Defaults to the latest version when omitted.
+
+        Returns:
+            The activated schedule record, including its ``id`` (schedule ID).
+        """
+        body: dict[str, Any] = {"configurationId": str(configuration_id)}
+        if configuration_version_id is not None:
+            body["configurationVersionId"] = str(configuration_version_id)
+        response = self._scheduler_request("POST", "/schedules", json=body)
+        return response.json()
+
+    def list_activated_schedules(self, configuration_id: str | None = None) -> list[dict[str, Any]]:
+        """List schedules activated in the Scheduler Service for this project.
+
+        Args:
+            configuration_id: Optional keboola.scheduler configuration ID to
+                filter by (client-side); when omitted, returns every activated
+                schedule the token can see.
+
+        Returns:
+            List of activated schedule records (each with ``id`` and
+            ``configurationId``).
+        """
+        response = self._scheduler_request("GET", "/schedules")
+        payload = response.json()
+        schedules = payload if isinstance(payload, list) else payload.get("schedules", [])
+        if configuration_id is None:
+            return schedules
+        return [s for s in schedules if str(s.get("configurationId", "")) == str(configuration_id)]
+
+    def deactivate_schedule(self, schedule_id: str) -> None:
+        """Deactivate (delete) an activated schedule in the Scheduler Service.
+
+        Removes the Scheduler Service registration and its scheduler token so a
+        deleted keboola.scheduler config does not leave an orphaned activation
+        that keeps firing (or errors) against a config that no longer exists.
+        """
+        safe_id = quote(str(schedule_id), safe="")
+        self._scheduler_request("DELETE", f"/schedules/{safe_id}")
 
     def encrypt_values(
         self,

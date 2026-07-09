@@ -396,13 +396,42 @@ def test_set_flow_schedule_targets_keboola_flow():
     client = MagicMock()
     client.get_config_detail.return_value = {"name": "CF"}
     client.list_component_configs.return_value = []
-    client.create_config.return_value = {"id": "77"}
+    client.create_config.return_value = {"id": "77", "version": 1}
+    client.activate_schedule.return_value = {"id": "sched-9"}
     svc = _make_flow_service(client)
     result = svc.set_flow_schedule(alias="prod", config_id="5", cron_tab="0 6 * * *")
     # scheduler config created with target.componentId == keboola.flow
     cfg = client.create_config.call_args.kwargs["configuration"]
     assert cfg["target"]["componentId"] == "keboola.flow"
     assert result["component_id"] == "keboola.flow"
+
+
+def test_set_flow_schedule_activates_in_scheduler_service():
+    client = MagicMock()
+    client.get_config_detail.return_value = {"name": "CF"}
+    client.list_component_configs.return_value = []
+    client.create_config.return_value = {"id": "77", "version": 3}
+    client.activate_schedule.return_value = {"id": "sched-9"}
+    svc = _make_flow_service(client)
+    result = svc.set_flow_schedule(alias="prod", config_id="5", cron_tab="0 6 * * *")
+    # The keboola.scheduler config is activated in the Scheduler Service so it
+    # actually fires -- creating the config alone would never run.
+    client.activate_schedule.assert_called_once_with("77", configuration_version_id="3")
+    assert result["activated"] is True
+    assert result["activated_schedule_id"] == "sched-9"
+
+
+def test_set_flow_schedule_skips_activation_on_dev_branch():
+    client = MagicMock()
+    client.get_config_detail.return_value = {"name": "CF"}
+    client.list_component_configs.return_value = []
+    client.create_config.return_value = {"id": "77", "version": 1}
+    svc = _make_flow_service(client)
+    result = svc.set_flow_schedule(alias="prod", config_id="5", cron_tab="0 6 * * *", branch_id=123)
+    # Dev-branch schedules are activated on deploy to production, not here.
+    client.activate_schedule.assert_not_called()
+    assert result["activated"] is False
+    assert result["activated_schedule_id"] is None
 
 
 def test_remove_flow_schedule_filters_keboola_flow():
@@ -415,7 +444,31 @@ def test_remove_flow_schedule_filters_keboola_flow():
             },
         }
     ]
+    client.list_activated_schedules.return_value = []
     svc = _make_flow_service(client)
     result = svc.remove_flow_schedule(alias="prod", config_id="5")
     assert result["deleted_count"] == 1
     assert result["component_id"] == "keboola.flow"
+
+
+def test_remove_flow_schedule_deactivates_scheduler_service():
+    client = MagicMock()
+    client.list_component_configs.return_value = [
+        {
+            "id": "77",
+            "configuration": {
+                "target": {"componentId": "keboola.flow", "configurationId": "5"},
+            },
+        }
+    ]
+    # An activation exists for the keboola.scheduler config being deleted.
+    client.list_activated_schedules.return_value = [
+        {"id": "sched-9", "configurationId": "77"},
+        {"id": "sched-other", "configurationId": "88"},
+    ]
+    svc = _make_flow_service(client)
+    result = svc.remove_flow_schedule(alias="prod", config_id="5")
+    # Only the matching activation is removed, before the config itself.
+    client.deactivate_schedule.assert_called_once_with("sched-9")
+    assert result["deactivated_schedule_ids"] == ["sched-9"]
+    assert result["deleted_count"] == 1

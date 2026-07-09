@@ -689,19 +689,41 @@ class FlowService(BaseService):
                     branch_id=effective_branch,
                 )
                 status = "created"
+
+            scheduler_config_id = str(result.get("id", existing_id or ""))
+
+            # Activate the scheduler config in the Scheduler Service. Creating
+            # the keboola.scheduler config above only stores the cron JSON in
+            # Storage -- without this step the Scheduler microservice never
+            # learns about it and the schedule never fires, even with
+            # state="enabled". Activation is only meaningful on production;
+            # dev-branch schedules are activated when the branch is deployed.
+            activated = False
+            activated_schedule_id: str | None = None
+            if effective_branch is None:
+                schedule = client.activate_schedule(
+                    scheduler_config_id,
+                    configuration_version_id=str(result["version"])
+                    if result.get("version") is not None
+                    else None,
+                )
+                activated = True
+                activated_schedule_id = str(schedule.get("id", ""))
         finally:
             client.close()
 
         return {
             "status": status,
             "project_alias": alias,
-            "schedule_id": str(result.get("id", existing_id or "")),
+            "schedule_id": scheduler_config_id,
             "schedule_name": schedule_name,
             "component_id": FLOW_COMPONENT_ID,
             "config_id": config_id,
             "cron_tab": cron_tab,
             "timezone": timezone,
             "state": "enabled" if enabled else "disabled",
+            "activated": activated,
+            "activated_schedule_id": activated_schedule_id,
             "branch_id": effective_branch,
         }
 
@@ -731,7 +753,23 @@ class FlowService(BaseService):
                 else:
                     raise
 
+            # On production, pull the Scheduler Service registrations once so we
+            # can deactivate them alongside their config. Deleting only the
+            # Storage config would orphan the activation (and its scheduler
+            # token), leaving the Scheduler Service firing against a config that
+            # no longer exists.
+            activated_by_config: dict[str, list[str]] = {}
+            if effective_branch is None:
+                try:
+                    for active in client.list_activated_schedules():
+                        cfg_id = str(active.get("configurationId", ""))
+                        activated_by_config.setdefault(cfg_id, []).append(str(active.get("id", "")))
+                except KeboolaApiError as exc:
+                    if exc.error_code != ErrorCode.NOT_FOUND:
+                        raise
+
             deleted: list[str] = []
+            deactivated: list[str] = []
             errors: list[str] = []
             for sched in all_sched:
                 body = _parse_configuration(sched.get("configuration"))
@@ -740,6 +778,12 @@ class FlowService(BaseService):
                     target.get("configurationId", "")
                 ) == str(config_id):
                     sched_id = str(sched.get("id", ""))
+                    for schedule_id in activated_by_config.get(sched_id, []):
+                        try:
+                            client.deactivate_schedule(schedule_id)
+                            deactivated.append(schedule_id)
+                        except KeboolaApiError as exc:
+                            errors.append(f"{schedule_id}: {exc.message}")
                     try:
                         client.delete_config(
                             SCHEDULER_COMPONENT_ID, sched_id, branch_id=effective_branch
@@ -765,5 +809,6 @@ class FlowService(BaseService):
             "config_id": config_id,
             "deleted_schedule_ids": deleted,
             "deleted_count": len(deleted),
+            "deactivated_schedule_ids": deactivated,
             "branch_id": effective_branch,
         }

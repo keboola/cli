@@ -3702,3 +3702,63 @@ class TestAssertSafeDownloadUrl:
 
         with pytest.raises(KeboolaApiError):
             _assert_safe_download_url("file:///etc/passwd")
+
+
+_SCHED_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
+
+
+class TestSchedulerService:
+    """Scheduler Service activation/deactivation (sibling 'scheduler.' host)."""
+
+    def test_activate_schedule_posts_configuration_id(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url="https://scheduler.keboola.com/schedules",
+            json={"id": "sched-9", "configurationId": "77"},
+            status_code=201,
+        )
+        client = KeboolaClient(stack_url="https://connection.keboola.com", token=_SCHED_TOKEN)
+        result = client.activate_schedule("77", configuration_version_id="3")
+        assert result["id"] == "sched-9"
+        request = httpx_mock.get_request()
+        assert request.method == "POST"
+        assert json.loads(request.content) == {
+            "configurationId": "77",
+            "configurationVersionId": "3",
+        }
+        assert request.headers["x-storageapi-token"] == _SCHED_TOKEN
+        client.close()
+
+    def test_activate_schedule_omits_version_when_absent(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url="https://scheduler.keboola.com/schedules",
+            json={"id": "sched-9"},
+        )
+        client = KeboolaClient(stack_url="https://connection.keboola.com", token=_SCHED_TOKEN)
+        client.activate_schedule("77")
+        request = httpx_mock.get_request()
+        assert json.loads(request.content) == {"configurationId": "77"}
+        client.close()
+
+    def test_list_activated_schedules_filters_by_configuration_id(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url="https://scheduler.keboola.com/schedules",
+            json=[
+                {"id": "sched-9", "configurationId": "77"},
+                {"id": "sched-other", "configurationId": "88"},
+            ],
+        )
+        client = KeboolaClient(stack_url="https://connection.keboola.com", token=_SCHED_TOKEN)
+        result = client.list_activated_schedules(configuration_id="77")
+        assert [s["id"] for s in result] == ["sched-9"]
+        client.close()
+
+    def test_deactivate_schedule_deletes_by_id(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url="https://scheduler.keboola.com/schedules/sched-9",
+            status_code=204,
+        )
+        client = KeboolaClient(stack_url="https://connection.keboola.com", token=_SCHED_TOKEN)
+        client.deactivate_schedule("sched-9")
+        request = httpx_mock.get_request()
+        assert request.method == "DELETE"
+        client.close()
