@@ -727,9 +727,10 @@ class FlowService(BaseService):
                 logger.warning("Scheduler Service activation failed: %s", exc.message)
                 warnings.append(
                     f"Schedule config {schedule_id} was {status} but could not be "
-                    f"activated on the Scheduler Service: {exc.message}. The cron "
-                    "trigger will NOT fire until activation succeeds -- re-run this "
-                    "command with a token that can manage schedules."
+                    f"activated on the Scheduler Service: {exc.message}. The service "
+                    "may not reflect the updated configuration until activation "
+                    "succeeds -- re-run this command with a token that can manage "
+                    "schedules."
                 )
 
         return {

@@ -828,7 +828,9 @@ def flow_schedule(
     else:
         state_label = "[green]enabled[/green]" if enabled else "[yellow]disabled[/yellow]"
         action = result.get("status", "created")
-        activation = " and activated" if result.get("activated") else ""
+        activation = ""
+        if result.get("activated"):
+            activation = " and activated" if enabled else " and deactivated"
         formatter.success(
             f"Schedule {action}{activation}: {escape(cron)} ({escape(timezone)}) — {state_label}"
         )

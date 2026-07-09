@@ -477,7 +477,7 @@ def test_set_flow_schedule_activation_failure_warns_not_raises():
     assert result["status"] == "created"
     assert result["activated"] is False
     assert len(result["warnings"]) == 1
-    assert "NOT fire" in result["warnings"][0]
+    assert "may not reflect" in result["warnings"][0]
 
 
 def test_remove_flow_schedule_filters_keboola_flow():

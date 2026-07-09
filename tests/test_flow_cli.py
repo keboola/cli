@@ -735,6 +735,42 @@ class TestFlowSchedule:
         assert result.exit_code == 0, result.output
         assert "created and activated" in result.output
 
+    def test_schedule_human_mode_reports_deactivated_when_disabled(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.set_flow_schedule.return_value = {
+            "status": "created",
+            "project_alias": "prod",
+            "schedule_id": "sched-99",
+            "schedule_name": "Daily Run (Schedule)",
+            "component_id": "keboola.flow",
+            "config_id": "flow-1",
+            "cron_tab": "0 6 * * *",
+            "timezone": "UTC",
+            "state": "disabled",
+            "activated": True,
+            "branch_id": None,
+            "warnings": [],
+        }
+        result = _invoke(
+            store,
+            mock_flow,
+            [
+                "flow",
+                "schedule",
+                "--project",
+                "prod",
+                "--flow-id",
+                "flow-1",
+                "--cron",
+                "0 6 * * *",
+                "--disabled",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "created and deactivated" in result.output
+        assert "and activated" not in result.output
+
 
 # ---------------------------------------------------------------------------
 # flow schedule-remove
