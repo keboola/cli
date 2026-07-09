@@ -51,11 +51,8 @@ class SchedulerClient(BaseHttpClient):
     def activate_schedule(self, configuration_id: str) -> dict[str, Any]:
         """Register (or refresh) a schedule with the Scheduler Service.
 
-        The service loads the referenced ``keboola.scheduler`` Storage
-        configuration and applies its current state -- an ``enabled`` config
-        gets a live cron trigger, a ``disabled`` one is deregistered. Call
-        this after every create/update of the config; the operation is
-        idempotent.
+        The service loads the referenced config and applies its current
+        state; the operation is idempotent.
 
         Args:
             configuration_id: ID of the ``keboola.scheduler`` Storage
@@ -75,9 +72,7 @@ class SchedulerClient(BaseHttpClient):
     def remove_schedule(self, configuration_id: str) -> None:
         """Deregister a schedule from the Scheduler Service.
 
-        Removes the service-side registration for the given
-        ``keboola.scheduler`` Storage configuration so its cron trigger stops
-        firing. The Storage configuration itself is untouched.
+        The Storage configuration itself is untouched.
 
         Args:
             configuration_id: ID of the ``keboola.scheduler`` Storage

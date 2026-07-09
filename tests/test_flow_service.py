@@ -76,7 +76,6 @@ def _make_scheduler_client() -> MagicMock:
     """Build a mock SchedulerClient usable as a context manager."""
     scheduler = MagicMock()
     scheduler.__enter__.return_value = scheduler
-    scheduler.activate_schedule.return_value = {"id": "77"}
     return scheduler
 
 

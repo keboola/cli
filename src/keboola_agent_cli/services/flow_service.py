@@ -79,6 +79,21 @@ def _parse_configuration(raw: Any) -> dict[str, Any]:
     return raw or {}
 
 
+def _schedules_targeting_flow(
+    all_sched: list[dict[str, Any]], config_id: str
+) -> list[dict[str, Any]]:
+    """Filter keboola.scheduler configs whose target is this keboola.flow config."""
+    matching: list[dict[str, Any]] = []
+    for sched in all_sched:
+        body = _parse_configuration(sched.get("configuration"))
+        target = body.get("target") or {}
+        if target.get("componentId") == FLOW_COMPONENT_ID and str(
+            target.get("configurationId", "")
+        ) == str(config_id):
+            matching.append(sched)
+    return matching
+
+
 def _collect_schedules_by_parent(
     client: Any, branch_id: int | None
 ) -> dict[tuple[str, str], list[dict[str, Any]]]:
@@ -585,22 +600,17 @@ class FlowService(BaseService):
             client.close()
 
         schedules: list[dict[str, Any]] = []
-        for sched in all_sched:
-            body = _parse_configuration(sched.get("configuration"))
-            target = body.get("target") or {}
-            if target.get("componentId") == FLOW_COMPONENT_ID and str(
-                target.get("configurationId", "")
-            ) == str(config_id):
-                sched_info = body.get("schedule") or {}
-                schedules.append(
-                    {
-                        "schedule_id": str(sched.get("id", "")),
-                        "name": sched.get("name", ""),
-                        "cron_tab": sched_info.get("cronTab", ""),
-                        "timezone": sched_info.get("timezone", "UTC"),
-                        "state": sched_info.get("state", "disabled"),
-                    }
-                )
+        for sched in _schedules_targeting_flow(all_sched, config_id):
+            sched_info = _parse_configuration(sched.get("configuration")).get("schedule") or {}
+            schedules.append(
+                {
+                    "schedule_id": str(sched.get("id", "")),
+                    "name": sched.get("name", ""),
+                    "cron_tab": sched_info.get("cronTab", ""),
+                    "timezone": sched_info.get("timezone", "UTC"),
+                    "state": sched_info.get("state", "disabled"),
+                }
+            )
 
         return {
             "project_alias": alias,
@@ -680,15 +690,8 @@ class FlowService(BaseService):
                 else:
                     raise
 
-            existing_id: str | None = None
-            for sched in existing:
-                body = _parse_configuration(sched.get("configuration"))
-                target = body.get("target") or {}
-                if target.get("componentId") == FLOW_COMPONENT_ID and str(
-                    target.get("configurationId", "")
-                ) == str(config_id):
-                    existing_id = str(sched.get("id", ""))
-                    break
+            matching = _schedules_targeting_flow(existing, config_id)
+            existing_id = str(matching[0].get("id", "")) if matching else None
 
             if existing_id:
                 result = client.update_config(
@@ -779,13 +782,10 @@ class FlowService(BaseService):
             deleted: list[str] = []
             errors: list[str] = []
             warnings: list[str] = []
-            with self._scheduler_client_factory(project.stack_url, project.token) as scheduler:
-                for sched in all_sched:
-                    body = _parse_configuration(sched.get("configuration"))
-                    target = body.get("target") or {}
-                    if target.get("componentId") == FLOW_COMPONENT_ID and str(
-                        target.get("configurationId", "")
-                    ) == str(config_id):
+            matching = _schedules_targeting_flow(all_sched, config_id)
+            if matching:
+                with self._scheduler_client_factory(project.stack_url, project.token) as scheduler:
+                    for sched in matching:
                         sched_id = str(sched.get("id", ""))
                         try:
                             scheduler.remove_schedule(sched_id)
