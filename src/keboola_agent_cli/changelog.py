@@ -24,6 +24,20 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.66.1": [
+        "Fix (#479): `flow schedule` now activates the schedule on the Scheduler Service, so the cron "
+        "trigger actually fires. Previously the command only wrote the `keboola.scheduler` Storage "
+        "config; the schedule looked `enabled` but never ran until re-saved in the UI. The command "
+        "now calls `POST /schedules` on the Scheduler Service after the config upsert (also for "
+        "`--disabled`, which deregisters the trigger). An activation failure -- e.g. a token without "
+        "the schedule-management privilege -- keeps the config written, reports `activated: false` + "
+        "a warning, and exits 0. Schedules created by older kbagent versions stay dormant until "
+        "`flow schedule` is re-run on 0.66.1+.",
+        "Fix (#479): `flow schedule-remove` now deregisters each schedule from the Scheduler Service "
+        "(`DELETE /configurations/{id}`) before deleting its Storage config, so removed schedules "
+        "stop firing. Deregistration failures other than 404 are surfaced as warnings and do not "
+        "block the config deletion.",
+    ],
     "0.66.0": [
         "New: device-enrollment primitives on the importable library -- a hosted Data App can now mint "
         "per-device credentials in-process (no CLI subprocess, no master token on the device). "

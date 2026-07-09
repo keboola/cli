@@ -625,11 +625,14 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--timezone TZ] [--enabled/--disabled] [--name NAME] [--branch ID]
     Upsert a cron schedule: updates the existing keboola.scheduler config if one exists, creates one
     otherwise. Calling twice with a new cron replaces the old schedule — no duplicates created.
-    Schedules are stored as Storage API configs, not a separate scheduler service.
+    The config is then activated on the Scheduler Service so the cron trigger fires; an activation
+    failure (e.g. token cannot manage schedules) keeps the config written, sets activated=false, and
+    surfaces a warning (exit stays 0). Re-run with a capable token to activate.
 
   kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
-    Remove all schedules bound to this flow (deletes all matching keboola.scheduler configs).
-    Idempotent: safe to run when no schedules exist.
+    Remove all schedules bound to this flow: each schedule is deregistered from the Scheduler
+    Service, then its keboola.scheduler config is deleted. Idempotent: safe to run when no
+    schedules exist.
 
 ### Schedule Discovery & Audit (Fleet-Wide)
 

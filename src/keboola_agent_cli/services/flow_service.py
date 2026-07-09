@@ -9,7 +9,9 @@ single component keboola.flow. Legacy orchestrator configs are still counted
 
 Flows are semantic sugar over the Storage API config layer -- no separate
 HTTP client is needed.  Schedules are stored as keboola.scheduler configs
-whose ``target`` points at the flow.
+whose ``target`` points at the flow, and are additionally registered with
+the Scheduler Service (via ``SchedulerClient``) -- the Storage config alone
+does not make the cron trigger fire.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ComponentDetail, ProjectConfig
+from ..scheduler_client import SchedulerClient
 from .base import BaseService, ClientFactory
 from .flow_validation import find_unreachable_phases, validate_conditional_flow
 
@@ -34,6 +37,7 @@ LEGACY_FLOW_COMPONENT_ID = "keboola.orchestrator"
 SCHEDULER_COMPONENT_ID = "keboola.scheduler"
 
 AiClientFactory = Callable[[str, str], AiServiceClient]
+SchedulerClientFactory = Callable[[str, str], SchedulerClient]
 
 
 @dataclass(frozen=True)
@@ -53,6 +57,11 @@ class FlowSchemaFetch:
 def default_ai_client_factory(stack_url: str, token: str) -> AiServiceClient:
     """Default factory: build an ``AiServiceClient`` for the given project."""
     return AiServiceClient(stack_url=stack_url, token=token)
+
+
+def default_scheduler_client_factory(stack_url: str, token: str) -> SchedulerClient:
+    """Default factory: build a ``SchedulerClient`` for the given project."""
+    return SchedulerClient(stack_url=stack_url, token=token)
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +135,9 @@ def _collect_schedules_by_parent(
 class FlowService(BaseService):
     """Business logic for conditional flow (keboola.flow) CRUD.
 
-    All schedule operations use keboola.scheduler component configs --
-    no separate Scheduler Service HTTP client required.
+    Schedules are stored as keboola.scheduler component configs AND
+    registered with the Scheduler Service via ``scheduler_client_factory``
+    -- writing the Storage config alone leaves the cron trigger dormant.
 
     The structural conditional-flow JSON Schema is fetched at runtime from the
     stack's component registry (AI Service ``configurationSchema`` for
@@ -139,9 +149,13 @@ class FlowService(BaseService):
         config_store: ConfigStore,
         client_factory: ClientFactory | None = None,
         ai_client_factory: AiClientFactory | None = None,
+        scheduler_client_factory: SchedulerClientFactory | None = None,
     ) -> None:
         super().__init__(config_store, client_factory)
         self._ai_client_factory = ai_client_factory or default_ai_client_factory
+        self._scheduler_client_factory = (
+            scheduler_client_factory or default_scheduler_client_factory
+        )
 
     # ── schema fetch ─────────────────────────────────────────────────
 
@@ -612,7 +626,11 @@ class FlowService(BaseService):
         duplicate schedules when called repeatedly.
 
         The schedule is stored as a keboola.scheduler configuration whose
-        ``target`` points at the keboola.flow component + config.
+        ``target`` points at the keboola.flow component + config, then
+        registered with the Scheduler Service so the cron trigger actually
+        fires. An activation failure (e.g. token without the activation
+        privilege) is non-fatal: the config stays written and the failure is
+        reported via ``warnings`` + ``activated: False`` in the result.
 
         Args:
             alias: Project alias.
@@ -692,17 +710,38 @@ class FlowService(BaseService):
         finally:
             client.close()
 
+        schedule_id = str(result.get("id", existing_id or ""))
+
+        # The service re-reads the config on activation, so this also
+        # deregisters a disabled schedule.
+        warnings: list[str] = []
+        activated = False
+        with self._scheduler_client_factory(project.stack_url, project.token) as scheduler:
+            try:
+                scheduler.activate_schedule(schedule_id)
+                activated = True
+            except KeboolaApiError as exc:
+                logger.warning("Scheduler Service activation failed: %s", exc.message)
+                warnings.append(
+                    f"Schedule config {schedule_id} was {status} but could not be "
+                    f"activated on the Scheduler Service: {exc.message}. The cron "
+                    "trigger will NOT fire until activation succeeds -- re-run this "
+                    "command with a token that can manage schedules."
+                )
+
         return {
             "status": status,
             "project_alias": alias,
-            "schedule_id": str(result.get("id", existing_id or "")),
+            "schedule_id": schedule_id,
             "schedule_name": schedule_name,
             "component_id": FLOW_COMPONENT_ID,
             "config_id": config_id,
             "cron_tab": cron_tab,
             "timezone": timezone,
             "state": "enabled" if enabled else "disabled",
+            "activated": activated,
             "branch_id": effective_branch,
+            "warnings": warnings,
         }
 
     def remove_flow_schedule(
@@ -712,6 +751,12 @@ class FlowService(BaseService):
         branch_id: int | None = None,
     ) -> dict[str, Any]:
         """Delete all keboola.scheduler configs that target this flow.
+
+        Each schedule is first deregistered from the Scheduler Service (so
+        the cron trigger stops firing), then its Storage config is deleted.
+        A missing service-side registration is ignored; other deregistration
+        failures are reported via ``warnings`` and do not block the Storage
+        config deletion.
 
         Idempotent: if no schedules exist, returns deleted_count=0.
         """
@@ -733,20 +778,33 @@ class FlowService(BaseService):
 
             deleted: list[str] = []
             errors: list[str] = []
-            for sched in all_sched:
-                body = _parse_configuration(sched.get("configuration"))
-                target = body.get("target") or {}
-                if target.get("componentId") == FLOW_COMPONENT_ID and str(
-                    target.get("configurationId", "")
-                ) == str(config_id):
-                    sched_id = str(sched.get("id", ""))
-                    try:
-                        client.delete_config(
-                            SCHEDULER_COMPONENT_ID, sched_id, branch_id=effective_branch
-                        )
-                        deleted.append(sched_id)
-                    except KeboolaApiError as exc:
-                        errors.append(f"{sched_id}: {exc.message}")
+            warnings: list[str] = []
+            with self._scheduler_client_factory(project.stack_url, project.token) as scheduler:
+                for sched in all_sched:
+                    body = _parse_configuration(sched.get("configuration"))
+                    target = body.get("target") or {}
+                    if target.get("componentId") == FLOW_COMPONENT_ID and str(
+                        target.get("configurationId", "")
+                    ) == str(config_id):
+                        sched_id = str(sched.get("id", ""))
+                        try:
+                            scheduler.remove_schedule(sched_id)
+                        except KeboolaApiError as exc:
+                            if exc.error_code != ErrorCode.NOT_FOUND:
+                                logger.warning(
+                                    "Scheduler Service deregistration failed: %s", exc.message
+                                )
+                                warnings.append(
+                                    f"Schedule {sched_id} could not be deregistered from "
+                                    f"the Scheduler Service: {exc.message}"
+                                )
+                        try:
+                            client.delete_config(
+                                SCHEDULER_COMPONENT_ID, sched_id, branch_id=effective_branch
+                            )
+                            deleted.append(sched_id)
+                        except KeboolaApiError as exc:
+                            errors.append(f"{sched_id}: {exc.message}")
         finally:
             client.close()
 
@@ -766,4 +824,5 @@ class FlowService(BaseService):
             "deleted_schedule_ids": deleted,
             "deleted_count": len(deleted),
             "branch_id": effective_branch,
+            "warnings": warnings,
         }

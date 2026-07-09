@@ -72,19 +72,30 @@ def _make_ai_client(schema: dict | None = _FLOW_SCHEMA, raise_exc: Exception | N
     return ai
 
 
+def _make_scheduler_client() -> MagicMock:
+    """Build a mock SchedulerClient usable as a context manager."""
+    scheduler = MagicMock()
+    scheduler.__enter__.return_value = scheduler
+    scheduler.activate_schedule.return_value = {"id": "77"}
+    return scheduler
+
+
 def _make_flow_service(
     mock_client: MagicMock,
     projects: dict | None = None,
     ai_client: MagicMock | None = None,
+    scheduler_client: MagicMock | None = None,
 ) -> FlowService:
     if projects is None:
         projects = {"prod": {"url": "https://connection.keboola.com", "token": "tok"}}
     cs = _mock_config_store(projects)
     ai = ai_client if ai_client is not None else _make_ai_client()
+    scheduler = scheduler_client if scheduler_client is not None else _make_scheduler_client()
     return FlowService(
         config_store=cs,
         client_factory=lambda url, token: mock_client,
         ai_client_factory=lambda url, token: ai,
+        scheduler_client_factory=lambda url, token: scheduler,
     )
 
 
@@ -405,6 +416,71 @@ def test_set_flow_schedule_targets_keboola_flow():
     assert result["component_id"] == "keboola.flow"
 
 
+def test_set_flow_schedule_activates_created_config():
+    client = MagicMock()
+    client.get_config_detail.return_value = {"name": "CF"}
+    client.list_component_configs.return_value = []
+    client.create_config.return_value = {"id": "77"}
+    scheduler = _make_scheduler_client()
+    svc = _make_flow_service(client, scheduler_client=scheduler)
+    result = svc.set_flow_schedule(alias="prod", config_id="5", cron_tab="0 6 * * *")
+    # activation targets the scheduler config id, not the flow id
+    scheduler.activate_schedule.assert_called_once_with("77")
+    assert result["activated"] is True
+    assert result["warnings"] == []
+
+
+def test_set_flow_schedule_activates_updated_config():
+    client = MagicMock()
+    client.get_config_detail.return_value = {"name": "CF"}
+    client.list_component_configs.return_value = [
+        {
+            "id": "88",
+            "configuration": {
+                "target": {"componentId": "keboola.flow", "configurationId": "5"},
+            },
+        }
+    ]
+    client.update_config.return_value = {"id": "88"}
+    scheduler = _make_scheduler_client()
+    svc = _make_flow_service(client, scheduler_client=scheduler)
+    result = svc.set_flow_schedule(alias="prod", config_id="5", cron_tab="0 6 * * *")
+    assert result["status"] == "updated"
+    scheduler.activate_schedule.assert_called_once_with("88")
+    assert result["activated"] is True
+
+
+def test_set_flow_schedule_disabled_still_calls_scheduler_service():
+    client = MagicMock()
+    client.get_config_detail.return_value = {"name": "CF"}
+    client.list_component_configs.return_value = []
+    client.create_config.return_value = {"id": "77"}
+    scheduler = _make_scheduler_client()
+    svc = _make_flow_service(client, scheduler_client=scheduler)
+    svc.set_flow_schedule(alias="prod", config_id="5", cron_tab="0 6 * * *", enabled=False)
+    scheduler.activate_schedule.assert_called_once_with("77")
+
+
+def test_set_flow_schedule_activation_failure_warns_not_raises():
+    client = MagicMock()
+    client.get_config_detail.return_value = {"name": "CF"}
+    client.list_component_configs.return_value = []
+    client.create_config.return_value = {"id": "77"}
+    scheduler = _make_scheduler_client()
+    scheduler.activate_schedule.side_effect = KeboolaApiError(
+        message="Access denied",
+        status_code=403,
+        error_code=ErrorCode.ACCESS_DENIED,
+        retryable=False,
+    )
+    svc = _make_flow_service(client, scheduler_client=scheduler)
+    result = svc.set_flow_schedule(alias="prod", config_id="5", cron_tab="0 6 * * *")
+    assert result["status"] == "created"
+    assert result["activated"] is False
+    assert len(result["warnings"]) == 1
+    assert "NOT fire" in result["warnings"][0]
+
+
 def test_remove_flow_schedule_filters_keboola_flow():
     client = MagicMock()
     client.list_component_configs.return_value = [
@@ -419,3 +495,68 @@ def test_remove_flow_schedule_filters_keboola_flow():
     result = svc.remove_flow_schedule(alias="prod", config_id="5")
     assert result["deleted_count"] == 1
     assert result["component_id"] == "keboola.flow"
+
+
+def test_remove_flow_schedule_deregisters_from_scheduler_service():
+    client = MagicMock()
+    client.list_component_configs.return_value = [
+        {
+            "id": "77",
+            "configuration": {
+                "target": {"componentId": "keboola.flow", "configurationId": "5"},
+            },
+        }
+    ]
+    scheduler = _make_scheduler_client()
+    svc = _make_flow_service(client, scheduler_client=scheduler)
+    result = svc.remove_flow_schedule(alias="prod", config_id="5")
+    scheduler.remove_schedule.assert_called_once_with("77")
+    assert result["deleted_count"] == 1
+    assert result["warnings"] == []
+
+
+def test_remove_flow_schedule_tolerates_missing_service_registration():
+    client = MagicMock()
+    client.list_component_configs.return_value = [
+        {
+            "id": "77",
+            "configuration": {
+                "target": {"componentId": "keboola.flow", "configurationId": "5"},
+            },
+        }
+    ]
+    scheduler = _make_scheduler_client()
+    scheduler.remove_schedule.side_effect = KeboolaApiError(
+        message="Schedule not found",
+        status_code=404,
+        error_code=ErrorCode.NOT_FOUND,
+        retryable=False,
+    )
+    svc = _make_flow_service(client, scheduler_client=scheduler)
+    result = svc.remove_flow_schedule(alias="prod", config_id="5")
+    assert result["deleted_count"] == 1
+    assert result["warnings"] == []
+
+
+def test_remove_flow_schedule_service_failure_warns_but_deletes_config():
+    client = MagicMock()
+    client.list_component_configs.return_value = [
+        {
+            "id": "77",
+            "configuration": {
+                "target": {"componentId": "keboola.flow", "configurationId": "5"},
+            },
+        }
+    ]
+    scheduler = _make_scheduler_client()
+    scheduler.remove_schedule.side_effect = KeboolaApiError(
+        message="Access denied",
+        status_code=403,
+        error_code=ErrorCode.ACCESS_DENIED,
+        retryable=False,
+    )
+    svc = _make_flow_service(client, scheduler_client=scheduler)
+    result = svc.remove_flow_schedule(alias="prod", config_id="5")
+    assert result["deleted_count"] == 1
+    assert len(result["warnings"]) == 1
+    client.delete_config.assert_called_once()

@@ -14,9 +14,11 @@ Schedules are stored as regular Storage API configurations of the
     configuration.schedule.timezone = "Europe/Prague"
     configuration.schedule.state = "enabled"   # or "disabled"
 
-No separate Scheduler Service HTTP client is required -- everything reuses
-``KeboolaClient.list_component_configs`` + ``get_config_detail`` + ``list_jobs``
-from the Storage and Queue APIs.
+This read/audit path needs no Scheduler Service HTTP client -- everything
+reuses ``KeboolaClient.list_component_configs`` + ``get_config_detail`` +
+``list_jobs`` from the Storage and Queue APIs. (The WRITE path is different:
+making a schedule actually fire requires registering it with the Scheduler
+Service -- see ``SchedulerClient`` and ``FlowService.set_flow_schedule``.)
 """
 
 from __future__ import annotations

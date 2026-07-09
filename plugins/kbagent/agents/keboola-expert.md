@@ -181,6 +181,13 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
   phases+tasks -- fetch `flow detail` first, merge locally, run
   `flow validate --file @merged.yaml --project ALIAS` (full schema) until clean,
   then push.
+- **`flow schedule` activates on the Scheduler Service (0.66.1+)**: older
+  versions only wrote the `keboola.scheduler` config -- the schedule showed
+  `enabled` but the cron NEVER fired. On 0.66.1+ the command also registers it
+  with the service; check `activated: true` in the result. `activated: false`
+  + warning = config written but dormant (token lacks the privilege) -- re-run
+  with an admin token. **VERSION GATE**: schedules created by < 0.66.1 stay
+  dormant until `flow schedule` is re-run on 0.66.1+.
 - **Snowflake transformation scaffolding**: MCP `create_config` REFUSES
   `keboola.snowflake-transformation`. Use `config new --push --no-files`
   (0.33.0+) or `config new --output-dir` then `config update`, or MCP

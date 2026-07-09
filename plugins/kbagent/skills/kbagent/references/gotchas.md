@@ -2284,6 +2284,21 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
   scheduler configs that target the flow. Pair it with `--dry-run` to see the
   affected configs (cron + timezone) without calling `delete_config`.
 
+## Flow: `schedule` activates on the Scheduler Service (since v0.66.1)
+
+- `kbagent flow schedule` registers the `keboola.scheduler` config with the
+  **Scheduler Service** (`POST /schedules`) after writing it — writing the
+  Storage config alone leaves the cron trigger dormant. Older versions only
+  wrote the config: a schedule they created shows `state: enabled` but never
+  fires until `flow schedule` is re-run on v0.66.1+ (or the schedule is
+  re-saved in the UI).
+- Activation failure is **non-fatal**: the config stays written, the result
+  carries `activated: false` + a warning, and the exit code stays 0. Typical
+  cause is a Storage token without the schedule-management privilege — re-run
+  with an admin token to activate.
+- `flow schedule-remove` (v0.66.1+) deregisters each schedule from the
+  Scheduler Service before deleting its config, so removal stops the trigger.
+
 ## `search` is a top-level command, not `config search` (since v0.30.0)
 
 `kbagent search QUERY` searches across **all item types** (tables, buckets, configs, flows, data apps, transformations) via the Storage API global-search endpoint. It is distinct from `kbagent config search --query Q` which scans only configuration JSON bodies.
