@@ -593,6 +593,9 @@ kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
 # flow validate: with --project fetches the live schema (full validation; fetch failure ->
 #   semantic-only + note); without --project runs semantic-only + a note. flow schema --full
 #   requires --project (fetches live schema); plain flow schema is the offline YAML template.
+# flow schedule (0.66.1+) also activates the config on the Scheduler Service so the cron fires;
+#   activation failure keeps the config written, sets activated=false + warning, exit stays 0.
+#   flow schedule-remove deregisters from the service before deleting each config.
 # Execute a flow with: kbagent job run --project NAME --component-id keboola.flow --config-id ID
 
 kbagent schedule list [--project NAME ...] [--enabled-only] [--branch ID]
