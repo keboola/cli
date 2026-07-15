@@ -480,6 +480,24 @@ def test_set_flow_schedule_activation_failure_warns_not_raises():
     assert "may not reflect" in result["warnings"][0]
 
 
+def test_set_flow_schedule_activation_non_api_error_warns_not_raises():
+    """A malformed 2xx response (e.g. activate_schedule raising json.JSONDecodeError
+    while parsing the body) must degrade to a warning too, not crash the command --
+    the Storage config was already written successfully at that point."""
+    client = MagicMock()
+    client.get_config_detail.return_value = {"name": "CF"}
+    client.list_component_configs.return_value = []
+    client.create_config.return_value = {"id": "77"}
+    scheduler = _make_scheduler_client()
+    scheduler.activate_schedule.side_effect = ValueError("Expecting value: line 1 column 1")
+    svc = _make_flow_service(client, scheduler_client=scheduler)
+    result = svc.set_flow_schedule(alias="prod", config_id="5", cron_tab="0 6 * * *")
+    assert result["status"] == "created"
+    assert result["activated"] is False
+    assert len(result["warnings"]) == 1
+    assert "may not reflect" in result["warnings"][0]
+
+
 def test_remove_flow_schedule_filters_keboola_flow():
     client = MagicMock()
     client.list_component_configs.return_value = [

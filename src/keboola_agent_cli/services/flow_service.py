@@ -732,6 +732,20 @@ class FlowService(BaseService):
                     "succeeds -- re-run this command with a token that can manage "
                     "schedules."
                 )
+            except Exception as exc:
+                # Intentionally broad, mirroring _fetch_flow_schema: activation is
+                # documented as non-fatal, so ANY failure here (e.g. a malformed
+                # 2xx response raising json.JSONDecodeError in activate_schedule)
+                # must degrade to a warning, never crash a command that already
+                # wrote the Storage config successfully.
+                logger.warning("Scheduler Service activation failed unexpectedly: %s", exc)
+                warnings.append(
+                    f"Schedule config {schedule_id} was {status} but could not be "
+                    f"activated on the Scheduler Service: {exc}. The service "
+                    "may not reflect the updated configuration until activation "
+                    "succeeds -- re-run this command with a token that can manage "
+                    "schedules."
+                )
 
         return {
             "status": status,
