@@ -485,6 +485,11 @@ jobs:
           docker run --rm -e VERSION homebrew/brew bash -c '
             set -e
             brew tap keboola/keboola-cli2 https://github.com/keboola/homebrew-keboola-cli2
+            # brew now refuses to load a formula from a third-party tap until the tap is
+            # explicitly trusted ("Refusing to load formula ... from untrusted tap ...").
+            # First observed on the v0.66.1 run (github.com/keboola/cli, release-kbagent
+            # #29430278032) -- this is a real end-user install step too, not CI-only.
+            brew trust keboola/keboola-cli2
             brew install keboola-cli2
             kbagent --version | grep -q "${VERSION}"
           '
