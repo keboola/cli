@@ -484,6 +484,12 @@ jobs:
         run: |
           docker run --rm -e VERSION homebrew/brew bash -c '
             set -e
+            # Some homebrew/brew image builds ship HOMEBREW_REQUIRE_TAP_TRUST set, which makes
+            # brew refuse to load formulae from a third-party tap ("Refusing to load formula
+            # ... from untrusted tap"). Unset it so the smoke test can install: this is
+            # version-independent (the suggested `brew trust` command does not exist across all
+            # brew versions) and mirrors the default end-user environment where the var is unset.
+            unset HOMEBREW_REQUIRE_TAP_TRUST
             brew tap keboola/keboola-cli2 https://github.com/keboola/homebrew-keboola-cli2
             brew install keboola-cli2
             kbagent --version | grep -q "${VERSION}"
