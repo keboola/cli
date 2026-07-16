@@ -442,7 +442,32 @@ jobs:
           curl -fLSs https://aka.ms/wingetcreate/latest -o wingetcreate.exe
           # Verify it's validly Authenticode-signed by Microsoft before executing.
           powershell -Command '$s = Get-AuthenticodeSignature wingetcreate.exe; if ($s.Status -ne "Valid" -or $s.SignerCertificate.Subject -notmatch "Microsoft") { Write-Error "wingetcreate.exe signature not valid/Microsoft: $($s.Status)"; exit 1 }'
-          ./wingetcreate.exe update -v "$VERSION" -u "$url" -t "$WINGET_TOKEN" Keboola.KeboolaCLI2 -s
+          # `wingetcreate update` only works against an EXISTING manifest in
+          # microsoft/winget-pkgs. Until Keboola.KeboolaCLI2 is bootstrapped there
+          # with a one-time interactive `wingetcreate new` submission (see issue #484),
+          # every run 404s with "was not found". Treat that known, expected state as a
+          # skip with a loud pointer instead of a hard failure, so a first-run-after-a-gap
+          # doesn't masquerade as a silent regression — while any genuine winget error
+          # still fails the job.
+          set +e
+          output=$(./wingetcreate.exe update -v "$VERSION" -u "$url" -t "$WINGET_TOKEN" Keboola.KeboolaCLI2 -s 2>&1)
+          status=$?
+          set -e
+          echo "$output"
+          if [ "$status" -ne 0 ]; then
+            if echo "$output" | grep -qi "was not found"; then
+              msg="WinGet package Keboola.KeboolaCLI2 is not yet bootstrapped in microsoft/winget-pkgs; skipping. A one-time interactive \`wingetcreate new\` submission is required first — see https://github.com/keboola/cli/issues/484."
+              echo "::warning::${msg}"
+              {
+                echo "### WinGet skipped — package not bootstrapped"
+                echo ""
+                echo "${msg}"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::error::wingetcreate update failed (exit ${status})"
+            exit "$status"
+          fi
 
   # ── Smoke-test the real install paths end to end. Runs on every tag (incl. dev tags,
   #    against PUBLISH_PREFIX); the Homebrew leg is prod-only since the tap isn't pushed
