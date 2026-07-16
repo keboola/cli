@@ -39,6 +39,9 @@ from ._semantic_layer_internals import build_export_snapshot as _build_export_sn
 from ._semantic_layer_internals import collect_side_from_file
 from ._semantic_layer_internals import default_export_path as _default_export_path
 from ._semantic_layer_internals import diff_one_type as _diff_one_type_helper
+from ._semantic_layer_internals import (
+    enrich_schemas_with_workspace_types as _enrich_schemas_with_workspace_types,
+)
 from ._semantic_layer_internals import fetch_table_schemas as _fetch_table_schemas
 from ._semantic_layer_internals import heuristic_generate_model as _heuristic_generate_helper
 from ._semantic_layer_internals import push_built_model as _push_built_model
@@ -58,6 +61,7 @@ from ._semantic_layer_lookup import run_search_context as _run_search_context_he
 from .base import BaseService, ClientFactory
 from .encrypt_service import EncryptService
 from .storage_service import StorageService
+from .workspace_service import WorkspaceService
 
 # Constraint name regex enforced by the metastore server.
 CONSTRAINT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -1360,6 +1364,7 @@ class SemanticLayerService(BaseService):
         dry_run: bool = False,
         keep_on_failure: bool = False,
         output_path: Path | None = None,
+        types_workspace_id: int | None = None,
     ) -> dict[str, Any]:
         """Build (or update) a semantic-layer model from a list of tableIds.
 
@@ -1397,6 +1402,23 @@ class SemanticLayerService(BaseService):
         )
         schemas_by_tid, fetch_errors = _fetch_table_schemas(storage, alias, table_ids)
 
+        # Opt-in: backfill column types that Storage does not carry locally
+        # (alias / linked-bucket tables) by querying the warehouse
+        # INFORMATION_SCHEMA via the supplied workspace. Without this, such
+        # tables reach the heuristic with empty basetypes and every field is
+        # classified as `dimension`.
+        type_resolution_errors: list[dict[str, str]] = []
+        if types_workspace_id is not None:
+            workspace = WorkspaceService(
+                config_store=self._config_store, client_factory=self._client_factory
+            )
+            type_resolution_errors = _enrich_schemas_with_workspace_types(
+                schemas_by_tid=schemas_by_tid,
+                alias=alias,
+                workspace_id=types_workspace_id,
+                execute_query=workspace.execute_query,
+            )
+
         # Generate model JSON (heuristic). The internals helper takes the
         # FQN-derivation and role-classification callables as kwargs so its
         # module stays free of import-time coupling to this module.
@@ -1430,6 +1452,7 @@ class SemanticLayerService(BaseService):
             "keep_on_failure": keep_on_failure,
             "fallback_used": "heuristic",  # no AI endpoint shipped yet
             "fetch_errors": fetch_errors,
+            "type_resolution_errors": type_resolution_errors,
             "generated": generated,
             "validation": {"errors": errors, "warnings": warnings},
             "validated": len(errors) == 0,
