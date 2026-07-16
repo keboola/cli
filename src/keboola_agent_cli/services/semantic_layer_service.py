@@ -35,8 +35,8 @@ from ._semantic_layer_crud import edit_simple as _edit_simple_helper
 from ._semantic_layer_crud import find_target_for_remove as _find_target_for_remove
 from ._semantic_layer_crud import scan_orphan_constraints as _scan_orphan_constraints
 from ._semantic_layer_crud import validate_constraint_attrs as _validate_constraint_attrs
+from ._semantic_layer_internals import _normalize_field_type, collect_side_from_file
 from ._semantic_layer_internals import build_export_snapshot as _build_export_snapshot
-from ._semantic_layer_internals import collect_side_from_file
 from ._semantic_layer_internals import default_export_path as _default_export_path
 from ._semantic_layer_internals import diff_one_type as _diff_one_type_helper
 from ._semantic_layer_internals import fetch_table_schemas as _fetch_table_schemas
@@ -94,7 +94,11 @@ _MEASURE_TOKENS = (
     "QTY",
     "QUANTITY",
 )
-_NUMERIC_TYPES = ("NUMBER", "DECIMAL", "FLOAT", "INTEGER", "INT")
+# Normalized field types (see ``_normalize_field_type``) that represent a
+# numeric quantity, and thus qualify a measure-named column as a `measure`.
+_NUMERIC_NORMALIZED_TYPES = ("integer", "decimal")
+# Normalized field types that represent a point in time.
+_TEMPORAL_NORMALIZED_TYPES = ("date", "datetime")
 
 
 def _derive_fqn(table_id: str) -> str:
@@ -130,13 +134,25 @@ def _derive_fqn(table_id: str) -> str:
 
 
 def _classify_field_role(name: str, basetype: str) -> str:
-    """Apply the documented role heuristic to (column name, basetype)."""
+    """Apply the documented role heuristic to (column name, basetype).
+
+    The type test runs through ``_normalize_field_type`` rather than matching
+    raw type names, so it is warehouse-agnostic: Snowflake ``NUMBER``,
+    BigQuery ``INT64`` / ``FLOAT64`` / ``NUMERIC`` and the Keboola basetypes
+    (``INTEGER`` / ``NUMERIC`` / ``FLOAT``) all resolve to the same normalized
+    families. Before this, ``NUMERIC`` (Keboola's own basetype for BigQuery
+    and Snowflake decimals) was absent from the numeric whitelist, so numeric
+    measure columns silently fell through to ``dimension``.
+    """
     upper = name.upper()
     if any(upper.startswith(prefix) for prefix in _KEY_PREFIXES):
         return "key"
-    if any(tok in upper for tok in _TIMESTAMP_NAMES):
+    normalized = _normalize_field_type(basetype)
+    # A DATE / TIMESTAMP column is a timestamp regardless of its name; the
+    # name tokens stay as a fallback for untyped columns (basetype missing).
+    if normalized in _TEMPORAL_NORMALIZED_TYPES or any(tok in upper for tok in _TIMESTAMP_NAMES):
         return "timestamp"
-    if basetype.upper() in _NUMERIC_TYPES and any(tok in upper for tok in _MEASURE_TOKENS):
+    if normalized in _NUMERIC_NORMALIZED_TYPES and any(tok in upper for tok in _MEASURE_TOKENS):
         return "measure"
     return "dimension"
 
