@@ -595,6 +595,10 @@ class StorageService(BaseService):
             "name": table.get("name", ""),
             "display_name": table.get("displayName", ""),
             "bucket_id": table.get("bucket", {}).get("id", ""),
+            # Storage backend of the owning bucket (e.g. "snowflake",
+            # "bigquery"); needed to pick the right INFORMATION_SCHEMA dialect
+            # when resolving column types for alias / linked tables.
+            "backend": table.get("bucket", {}).get("backend", ""),
             "description": description,
             "columns": columns,
             "column_details": column_details,
