@@ -994,6 +994,54 @@ def _normalize_field_type(basetype: str) -> str:
     return _FIELD_TYPE_MAP.get(head, "string")
 
 
+# Aggregation heuristic for auto-generated per-measure metrics. Mirrors the
+# semantic-layer toolkit's name-based guess, with two deliberate refinements:
+# percentage / ratio columns aggregate as AVG (not SUM -- summing a rate is
+# almost always wrong, and would trip the SUM_ON_PCT validation), and a
+# ``count_*`` column stays SUM (additive daily counts sum to a total; COUNT()
+# of an already-aggregated column would be meaningless).
+_AGG_AVG_TOKENS = ("AVG", "AVERAGE", "MEAN", "RATE", "PCT", "PERCENT", "RATIO", "SHARE")
+_AGG_MAX_TOKENS = ("MAX", "MAXIMUM", "PEAK")
+_AGG_MIN_TOKENS = ("MIN", "MINIMUM")
+
+# metric-name prefix per aggregate.
+_AGG_NAME_PREFIX = {"AVG": "avg", "MAX": "max", "MIN": "min", "SUM": "total"}
+
+
+def _estimate_metric_aggregation(col_name: str) -> str:
+    """Guess an aggregate for a measure column from keywords in its name.
+
+    Defaults to SUM (additive measures). See ``_AGG_*_TOKENS`` for the rules.
+    """
+    upper = col_name.upper()
+    if any(tok in upper for tok in _AGG_AVG_TOKENS):
+        return "AVG"
+    if any(tok in upper for tok in _AGG_MAX_TOKENS):
+        return "MAX"
+    if any(tok in upper for tok in _AGG_MIN_TOKENS):
+        return "MIN"
+    return "SUM"
+
+
+def _metric_snake_case(text: str) -> str:
+    """Lowercase snake_case slug safe for a metric name."""
+    slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+    return slug or "metric"
+
+
+def _dedupe_name(name: str, seen: set[str]) -> str:
+    """Return ``name`` (or a ``_2``/``_3``… suffixed variant) unused in ``seen``."""
+    if name not in seen:
+        seen.add(name)
+        return name
+    counter = 2
+    while f"{name}_{counter}" in seen:
+        counter += 1
+    unique = f"{name}_{counter}"
+    seen.add(unique)
+    return unique
+
+
 def heuristic_generate_model(
     *,
     schemas: dict[str, dict[str, Any]],
@@ -1003,10 +1051,11 @@ def heuristic_generate_model(
 ) -> dict[str, Any]:
     """Deterministic stand-in for the AI generator (see ``build_model``).
 
-    Builds: one dataset per table (with classified fields[]), one
-    COUNT(*) metric per dataset as a placeholder, no relationships
-    (cross-table FKs are not inferrable from columns alone), an empty
-    constraints list, and a glossary entry per dataset.
+    Builds: one dataset per table (with classified fields[]); one metric per
+    ``measure`` field (aggregate guessed from the column name -- see
+    ``_estimate_metric_aggregation``) plus a ``COUNT(*)`` row-count metric per
+    dataset; no relationships (cross-table FKs are not inferrable from columns
+    alone); an empty constraints list; and a glossary entry per dataset.
 
     Accepts the FQN-derivation and role-classification helpers as
     callables so the helper module stays free of import-time coupling
@@ -1015,6 +1064,9 @@ def heuristic_generate_model(
     datasets: list[dict[str, Any]] = []
     metrics: list[dict[str, Any]] = []
     glossary: list[dict[str, Any]] = []
+    # Metric names must be unique across the whole model (validate_basic flags
+    # duplicates), so dedupe against one model-wide set.
+    seen_metric_names: set[str] = set()
 
     for tid, detail in schemas.items():
         ds_name = (
@@ -1022,6 +1074,7 @@ def heuristic_generate_model(
             .replace(" ", "_")
             .lower()
         )
+        fqn = derive_fqn(tid)
         fields: list[dict[str, Any]] = []
         for col in detail.get("column_details", []) or []:
             cname = col.get("name", "")
@@ -1043,15 +1096,33 @@ def heuristic_generate_model(
             {
                 "name": ds_name,
                 "tableId": tid,
-                "fqn": derive_fqn(tid),
+                "fqn": fqn,
                 "fields": fields,
                 "description": detail.get("description", "") or "",
             }
         )
+        # One metric per measure field: aggregate guessed from the name.
+        for field in fields:
+            if field["role"] != "measure":
+                continue
+            col = field["name"]
+            agg = _estimate_metric_aggregation(col)
+            name = _dedupe_name(
+                _metric_snake_case(f"{_AGG_NAME_PREFIX[agg]}_{col}"), seen_metric_names
+            )
+            metrics.append(
+                {
+                    "name": name,
+                    "sql": f'{agg}("{col}") FROM {fqn}',
+                    "dataset": tid,
+                    "description": f"{agg} of {col}.",
+                }
+            )
+        # Always add a row-count metric as a safe baseline.
         metrics.append(
             {
-                "name": f"{ds_name}_row_count",
-                "sql": f"COUNT(*) FROM {derive_fqn(tid)}",
+                "name": _dedupe_name(f"{ds_name}_row_count", seen_metric_names),
+                "sql": f"COUNT(*) FROM {fqn}",
                 "dataset": tid,
                 "description": f"Row count of {ds_name}.",
             }

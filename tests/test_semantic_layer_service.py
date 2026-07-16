@@ -2085,7 +2085,8 @@ class TestBuildModel:
         mock.post_item.side_effect = [
             {"id": "new-model"},  # the model
             {"id": "d1"},  # dataset
-            {"id": "m1"},  # metric (count(*))
+            {"id": "m1"},  # measure metric (SUM of AMOUNT)
+            {"id": "m2"},  # row-count metric
             {"id": "g1"},  # glossary
         ]
         with patch(
@@ -2099,7 +2100,12 @@ class TestBuildModel:
             result = service.build_model("prod", table_ids=["out.c.t"])
         assert result["fallback_used"] == "heuristic"
         assert len(result["generated"]["datasets"]) == 1
-        assert len(result["generated"]["metrics"]) == 1
+        # One metric per measure field (AMOUNT -> SUM) + a row-count baseline.
+        metrics = result["generated"]["metrics"]
+        assert len(metrics) == 2
+        measure_metric = next(m for m in metrics if m["name"] != "fact_orders_row_count")
+        assert measure_metric["name"] == "total_amount"
+        assert measure_metric["sql"] == 'SUM("AMOUNT") FROM "KEBOOLA"."out.c"."t"'
         assert len(result["generated"]["glossary"]) == 1
         assert result["validated"] is True
         # Pin the warehouse → metastore type normalization: Storage hands us
@@ -2870,3 +2876,112 @@ class TestReferenceDataPermissions:
         assert OPERATION_REGISTRY["semantic-layer.reference-data.get"] == "read"
         assert OPERATION_REGISTRY["semantic-layer.reference-data.set"] == "write"
         assert OPERATION_REGISTRY["semantic-layer.reference-data.delete"] == "destructive"
+
+
+# ---------------------------------------------------------------------------
+# build: one metric per measure field (sl-toolkit-style), aggregate guessed
+# ---------------------------------------------------------------------------
+
+
+class TestEstimateMetricAggregation:
+    """Name-based aggregate guess for auto-generated metrics."""
+
+    def test_default_is_sum(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            _estimate_metric_aggregation,
+        )
+
+        assert _estimate_metric_aggregation("total_ppc_revenue") == "SUM"
+        # Additive daily counts sum to a total -- NOT COUNT().
+        assert _estimate_metric_aggregation("count_marketplace_orders") == "SUM"
+
+    def test_rate_and_percent_are_avg(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            _estimate_metric_aggregation,
+        )
+
+        assert _estimate_metric_aggregation("conversion_rate") == "AVG"
+        assert _estimate_metric_aggregation("offers_75_100_pct_pricelist") == "AVG"
+        assert _estimate_metric_aggregation("avg_order_value") == "AVG"
+
+    def test_min_max(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            _estimate_metric_aggregation,
+        )
+
+        assert _estimate_metric_aggregation("max_price") == "MAX"
+        assert _estimate_metric_aggregation("min_price") == "MIN"
+
+
+class TestHeuristicMetricPerMeasure:
+    """`heuristic_generate_model` emits one metric per measure + a row count."""
+
+    @staticmethod
+    def _identity_fqn(tid: str) -> str:
+        return f"FQN({tid})"
+
+    @staticmethod
+    def _role(name: str, basetype: str) -> str:
+        # Minimal stand-in classifier for the test: numeric measure-ish names.
+        if basetype.lower() in ("numeric", "integer", "decimal") and any(
+            t in name.lower() for t in ("revenue", "count", "rate")
+        ):
+            return "measure"
+        return "dimension"
+
+    def test_metric_per_measure_plus_row_count(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            heuristic_generate_model,
+        )
+
+        schemas = {
+            "in.c-x.t": {
+                "display_name": "t",
+                "column_details": [
+                    {"name": "total_revenue", "type": "NUMERIC"},
+                    {"name": "conversion_rate", "type": "NUMERIC"},
+                    {"name": "category_id", "type": "INTEGER"},  # dimension
+                ],
+            }
+        }
+        model = heuristic_generate_model(
+            schemas=schemas,
+            model_name="m",
+            derive_fqn=self._identity_fqn,
+            classify_role=self._role,
+        )
+        metrics = {m["name"]: m for m in model["metrics"]}
+        # 2 measures -> 2 metrics, + 1 row count = 3
+        assert len(metrics) == 3
+        assert metrics["total_total_revenue"]["sql"] == 'SUM("total_revenue") FROM FQN(in.c-x.t)'
+        assert metrics["avg_conversion_rate"]["sql"] == 'AVG("conversion_rate") FROM FQN(in.c-x.t)'
+        assert "t_row_count" in metrics
+        # The dimension column produced no metric.
+        assert not any("category_id" in name for name in metrics)
+
+    def test_duplicate_metric_names_deduped_across_tables(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            heuristic_generate_model,
+        )
+
+        # Same measure column name in two tables -> names must not collide.
+        schemas = {
+            "in.c-a.t": {
+                "display_name": "a",
+                "column_details": [{"name": "revenue", "type": "NUMERIC"}],
+            },
+            "in.c-b.t": {
+                "display_name": "b",
+                "column_details": [{"name": "revenue", "type": "NUMERIC"}],
+            },
+        }
+        model = heuristic_generate_model(
+            schemas=schemas,
+            model_name="m",
+            derive_fqn=self._identity_fqn,
+            classify_role=self._role,
+        )
+        names = [m["name"] for m in model["metrics"]]
+        assert len(names) == len(set(names)), f"duplicate metric names: {names}"
+        assert "total_revenue" in names
+        assert "total_revenue_2" in names
