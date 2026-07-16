@@ -1354,6 +1354,26 @@ class SemanticLayerService(BaseService):
     # Phase 7 — build (AI-assisted / heuristic greenfield)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _pick_types_workspace(workspace: WorkspaceService, alias: str, backend: str) -> int | None:
+        """Auto-pick a workspace able to read ``backend`` types via the Query
+        Service.
+
+        Prefers a Query-Service-compatible, read-only workspace whose backend
+        matches the table's (so ``INFORMATION_SCHEMA`` runs in the right
+        dialect). Returns its ID, or ``None`` if the project has none.
+        """
+        try:
+            listing = workspace.list_workspaces(aliases=[alias], qs_compatible_only=True)
+        except (KeboolaApiError, ConfigError):
+            return None
+        candidates = listing.get("workspaces", [])
+        for ws in candidates:
+            if not backend or (ws.get("backend", "") or "").lower() == backend.lower():
+                ws_id = ws.get("id")
+                return int(ws_id) if ws_id is not None else None
+        return None
+
     def build_model(
         self,
         alias: str,
@@ -1365,6 +1385,7 @@ class SemanticLayerService(BaseService):
         keep_on_failure: bool = False,
         output_path: Path | None = None,
         types_workspace_id: int | None = None,
+        auto_resolve_types: bool = False,
     ) -> dict[str, Any]:
         """Build (or update) a semantic-layer model from a list of tableIds.
 
@@ -1408,14 +1429,28 @@ class SemanticLayerService(BaseService):
         # tables reach the heuristic with empty basetypes and every field is
         # classified as `dimension`.
         type_resolution_errors: list[dict[str, str]] = []
-        if types_workspace_id is not None:
+        if types_workspace_id is not None or auto_resolve_types:
             workspace = WorkspaceService(
                 config_store=self._config_store, client_factory=self._client_factory
             )
+            if types_workspace_id is not None:
+                # Explicit workspace: use it for every backend.
+                def resolve_workspace_id(_backend: str) -> int | None:
+                    return types_workspace_id
+            else:
+                # Auto mode (UI / server default): pick a Query-Service-capable
+                # read-only workspace per backend, cached across tables.
+                ws_cache: dict[str, int | None] = {}
+
+                def resolve_workspace_id(backend: str) -> int | None:
+                    if backend not in ws_cache:
+                        ws_cache[backend] = self._pick_types_workspace(workspace, alias, backend)
+                    return ws_cache[backend]
+
             type_resolution_errors = _enrich_schemas_with_workspace_types(
                 schemas_by_tid=schemas_by_tid,
                 alias=alias,
-                workspace_id=types_workspace_id,
+                resolve_workspace_id=resolve_workspace_id,
                 execute_query=workspace.execute_query,
             )
 

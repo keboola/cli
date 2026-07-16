@@ -875,16 +875,21 @@ def enrich_schemas_with_workspace_types(
     *,
     schemas_by_tid: dict[str, dict[str, Any]],
     alias: str,
-    workspace_id: int,
+    resolve_workspace_id: Callable[[str], int | None],
     execute_query: Callable[..., dict[str, Any]],
 ) -> list[dict[str, str]]:
     """Backfill missing column ``type``s from the warehouse INFORMATION_SCHEMA.
 
     Alias / linked-bucket tables carry no per-column datatype metadata in
     Storage -- the types live on the source table -- so the build heuristic
-    sees empty basetypes and classifies every field as ``dimension``. When the
-    caller supplies a workspace, query the warehouse for the real types and
-    fill them in on each ``column_details`` entry in place.
+    sees empty basetypes and classifies every field as ``dimension``. When a
+    workspace is available, query the warehouse for the real types and fill
+    them in on each ``column_details`` entry in place.
+
+    ``resolve_workspace_id`` maps a storage backend (e.g. ``"bigquery"``) to a
+    workspace ID that can run SQL against it -- either a fixed id supplied by
+    the caller, or one auto-picked per backend. Returning ``None`` means no
+    suitable workspace, and the table is reported as unresolved.
 
     Returns a list of ``{"table_id", "error"}`` for tables that could not be
     (fully) resolved. These are non-fatal and surfaced in the build result.
@@ -894,8 +899,9 @@ def enrich_schemas_with_workspace_types(
         cols = detail.get("column_details") or []
         if not any(not col.get("type") for col in cols):
             continue  # already fully typed (or no columns) -- nothing to do
+        backend = detail.get("backend", "")
         sql = build_information_schema_sql(
-            detail.get("backend", ""),
+            backend,
             detail.get("bucket_id", ""),
             detail.get("name", "") or tid.split(".")[-1],
         )
@@ -903,7 +909,16 @@ def enrich_schemas_with_workspace_types(
             unresolved.append(
                 {
                     "table_id": tid,
-                    "error": f"type resolution unsupported for backend {detail.get('backend', '')!r}",
+                    "error": f"type resolution unsupported for backend {backend!r}",
+                }
+            )
+            continue
+        workspace_id = resolve_workspace_id(backend)
+        if workspace_id is None:
+            unresolved.append(
+                {
+                    "table_id": tid,
+                    "error": f"no workspace available to read {backend!r} types",
                 }
             )
             continue

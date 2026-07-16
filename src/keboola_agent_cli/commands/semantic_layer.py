@@ -451,6 +451,14 @@ def semantic_layer_build(
             "heuristic untyped and every field becomes a dimension."
         ),
     ),
+    auto_types_workspace: bool = typer.Option(
+        False,
+        "--auto-types-workspace",
+        help=(
+            "Auto-pick a read-only workspace per backend for column-type "
+            "resolution (instead of passing --types-workspace explicitly)."
+        ),
+    ),
 ) -> None:
     """Build a semantic-layer model from a list of storage tables (non-interactive).
 
@@ -489,6 +497,7 @@ def semantic_layer_build(
         keep_on_failure=keep_on_failure,
         output_path=output,
         types_workspace_id=types_workspace,
+        auto_resolve_types=auto_types_workspace,
     )
     formatter.output(result, _print_build_result)
 

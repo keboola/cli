@@ -2953,7 +2953,10 @@ class TestEnrichSchemasWithWorkspaceTypes:
             )
         )
         errors = enrich_schemas_with_workspace_types(
-            schemas_by_tid=schemas, alias="prod", workspace_id=42, execute_query=execute_query
+            schemas_by_tid=schemas,
+            alias="prod",
+            resolve_workspace_id=lambda _backend: 42,
+            execute_query=execute_query,
         )
         assert errors == []
         cols = {c["name"]: c["type"] for c in schemas["in.c-linked.metrics"]["column_details"]}
@@ -2977,7 +2980,10 @@ class TestEnrichSchemasWithWorkspaceTypes:
         }
         execute_query = MagicMock()
         errors = enrich_schemas_with_workspace_types(
-            schemas_by_tid=schemas, alias="prod", workspace_id=1, execute_query=execute_query
+            schemas_by_tid=schemas,
+            alias="prod",
+            resolve_workspace_id=lambda _backend: 1,
+            execute_query=execute_query,
         )
         assert errors == []
         execute_query.assert_not_called()
@@ -2999,7 +3005,10 @@ class TestEnrichSchemasWithWorkspaceTypes:
             side_effect=KeboolaApiError(message="boom", error_code=ErrorCode.API_ERROR)
         )
         errors = enrich_schemas_with_workspace_types(
-            schemas_by_tid=schemas, alias="prod", workspace_id=1, execute_query=execute_query
+            schemas_by_tid=schemas,
+            alias="prod",
+            resolve_workspace_id=lambda _backend: 1,
+            execute_query=execute_query,
         )
         assert len(errors) == 1
         assert errors[0]["table_id"] == "in.c-linked.t"
@@ -3023,7 +3032,10 @@ class TestEnrichSchemasWithWorkspaceTypes:
             return_value=self._query_result("column_name,data_type\r\na,INT64\r\n")
         )
         errors = enrich_schemas_with_workspace_types(
-            schemas_by_tid=schemas, alias="prod", workspace_id=1, execute_query=execute_query
+            schemas_by_tid=schemas,
+            alias="prod",
+            resolve_workspace_id=lambda _backend: 1,
+            execute_query=execute_query,
         )
         assert schemas["in.c-linked.t"]["column_details"][0]["type"] == "INT64"
         assert len(errors) == 1
@@ -3098,3 +3110,78 @@ class TestBuildModelTypesWorkspace:
         # Untyped -> string, and the measure-named column defaults to dimension.
         assert fields[0]["type"] == "string"
         assert fields[0]["role"] == "dimension"
+
+    def test_auto_resolve_picks_workspace_per_backend(self, tmp_path: Path) -> None:
+        """`auto_resolve_types=True` (the server/UI default) picks a read-only
+        workspace itself -- no explicit id needed."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        mock.post_item.side_effect = [
+            {"id": "new-model"},
+            {"id": "d1"},
+            {"id": "m1"},
+            {"id": "g1"},
+        ]
+        with (
+            patch(
+                "keboola_agent_cli.services.semantic_layer_service.StorageService"
+            ) as MockStorageCls,
+            patch(
+                "keboola_agent_cli.services.semantic_layer_service.WorkspaceService"
+            ) as MockWorkspaceCls,
+        ):
+            MockStorageCls.return_value.get_table_detail.return_value = {
+                "display_name": "metrics",
+                "backend": "bigquery",
+                "bucket_id": "in.c-linked",
+                "name": "metrics",
+                "column_details": [{"name": "total_revenue"}],
+            }
+            ws = MockWorkspaceCls.return_value
+            # Two workspaces; only the BigQuery one matches the table backend.
+            ws.list_workspaces.return_value = {
+                "workspaces": [
+                    {"id": 111, "backend": "snowflake"},
+                    {"id": 222, "backend": "bigquery"},
+                ]
+            }
+            ws.execute_query.return_value = {
+                "statements": [{"csv_data": "column_name,data_type\r\ntotal_revenue,NUMERIC\r\n"}]
+            }
+            result = service.build_model(
+                "prod", table_ids=["in.c-linked.metrics"], auto_resolve_types=True, dry_run=True
+            )
+            # The backend-matching workspace (222) was used, not 111.
+            assert ws.execute_query.call_args.args[1] == 222
+        assert result["type_resolution_errors"] == []
+        assert result["generated"]["datasets"][0]["fields"][0]["type"] == "decimal"
+
+    def test_auto_resolve_no_workspace_reports_error(self, tmp_path: Path) -> None:
+        """Auto mode with no matching workspace is non-fatal: build proceeds,
+        the table is reported unresolved."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        with (
+            patch(
+                "keboola_agent_cli.services.semantic_layer_service.StorageService"
+            ) as MockStorageCls,
+            patch(
+                "keboola_agent_cli.services.semantic_layer_service.WorkspaceService"
+            ) as MockWorkspaceCls,
+        ):
+            MockStorageCls.return_value.get_table_detail.return_value = {
+                "display_name": "metrics",
+                "backend": "bigquery",
+                "bucket_id": "in.c-linked",
+                "name": "metrics",
+                "column_details": [{"name": "total_revenue"}],
+            }
+            MockWorkspaceCls.return_value.list_workspaces.return_value = {"workspaces": []}
+            result = service.build_model(
+                "prod", table_ids=["in.c-linked.metrics"], auto_resolve_types=True, dry_run=True
+            )
+            MockWorkspaceCls.return_value.execute_query.assert_not_called()
+        assert len(result["type_resolution_errors"]) == 1
+        assert "no workspace" in result["type_resolution_errors"][0]["error"]
