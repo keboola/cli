@@ -711,6 +711,7 @@ def config_update(
             f"{branch_info}"
         )
         _emit_normalizations_warning(formatter, normalizations)
+        _emit_plaintext_written_warning(formatter, result)
 
 
 def _emit_normalizations_warning(formatter: Any, normalizations: list[dict[str, Any]]) -> None:
@@ -733,6 +734,26 @@ def _emit_normalizations_warning(formatter: Any, normalizations: list[dict[str, 
         formatter.console.print(
             f"  [dim]{entry['path']}: {entry['action']} -> {entry['after_length']} element(s)[/dim]"
         )
+
+
+def _emit_plaintext_written_warning(formatter: Any, result: dict[str, Any]) -> None:
+    """Surface a plaintext-on-encrypt-failure fallback in human mode.
+
+    When ``--allow-plaintext-on-encrypt-failure`` lets a write proceed despite a
+    failed encryption, the service result carries ``plaintext_written`` -- the
+    secret key-paths now stored in PLAINTEXT (key-paths only, never the values).
+    Name them and the remediation so the leak is visible and actionable. JSON
+    mode already exposes the same list on the envelope, so emit only here.
+    """
+    leaked = result.get("plaintext_written")
+    if not leaked:
+        return
+    formatter.warning(
+        f"{len(leaked)} secret(s) were written in PLAINTEXT (encryption failed and "
+        f"--allow-plaintext-on-encrypt-failure was set): {', '.join(leaked)}. "
+        f"Rotate these credentials and re-encrypt once the Encryption API is reachable "
+        f"-- config version history retains the plaintext copy."
+    )
 
 
 @config_app.command("set-default-bucket", rich_help_panel="Storage")
@@ -1417,6 +1438,7 @@ def _render_push_result_human(
             "[dim]Note: schema validation was skipped "
             "(empty shell, no schema available, or --no-validate).[/dim]"
         )
+    _emit_plaintext_written_warning(formatter, result)
 
 
 # ── Config metadata commands ───────────────────────────────────────────
@@ -1771,6 +1793,7 @@ def config_variables_set(
         formatter.output(result)
     else:
         _format_variables_set(formatter, result)
+        _emit_plaintext_written_warning(formatter, result)
 
 
 @config_app.command("variables-get", rich_help_panel="Variables")
@@ -2095,6 +2118,7 @@ def config_row_create(
             f"Created row '{escape(row_name)}' [{row_id}] "
             f"in {escape(component_id)}/{escape(config_id)}{branch_info}"
         )
+        _emit_plaintext_written_warning(formatter, result)
 
 
 # ── config row-update ──────────────────────────────────────────────────────────
@@ -2298,6 +2322,7 @@ def config_row_update(
             f"Updated row '{escape(updated_name)}' [{row_id}] "
             f"in {escape(component_id)}/{escape(config_id)}{branch_info}"
         )
+        _emit_plaintext_written_warning(formatter, result)
 
 
 # ── config row-delete ──────────────────────────────────────────────────────────
