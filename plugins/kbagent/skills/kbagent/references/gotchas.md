@@ -1577,6 +1577,33 @@ One project failing does not block others. Check the `errors` array:
 See [storage-types-workflow.md](storage-types-workflow.md) for the full
 type inventory and examples.
 
+## `storage create-table --source-table-id` + partition/clustering are BigQuery-only (since 0.66.0)
+
+- **`--source-table-id` copies an existing table instead of building from `--column`.**
+  The new table's schema is derived from the source and its rows are copied into the
+  requested partition/clustering layout (`INSERT … SELECT`, preserving NOT NULL + primary
+  key). This is the supported way to repartition a populated BigQuery table; promote it
+  with `storage swap-tables`. Mirrors keboola/connection#7697.
+- **`--column` and `--source-table-id` are mutually exclusive.** Supplying both, or
+  neither, exits 2 (`INVALID_ARGUMENT`) before any API call. `--not-null` / `--default`
+  attach to `--column` definitions, so they are also rejected in source mode.
+- **Partition/clustering flags also work on a plain `--column` create** (BigQuery only):
+  `--time-partitioning-type` (DAY/HOUR/MONTH/YEAR; required when any `--time-partitioning-*`
+  is set) + optional `--time-partitioning-field`/`-expiration-ms`; OR
+  `--range-partitioning-field`/`-start`/`-end`/`-interval` (all four required together).
+  **Range bounds are strings** in the API, and time vs range partitioning are mutually
+  exclusive (BigQuery allows one partitioning kind per table).
+- **BigQuery-only with a pre-flight guard.** When any source/partition/clustering flag is
+  used, `create-table` verifies the project backend (one token-verify call) and fails fast
+  with exit 2 + a clear `… require a BigQuery backend` message on a non-BigQuery project,
+  before issuing the create. A plain `--column` create makes no extra call. The connection
+  API also rejects these server-side (422 `storage.tables.backendDoesNotSupportSourceTable`,
+  `sourceAliasNotPersisted`, `sourceTableMissingReferencedColumn`; 404
+  `sourceTableNotFound`) as a backstop.
+- **Aliases and linked-bucket tables are valid sources.** A persisted alias (materialized
+  view) is queryable; a non-persisted alias (project lacks `bigquery-persisted-alias-views`)
+  is rejected 422.
+
 ## Legacy fake-branch storage warning on `--branch` writes (since 0.25.2)
 
 - **What it is.** Projects without the `storage-branches` feature flag use

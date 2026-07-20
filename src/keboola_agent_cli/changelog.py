@@ -24,6 +24,22 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.67.0": [
+        "New: `storage create-table` can copy from an existing table and apply a "
+        "BigQuery partition/clustering layout. `--source-table-id` (with optional "
+        "`--source-branch-id`) derives the new table's schema from a source table and "
+        "copies its rows into the requested layout -- the supported way to repartition "
+        "a populated BigQuery table, then flip it into place with `storage swap-tables`. "
+        "`--column` is now optional and mutually exclusive with `--source-table-id`. "
+        "New layout flags (also usable on a plain columns create): "
+        "`--time-partitioning-type`/`-field`/`-expiration-ms`, `--range-partitioning-field`/"
+        "`-start`/`-end`/`-interval`, and `--clustering-field` (repeatable). Time and range "
+        "partitioning are mutually exclusive. Mirrors keboola/connection#7697.",
+        "Note: the source-copy and partition/clustering flags are BigQuery-only. "
+        "`create-table` runs a one-call backend pre-flight (token verify) when any of them "
+        "is used and fails fast with a clear message on a non-BigQuery project, before "
+        "issuing the create. A plain columns create is unaffected (no extra call).",
+    ],
     "0.66.1": [
         "Fix (#479): `flow schedule` now activates the schedule on the Scheduler Service, so the cron "
         "trigger actually fires. Previously the command only wrote the `keboola.scheduler` Storage "
