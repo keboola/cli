@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from rich.markup import escape
 
 from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
@@ -130,7 +131,7 @@ def storage_buckets(
             for b in proj_buckets:
                 linked = ""
                 if b["is_linked"]:
-                    linked = f"{b['source_project_name']} (#{b['source_project_id']})"
+                    linked = f"{escape(b['source_project_name'])} (#{b['source_project_id']})"
                 table.add_row(
                     b["id"],
                     b["stage"],

@@ -11,6 +11,7 @@ from typing import Any
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from ..constants import (
@@ -69,10 +70,10 @@ def _format_project_table(console: Console, projects: list[dict[str, Any]]) -> N
         branch_id = p.get("active_branch_id")
         branch_display = str(branch_id) if branch_id is not None else "[dim]main[/dim]"
         table.add_row(
-            p["alias"],
-            p.get("project_name", ""),
+            escape(p["alias"]),
+            escape(p.get("project_name", "")),
             str(p.get("project_id", "")),
-            p["stack_url"],
+            escape(p["stack_url"]),
             p["token"],
             default_marker,
             branch_display,
@@ -99,16 +100,16 @@ def _format_status_table(console: Console, statuses: list[dict[str, Any]]) -> No
         if s["status"] == "ok":
             status_str = "[bold green]OK[/bold green]"
         else:
-            status_str = f"[bold red]ERROR[/bold red]: {s.get('error', 'Unknown')}"
+            status_str = f"[bold red]ERROR[/bold red]: {escape(s.get('error', 'Unknown'))}"
         response_time = f"{s.get('response_time_ms', 0)}ms"
         branch_id = s.get("active_branch_id")
         branch_display = str(branch_id) if branch_id is not None else "[dim]main[/dim]"
         table.add_row(
-            s["alias"],
+            escape(s["alias"]),
             status_str,
             response_time,
-            s.get("project_name", ""),
-            s["stack_url"],
+            escape(s.get("project_name", "")),
+            escape(s["stack_url"]),
             branch_display,
         )
 
@@ -176,8 +177,8 @@ def project_add(
         formatter.output(
             result,
             lambda c, d: c.print(
-                f"[bold green]Success:[/bold green] Project [bold]{d['alias']}[/bold] added "
-                f"(project: {d['project_name']}, id: {d['project_id']})"
+                f"[bold green]Success:[/bold green] Project [bold]{escape(d['alias'])}[/bold] "
+                f"added (project: {escape(d['project_name'])}, id: {d['project_id']})"
             ),
         )
     except KeboolaApiError as exc:
@@ -339,10 +340,13 @@ def _format_refresh_result(console: Console, data: dict) -> None:
 
         for p in refreshed:
             if dry_run:
-                table.add_row(p["alias"], str(p["project_id"]), p["project_name"])
+                table.add_row(escape(p["alias"]), str(p["project_id"]), escape(p["project_name"]))
             else:
                 table.add_row(
-                    p["alias"], str(p["project_id"]), p["project_name"], p.get("token", "")
+                    escape(p["alias"]),
+                    str(p["project_id"]),
+                    escape(p["project_name"]),
+                    p.get("token", ""),
                 )
 
         console.print(table)
@@ -357,7 +361,7 @@ def _format_refresh_result(console: Console, data: dict) -> None:
         table.add_column("Project Name")
 
         for p in valid:
-            table.add_row(p["alias"], str(p["project_id"]), p["project_name"])
+            table.add_row(escape(p["alias"]), str(p["project_id"]), escape(p["project_name"]))
 
         console.print(table)
         console.print()
@@ -656,7 +660,9 @@ def project_description_get(
 
     formatter.output(
         result,
-        lambda c, d: c.print(d["description"] or "[dim](no description set)[/dim]"),
+        lambda c, d: c.print(
+            escape(d["description"]) if d["description"] else "[dim](no description set)[/dim]"
+        ),
     )
 
 
@@ -718,13 +724,13 @@ def _format_info_table(console: Console, data: dict[str, Any]) -> None:
     table.add_column("Field", style="bold cyan", no_wrap=True)
     table.add_column("Value")
 
-    table.add_row("Alias", str(data.get("alias", "")))
+    table.add_row("Alias", escape(str(data.get("alias", ""))))
     table.add_row("Project ID", str(data.get("project_id", "")))
-    table.add_row("Project Name", str(data.get("project_name", "")))
-    table.add_row("Stack URL", str(data.get("stack_url", "")))
+    table.add_row("Project Name", escape(str(data.get("project_name", ""))))
+    table.add_row("Stack URL", escape(str(data.get("stack_url", ""))))
     table.add_row("Default Backend", str(data.get("default_backend", "")))
     table.add_row("Token ID", str(data.get("token_id", "")))
-    table.add_row("Token Description", str(data.get("token_description", "")))
+    table.add_row("Token Description", escape(str(data.get("token_description", ""))))
     table.add_row("Master Token", "Yes" if data.get("is_master_token") else "No")
 
     expires = data.get("token_expires")
@@ -746,7 +752,9 @@ def _format_info_table(console: Console, data: dict[str, Any]) -> None:
         metric_lines = [f"{k}: {v}" for k, v in sorted(metrics.items())]
         table.add_row("Metrics", "\n".join(metric_lines))
 
-    console.print(Panel(table, title=f"Project Info: {data.get('alias', '')}", expand=False))
+    console.print(
+        Panel(table, title=f"Project Info: {escape(str(data.get('alias', '')))}", expand=False)
+    )
 
 
 @project_app.command("info")
@@ -864,7 +872,7 @@ def _format_member_list(console: Console, data: dict[str, Any]) -> None:
                 str(p.get("id", "")),
                 p.get("user", {}).get("email", ""),
                 p.get("role", ""),
-                p.get("reason", ""),
+                escape(p.get("reason", "")),
             )
         console.print(ptable)
 

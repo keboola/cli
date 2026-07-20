@@ -1145,6 +1145,40 @@ def _setup_config_test(config_dir: Path, projects: dict[str, dict] | None = None
     return store
 
 
+class TestProjectNameMarkupEscape:
+    """Regression: a project name containing square brackets ("[e2e] - ...")
+    must reach human-mode output verbatim, not be eaten as a Rich markup tag."""
+
+    BRACKETED_NAME = "[e2e] - kbagent bigquery"
+
+    def test_project_list_human_shows_bracketed_name(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
+            store_instance = _setup_config_test(
+                config_dir,
+                {
+                    "bq": {
+                        "token": TEST_TOKEN,
+                        "project_name": self.BRACKETED_NAME,
+                        "project_id": 6100,
+                    }
+                },
+            )
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(config_store=store_instance)
+
+            # Wide terminal so the Rich table does not wrap the name cell.
+            result = runner.invoke(app, ["project", "list"], env={"COLUMNS": "200"})
+
+        assert result.exit_code == 0
+        assert "[e2e]" in result.output
+
+
 class TestConfigList:
     """Tests for `kbagent config list` command."""
 
