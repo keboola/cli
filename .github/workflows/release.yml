@@ -117,9 +117,21 @@ jobs:
           fi
           echo "OK: legacy compat wheel $expected present"
 
+      - name: Generate command-reference.md from the built wheel
+        # Introspects the Typer command tree of the EXACT artifact being
+        # shipped (issue #498), so the reference asset can never disagree with
+        # the released CLI. Downstream consumers (help.keboola.com CLI section,
+        # the Claude Code plugin) fetch it pinned to the release tag instead of
+        # hand-copying command lists.
+        run: |
+          tag="$TAG"
+          version="${tag#v}"
+          uv run --no-project --with "dist/keboola_cli-${version}-py3-none-any.whl" \
+            python scripts/gen_command_reference.py --output dist/command-reference.md
+
       - name: Upload the wheel to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # --clobber makes a re-run idempotent (overwrites instead of erroring on
         # "asset already exists").
-        run: gh release upload "$TAG" dist/*.whl --clobber
+        run: gh release upload "$TAG" dist/*.whl dist/command-reference.md --clobber
