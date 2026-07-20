@@ -14,7 +14,8 @@ description: >
   keboola lineage, keboola sync, gitops, dev branch, workspace SQL, data app,
   streamlit deploy, semantic layer, sl, dev-portal, data stream, OTLP,
   scoped token, bucket sharing, encrypt secrets, feature flag, flow schedule,
-  invite member.
+  invite member, SQL transformation editing, sync action, testConnection,
+  keboola docs, config examples, flow examples.
 ---
 
 # kbagent -- Keboola Agent CLI

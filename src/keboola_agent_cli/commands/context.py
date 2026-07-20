@@ -631,10 +631,18 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent flow detail --project NAME --flow-id ID [--branch ID]
     Show phases, transitions (next[].goto + conditions), typed tasks, and full configuration.
 
-  kbagent flow schema [--full --project NAME]
-    Plain: print the offline conditional-flow YAML template. --full fetches and dumps the
-    live JSON Schema from the stack (AI Service configurationSchema for keboola.flow) and
-    REQUIRES --project (the schema is no longer bundled).
+  kbagent flow schema [--full [--project NAME]]
+    Plain: print the offline conditional-flow YAML template. --full with --project
+    fetches the live JSON Schema from the stack (source=live); --full WITHOUT
+    --project serves the bundled authoritative snapshot (source=bundled,
+    since 0.73.0 -- previously an error).
+
+  kbagent flow examples [--component-id keboola.flow|keboola.orchestrator]
+    (since 0.73.0) Bundled example flow configurations (vendored from
+    keboola-mcp-server), fully offline. Default keboola.flow (conditional);
+    keboola.orchestrator serves legacy examples with an informational-only
+    warning (kbagent cannot create or edit orchestrator flows). --json emits
+    the bare list of example configs.
 
   kbagent flow validate --file YAML|@file|- [--project NAME]
     With --project: fetch the live schema from the stack -> full structural + semantic

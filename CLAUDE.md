@@ -605,7 +605,8 @@ kbagent docs query "QUESTION" [--project NAME]
 
 kbagent flow list [--project NAME] [--branch ID] [--with-schedules]
 kbagent flow detail --project NAME --flow-id ID [--branch ID]
-kbagent flow schema [--full --project NAME]
+kbagent flow schema [--full [--project NAME]]
+kbagent flow examples [--component-id keboola.flow|keboola.orchestrator]
 kbagent flow validate --file @flow.yaml|- [--project NAME]
 kbagent flow new --project NAME --name NAME [--description D] [--file @path.yaml|-|JSON] [--branch ID]
 kbagent flow update --project NAME --flow-id ID [--name N] [--description D] [--file @path.yaml|-|JSON] [--branch ID]
@@ -619,8 +620,12 @@ kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
 #   Schema-fetch failure (network/empty) does NOT block the write: structural check skipped,
 #   semantic checks still run, a "structural schema validation skipped" warning is surfaced.
 # flow validate: with --project fetches the live schema (full validation; fetch failure ->
-#   semantic-only + note); without --project runs semantic-only + a note. flow schema --full
-#   requires --project (fetches live schema); plain flow schema is the offline YAML template.
+#   semantic-only + note); without --project runs semantic-only + a note. flow schema --full:
+#   with --project fetches the live schema (source=live); without --project serves the bundled
+#   authoritative snapshot (source=bundled, 0.73.0+). Plain flow schema is the offline YAML template.
+# flow examples (0.73.0+): bundled example flow configs (vendored from keboola-mcp-server), offline.
+#   Default keboola.flow; keboola.orchestrator serves legacy examples informational-only (kbagent
+#   cannot create/edit orchestrator flows). --json emits the bare list of configs.
 # flow schedule (0.66.1+) also activates the config on the Scheduler Service so the cron fires;
 #   activation failure keeps the config written, sets activated=false + warning, exit stays 0.
 #   flow schedule-remove deregisters from the service before deleting each config.
