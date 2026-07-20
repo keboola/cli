@@ -32,7 +32,7 @@ import sys
 from collections.abc import Collection, Mapping
 from pathlib import Path
 
-CHANGELOG_URL = "https://github.com/keboola/cli/blob/main/src/keboola_agent_cli/changelog.py"
+RELEASES_URL = "https://github.com/keboola/cli/releases"
 
 
 def collect_versions(
@@ -88,7 +88,7 @@ def render_notes(
         lines.append("")
     lines.append(
         f"Generated from the bundled changelog — the same content "
-        f"`kbagent changelog --full` shows. Full history: [changelog.py]({CHANGELOG_URL})."
+        f"`kbagent changelog --full` shows. Full history: [all releases]({RELEASES_URL})."
     )
     return "\n".join(lines) + "\n"
 
