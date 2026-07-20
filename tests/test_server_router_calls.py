@@ -1081,3 +1081,53 @@ def test_bulk_delete_route_not_shadowed_by_alias_delete(tmp_path: Path) -> None:
     assert res.status_code == 200, res.text
     project_svc.bulk_remove_projects.assert_called_once()
     project_svc.remove_project.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# configs.py  PATCH /{p}/{c}/{cfg}
+# Service: config.update_config(change_description=...)
+# ---------------------------------------------------------------------------
+
+
+def test_config_update_passes_change_description_kwarg(tmp_path: Path) -> None:
+    """Router forwards change_description= to ConfigService.update_config."""
+    config_svc = MagicMock()
+    config_svc.update_config.return_value = {"id": CONFIG_ID, "name": "cfg"}
+    registry = _mock_registry(config=config_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.patch(
+            f"/configs/{PROJECT}/{COMPONENT}/{CONFIG_ID}",
+            headers=AUTH,
+            json={"name": "cfg", "change_description": "AI-1234: via API"},
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = config_svc.update_config.call_args.kwargs
+    assert kwargs["change_description"] == "AI-1234: via API"
+
+
+# ---------------------------------------------------------------------------
+# configs.py  PATCH /{p}/{c}/{cfg}/rows/{row}
+# Service: config.update_config_row(change_description=...)
+# ---------------------------------------------------------------------------
+
+
+def test_config_row_update_passes_change_description_kwarg(tmp_path: Path) -> None:
+    """Router forwards change_description= to ConfigService.update_config_row."""
+    config_svc = MagicMock()
+    config_svc.update_config_row.return_value = {"id": ROW_ID, "name": "row"}
+    registry = _mock_registry(config=config_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.patch(
+            f"/configs/{PROJECT}/{COMPONENT}/{CONFIG_ID}/rows/{ROW_ID}",
+            headers=AUTH,
+            json={"name": "row", "change_description": "AI-1234: via API"},
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = config_svc.update_config_row.call_args.kwargs
+    assert kwargs["change_description"] == "AI-1234: via API"

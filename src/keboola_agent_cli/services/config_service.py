@@ -66,6 +66,23 @@ def _infer_component_type(component_id: str) -> str | None:
     return None
 
 
+def _default_change_description(command: str, *, has_metadata: bool, has_content: bool) -> str:
+    """Build the default config-version ``changeDescription`` for a write.
+
+    Used when the caller does not pass an explicit ``--change-description``.
+    ``command`` is the kbagent command that produced the version (e.g.
+    ``"config update"``), and the flags describe which parts changed so the
+    version-history line reads e.g. ``Updated metadata + configuration via
+    kbagent config update``.
+    """
+    parts = []
+    if has_metadata:
+        parts.append("metadata")
+    if has_content:
+        parts.append("configuration")
+    return f"Updated {' + '.join(parts)} via kbagent {command}"
+
+
 def _find_matches_in_json(
     obj: Any,
     match_fn: Any,
@@ -663,6 +680,7 @@ class ConfigService(BaseService):
         set_paths: list[tuple[str, Any]] | None = None,
         merge: bool = False,
         dry_run: bool = False,
+        change_description: str | None = None,
         branch_id: int | None = None,
         allow_plaintext_fallback: bool = False,
     ) -> dict[str, Any]:
@@ -680,6 +698,9 @@ class ConfigService(BaseService):
             merge: If True, deep-merge *configuration* or *set_paths* into
                    the existing config instead of replacing.  When using
                    *set_paths* merge is always implied.
+            change_description: Text stored as the new config version's
+                   ``changeDescription`` (the version-history audit line). When
+                   ``None`` a default is generated from what changed.
             dry_run: If True, compute and return the diff without applying.
             branch_id: If set, update in a specific dev branch.
                        If None, uses the project's active branch (if any).
@@ -737,6 +758,10 @@ class ConfigService(BaseService):
                     component_id, final_config
                 )
 
+            change_desc = change_description or _default_change_description(
+                "config update", has_metadata=has_metadata, has_content=has_content
+            )
+
             if dry_run:
                 current = client.get_config_detail(
                     component_id, config_id, branch_id=effective_branch_id
@@ -751,6 +776,7 @@ class ConfigService(BaseService):
                     "config_id": config_id,
                     "branch_id": effective_branch_id,
                     "changes": changes,
+                    "change_description": change_desc,
                     "old_configuration": old_cfg,
                     "new_configuration": new_cfg,
                     "normalizations": normalizations,
@@ -767,13 +793,6 @@ class ConfigService(BaseService):
                     final_config,
                     allow_plaintext_fallback=allow_plaintext_fallback,
                 )
-
-            change_parts = []
-            if has_metadata:
-                change_parts.append("metadata")
-            if has_content:
-                change_parts.append("configuration")
-            change_desc = f"Updated {' + '.join(change_parts)} via kbagent config update"
 
             result = client.update_config(
                 component_id=component_id,
@@ -1821,6 +1840,7 @@ class ConfigService(BaseService):
         set_paths: list[tuple[str, Any]] | None = None,
         merge: bool = False,
         dry_run: bool = False,
+        change_description: str | None = None,
         is_disabled: bool | None = None,
         branch_id: int | None = None,
         allow_plaintext_fallback: bool = False,
@@ -1838,6 +1858,9 @@ class ConfigService(BaseService):
             set_paths: List of (path, value) tuples for targeted updates.
             merge: If True, deep-merge *configuration* into the existing row
                    config instead of replacing.
+            change_description: Text stored as the new row version's
+                   ``changeDescription``. When ``None`` a default is generated
+                   from what changed.
             dry_run: If True, compute and return the diff without applying.
             is_disabled: When True, disable the row; when False, enable it;
                    when None, leave the current state unchanged.
@@ -1889,6 +1912,10 @@ class ConfigService(BaseService):
                     branch_id=effective_branch_id,
                 )
 
+            change_desc = change_description or _default_change_description(
+                "config row-update", has_metadata=has_metadata, has_content=has_content
+            )
+
             if dry_run:
                 current_row = client.get_config_row(
                     component_id, config_id, row_id, branch_id=effective_branch_id
@@ -1910,16 +1937,10 @@ class ConfigService(BaseService):
                     "row_id": row_id,
                     "branch_id": effective_branch_id,
                     "changes": changes,
+                    "change_description": change_desc,
                     "old_configuration": old_cfg,
                     "new_configuration": new_cfg,
                 }
-
-            change_parts = []
-            if has_metadata:
-                change_parts.append("metadata")
-            if has_content:
-                change_parts.append("configuration")
-            change_desc = f"Updated {' + '.join(change_parts)} via kbagent config row-update"
 
             # Encrypt #-prefixed secrets before they reach Storage (issue #378).
             # Real write only -- dry-run returned above with plaintext diff.

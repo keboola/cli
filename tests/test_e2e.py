@@ -1619,6 +1619,54 @@ class TestFullE2E:
         assert db_config["port"] == 5439
         assert "schema" not in db_config
 
+        # --change-description sets the version changeDescription verbatim.
+        change_desc = f"{RUN_ID} AI-1234: e2e change description"
+        dry = self._run_ok(
+            "config",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--set",
+            "parameters.db.timeout=15",
+            "--change-description",
+            change_desc,
+            "--dry-run",
+        )
+        # --dry-run echoes the change description that would be sent.
+        assert dry["data"]["change_description"] == change_desc
+
+        self._run_ok(
+            "config",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--set",
+            "parameters.db.timeout=15",
+            "--change-description",
+            change_desc,
+        )
+
+        # Verify the new version's changeDescription via config detail.
+        data = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+        assert data["data"]["changeDescription"] == change_desc
+
     def _test_config_merge(self, config_id: str) -> None:
         """Test config update --merge: partial merge without losing existing keys."""
         # Current state: host=final.example.com, port=5439, database=final_db

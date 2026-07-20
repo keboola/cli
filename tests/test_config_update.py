@@ -457,3 +457,146 @@ class TestConfigUpdateCli:
         assert result.exit_code == 0, result.output
         cfg = mock_client.update_config.call_args.kwargs["configuration"]
         assert cfg["parameters"]["tables"] == {"new": "table"}
+
+
+# ---------------------------------------------------------------------------
+# change-description tests
+# ---------------------------------------------------------------------------
+
+
+class TestConfigServiceUpdateChangeDescription:
+    """Tests for the version changeDescription on ConfigService.update_config."""
+
+    def test_custom_change_description_forwarded(self, tmp_config_dir: Path) -> None:
+        """An explicit change_description is sent verbatim to the client."""
+        service, client = _make_service(tmp_config_dir)
+
+        service.update_config(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="cfg-001",
+            name="New Name",
+            change_description="AI-1234: bump timeout",
+        )
+
+        call_kwargs = client.update_config.call_args.kwargs
+        assert call_kwargs["change_description"] == "AI-1234: bump timeout"
+
+    def test_default_change_description_when_omitted(self, tmp_config_dir: Path) -> None:
+        """Omitting change_description preserves the generated default."""
+        service, client = _make_service(tmp_config_dir)
+
+        service.update_config(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="cfg-001",
+            name="New Name",
+        )
+
+        call_kwargs = client.update_config.call_args.kwargs
+        assert call_kwargs["change_description"] == ("Updated metadata via kbagent config update")
+
+    def test_dry_run_includes_change_description(self, tmp_config_dir: Path) -> None:
+        """dry_run surfaces the change_description that would be sent."""
+        service, client = _make_service(tmp_config_dir)
+
+        result = service.update_config(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="cfg-001",
+            set_paths=[("parameters.user", "new-admin")],
+            change_description="AI-1234: rotate creds",
+            dry_run=True,
+        )
+
+        assert result["change_description"] == "AI-1234: rotate creds"
+        client.update_config.assert_not_called()
+
+
+class TestConfigUpdateChangeDescriptionCli:
+    """CLI-level tests for --change-description on config update."""
+
+    def _invoke(self, tmp_config_dir: Path, args: list[str]) -> Result:
+        return runner.invoke(
+            app,
+            ["--json", "--config-dir", str(tmp_config_dir), "config", "update", *args],
+        )
+
+    def test_change_description_flag_forwarded(self, tmp_config_dir: Path) -> None:
+        """--change-description reaches the client as change_description."""
+        store = setup_single_project(tmp_config_dir)
+
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = SAMPLE_CONFIG_DETAIL
+        mock_client.update_config.return_value = {
+            "id": "cfg-001",
+            "name": "My Config",
+            "componentId": "keboola.ex-db-snowflake",
+        }
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.config.get_service",
+                lambda ctx, name: ConfigService(
+                    config_store=store,
+                    client_factory=lambda url, token: mock_client,
+                ),
+            )
+
+            result = self._invoke(
+                tmp_config_dir,
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "cfg-001",
+                    "--set",
+                    "parameters.user=new-admin",
+                    "--change-description",
+                    "AI-1234: rotate creds",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = mock_client.update_config.call_args.kwargs
+        assert call_kwargs["change_description"] == "AI-1234: rotate creds"
+
+    def test_dry_run_echoes_change_description(self, tmp_config_dir: Path) -> None:
+        """--dry-run --json output includes the change_description."""
+        store = setup_single_project(tmp_config_dir)
+
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = SAMPLE_CONFIG_DETAIL
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.config.get_service",
+                lambda ctx, name: ConfigService(
+                    config_store=store,
+                    client_factory=lambda url, token: mock_client,
+                ),
+            )
+
+            result = self._invoke(
+                tmp_config_dir,
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "cfg-001",
+                    "--set",
+                    "parameters.user=new-admin",
+                    "--change-description",
+                    "AI-1234: rotate creds",
+                    "--dry-run",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert data["change_description"] == "AI-1234: rotate creds"
+        mock_client.update_config.assert_not_called()
