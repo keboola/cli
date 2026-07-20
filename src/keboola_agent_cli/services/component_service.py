@@ -14,7 +14,7 @@ import yaml
 from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
 from ..constants import SECRET_PLACEHOLDER
-from ..errors import KeboolaApiError
+from ..errors import ConfigError, KeboolaApiError
 from ..models import ComponentDetail, ComponentSuggestion, ProjectConfig
 from .base import BaseService, ClientFactory
 from .org_service import slugify
@@ -417,6 +417,140 @@ class ComponentService(BaseService):
             "examples_count": len(detail.root_configuration_examples),
             "row_examples_count": len(detail.row_configuration_examples),
             "project_alias": alias,
+        }
+
+    def get_config_examples(self, alias: str | None, component_id: str) -> dict[str, Any]:
+        """Fetch root and row configuration example bodies for a component.
+
+        Ports the MCP ``get_config_examples`` tool (issue #393): the AI Service
+        component detail already carries ``rootConfigurationExamples`` /
+        ``rowConfigurationExamples``; this method surfaces the full bodies that
+        :meth:`get_component_detail` deliberately reduces to counts (its
+        contract is a summary and stays unchanged).
+
+        Args:
+            alias: Project alias. When None, the first available project is
+                used (only the stack URL and token are needed).
+            component_id: The component identifier (e.g. 'keboola.ex-google-drive').
+
+        Returns:
+            Dict with keys ``component_id``, ``root_examples`` (list of dicts),
+            and ``row_examples`` (list of dicts).
+
+        Raises:
+            ConfigError: If the alias is not found or no projects are configured.
+            KeboolaApiError: If the AI Service call fails.
+        """
+        projects = self.resolve_projects([alias] if alias else None)
+        if not projects:
+            raise ConfigError(
+                "No projects configured. Use 'kbagent project add' to connect a project first."
+            )
+        resolved_alias = alias or next(iter(projects))
+        project = projects[resolved_alias]
+
+        ai_client = self._ai_client_factory(project.stack_url, project.token)
+        try:
+            raw = ai_client.get_component_detail(component_id)
+        finally:
+            ai_client.close()
+
+        detail = ComponentDetail(**raw)
+        return {
+            "component_id": detail.component_id,
+            "root_examples": detail.root_configuration_examples,
+            "row_examples": detail.row_configuration_examples,
+        }
+
+    def run_sync_action(
+        self,
+        alias: str,
+        component_id: str,
+        action: str,
+        config_id: str | None = None,
+        row_id: str | None = None,
+        branch_id: int | None = None,
+        config_data_override: dict[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Run a synchronous component action (issue #395, MCP ``run_sync_action`` port).
+
+        Builds the ``configData`` payload and delegates the POST to
+        :meth:`KeboolaClient.run_sync_action`. When ``config_data_override`` is
+        given it is sent verbatim (no config fetch). Otherwise the root
+        configuration is fetched (honoring ``branch_id``) and, when ``row_id``
+        is given, the row configuration is SHALLOW-merged over it at the top
+        level only -- exactly like the MCP tool: a row-level ``parameters`` or
+        ``storage`` key REPLACES the root key wholesale (never deep-merged),
+        so e.g. a row ``storage.input`` replaces the root ``storage.input``.
+
+        Args:
+            alias: Project alias (resolves stack URL + token).
+            component_id: Component identifier (e.g. 'keboola.ex-db-mysql').
+            action: Sync action name (freeform; component-defined).
+            config_id: Configuration ID to build configData from. Required
+                unless ``config_data_override`` is provided.
+            row_id: Optional configuration row ID to shallow-merge over root.
+            branch_id: Optional dev branch ID (config fetch + action call).
+            config_data_override: Explicit configData dict; sent verbatim.
+            timeout: Optional per-request timeout in seconds for the action call.
+
+        Returns:
+            Dict with keys ``component_id``, ``action``, and ``result`` (the
+            opaque action response -- dict or list, action-specific).
+
+        Raises:
+            ConfigError: If the alias is unknown, or neither ``config_id`` nor
+                ``config_data_override`` is provided.
+            KeboolaApiError: If any API call fails.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            if config_data_override is not None:
+                config_data = config_data_override
+            else:
+                if config_id is None:
+                    raise ConfigError(
+                        "Either a configuration ID or explicit config data is required "
+                        "to run a sync action."
+                    )
+                root = client.get_config_detail(component_id, config_id, branch_id=branch_id)
+                root_configuration = root.get("configuration") or {}
+                row_configuration: dict[str, Any] = {}
+                if row_id is not None:
+                    row = client.get_config_row(
+                        component_id, config_id, row_id, branch_id=branch_id
+                    )
+                    row_configuration = row.get("configuration") or {}
+                # SHALLOW top-level merge (MCP parity): row keys replace root
+                # keys wholesale; do NOT deep-merge.
+                config_data = {
+                    "parameters": {
+                        **root_configuration.get("parameters", {}),
+                        **row_configuration.get("parameters", {}),
+                    },
+                    "storage": {
+                        **root_configuration.get("storage", {}),
+                        **row_configuration.get("storage", {}),
+                    },
+                }
+            result = client.run_sync_action(
+                component_id,
+                action,
+                config_data,
+                branch_id=branch_id,
+                timeout=timeout,
+            )
+        finally:
+            client.close()
+
+        return {
+            "component_id": component_id,
+            "action": action,
+            "result": result,
         }
 
     def generate_scaffold(
