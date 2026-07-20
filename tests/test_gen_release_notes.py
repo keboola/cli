@@ -105,10 +105,13 @@ class TestRenderNotes:
         for version in ("v0.71.0", "v0.70.1", "v0.70.0"):
             assert f"### {version}" in notes
 
-    def test_footer_links_the_changelog(self) -> None:
+    def test_footer_links_the_releases_page(self) -> None:
+        # The footer must point humans at the releases page, not at Python
+        # source (changelog.py); the in-CLI pointer stays in the sentence.
         notes = render_notes(["0.71.0"], _CHANGELOG)
         assert "kbagent changelog --full" in notes
-        assert "changelog.py" in notes
+        assert "[all releases](https://github.com/keboola/cli/releases)" in notes
+        assert "changelog.py" not in notes
 
 
 class TestCli:
