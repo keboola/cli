@@ -14,6 +14,7 @@ from .commands.config import config_app
 from .commands.context import context_command
 from .commands.data_app import data_app_app
 from .commands.dev_portal import dev_portal_app
+from .commands.docs import docs_app
 from .commands.doctor import doctor_command
 from .commands.encrypt import encrypt_app
 from .commands.feature import feature_app
@@ -52,6 +53,7 @@ from .services.config_service import ConfigService
 from .services.data_app_git_service import DataAppGitService
 from .services.data_app_service import DataAppService
 from .services.deep_lineage_service import DeepLineageService
+from .services.docs_service import DocsService
 from .services.doctor_service import DoctorService
 from .services.encrypt_service import EncryptService
 from .services.feature_service import FeatureService
@@ -119,6 +121,7 @@ app.add_typer(stream_app, name="stream", rich_help_panel=_BROWSE)
 app.add_typer(sharing_app, name="sharing", rich_help_panel=_BROWSE)
 app.add_typer(lineage_app, name="lineage", rich_help_panel=_BROWSE)
 app.add_typer(kai_app, name="kai", rich_help_panel=_BROWSE)
+app.add_typer(docs_app, name="docs", rich_help_panel=_BROWSE)
 
 # -- Flows --
 _FLOWS = "Flows"
@@ -335,6 +338,7 @@ def main(
     semantic_layer_service = SemanticLayerService(config_store=config_store)
     repo_validate_service = RepoValidateService(config_store=config_store)
     kai_service = KaiService(config_store=config_store)
+    docs_service = DocsService(config_store=config_store)
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
     version_service = VersionService()
     http_forwarder_service = HttpForwarderService()
@@ -391,6 +395,7 @@ def main(
     ctx.obj["semantic_layer_service"] = semantic_layer_service
     ctx.obj["repo_validate_service"] = repo_validate_service
     ctx.obj["kai_service"] = kai_service
+    ctx.obj["docs_service"] = docs_service
     ctx.obj["doctor_service"] = doctor_service
     ctx.obj["version_service"] = version_service
     ctx.obj["http_forwarder_service"] = http_forwarder_service

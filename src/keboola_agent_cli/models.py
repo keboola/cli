@@ -306,6 +306,27 @@ class ComponentSuggestion(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class DocsAnswer(BaseModel):
+    """Answer from Keboola AI Service /docs/question endpoint."""
+
+    text: str = Field(default="")
+    source_urls: list[str] = Field(default_factory=list, alias="sourceUrls")
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _none_text_to_empty_string(cls, value: Any) -> Any:
+        """AI Service may return explicit null for an empty answer."""
+        return "" if value is None else value
+
+    @field_validator("source_urls", mode="before")
+    @classmethod
+    def _none_sources_to_empty_list(cls, value: Any) -> Any:
+        """AI Service may return explicit null when no sources matched."""
+        return [] if value is None else value
+
+    model_config = {"populate_by_name": True}
+
+
 class ErrorResponse(BaseModel):
     """Structured error response for JSON output mode."""
 

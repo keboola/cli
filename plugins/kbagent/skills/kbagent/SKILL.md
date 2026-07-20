@@ -97,8 +97,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Rotate a token: generate a new value and invalidate the old one (secret shown once) | `kbagent token refresh --project PROJECT --token-id TOKEN-ID` |
 | List available components from connected projects | `kbagent component list` |
 | Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
+| Run a synchronous component action (e.g. | `kbagent component sync-action <ACTION-NAME> --component-id COMPONENT-ID --project PROJECT` |
 | List configurations from connected projects | `kbagent config list` |
 | Show detailed information about one or many configurations | `kbagent config detail --component-id COMPONENT-ID` |
+| Show sample configuration JSON examples for a component | `kbagent config examples --component-id COMPONENT-ID` |
 | Search through configuration bodies for a string or pattern | `kbagent config search --query QUERY` |
 | Update a configuration's metadata and/or content | `kbagent config update --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Set or clear ``storage.output.default_bucket`` on a configuration | `kbagent config set-default-bucket --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -186,6 +188,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Check whether the configured token can use Kai (master token + AI Agent Chat) | `kbagent kai preflight` |
 | Fetch the full message history of a single Kai chat | `kbagent kai chat-detail --chat-id CHAT-ID` |
 | List recent Kai chat sessions | `kbagent kai history` |
+| Ask the Keboola documentation a natural language question | `kbagent docs query <QUESTION>` |
 | List conditional flows (keboola.flow) across projects | `kbagent flow list` |
 | Show detailed conditional-flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |
 | Print the conditional-flow YAML template, or --full for the live JSON Schema | `kbagent flow schema` |
