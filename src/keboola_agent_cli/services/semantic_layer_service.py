@@ -357,11 +357,14 @@ class SemanticLayerService(BaseService):
         results: dict[str, dict[str, Any]] = {}
         with self._new_metastore_client(project) as client:
             if len(requested) == 1:
-                results[requested[0]] = client.get_schema(SCHEMA_TYPE_ALIAS[requested[0]])
+                results[requested[0]] = self._fetch_resolved_schema(
+                    client, SCHEMA_TYPE_ALIAS[requested[0]]
+                )
             else:
                 with ThreadPoolExecutor(max_workers=len(requested)) as pool:
                     future_to_type = {
-                        pool.submit(client.get_schema, SCHEMA_TYPE_ALIAS[t]): t for t in requested
+                        pool.submit(self._fetch_resolved_schema, client, SCHEMA_TYPE_ALIAS[t]): t
+                        for t in requested
                     }
                     errors: list[Exception] = []
                     for future in future_to_type:
@@ -376,8 +379,40 @@ class SemanticLayerService(BaseService):
                         raise errors[0]
         return {
             "project": alias,
-            "schemas": [{"type": t, "schema": results[t]} for t in requested],
+            "schemas": [
+                {
+                    "type": t,
+                    "schema": results[t]["schema"],
+                    "schema_version": results[t]["schema_version"],
+                }
+                for t in requested
+            ],
         }
+
+    @staticmethod
+    def _fetch_resolved_schema(client: MetastoreClient, wire_type: str) -> dict[str, Any]:
+        """Fetch the actual JSON Schema for a type, resolving the default version.
+
+        Live metastore behavior (2026-07): the bare ``/api/v1/schema/{type}``
+        endpoint returns only a ``{"versions": [...]}`` listing (metadata, no
+        schema body); the real JSON Schema lives at ``/{version}``. The
+        upstream MCP tool passes the bare listing through -- an upstream gap
+        we deliberately do NOT mirror: this resolves ``isDefault`` (falling
+        back to the first entry) and fetches the versioned document. If the
+        server someday returns the schema directly (no ``versions`` key),
+        it is passed through unchanged.
+        """
+        body = client.get_schema(wire_type)
+        versions = body.get("versions")
+        if not isinstance(versions, list) or not versions:
+            return {"schema": body, "schema_version": None}
+        default = next(
+            (v for v in versions if v.get("isDefault")),
+            versions[0],
+        )
+        version_id = str(default.get("version", ""))
+        resolved = client.get_schema(wire_type, version=version_id) if version_id else body
+        return {"schema": resolved, "schema_version": version_id or None}
 
     # Internal helpers (model-scoped fetches).
 

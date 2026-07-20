@@ -194,9 +194,51 @@ class TestServiceGetSchema:
 
         assert result == {
             "project": "prod",
-            "schemas": [{"type": "metric", "schema": _schema_for("semantic-metric")}],
+            "schemas": [
+                {
+                    "type": "metric",
+                    "schema": _schema_for("semantic-metric"),
+                    "schema_version": None,
+                }
+            ],
         }
         mock.get_schema.assert_called_once_with("semantic-metric")
+
+    def test_versions_listing_resolves_default_version(self, tmp_path: Path) -> None:
+        """Live metastore returns a {"versions": [...]} listing from the bare
+        endpoint; the service must resolve isDefault and fetch the real schema."""
+        service, mock = _make_service(_make_store(tmp_path))
+        listing = {
+            "versions": [
+                {"version": "0.9.0", "isDefault": False},
+                {"version": "1.0.0", "isDefault": True},
+            ]
+        }
+        real_schema = _schema_for("semantic-metric")
+
+        def _get_schema(wire_type: str, version: str | None = None):
+            return real_schema if version == "1.0.0" else listing
+
+        mock.get_schema.side_effect = _get_schema
+
+        result = service.get_schema("prod", types=["metric"])
+
+        assert result["schemas"] == [
+            {"type": "metric", "schema": real_schema, "schema_version": "1.0.0"}
+        ]
+
+    def test_versions_listing_without_default_uses_first(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        listing = {"versions": [{"version": "2.0.0"}, {"version": "1.0.0"}]}
+        real_schema = {"properties": {"x": {}}}
+        mock.get_schema.side_effect = lambda wt, version=None: (
+            real_schema if version == "2.0.0" else listing
+        )
+
+        result = service.get_schema("prod", types=["metric"])
+
+        assert result["schemas"][0]["schema_version"] == "2.0.0"
+        assert result["schemas"][0]["schema"] == real_schema
 
     def test_model_type_maps_to_semantic_model(self, tmp_path: Path) -> None:
         service, mock = _make_service(_make_store(tmp_path))
