@@ -20,6 +20,7 @@ from urllib.parse import quote
 import httpx
 
 from .constants import (
+    CLOUD_UPLOAD_ERROR_BODY_LIMIT,
     DEFAULT_GROUPED_JOBS_LIMIT,
     DEFAULT_JOB_LIMIT,
     DEFAULT_JOBS_PER_CONFIG,
@@ -34,16 +35,19 @@ from .constants import (
     METADATA_NOT_FOUND,
     OAUTH_HOST,
     OAUTH_PATH,
+    OTLP_BUCKET_PREFIX,
     QUERY_JOB_MAX_WAIT,
     QUERY_JOB_POLL_INTERVAL,
     QUERY_RESULTS_PAGE_SIZE,
     STORAGE_JOB_MAX_WAIT,
     STORAGE_JOB_POLL_INTERVAL,
+    STREAM_DEFAULT_BRANCH,
     VALID_POLL_STRATEGIES,
 )
 from .errors import ErrorCode, KeboolaApiError
 from .http_base import BaseHttpClient
 from .models import TokenVerifyResponse
+from .stream_client import StreamClient, provision_otlp_sinks, stream_task_source_id
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +175,9 @@ class KeboolaClient(BaseHttpClient):
         self._queue_client: httpx.Client | None = None
         self._query_client: httpx.Client | None = None
         self._encrypt_client: httpx.Client | None = None
+        # Lazily built on first Data Streams call (per-device OTLP sources); the
+        # Stream control plane is a sibling host reachable from this stack+token.
+        self._stream_client: StreamClient | None = None
         # Cache of project feature flags. Populated lazily on first
         # has_feature() / get_project_features() call so we don't pay an
         # extra verify_token round-trip on every kbagent invocation, and
@@ -199,6 +206,8 @@ class KeboolaClient(BaseHttpClient):
             self._query_client.close()
         if self._encrypt_client is not None:
             self._encrypt_client.close()
+        if self._stream_client is not None:
+            self._stream_client.close()
 
     def __enter__(self) -> "KeboolaClient":
         return self
@@ -376,6 +385,209 @@ class KeboolaClient(BaseHttpClient):
         )
         return response.json()
 
+    def create_scoped_token(
+        self,
+        *,
+        description: str,
+        bucket_permissions: dict[str, str] | None = None,
+        component_access: list[str] | None = None,
+        can_read_all_file_uploads: bool = False,
+        expires_in: int | None = None,
+    ) -> dict[str, Any]:
+        """Create a scoped Storage API token (``POST /v2/storage/tokens``).
+
+        The general form of :meth:`create_short_lived_token`: instead of only a
+        component allow-list it also expresses **bucket** permissions, so a
+        caller can mint the narrow "upload Files + write one sink bucket,
+        expiring, nothing else" token a capture device needs (Keboola's
+        single-bucket-write pattern).
+
+        Note on Files upload: a Files upload (``POST /v2/storage/files/prepare``)
+        is a generic Storage write available to any valid Storage token -- it is
+        **not** gated by ``componentAccess`` or ``canReadAllFileUploads``. Grant
+        ``bucket_permissions={sink_bucket: "write"}`` for the sink write;
+        ``can_read_all_file_uploads`` only widens *reading* files uploaded by
+        *other* tokens (a device sees its own uploads regardless).
+
+        The acting token must carry ``canManageTokens`` (the API rejects the
+        create otherwise -- surfaced as an ``ACCESS_DENIED`` :class:`KeboolaApiError`
+        with the token masked). The returned dict is the raw API response; its
+        ``token`` field is a **one-time** secret reveal -- persist only ``id``
+        (for :meth:`delete_token` / :meth:`refresh_token`) and ``expires``.
+
+        Args:
+            description: Human-readable token description (per-device label).
+            bucket_permissions: ``{bucketId: "read" | "write"}`` grants.
+            component_access: Component IDs the token may run (often empty for a
+                capture device that only uploads Files + streams OTLP).
+            can_read_all_file_uploads: If True the token may read files uploaded
+                by other tokens (default False = only its own uploads).
+            expires_in: Lifetime in seconds; ``None`` = never expires.
+        """
+        data: dict[str, Any] = {"description": description}
+        if expires_in is not None:
+            data["expiresIn"] = str(expires_in)
+        if can_read_all_file_uploads:
+            # Storage API reads this form field as truthy; omit it (=> default
+            # false) rather than sending "0" so an unset scope stays minimal.
+            data["canReadAllFileUploads"] = "1"
+        for bucket_id, permission in (bucket_permissions or {}).items():
+            data[f"bucketPermissions[{bucket_id}]"] = permission
+        if component_access:
+            data["componentAccess[]"] = component_access
+        response = self._request("POST", "/v2/storage/tokens", data=data)
+        return response.json()
+
+    def delete_token(self, token_id: str) -> None:
+        """Revoke a Storage API token immediately (``DELETE /v2/storage/tokens/{id}``).
+
+        Returns 204 and the token stops authenticating at once. Only a
+        **non-master** token can be deleted (the API refuses to delete the master
+        token). Use this for active per-device revocation instead of waiting for
+        the token to expire.
+        """
+        self._request("DELETE", f"/v2/storage/tokens/{quote(str(token_id), safe='')}")
+
+    def refresh_token(self, token_id: str) -> dict[str, Any]:
+        """Rotate a Storage API token (``POST /v2/storage/tokens/{id}/refresh``).
+
+        Generates a **new** token value and returns the updated token dict; the
+        **old** token string becomes immediately invalid (rotation, not
+        additive), so every place using it must be updated. The token id is
+        stable across a refresh.
+        """
+        response = self._request(
+            "POST", f"/v2/storage/tokens/{quote(str(token_id), safe='')}/refresh"
+        )
+        return response.json()
+
+    # ------------------------------------------------------------------
+    # Data Streams (per-device OTLP sources) -- delegate to StreamClient
+    # ------------------------------------------------------------------
+
+    def _get_stream_client(self) -> StreamClient:
+        """Lazily build (and cache) a :class:`StreamClient` over this stack+token.
+
+        The Stream control plane lives on a sibling host (``stream.<region>``)
+        and authenticates with the same Storage token, so it is reachable from
+        the same ``(stack_url, token)`` this client already holds.
+        """
+        if self._stream_client is None:
+            self._stream_client = StreamClient(stack_url=self._stack_url, token=self._token)
+        return self._stream_client
+
+    @staticmethod
+    def _stream_source_detail(
+        source: dict[str, Any], branch_id: str, sink_bucket_id: str | None
+    ) -> dict[str, Any]:
+        """Normalise a raw Stream ``source`` object into the returned detail dict.
+
+        Flattens the OTLP block so the caller gets ``otlp_url`` (with the ingest
+        secret embedded, **unmasked** -- the lib layer hands it to the device
+        once and never persists it) without digging into ``source["otlp"]``. The
+        raw ``source`` is echoed under ``source`` so nothing is lost.
+        """
+        otlp = source.get("otlp") or {}
+        source_id = source.get("sourceId", "")
+        return {
+            "id": source_id,
+            "source_id": source_id,
+            "name": source.get("name", ""),
+            "type": source.get("type", ""),
+            "description": source.get("description", ""),
+            "branch_id": branch_id,
+            "otlp_url": otlp.get("url", ""),
+            "otlp_secret": otlp.get("secret", ""),
+            "base_endpoint": otlp.get("baseUrl", ""),
+            "sink_bucket_id": sink_bucket_id,
+            "source": source,
+        }
+
+    def create_stream_source(
+        self,
+        name: str,
+        *,
+        source_type: str = "otlp",
+        description: str = "",
+        branch_id: str = STREAM_DEFAULT_BRANCH,
+        provision_sinks: bool = True,
+    ) -> dict[str, Any]:
+        """Create a per-device OTLP (or HTTP) stream source and return its detail.
+
+        Async under the hood: the Stream API returns a 202 ``Task`` which is
+        polled to completion here (the caller sees one blocking call). For an
+        ``otlp`` source with ``provision_sinks`` (default) the logs/metrics/traces
+        sinks and the ``in.c-otlp-<sourceId>`` sink bucket are auto-created so
+        OTLP data actually lands in Storage -- and so a scoped device token can be
+        granted ``write`` on that bucket. Pass ``provision_sinks=False`` for a
+        bare source.
+
+        Per-device sources are the unit of isolated event-plane revocation:
+        delete one device's source (:meth:`delete_stream_source`) without
+        rotating a secret shared with other devices.
+
+        Returns a dict with the flattened endpoint: ``id`` / ``source_id``,
+        ``otlp_url`` (secret **unmasked**), ``otlp_secret``, ``sink_bucket_id``
+        (``None`` when no sinks were provisioned), and the raw ``source``.
+        Requires a Storage token privileged to manage Data Streams.
+        """
+        stream = self._get_stream_client()
+        task = stream.create_source(
+            branch_id, name=name, source_type=source_type, description=description or None
+        )
+        finished = stream.wait_for_task(task)
+        source_id = stream_task_source_id(finished) or name
+        sink_bucket_id: str | None = None
+        if provision_sinks and source_type == "otlp":
+            provision_otlp_sinks(stream, branch_id, source_id)
+            sink_bucket_id = f"{OTLP_BUCKET_PREFIX}{source_id}"
+        source = stream.get_source(branch_id, source_id)
+        return self._stream_source_detail(source, branch_id, sink_bucket_id)
+
+    @staticmethod
+    def _sink_bucket_from_sinks(sinks_raw: dict[str, Any]) -> str | None:
+        """Return the bucket of the source's first table sink, or None if it has none.
+
+        Derived from the ACTUAL sinks rather than assumed from the source type,
+        so a source created with ``provision_sinks=False`` (or outside kbagent)
+        truthfully reports ``None`` instead of a bucket that does not exist.
+        """
+        for sink in sinks_raw.get("sinks", []):
+            table_id = (sink.get("table") or {}).get("tableId", "")
+            if "." in table_id:
+                return table_id.rsplit(".", 1)[0]
+        return None
+
+    def get_stream_source(
+        self, source_id: str, *, branch_id: str = STREAM_DEFAULT_BRANCH
+    ) -> dict[str, Any]:
+        """Fetch one stream source's detail (endpoint + secret + sink bucket).
+
+        ``sink_bucket_id`` reflects the source's ACTUAL sinks (``None`` when it
+        has none -- e.g. created with ``provision_sinks=False`` or outside
+        kbagent), so a caller never scopes a device token to a bucket that does
+        not exist.
+        """
+        stream = self._get_stream_client()
+        source = stream.get_source(branch_id, source_id)
+        sinks = stream.list_sinks(branch_id, source.get("sourceId", source_id))
+        return self._stream_source_detail(source, branch_id, self._sink_bucket_from_sinks(sinks))
+
+    def list_stream_sources(
+        self, *, branch_id: str = STREAM_DEFAULT_BRANCH
+    ) -> list[dict[str, Any]]:
+        """List the project's stream sources (raw source objects; find-or-create by name)."""
+        raw = self._get_stream_client().list_sources(branch_id)
+        return list(raw.get("sources", []))
+
+    def delete_stream_source(
+        self, source_id: str, *, branch_id: str = STREAM_DEFAULT_BRANCH
+    ) -> None:
+        """Delete a stream source (per-device revocation) -- async task polled to completion."""
+        stream = self._get_stream_client()
+        task = stream.delete_source(branch_id, source_id)
+        stream.wait_for_task(task)
+
     def global_search(
         self,
         query: str,
@@ -385,6 +597,7 @@ class KeboolaClient(BaseHttpClient):
         branch_id: int | None = None,
         limit: int = 50,
         offset: int = 0,
+        regex: bool = False,
     ) -> dict[str, Any]:
         """Search for items by name across the project using the Storage API global-search endpoint.
 
@@ -403,6 +616,9 @@ class KeboolaClient(BaseHttpClient):
             branch_id: Required when ``branch_type="development"``; ignored otherwise.
             limit: Maximum number of results to return (default 50, max 100).
             offset: Pagination offset (default 0).
+            regex: When True, run the query as a case-insensitive whole-term
+                   regular expression over entity names (Storage API
+                   ``mode=regex``). Omitted from the request otherwise.
 
         Returns:
             Raw API response dict with keys ``"all"`` (total count) and
@@ -419,6 +635,8 @@ class KeboolaClient(BaseHttpClient):
         }
         if types:
             params["types[]"] = types
+        if regex:
+            params["mode"] = "regex"
         if branch_type == "development" and branch_id is not None:
             params["branchTypes[]"] = "development"
             params["branchIds[]"] = branch_id
@@ -1704,8 +1922,20 @@ class KeboolaClient(BaseHttpClient):
             success_codes = (200, 201)
 
         if response.status_code not in success_codes:
+            # The provider's error body names the exact denial (service
+            # account, missing permission) -- essential when diagnosing e.g.
+            # a platform-side IAM misconfiguration -- but it may embed signed
+            # URLs, so the full text goes to the DEBUG log only; the raised
+            # message carries just the short whitelisted error code.
+            logger.debug(
+                "Cloud storage error response (HTTP %d): %s",
+                response.status_code,
+                response.text[:CLOUD_UPLOAD_ERROR_BODY_LIMIT],
+            )
+            provider_code = _extract_cloud_error_code(response)
+            code_suffix = f", {provider_code}" if provider_code else ""
             raise KeboolaApiError(
-                message=f"Cloud storage upload failed (HTTP {response.status_code})",
+                message=(f"Cloud storage upload failed (HTTP {response.status_code}{code_suffix})"),
                 status_code=response.status_code,
                 error_code=ErrorCode.UPLOAD_FAILED,
                 retryable=False,
@@ -3126,6 +3356,26 @@ def _build_abs_upload_url(abs_params: dict[str, Any]) -> str:
     sas = parts.get("SharedAccessSignature", "")
 
     return f"{blob_endpoint}/{container}/{blob_name}?{sas}"
+
+
+# Strict charset: provider error codes are short alphanumeric tokens (GCS/S3
+# "AccessDenied", Azure "AuthorizationFailure"). Anything else in the response
+# -- signed URLs, credentials, free-form messages -- must never reach the
+# user-facing error string.
+_CLOUD_ERROR_CODE_RE = re.compile(r"<Code>([A-Za-z0-9._-]{1,64})</Code>")
+
+
+def _extract_cloud_error_code(response: httpx.Response) -> str | None:
+    """Best-effort short error code from a failed cloud-storage response.
+
+    Azure surfaces it in the ``x-ms-error-code`` header; GCS and S3 return an
+    XML body with a ``<Code>`` element. Returns ``None`` when neither matches.
+    """
+    header_code = response.headers.get("x-ms-error-code", "")
+    if header_code and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", header_code):
+        return header_code
+    match = _CLOUD_ERROR_CODE_RE.search(response.text[:CLOUD_UPLOAD_ERROR_BODY_LIMIT])
+    return match.group(1) if match else None
 
 
 # ---------------------------------------------------------------------------

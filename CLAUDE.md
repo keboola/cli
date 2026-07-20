@@ -316,7 +316,12 @@ kbagent config row-update --project NAME --component-id ID --config-id ID --row-
 kbagent config row-delete --project NAME --component-id ID --config-id ID --row-id ID [--branch ID] [--yes]
 kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL]
 
-kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--limit N]
+kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--limit N]
+# --regex (0.67.0+): opt-in regex mode (mode=regex). Case-insensitive whole-term match on ENTITY NAMES
+#   only ('report' != 'monthly_report'; use '.*report.*'). Textual only -- error with --search-type
+#   config-based. Regex does NOT match column names, so matched_columns is always empty under --regex.
+#   In textual mode, table results matched via a column name carry matched_columns (JSON) / a
+#   "Matched columns" table column.
 
 kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
 kbagent job detail --project NAME --job-id ID
@@ -386,6 +391,14 @@ kbagent feature user-show --project ALIAS --email EMAIL
 kbagent feature user-add --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
 kbagent feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
 
+# token: scoped Storage tokens (Keboola single-bucket-write pattern; acting token needs canManageTokens; secret shown once).
+kbagent token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]
+kbagent token delete --project NAME --token-id ID [--yes]
+kbagent token refresh --project NAME --token-id ID [--yes]
+# SDK (importable Client(url,token)) now exposes create_scoped_token / delete_token / refresh_token /
+# create_stream_source / get_stream_source / list_stream_sources / delete_stream_source: dicts on .raw,
+# typed ScopedTokenResult / StreamSourceResult on the facade. See docs/sdk.md.
+
 # permissions: session write/destructive firewall. The top-level --deny-writes / --deny-destructive
 # flags are the one-shot form; `permissions set` persists a policy (mode allow|deny + allow/deny patterns
 # like cli:write, cli:destructive, tool:write). The agent guards rails against mistakes; not a sandbox.
@@ -449,11 +462,9 @@ kbagent data-app secrets-get --project ALIAS --app-id ID --key 'KEY' [--branch I
 kbagent data-app secrets-remove --project ALIAS --app-id ID --key 'KEY' [--key ...] [--branch ID] [--yes] [--dry-run]   # '#' optional
 kbagent data-app validate-repo --git-repo URL [--git-branch BRANCH] [--git-public/--no-git-public] [--git-pat-env VAR | --git-pat-file PATH] [--type python-js] [--strict]
 kbagent data-app git-repo --project NAME --app-id ID
-kbagent data-app git-branches --project NAME --app-id ID
-kbagent data-app git-entrypoints --project NAME --app-id ID
 kbagent data-app git-credentials --project NAME --app-id ID
 kbagent data-app git-credentials-create --project NAME --app-id ID --type ssh_key|http_token --permissions readOnly|readWrite [--public-key KEY | --public-key-file PATH] [--name LABEL] [--yes]
-# git-repo/git-branches/git-entrypoints introspect the deployed-from git repo (sandboxes-service /apps/{id}/git-repo/*); they return 409 "no Git repository configured" until the app has been DEPLOYED at least once (git config syncs Storage->DS record at deploy). git-credentials* manage credentials for a MANAGED repo only; apps from `data-app create --git-repo` are external => git-credentials-create returns 409. http_token mints a ONE-TIME secret (shown once); credentials endpoints need an admin storage token.
+# git-repo introspects the deployed-from git repo (sandboxes-service /apps/{id}/git-repo); it returns 409 "no Git repository configured" until the app has been DEPLOYED at least once (git config syncs Storage->DS record at deploy). git-credentials* manage credentials for a MANAGED repo only; apps from `data-app create --git-repo` are external => git-credentials-create returns 409. http_token mints a ONE-TIME secret (shown once); credentials endpoints need an admin storage token.
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
@@ -586,6 +597,9 @@ kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
 # flow validate: with --project fetches the live schema (full validation; fetch failure ->
 #   semantic-only + note); without --project runs semantic-only + a note. flow schema --full
 #   requires --project (fetches live schema); plain flow schema is the offline YAML template.
+# flow schedule (0.66.1+) also activates the config on the Scheduler Service so the cron fires;
+#   activation failure keeps the config written, sets activated=false + warning, exit stays 0.
+#   flow schedule-remove deregisters from the service before deleting each config.
 # Execute a flow with: kbagent job run --project NAME --component-id keboola.flow --config-id ID
 
 kbagent schedule list [--project NAME ...] [--enabled-only] [--branch ID]

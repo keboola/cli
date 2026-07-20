@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from rich.markup import escape
 
 from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
@@ -130,7 +131,7 @@ def storage_buckets(
             for b in proj_buckets:
                 linked = ""
                 if b["is_linked"]:
-                    linked = f"{b['source_project_name']} (#{b['source_project_id']})"
+                    linked = f"{escape(b['source_project_name'])} (#{b['source_project_id']})"
                 table.add_row(
                     b["id"],
                     b["stage"],
@@ -201,13 +202,13 @@ def storage_bucket_detail(
         formatter.output(result)
     else:
         formatter.console.print(f"[bold]Bucket:[/bold] {result['bucket_id']}")
-        formatter.console.print(f"  Display name: {result['display_name']}")
+        formatter.console.print(f"  Display name: {escape(result['display_name'])}")
         formatter.console.print(f"  Backend: {result['backend']}")
 
         if result["is_linked"]:
             formatter.console.print(
                 f"  [yellow]Linked from:[/yellow] "
-                f"{result['source_project_name']} (#{result['source_project_id']})"
+                f"{escape(result['source_project_name'])} (#{result['source_project_id']})"
             )
             formatter.console.print(f"  Source bucket: {result['source_bucket_id']}")
 
@@ -409,7 +410,7 @@ def storage_table_detail(
         formatter.output(result)
     else:
         formatter.console.print(f"[bold]Table:[/bold] {result['table_id']}")
-        formatter.console.print(f"  Name: {result['display_name'] or result['name']}")
+        formatter.console.print(f"  Name: {escape(result['display_name'] or result['name'])}")
         formatter.console.print(f"  Bucket: {result['bucket_id']}")
         formatter.console.print(f"  Rows: {result['rows_count']:,}")
         size_mb = result["data_size_bytes"] / (1024 * 1024)
@@ -504,7 +505,7 @@ def storage_create_bucket(
         formatter.console.print(f"  Stage: {result['stage']}")
         formatter.console.print(f"  Backend: {result['backend']}")
         if result["description"]:
-            formatter.console.print(f"  Description: {result['description']}")
+            formatter.console.print(f"  Description: {escape(result['description'])}")
         if result.get("legacy_branch_storage"):
             formatter.console.print(_LEGACY_BRANCH_STORAGE_WARNING)
 
@@ -1762,7 +1763,7 @@ def storage_describe_bucket(
         formatter.output(result)
     else:
         formatter.console.print(f"[bold green]Description set:[/bold green] {bucket_id}")
-        formatter.console.print(f"  {description[:120]}")
+        formatter.console.print(f"  {escape(description[:120])}")
 
 
 @storage_app.command("describe-table", rich_help_panel=_DESCRIBE)
@@ -1835,7 +1836,7 @@ def storage_describe_table(
         formatter.output(result)
     else:
         formatter.console.print(f"[bold green]Description set:[/bold green] {table_id}")
-        formatter.console.print(f"  {description[:120]}")
+        formatter.console.print(f"  {escape(description[:120])}")
 
 
 @storage_app.command("describe-column", rich_help_panel=_DESCRIBE)
@@ -1925,7 +1926,7 @@ def storage_describe_column(
             f"({len(parsed)} column(s))"
         )
         for name, desc in parsed.items():
-            formatter.console.print(f"  {name}: {desc[:80]}")
+            formatter.console.print(f"  {name}: {escape(desc[:80])}")
 
 
 @storage_app.command("describe-batch", rich_help_panel=_DESCRIBE)
@@ -2170,7 +2171,7 @@ def storage_file_list(
             created = f.get("created", "")[:19] if f.get("created") else ""
             table.add_row(
                 str(f.get("id", "")),
-                f.get("name", ""),
+                escape(f.get("name", "")),
                 _format_file_size(f.get("sizeBytes")),
                 tags_str,
                 permanent,

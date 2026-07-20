@@ -24,7 +24,7 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
-    "0.67.0": [
+    "0.71.0": [
         "New (web UI): the `kbagent serve --ui` table detail now has a **Repartition** tab "
         "for BigQuery tables. Pick a time or integer-range partitioning layout plus optional "
         "clustering fields, and the UI copies the table into the new layout (`create-table "
@@ -38,7 +38,65 @@ CHANGELOG: dict[str, list[str]] = {
         "optional, matching the CLI. Table detail responses now include the owning bucket's "
         "`backend` so the UI can gate BigQuery-only features.",
     ],
-    "0.66.0": [
+    "0.70.1": [
+        "Fix: config.json reliability hardening (issue #477). Every rewrite now first copies the "
+        "previous config.json to `config.json.bak` (0600, same directory), so stored project "
+        "tokens are recoverable if the config is ever lost or clobbered -- no more re-entering "
+        "tokens by hand. The backup is best-effort and never blocks the save.",
+        "Fix: file locking moved from config.json itself to a sidecar `config.json.lock`. "
+        "Pre-fix, `save()` opened config.json with O_CREAT to lock it, so a save that failed "
+        "before the atomic rename left behind an empty 0-byte config.json that broke the next "
+        "load with 'not valid JSON'. A failed save now leaves no artifact at all (the temp file "
+        "is cleaned up too) and the previous config survives intact. Side effect: the Windows "
+        "close-before-replace special case is gone -- the lock fd never points at config.json.",
+        "Fix: config mutations are now transactional. `ConfigStore.transaction()` holds the "
+        "exclusive lock across the whole load -> mutate -> save cycle (reentrant per thread), "
+        "closing the lost-update race where two concurrent kbagent processes doing "
+        "read-modify-write silently dropped each other's changes -- e.g. a freshly added "
+        "project vanishing from config.json when another command saved a stale snapshot. All "
+        "ConfigStore mutation methods, `permissions set/reset`, the default-project pin, and "
+        "the org-metadata backfill now run inside a transaction.",
+        "Improved: `Project '<alias>' not found` errors now name the RESOLVED config file and "
+        "its source, e.g. `Project 'x' not found in /home/u/.kbagent/config.json (source: "
+        "local). Run 'kbagent project list' to see configured projects.` Config resolution is "
+        "cwd- and env-dependent (--config-dir > KBAGENT_CONFIG_DIR > nearest .kbagent/ walking "
+        "up from cwd > global), so two shells can silently talk to different configs; the "
+        "enriched error makes that split-brain visible instead of opaque (issue #477).",
+    ],
+    "0.70.0": [
+        "BREAKING: Removed `data-app git-branches` and `data-app git-entrypoints` (and their "
+        "`kbagent serve` endpoints). The sandboxes-service backend dropped the underlying "
+        "`GET /apps/{id}/git-repo/branches` and `/git-repo/entrypoints` endpoints -- they cannot "
+        "work for managed git repos and will be reworked later via git-service. This CLI was the "
+        "sole remaining consumer. `data-app git-repo` (clone-URL introspection) and the "
+        "`git-credentials` / `git-credentials-create` commands are unchanged.",
+    ],
+    "0.69.0": [
+        "New: `kbagent search --regex` opts into regex mode on the global-search endpoint "
+        "(DMD-1716). Forwards `mode=regex` to the Storage API -- a case-insensitive whole-term "
+        "match against ENTITY NAMES only (`report` does not match `monthly_report`; use "
+        "`.*report.*`). Textual-search only: combining it with `--search-type config-based` is a "
+        "usage error. Regex does NOT match column names, so `matched_columns` is always empty "
+        "under `--regex`.",
+        "New: textual search results now report which column names matched (DMD-1717). Table "
+        "results matched via a column name surface the API's `matchedColumns`: a `matched_columns` "
+        "field on every result in `--json` (always present; `[]` when the entity name itself "
+        'matched) and a "Matched columns" column in the human table, shown only when at least one '
+        "result actually matched via a column, so it never adds an empty column.",
+        "Note: the Global Search re-architecture's rebuilt index / ranking upgrade is server-side "
+        "and flows through the CLI unchanged. Both new contracts were verified live against a "
+        "real stack before release.",
+    ],
+    "0.68.0": [
+        "New: bulk-remove projects from the `kbagent serve` Web UI. The Projects table now has "
+        "per-row checkboxes plus a select-all header, and a `Remove from kbagent` action that "
+        "unregisters several projects at once. A styled confirmation modal lists the affected "
+        "aliases and makes clear this only edits the local kbagent config -- it does NOT delete "
+        "the Keboola projects. Backed by a new `POST /projects/bulk-delete` REST endpoint "
+        "(`ProjectService.bulk_remove_projects`) with per-alias error accumulation and a "
+        "`dry_run` mode; one bad alias never blocks the rest.",
+    ],
+    "0.67.0": [
         "New: `storage create-table` can copy from an existing table and apply a "
         "BigQuery partition/clustering layout. `--source-table-id` (with optional "
         "`--source-branch-id`) derives the new table's schema from a source table and "
@@ -53,6 +111,48 @@ CHANGELOG: dict[str, list[str]] = {
         "`create-table` runs a one-call backend pre-flight (token verify) when any of them "
         "is used and fails fast with a clear message on a non-BigQuery project, before "
         "issuing the create. A plain columns create is unaffected (no extra call).",
+    ],
+    "0.66.1": [
+        "Fix (#479): `flow schedule` now activates the schedule on the Scheduler Service, so the cron "
+        "trigger actually fires. Previously the command only wrote the `keboola.scheduler` Storage "
+        "config; the schedule looked `enabled` but never ran until re-saved in the UI. The command "
+        "now calls `POST /schedules` on the Scheduler Service after the config upsert (also for "
+        "`--disabled`, which deregisters the trigger). An activation failure -- e.g. a token without "
+        "the schedule-management privilege -- keeps the config written, reports `activated: false` + "
+        "a warning, and exits 0. Schedules created by older kbagent versions stay dormant until "
+        "`flow schedule` is re-run on 0.66.1+.",
+        "Fix (#479): `flow schedule-remove` now deregisters each schedule from the Scheduler Service "
+        "(`DELETE /configurations/{id}`) before deleting its Storage config, so removed schedules "
+        "stop firing. Deregistration failures other than 404 are surfaced as warnings and do not "
+        "block the config deletion.",
+    ],
+    "0.66.0": [
+        "New: device-enrollment primitives on the importable library -- a hosted Data App can now mint "
+        "per-device credentials in-process (no CLI subprocess, no master token on the device). "
+        "`Client(url, token)` / `.raw` (`KeboolaClient`) gains `create_scoped_token`, `delete_token`, "
+        "`refresh_token`, and per-device Data Streams `create_stream_source` / `get_stream_source` / "
+        "`list_stream_sources` / `delete_stream_source`. The facade returns typed `ScopedTokenResult` / "
+        "`StreamSourceResult` (exported from the package root); `.raw` returns plain dicts. Built for "
+        "keboola/jasnost device enrollment (ADR 0005).",
+        "New: `create_scoped_token(description, bucket_permissions, component_access, "
+        "can_read_all_file_uploads, expires_in)` generalises `create_short_lived_token` beyond "
+        "component scope -- it maps straight to `POST /v2/storage/tokens` so you can mint the narrow "
+        "'upload Files + write one sink bucket, expiring' token a capture device needs (the Keboola "
+        "single-bucket-write pattern). The acting token must carry `canManageTokens`.",
+        "New: `create_stream_source` provisions a per-device OTLP source AND (for `otlp`, default) its "
+        "logs/metrics/traces sinks + `in.c-otlp-<sourceId>` bucket, and returns `sink_bucket_id` so the "
+        "scoped device token can be granted write on exactly that bucket. Per-device sources are the "
+        "unit of isolated event-plane revocation (`delete_stream_source`) -- no shared-secret rotation. "
+        "`otlp_url` carries the ingest secret unmasked (revealed to the device once, never persisted).",
+        "New: `kbagent token` command group (create | delete | refresh) mirrors the scoped-token "
+        "primitives on the CLI (Project Management). `token create` prints the secret once; `token "
+        "delete` revokes immediately; `token refresh` rotates and invalidates the old value. These are "
+        "Storage-API operations (no manage token).",
+        "Note: contrary to earlier assumptions, a Data Streams source create is authenticated with a "
+        "normal per-project Storage token (NOT a master token) and there is no `masterTokenRequired` "
+        "error code; and a Files upload is NOT gated by `componentAccess` / `canReadAllFileUploads` -- "
+        "any valid Storage token can upload its own Files. `canReadAllFileUploads` only widens reading "
+        "files uploaded by OTHER tokens.",
     ],
     "0.65.1": [
         "BREAKING: Removed `data-app git-bind-credential` (and its `kbagent serve` endpoint). It shipped in "

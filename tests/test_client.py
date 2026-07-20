@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+import logging
 from typing import SupportsIndex
 from unittest.mock import patch
 from urllib.parse import parse_qs, quote
@@ -3702,3 +3703,151 @@ class TestAssertSafeDownloadUrl:
 
         with pytest.raises(KeboolaApiError):
             _assert_safe_download_url("file:///etc/passwd")
+
+
+class TestGlobalSearchRegex:
+    """KeboolaClient.global_search() regex mode -- HTTP param wiring."""
+
+    def test_regex_true_sends_mode_param(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            method="GET",
+            json={"all": 0, "items": []},
+            status_code=200,
+        )
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="test-token-12345",
+        )
+        client.global_search(query=".*orders.*", project_id=42, regex=True)
+
+        sent = httpx_mock.get_request()
+        assert b"mode=regex" in sent.url.query
+        client.close()
+
+    def test_regex_false_omits_mode_param(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            method="GET",
+            json={"all": 0, "items": []},
+            status_code=200,
+        )
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="test-token-12345",
+        )
+        client.global_search(query="orders", project_id=42)
+
+        sent = httpx_mock.get_request()
+        assert b"mode" not in sent.url.query
+        client.close()
+
+
+GCS_ACCESS_DENIED_XML = (
+    "<?xml version='1.0' encoding='UTF-8'?><Error><Code>AccessDenied</Code>"
+    "<Message>Access denied.</Message><Details>sa@project.iam.gserviceaccount.com "
+    "does not have storage.objects.create access to the object.</Details></Error>"
+)
+
+
+class TestExtractCloudErrorCode:
+    """Short provider error code extraction from a failed cloud-storage response."""
+
+    def test_gcs_s3_xml_code(self) -> None:
+        from keboola_agent_cli.client import _extract_cloud_error_code
+
+        response = httpx.Response(403, text=GCS_ACCESS_DENIED_XML)
+        assert _extract_cloud_error_code(response) == "AccessDenied"
+
+    def test_azure_header_code(self) -> None:
+        from keboola_agent_cli.client import _extract_cloud_error_code
+
+        response = httpx.Response(403, text="", headers={"x-ms-error-code": "AuthorizationFailure"})
+        assert _extract_cloud_error_code(response) == "AuthorizationFailure"
+
+    def test_unparseable_body_returns_none(self) -> None:
+        from keboola_agent_cli.client import _extract_cloud_error_code
+
+        response = httpx.Response(403, text="upstream gateway error (html)")
+        assert _extract_cloud_error_code(response) is None
+
+    def test_code_outside_whitelist_charset_rejected(self) -> None:
+        # A <Code> carrying anything beyond the short alphanumeric token charset
+        # (e.g. an injected signed URL) must not reach the error message.
+        from keboola_agent_cli.client import _extract_cloud_error_code
+
+        response = httpx.Response(403, text="<Error><Code>https://evil?sig=secret</Code></Error>")
+        assert _extract_cloud_error_code(response) is None
+
+
+GCS_UPLOAD_INFO = {
+    "id": 99,
+    "gcsUploadParams": {
+        "bucket": "kbc-test-files",
+        "key": "exp-15/9621/files/test.csv",
+        "access_token": "901-gcs-fakeUploadTokenXXXX",
+    },
+}
+
+
+class TestUploadToCloudErrorDiagnostics:
+    """_upload_to_cloud failure carries the provider code + DEBUG-logs the body."""
+
+    def test_403_message_carries_provider_code_and_logs_body(
+        self, httpx_mock, tmp_path, caplog
+    ) -> None:
+        test_file = tmp_path / "test.csv"
+        test_file.write_text("a,b\n1,2\n")
+        httpx_mock.add_response(
+            url="https://storage.googleapis.com/kbc-test-files/exp-15/9621/files/test.csv",
+            method="PUT",
+            status_code=403,
+            text=GCS_ACCESS_DENIED_XML,
+        )
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        )
+        with (
+            caplog.at_level(logging.DEBUG, logger="keboola_agent_cli.client"),
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client._upload_to_cloud(GCS_UPLOAD_INFO, str(test_file))
+        client.close()
+
+        assert exc_info.value.message == "Cloud storage upload failed (HTTP 403, AccessDenied)"
+        # Full provider body (service account + missing permission) is DEBUG-only.
+        assert "storage.objects.create" in caplog.text
+        assert "storage.objects.create" not in exc_info.value.message
+
+    def test_403_without_parseable_code_keeps_plain_message(self, httpx_mock, tmp_path) -> None:
+        test_file = tmp_path / "test.csv"
+        test_file.write_text("a,b\n1,2\n")
+        httpx_mock.add_response(
+            url="https://storage.googleapis.com/kbc-test-files/exp-15/9621/files/test.csv",
+            method="PUT",
+            status_code=403,
+            text="<html>gateway error</html>",
+        )
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client._upload_to_cloud(GCS_UPLOAD_INFO, str(test_file))
+        client.close()
+
+        assert exc_info.value.message == "Cloud storage upload failed (HTTP 403)"
+
+    def test_success_path_unaffected(self, httpx_mock, tmp_path) -> None:
+        test_file = tmp_path / "test.csv"
+        test_file.write_text("a,b\n1,2\n")
+        httpx_mock.add_response(
+            url="https://storage.googleapis.com/kbc-test-files/exp-15/9621/files/test.csv",
+            method="PUT",
+            status_code=200,
+        )
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        )
+        client._upload_to_cloud(GCS_UPLOAD_INFO, str(test_file))
+        client.close()

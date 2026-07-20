@@ -144,6 +144,68 @@ def test_config_search_passes_use_regex_kwarg(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# search.py  GET /search
+# Service: search.search(regex=...)   (DMD-1716 -- must forward the flag)
+# ---------------------------------------------------------------------------
+
+
+def test_global_search_forwards_regex_kwarg(tmp_path: Path) -> None:
+    """Router must forward ``regex=`` to SearchService.search (mirrors kbagent search)."""
+    search_svc = MagicMock()
+    search_svc.search.return_value = {"results": [], "errors": [], "stats": {}}
+    registry = _mock_registry(search=search_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/search",
+            headers=AUTH,
+            params={"query": ".*orders.*", "regex": True},
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = search_svc.search.call_args.kwargs
+    assert kwargs["regex"] is True
+
+
+def test_global_search_regex_defaults_false(tmp_path: Path) -> None:
+    """Without the regex param the router forwards regex=False."""
+    search_svc = MagicMock()
+    search_svc.search.return_value = {"results": [], "errors": [], "stats": {}}
+    registry = _mock_registry(search=search_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/search", headers=AUTH, params={"query": "orders"})
+
+    assert res.status_code == 200, res.text
+    assert search_svc.search.call_args.kwargs["regex"] is False
+
+
+def test_global_search_regex_with_config_based_returns_400(tmp_path: Path) -> None:
+    """SearchService rejects regex + config-based with ConfigError -> HTTP 400 (not silent 200)."""
+    from keboola_agent_cli.errors import ConfigError
+
+    search_svc = MagicMock()
+    search_svc.search.side_effect = ConfigError(
+        "Regex mode is only supported with textual search "
+        "(config-based search does not support regex)."
+    )
+    registry = _mock_registry(search=search_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/search",
+            headers=AUTH,
+            params={"query": ".*orders.*", "search_type": "config-based", "regex": True},
+        )
+
+    assert res.status_code == 400, res.text
+    assert "regex" in res.json()["error"]["message"].lower()
+
+
+# ---------------------------------------------------------------------------
 # configs.py  POST /{p}/{c}  (create config)
 # Service: config.create_config(description="" when body.description is None)
 # ---------------------------------------------------------------------------
@@ -949,3 +1011,73 @@ def test_data_app_runs_endpoint_calls_service(tmp_path: Path) -> None:
 
     assert res.status_code == 200, res.text
     data_app_svc.list_app_runs.assert_called_once_with(PROJECT, APP_ID, limit=3)
+
+
+# ---------------------------------------------------------------------------
+# projects.py  POST /projects/bulk-delete
+# Service: project.bulk_remove_projects(aliases=..., dry_run=...)
+# ---------------------------------------------------------------------------
+
+
+def test_bulk_delete_projects_passes_aliases(tmp_path: Path) -> None:
+    """POST /projects/bulk-delete must call ProjectService.bulk_remove_projects."""
+    project_svc = MagicMock()
+    project_svc.bulk_remove_projects.return_value = {
+        "removed": ["a", "b"],
+        "failed": [],
+        "dry_run": False,
+    }
+    registry = _mock_registry(project=project_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/projects/bulk-delete",
+            headers=AUTH,
+            json={"aliases": ["a", "b"]},
+        )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["removed"] == ["a", "b"]
+    project_svc.bulk_remove_projects.assert_called_once_with(aliases=["a", "b"], dry_run=False)
+
+
+def test_bulk_delete_projects_forwards_dry_run(tmp_path: Path) -> None:
+    """The dry_run flag in the body must reach the service."""
+    project_svc = MagicMock()
+    project_svc.bulk_remove_projects.return_value = {
+        "removed": ["a"],
+        "failed": [],
+        "dry_run": True,
+    }
+    registry = _mock_registry(project=project_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/projects/bulk-delete",
+            headers=AUTH,
+            json={"aliases": ["a"], "dry_run": True},
+        )
+
+    assert res.status_code == 200, res.text
+    project_svc.bulk_remove_projects.assert_called_once_with(aliases=["a"], dry_run=True)
+
+
+def test_bulk_delete_route_not_shadowed_by_alias_delete(tmp_path: Path) -> None:
+    """The literal /projects/bulk-delete POST must not be swallowed by /{alias}.
+
+    A DELETE /{alias} exists; the bulk route is a POST to a literal path, so it
+    must resolve to bulk_remove_projects, never remove_project('bulk-delete').
+    """
+    project_svc = MagicMock()
+    project_svc.bulk_remove_projects.return_value = {"removed": [], "failed": [], "dry_run": False}
+    registry = _mock_registry(project=project_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post("/projects/bulk-delete", headers=AUTH, json={"aliases": []})
+
+    assert res.status_code == 200, res.text
+    project_svc.bulk_remove_projects.assert_called_once()
+    project_svc.remove_project.assert_not_called()

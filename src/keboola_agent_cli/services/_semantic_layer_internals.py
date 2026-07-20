@@ -25,6 +25,8 @@ Helpers grouped by feature:
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import os
@@ -807,6 +809,143 @@ def fetch_table_schemas(
     return schemas_by_tid, fetch_errors
 
 
+# ── build: warehouse type resolution (opt-in `--types-workspace`) ────
+
+# Keboola bucket/table identifiers are restricted to this character set. We
+# interpolate them into INFORMATION_SCHEMA SQL, so an identifier containing
+# anything else is rejected rather than escaped -- defense in depth even
+# though the Storage API would never mint such an id.
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+
+
+def build_information_schema_sql(backend: str, bucket_id: str, table_name: str) -> str | None:
+    """Build an ``INFORMATION_SCHEMA.COLUMNS`` query for a table's real types.
+
+    Returns a query projecting ``(column_name, data_type)`` for the given
+    backend, or ``None`` when the backend is unsupported or an identifier
+    contains an unexpected character (see ``_SAFE_IDENTIFIER_RE``).
+    """
+    if not (
+        _SAFE_IDENTIFIER_RE.match(bucket_id or "") and _SAFE_IDENTIFIER_RE.match(table_name or "")
+    ):
+        return None
+    normalized_backend = (backend or "").lower()
+    if normalized_backend == "bigquery":
+        # Keboola maps a bucket to a BigQuery dataset by replacing `.` and `-`
+        # with `_` (e.g. `in.c-Foo-Bar` -> `in_c_Foo_Bar`).
+        dataset = bucket_id.replace(".", "_").replace("-", "_")
+        return (
+            "SELECT column_name, data_type "
+            f"FROM `{dataset}`.INFORMATION_SCHEMA.COLUMNS "
+            f"WHERE table_name = '{table_name}'"
+        )
+    if normalized_backend == "snowflake":
+        # Keboola's Snowflake mapping keeps the bucketId verbatim as the schema
+        # name inside the KEBOOLA database (mirrors ``_derive_fqn``).
+        return (
+            "SELECT COLUMN_NAME AS column_name, DATA_TYPE AS data_type "
+            'FROM "KEBOOLA".INFORMATION_SCHEMA.COLUMNS '
+            f"WHERE TABLE_SCHEMA = '{bucket_id}' AND TABLE_NAME = '{table_name}'"
+        )
+    return None
+
+
+def _parse_information_schema_result(result: dict[str, Any]) -> dict[str, str]:
+    """Extract a ``{column_name: data_type}`` map from an execute_query result.
+
+    Reads the first statement's synthesized ``csv_data`` (always present on the
+    fast inline path), which carries a ``column_name,data_type`` header.
+    """
+    statements = result.get("statements") or []
+    if not statements:
+        return {}
+    csv_data = statements[0].get("csv_data")
+    if not csv_data:
+        return {}
+    type_map: dict[str, str] = {}
+    for row in csv.DictReader(io.StringIO(csv_data)):
+        name = (row.get("column_name") or row.get("COLUMN_NAME") or "").strip()
+        dtype = (row.get("data_type") or row.get("DATA_TYPE") or "").strip()
+        if name and dtype:
+            type_map[name] = dtype
+    return type_map
+
+
+def enrich_schemas_with_workspace_types(
+    *,
+    schemas_by_tid: dict[str, dict[str, Any]],
+    alias: str,
+    resolve_workspace_id: Callable[[str], int | None],
+    execute_query: Callable[..., dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Backfill missing column ``type``s from the warehouse INFORMATION_SCHEMA.
+
+    Alias / linked-bucket tables carry no per-column datatype metadata in
+    Storage -- the types live on the source table -- so the build heuristic
+    sees empty basetypes and classifies every field as ``dimension``. When a
+    workspace is available, query the warehouse for the real types and fill
+    them in on each ``column_details`` entry in place.
+
+    ``resolve_workspace_id`` maps a storage backend (e.g. ``"bigquery"``) to a
+    workspace ID that can run SQL against it -- either a fixed id supplied by
+    the caller, or one auto-picked per backend. Returning ``None`` means no
+    suitable workspace, and the table is reported as unresolved.
+
+    Returns a list of ``{"table_id", "error"}`` for tables that could not be
+    (fully) resolved. These are non-fatal and surfaced in the build result.
+    """
+    unresolved: list[dict[str, str]] = []
+    for tid, detail in schemas_by_tid.items():
+        cols = detail.get("column_details") or []
+        if not any(not col.get("type") for col in cols):
+            continue  # already fully typed (or no columns) -- nothing to do
+        backend = detail.get("backend", "")
+        sql = build_information_schema_sql(
+            backend,
+            detail.get("bucket_id", ""),
+            detail.get("name", "") or tid.split(".")[-1],
+        )
+        if sql is None:
+            unresolved.append(
+                {
+                    "table_id": tid,
+                    "error": f"type resolution unsupported for backend {backend!r}",
+                }
+            )
+            continue
+        workspace_id = resolve_workspace_id(backend)
+        if workspace_id is None:
+            unresolved.append(
+                {
+                    "table_id": tid,
+                    "error": f"no workspace available to read {backend!r} types",
+                }
+            )
+            continue
+        try:
+            result = execute_query(alias, workspace_id, sql)
+        except (KeboolaApiError, ConfigError) as exc:
+            unresolved.append({"table_id": tid, "error": str(exc)})
+            continue
+        type_map = _parse_information_schema_result(result)
+        if not type_map:
+            unresolved.append(
+                {"table_id": tid, "error": "INFORMATION_SCHEMA returned no column types"}
+            )
+            continue
+        for col in cols:
+            if not col.get("type"):
+                dtype = type_map.get(col.get("name", ""))
+                if dtype:
+                    col["type"] = dtype
+        missing = [col.get("name", "") for col in cols if not col.get("type")]
+        if missing:
+            unresolved.append(
+                {"table_id": tid, "error": f"no type found for column(s): {', '.join(missing)}"}
+            )
+    return unresolved
+
+
 def resolve_model_uuid(
     client: Any,
     model_name_or_uuid: str | None,
@@ -955,6 +1094,7 @@ _FIELD_TYPE_MAP: dict[str, str] = {
     "bigint": "integer",
     "smallint": "integer",
     "tinyint": "integer",
+    "int64": "integer",  # BigQuery
     # decimals
     "decimal": "decimal",
     "numeric": "decimal",
@@ -963,6 +1103,8 @@ _FIELD_TYPE_MAP: dict[str, str] = {
     "double": "decimal",
     "real": "decimal",
     "money": "decimal",
+    "float64": "decimal",  # BigQuery
+    "bignumeric": "decimal",  # BigQuery
     # booleans
     "boolean": "boolean",
     "bool": "boolean",
@@ -994,6 +1136,54 @@ def _normalize_field_type(basetype: str) -> str:
     return _FIELD_TYPE_MAP.get(head, "string")
 
 
+# Aggregation heuristic for auto-generated per-measure metrics. Mirrors the
+# semantic-layer toolkit's name-based guess, with two deliberate refinements:
+# percentage / ratio columns aggregate as AVG (not SUM -- summing a rate is
+# almost always wrong, and would trip the SUM_ON_PCT validation), and a
+# ``count_*`` column stays SUM (additive daily counts sum to a total; COUNT()
+# of an already-aggregated column would be meaningless).
+_AGG_AVG_TOKENS = ("AVG", "AVERAGE", "MEAN", "RATE", "PCT", "PERCENT", "RATIO", "SHARE")
+_AGG_MAX_TOKENS = ("MAX", "MAXIMUM", "PEAK")
+_AGG_MIN_TOKENS = ("MIN", "MINIMUM")
+
+# metric-name prefix per aggregate.
+_AGG_NAME_PREFIX = {"AVG": "avg", "MAX": "max", "MIN": "min", "SUM": "total"}
+
+
+def _estimate_metric_aggregation(col_name: str) -> str:
+    """Guess an aggregate for a measure column from keywords in its name.
+
+    Defaults to SUM (additive measures). See ``_AGG_*_TOKENS`` for the rules.
+    """
+    upper = col_name.upper()
+    if any(tok in upper for tok in _AGG_AVG_TOKENS):
+        return "AVG"
+    if any(tok in upper for tok in _AGG_MAX_TOKENS):
+        return "MAX"
+    if any(tok in upper for tok in _AGG_MIN_TOKENS):
+        return "MIN"
+    return "SUM"
+
+
+def _metric_snake_case(text: str) -> str:
+    """Lowercase snake_case slug safe for a metric name."""
+    slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+    return slug or "metric"
+
+
+def _dedupe_name(name: str, seen: set[str]) -> str:
+    """Return ``name`` (or a ``_2``/``_3``… suffixed variant) unused in ``seen``."""
+    if name not in seen:
+        seen.add(name)
+        return name
+    counter = 2
+    while f"{name}_{counter}" in seen:
+        counter += 1
+    unique = f"{name}_{counter}"
+    seen.add(unique)
+    return unique
+
+
 def heuristic_generate_model(
     *,
     schemas: dict[str, dict[str, Any]],
@@ -1003,10 +1193,11 @@ def heuristic_generate_model(
 ) -> dict[str, Any]:
     """Deterministic stand-in for the AI generator (see ``build_model``).
 
-    Builds: one dataset per table (with classified fields[]), one
-    COUNT(*) metric per dataset as a placeholder, no relationships
-    (cross-table FKs are not inferrable from columns alone), an empty
-    constraints list, and a glossary entry per dataset.
+    Builds: one dataset per table (with classified fields[]); one metric per
+    ``measure`` field (aggregate guessed from the column name -- see
+    ``_estimate_metric_aggregation``) plus a ``COUNT(*)`` row-count metric per
+    dataset; no relationships (cross-table FKs are not inferrable from columns
+    alone); an empty constraints list; and a glossary entry per dataset.
 
     Accepts the FQN-derivation and role-classification helpers as
     callables so the helper module stays free of import-time coupling
@@ -1015,6 +1206,9 @@ def heuristic_generate_model(
     datasets: list[dict[str, Any]] = []
     metrics: list[dict[str, Any]] = []
     glossary: list[dict[str, Any]] = []
+    # Metric names must be unique across the whole model (validate_basic flags
+    # duplicates), so dedupe against one model-wide set.
+    seen_metric_names: set[str] = set()
 
     for tid, detail in schemas.items():
         ds_name = (
@@ -1022,6 +1216,7 @@ def heuristic_generate_model(
             .replace(" ", "_")
             .lower()
         )
+        fqn = derive_fqn(tid)
         fields: list[dict[str, Any]] = []
         for col in detail.get("column_details", []) or []:
             cname = col.get("name", "")
@@ -1043,15 +1238,33 @@ def heuristic_generate_model(
             {
                 "name": ds_name,
                 "tableId": tid,
-                "fqn": derive_fqn(tid),
+                "fqn": fqn,
                 "fields": fields,
                 "description": detail.get("description", "") or "",
             }
         )
+        # One metric per measure field: aggregate guessed from the name.
+        for field in fields:
+            if field["role"] != "measure":
+                continue
+            col = field["name"]
+            agg = _estimate_metric_aggregation(col)
+            name = _dedupe_name(
+                _metric_snake_case(f"{_AGG_NAME_PREFIX[agg]}_{col}"), seen_metric_names
+            )
+            metrics.append(
+                {
+                    "name": name,
+                    "sql": f'{agg}("{col}") FROM {fqn}',
+                    "dataset": tid,
+                    "description": f"{agg} of {col}.",
+                }
+            )
+        # Always add a row-count metric as a safe baseline.
         metrics.append(
             {
-                "name": f"{ds_name}_row_count",
-                "sql": f"COUNT(*) FROM {derive_fqn(tid)}",
+                "name": _dedupe_name(f"{ds_name}_row_count", seen_metric_names),
+                "sql": f"COUNT(*) FROM {fqn}",
                 "dataset": tid,
                 "description": f"Row count of {ds_name}.",
             }

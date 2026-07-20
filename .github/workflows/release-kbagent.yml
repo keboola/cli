@@ -383,8 +383,13 @@ jobs:
         env:
           API_TOKEN_GITHUB: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         with:
-          source-directory: "out"
-          target-directory: "."
+          # Copy the rendered formula into the tap's `Formula/` dir (its canonical
+          # location) rather than the repo root. target-directory "." made the
+          # push action run `rm` against `.`/`..` while clearing the target, which
+          # fails fatally ("can't remove '.' or '..'"); a real subdirectory clears
+          # cleanly. The resulting tap layout (`Formula/keboola-cli2.rb`) is unchanged.
+          source-directory: "out/Formula"
+          target-directory: "Formula"
           destination-github-username: keboola
           destination-repository-name: homebrew-keboola-cli2
           target-branch: main
@@ -405,7 +410,12 @@ jobs:
           CHOCOLATEY_KEY: ${{ secrets.CHOCOLATEY_KEY }}
         run: |
           $url = "$env:BASE_URL/$env:S3_PREFIX/v$env:VERSION/keboola-cli2_${env:VERSION}_windows_amd64.zip"
-          $checksum = (Invoke-WebRequest "$url.sha256").Content.Split(" ")[0]
+          # The .sha256 asset is served as application/octet-stream, so pwsh returns
+          # Invoke-WebRequest's .Content as a byte[] (no .Split method -> the job failed
+          # with "[System.Byte] does not contain a method named 'Split'"). Download it to
+          # a file and read it back as text, splitting on any whitespace ("<hash>  <file>").
+          Invoke-WebRequest "$url.sha256" -OutFile checksum.txt
+          $checksum = ((Get-Content checksum.txt -Raw).Trim() -split '\s+')[0]
           $push = "build/package/chocolatey"
           (Get-Content "$push/keboola-cli2.nuspec" -Raw).Replace('{VERSION}', $env:VERSION) | Set-Content "$push/keboola-cli2.nuspec"
           (Get-Content "$push/tools/chocolateyinstall.ps1" -Raw).Replace('{URL}', $url).Replace('{CHECKSUM}', $checksum) | Set-Content "$push/tools/chocolateyinstall.ps1"
@@ -475,6 +485,11 @@ jobs:
           docker run --rm -e VERSION homebrew/brew bash -c '
             set -e
             brew tap keboola/keboola-cli2 https://github.com/keboola/homebrew-keboola-cli2
+            # brew now refuses to load a formula from a third-party tap until the tap is
+            # explicitly trusted ("Refusing to load formula ... from untrusted tap ...").
+            # First observed on the v0.66.1 run (github.com/keboola/cli, release-kbagent
+            # #29430278032) -- this is a real end-user install step too, not CI-only.
+            brew trust keboola/keboola-cli2
             brew install keboola-cli2
             kbagent --version | grep -q "${VERSION}"
           '

@@ -253,10 +253,14 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Cross-Project Search
 
-  kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--limit N]
+  kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--limit N]
     Search for items across one or more projects. Textual mode (default) searches item names
     via the Storage API global-search endpoint. Config-based mode scans full configuration JSON bodies.
     --type is repeatable. --limit applies per project in textual mode (1-100, default 50).
+    --regex (0.67.0+): opt-in regex mode. Case-insensitive whole-term match on ENTITY NAMES only
+    ('report' != 'monthly_report'; use '.*report.*'). Textual only (error with --search-type config-based);
+    regex does NOT match columns, so matched_columns stays empty under --regex. In textual mode, tables
+    matched via a column name carry matched_columns (JSON) / a "Matched columns" column.
 
 ### Job History
 
@@ -504,6 +508,21 @@ remain branch-aware because modifying a dev branch is the expected intent.
   provisions the 3 OTLP sinks itself on create-source --type otlp (--no-sinks to opt out). Send
   OTLP/HTTP to <endpoint>/v1/logs|/v1/traces|/v1/metrics; data lands in in.c-otlp-<source>.* tables.
 
+### Scoped Storage Tokens
+
+  kbagent token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]
+    Create a scoped Storage API token (Keboola single-bucket-write pattern). --bucket-write /
+    --bucket-read (repeatable) grant per-bucket write/read; write wins when a bucket is on both.
+    --component-access (repeatable) restricts to named components. The token secret is printed ONCE
+    in a Rich Panel -- store it now, it is never retrievable again. Acting token needs canManageTokens.
+  kbagent token delete --project NAME --token-id ID [--yes]
+    Revoke a token by its numeric id (destructive; confirms unless --yes / --json).
+  kbagent token refresh --project NAME --token-id ID [--yes]
+    Rotate a token's secret (new secret printed ONCE; confirms unless --yes / --json).
+  Notes: uses the per-project Storage token (no manage token); the acting token must have the
+  canManageTokens privilege. The importable SDK (Client(url,token)) mirrors these as
+  create_scoped_token / delete_token / refresh_token (dicts on .raw, typed ScopedTokenResult on the facade).
+
 ### Sharing (Cross-Project)
 
   kbagent sharing list [--project NAME]
@@ -628,11 +647,14 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--timezone TZ] [--enabled/--disabled] [--name NAME] [--branch ID]
     Upsert a cron schedule: updates the existing keboola.scheduler config if one exists, creates one
     otherwise. Calling twice with a new cron replaces the old schedule — no duplicates created.
-    Schedules are stored as Storage API configs, not a separate scheduler service.
+    The config is then activated on the Scheduler Service so the cron trigger fires; an activation
+    failure (e.g. token cannot manage schedules) keeps the config written, sets activated=false, and
+    surfaces a warning (exit stays 0). Re-run with a capable token to activate.
 
   kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
-    Remove all schedules bound to this flow (deletes all matching keboola.scheduler configs).
-    Idempotent: safe to run when no schedules exist.
+    Remove all schedules bound to this flow: each schedule is deregistered from the Scheduler
+    Service, then its keboola.scheduler config is deleted. Idempotent: safe to run when no
+    schedules exist.
 
 ### Schedule Discovery & Audit (Fleet-Wide)
 
@@ -871,17 +893,6 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     been DEPLOYED at least once -- the git block is synced from the Storage
     config into the Data Science app record at deploy time, so a fresh
     --no-deploy app has no git repo from the service's point of view.
-
-  kbagent data-app git-branches --project NAME --app-id ID
-    List the remote branches of the app's git repository with commit
-    metadata (branch, sha, comment, author name+email, date). Raw
-    top-level array from the server. Same deploy-once precondition as
-    git-repo.
-
-  kbagent data-app git-entrypoints --project NAME --app-id ID
-    List root-level .py entrypoint files of the app's git repository on the
-    configured branch. Extension is hardcoded to py server-side (non-Python
-    entrypoints are not listable). Same deploy-once precondition.
 
   kbagent data-app git-credentials --project NAME --app-id ID
     List the credentials of the app's MANAGED git repository (id, type,

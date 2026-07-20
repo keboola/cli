@@ -791,6 +791,10 @@ def flow_schedule(
     created. If one already exists it is updated in-place — calling this
     command a second time will not create duplicates.
 
+    The schedule is also activated on the Scheduler Service so the cron
+    trigger actually fires. If activation fails (e.g. the token cannot
+    manage schedules), the config stays written and a warning is shown.
+
     \b
     Examples:
       # Run daily at 6am UTC
@@ -824,11 +828,18 @@ def flow_schedule(
     else:
         state_label = "[green]enabled[/green]" if enabled else "[yellow]disabled[/yellow]"
         action = result.get("status", "created")
-        formatter.success(f"Schedule {action}: {escape(cron)} ({escape(timezone)}) — {state_label}")
+        activation = ""
+        if result.get("activated"):
+            activation = " and activated" if enabled else " and deactivated"
+        formatter.success(
+            f"Schedule {action}{activation}: {escape(cron)} ({escape(timezone)}) — {state_label}"
+        )
         formatter.console.print(
             f"  Scheduler config: {escape(result.get('schedule_name', ''))} "
             f"[dim](ID: {escape(result.get('schedule_id', ''))})[/dim]"
         )
+        for warning in result.get("warnings", []):
+            formatter.warning(warning)
 
 
 # ---------------------------------------------------------------------------
@@ -859,6 +870,9 @@ def flow_schedule_remove(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Remove all schedules bound to a flow (deletes keboola.scheduler configs).
+
+    Each schedule is deregistered from the Scheduler Service before its
+    config is deleted, so the cron trigger stops firing.
 
     Idempotent: safe to run even if no schedules exist.
     """
@@ -946,3 +960,5 @@ def flow_schedule_remove(
             formatter.console.print("[dim]No schedules found — nothing removed.[/dim]")
         else:
             formatter.success(f"Removed {count} schedule(s) from flow {escape(flow_id)}")
+        for warning in result.get("warnings", []):
+            formatter.warning(warning)

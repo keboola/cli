@@ -46,6 +46,11 @@ OPERATION_REGISTRY: dict[str, str] = {
     "stream.detail": "read",
     "stream.create-source": "write",
     "stream.delete": "destructive",
+    # Storage API scoped tokens: minting/rotating is a write (creates a
+    # credential), revoking is destructive (a live token stops working).
+    "token.create": "write",
+    "token.refresh": "write",
+    "token.delete": "destructive",
     # Config browsing & management
     "config.list": "read",
     "config.detail": "read",
@@ -168,8 +173,6 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.validate-repo": "read",
     # Data apps - git-repo introspection + managed-repo credentials
     "data-app.git-repo": "read",
-    "data-app.git-branches": "read",
-    "data-app.git-entrypoints": "read",
     "data-app.git-credentials": "read",
     "data-app.git-credentials-create": "write",
     # Developer Portal — identity sub-app leaves (composed by the

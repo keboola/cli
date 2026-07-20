@@ -11,6 +11,49 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## `token` group mints/rotates/revokes SCOPED Storage tokens; secret shown ONCE (since v0.66.0)
+
+- **`kbagent token create --project P --description D [--bucket-write B ...]
+  [--bucket-read B ...] [--component-access ID ...] [--can-read-all-file-uploads]
+  [--expires-in N]`** mints a NEW Storage token scoped by bucket permissions,
+  `token refresh --token-id ID` rotates the secret in place, `token delete
+  --token-id ID` revokes. All three back the SDK facade
+  (`Client.create_scoped_token` / `refresh_token` / `delete_token`) and the same
+  service layer.
+- **The acting token must carry `canManageTokens`.** Without it the create/refresh
+  `POST /v2/storage/tokens[...]` returns 403. A normal project-admin storage token
+  has it; a narrowly-scoped device token does NOT — you cannot bootstrap tokens
+  from a token you just minted unless you granted it `canManageTokens`.
+- **The secret is a ONE-TIME reveal.** `create` / `refresh` print the token value
+  once (human mode: inside a Rich panel; `--json`: the `token` field). It is never
+  retrievable again — persist only the `id` (to revoke/refresh later) and `expires`.
+  Lost the secret? `token refresh --token-id ID` mints a new one.
+
+## Files-upload permission: `canReadAllFileUploads` gates READING, not the UPLOAD (since v0.66.0)
+
+- **Any valid Storage token can upload its OWN Files.** Uploading is NOT gated by
+  `canReadAllFileUploads` or by `componentAccess`. `canReadAllFileUploads` controls
+  whether the token may *read/list other tokens'* file uploads — it has nothing to
+  do with the upload action itself. `componentAccess` is unrelated to Files entirely
+  (it scopes which components' configs the token may touch).
+- **To scope a DEVICE token that uploads into a bucket, grant
+  `bucketPermissions[<sinkBucket>]=write`** (`token create --bucket-write
+  in.c-otlp-<source>`). That write grant on the destination bucket is the
+  load-bearing scope — not `--component-access`, not `--can-read-all-file-uploads`.
+- Practical enrollment pairing: `stream create-source` provisions the OTLP source +
+  its `in.c-otlp-<source_id>` sink bucket, then `token create --bucket-write
+  in.c-otlp-<source_id> --expires-in 3600` mints exactly the token the device holds.
+
+## `stream create-source` uses a NORMAL Storage token — there is NO master-token gate (since v0.66.0)
+
+- Creating a Data Streams source (`kbagent stream create-source` /
+  `Client.create_stream_source`) authenticates with the ordinary project Storage
+  token — **NOT** a master token. There is **no `stream.api.masterTokenRequired`
+  error code**; do not code against one or tell a user they need a master token.
+- The documented create-time errors are `stream.api.sourceAlreadyExists` (HTTP 409
+  — use `stream create-source --if-not-exists` to make it idempotent) and
+  `stream.api.resourceLimitReached` (HTTP 422 — the project hit its source quota).
+
 ## `sync status` + `doctor` flag plaintext `#`-secrets in synced configs (since v0.55.0)
 
 - **What it catches.** The v0.54.0 fix is forward-looking -- it does NOT
@@ -2268,6 +2311,21 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
   scheduler configs that target the flow. Pair it with `--dry-run` to see the
   affected configs (cron + timezone) without calling `delete_config`.
 
+## Flow: `schedule` activates on the Scheduler Service (since v0.66.1)
+
+- `kbagent flow schedule` registers the `keboola.scheduler` config with the
+  **Scheduler Service** (`POST /schedules`) after writing it — writing the
+  Storage config alone leaves the cron trigger dormant. Older versions only
+  wrote the config: a schedule they created shows `state: enabled` but never
+  fires until `flow schedule` is re-run on v0.66.1+ (or the schedule is
+  re-saved in the UI).
+- Activation failure is **non-fatal**: the config stays written, the result
+  carries `activated: false` + a warning, and the exit code stays 0. Typical
+  cause is a Storage token without the schedule-management privilege — re-run
+  with an admin token to activate.
+- `flow schedule-remove` (v0.66.1+) deregisters each schedule from the
+  Scheduler Service before deleting its config, so removal stops the trigger.
+
 ## `search` is a top-level command, not `config search` (since v0.30.0)
 
 `kbagent search QUERY` searches across **all item types** (tables, buckets, configs, flows, data apps, transformations) via the Storage API global-search endpoint. It is distinct from `kbagent config search --query Q` which scans only configuration JSON bodies.
@@ -2634,31 +2692,32 @@ forking `kbagent`, and never needs those super-admin credentials. `KBC_TOKEN`
 (storage) is retained, and `cli_command` tasks are unchanged. (Private advisory
 GHSA-wm54-r2hh-cxm9.)
 
-## `data-app git-repo` / `git-branches` / `git-entrypoints` need a deployed app (since v0.63.3)
+## `data-app git-repo` needs a deployed app (since v0.63.3)
 
-The three git-repo introspection commands (sandboxes-service
-`GET /apps/{id}/git-repo`, `/branches`, `/entrypoints`) return **409 "App has no
-Git repository configured"** until the app has been **deployed at least once** --
-even though `data-app create --git-repo <url>` already wrote the git block into
-the Storage config. The git block is synced from the Storage config into the
-Data Science app record at *deploy* time; a `--no-deploy` app has no git repo
-from the service's point of view. Fix: run `kbagent data-app deploy` (the sync
-happens before the container build, so it works even if the build later fails),
-then re-run the git-repo command.
+The git-repo introspection command (sandboxes-service
+`GET /apps/{id}/git-repo`) returns **409 "App has no Git repository
+configured"** until the app has been **deployed at least once** -- even though
+`data-app create --git-repo <url>` already wrote the git block into the Storage
+config. The git block is synced from the Storage config into the Data Science
+app record at *deploy* time; a `--no-deploy` app has no git repo from the
+service's point of view. Fix: run `kbagent data-app deploy` (the sync happens
+before the container build, so it works even if the build later fails), then
+re-run the git-repo command.
+
+> **Removed in v0.66.1:** `data-app git-branches` and `data-app git-entrypoints`
+> were dropped -- the sandboxes-service backend removed the underlying
+> `/git-repo/branches` and `/git-repo/entrypoints` endpoints (they cannot work
+> for managed git repos and will be reworked via git-service). Use `git-repo`
+> for clone-URL introspection.
 
 Other behaviors of this family:
 
-- `git-branches` returns a **raw top-level JSON array** of
-  `{branch, sha, comment, author{...}, date}` (not wrapped in
-  `{branches: [...]}`); `git-entrypoints` returns a **raw `array<string>`** of
-  root-level filenames. The service hardcodes the entrypoint extension to `.py`,
-  so non-Python entrypoints are never listed.
 - `git-credentials` / `git-credentials-create` only apply to a **managed** git
   repo (`app.managedGitRepoId` set). Apps created via
   `data-app create --git-repo <url>` are **external**, so
   `git-credentials-create` returns **409 "no managed Git repository"** for them.
   These two endpoints also need an **admin** storage token
-  (`CanManageAppRepoCredentials`), unlike the read trio which need only the
+  (`CanManageAppRepoCredentials`), unlike `git-repo` which needs only the
   ordinary project storage token.
 - For `--type http_token`, the create response carries a **one-time secret**
   that is printed once and can never be retrieved again (mirrors
@@ -2683,9 +2742,9 @@ The end-to-end flow that is **verified to deploy and serve** (tic-tac-toe on
 3. `git push https://<token>@<managed-host>/.../app-<id>.git <local>:main`
    (token authenticates as the username, Gitea-style; or as the password with any
    username).
-4. `data-app git-repo` / `git-branches` / `git-entrypoints` introspect the repo
-   immediately -- **unlike external repos, no prior deploy is needed** (managed
-   resolves via `managedGitRepoId`, returns `is_managed_git_repo: true` + URLs).
+4. `data-app git-repo` introspects the repo immediately -- **unlike external
+   repos, no prior deploy is needed** (managed resolves via `managedGitRepoId`,
+   returns `is_managed_git_repo: true` + URLs).
 5. `data-app deploy` -> clones + builds + runs. **No credential wiring needed:**
    the platform injects the `git clone` credentials at deploy time (per the
    sandboxes-service `tests/e2e/scripts/testManagedGitRepo.sh` contract), so a
@@ -2853,3 +2912,28 @@ things to internalise:
   new/empty target. Re-running clone with the same `--target-dir` is idempotent
   (`no_changes`), because after the first push the local manifest carries the new
   ULIDs that match the target remote.
+
+### `search --regex` matches entity names only; `matched_columns` is textual-only (since v0.67.0)
+
+`kbagent search --regex` opts into the Storage API `mode=regex` global-search
+path. Three things verified live against a real stack (2026-07-02):
+- Regex is a **whole-term, case-insensitive** match — `report` will NOT match
+  `monthly_report`; you must write `.*report.*`. An invalid pattern returns a
+  clean 400 (`storage.globalSearch.invalidQuery`), surfaced as an API error.
+- Regex runs over **entity names only**, not column names. So `matched_columns`
+  is **always empty under `--regex`** — column matching is a textual-mode signal.
+- `--regex` is textual-only; combining it with `--search-type config-based` is a
+  usage error (exit 2 from the CLI; HTTP 400 from the `serve` REST `/search`).
+- On a stack whose Storage API predates the regex mode, the unknown `mode=regex`
+  query param may be silently ignored — the search then runs as plain fulltext
+  over the literal pattern string (typically 0 results) with no error or
+  warning. An unexpectedly empty `--regex` result on an older stack is NOT
+  proof that nothing matches; retry without `--regex` to distinguish.
+
+In plain textual mode, a `table` that matched via one of its column names carries
+`matched_columns: ["col", ...]` in `--json` output and a populated "Matched
+columns" column in the human table. The key is present on **every** result for
+shape consistency and is empty (`[]`) when the table matched on its own name
+(only column matches populate it). The human table adds
+the "Matched columns" column **only when at least one result actually matched via
+a column** -- a plain search that hit nothing by column shows no extra column.

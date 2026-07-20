@@ -3,13 +3,19 @@
 Manages reading and writing of config.json with project connections.
 File permissions are set to 0600 to protect stored tokens.
 Uses atomic writes to prevent TOCTOU race conditions.
-File locking (fcntl) prevents corruption from concurrent access.
+File locking (fcntl) on a sidecar lock file (config.json.lock) prevents
+corruption AND lost updates from concurrent access: mutation methods hold
+the exclusive lock across the whole load -> mutate -> save cycle via
+``transaction()``. Every rewrite first copies the previous config.json to
+config.json.bak as a recovery safety net (issue #477).
 """
 
 import contextlib
 import json
 import logging
 import os
+import threading
+from collections.abc import Iterator
 from pathlib import Path
 
 import platformdirs
@@ -69,6 +75,25 @@ def _try_flock(fd: int, operation: int) -> None:
         fcntl.flock(fd, operation)
 
 
+def project_not_found_error(alias: str, config_path: object, source: object) -> ConfigError:
+    """Build the canonical "project not found" error.
+
+    Names the RESOLVED config file and its source label so a split-brain
+    config resolution (``--config-dir`` / ``KBAGENT_CONFIG_DIR`` / local
+    ``.kbagent`` walk-up vs global) is visible directly in the error message
+    instead of failing opaquely (issue #477).
+
+    A module-level function (not a ConfigStore method) so services can build
+    a real ConfigError even when their config_store is a test double -- the
+    path and source are read as plain attributes, never via a method call.
+    """
+    return ConfigError(
+        f"Project '{alias}' not found in {config_path} "
+        f"(source: {source}). "
+        "Run 'kbagent project list' to see configured projects."
+    )
+
+
 def resolve_config_dir(cli_config_dir: str | None = None) -> tuple[Path, str]:
     """Resolve the config directory using the priority chain.
 
@@ -114,6 +139,8 @@ class ConfigStore:
     """
 
     CONFIG_FILENAME = "config.json"
+    LOCK_FILENAME = "config.json.lock"
+    BACKUP_FILENAME = "config.json.bak"
 
     def __init__(self, config_dir: Path | None = None, source: str = "global") -> None:
         if config_dir is None:
@@ -121,7 +148,14 @@ class ConfigStore:
         else:
             self._config_dir = config_dir
         self._config_path = self._config_dir / self.CONFIG_FILENAME
+        self._lock_path = self._config_dir / self.LOCK_FILENAME
+        self._backup_path = self._config_dir / self.BACKUP_FILENAME
         self._source = source
+        # Per-thread transaction depth: transaction() holds the exclusive
+        # sidecar lock across a whole load->mutate->save cycle, and the nested
+        # load()/save() calls must NOT re-acquire it -- flock treats every open
+        # file description independently, so re-acquiring would self-deadlock.
+        self._txn = threading.local()
 
     @property
     def config_path(self) -> Path:
@@ -138,6 +172,67 @@ class ConfigStore:
         """Return the config source label (cli-flag, env-var, local, global)."""
         return self._source
 
+    def _txn_depth(self) -> int:
+        """Return this thread's active transaction nesting depth."""
+        return getattr(self._txn, "depth", 0)
+
+    def _acquire_lock(self, operation: int) -> int | None:
+        """Open the sidecar lock file and apply an advisory flock.
+
+        The lock file (``config.json.lock``) is deliberately separate from
+        ``config.json`` itself: locking the config file required opening it
+        with ``O_CREAT``, so a save that failed before the atomic rename left
+        behind an empty config.json that broke the next load (issue #477).
+
+        Returns the open fd holding the lock, or None when the lock file
+        cannot be created (unwritable directory) -- locking stays best-effort,
+        matching the ``_try_flock`` silent-skip semantics.
+        """
+        try:
+            self._config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            fd = os.open(str(self._lock_path), os.O_RDONLY | os.O_CREAT, 0o600)
+        except OSError:
+            return None
+        _try_flock(fd, operation)
+        return fd
+
+    def _release_lock(self, fd: int | None) -> None:
+        """Release and close a lock fd obtained from ``_acquire_lock``."""
+        if fd is None:
+            return
+        _try_flock(fd, _LOCK_UN)
+        os.close(fd)
+
+    @contextlib.contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Hold the exclusive config lock across a load -> mutate -> save cycle.
+
+        Without this, two concurrent kbagent processes doing read-modify-write
+        can silently drop each other's changes (issue #477): both load the
+        same snapshot and the second save wins, so a project added by the
+        first process vanishes from config.json. Mutation methods wrap
+        themselves in a transaction; ``load()``/``save()`` inside an active
+        transaction skip their own locking (reentrant per thread).
+        """
+        if self._txn_depth() > 0:
+            self._txn.depth += 1
+            try:
+                yield
+            finally:
+                self._txn.depth -= 1
+            return
+        fd = self._acquire_lock(_LOCK_EX)
+        self._txn.depth = 1
+        try:
+            yield
+        finally:
+            self._txn.depth = 0
+            self._release_lock(fd)
+
+    def project_not_found_error(self, alias: str) -> ConfigError:
+        """Build the canonical "project not found" error for this store."""
+        return project_not_found_error(alias, self._config_path, self._source)
+
     def load(self) -> AppConfig:
         """Load configuration from disk.
 
@@ -152,19 +247,20 @@ class ConfigStore:
             logger.debug("Config file does not exist, returning empty config")
             return self._inject_env_project(AppConfig())
 
-        fd: int | None = None
+        lock_fd: int | None = None
         try:
-            fd = os.open(str(self._config_path), os.O_RDONLY)
-            _try_flock(fd, _LOCK_SH)
+            # Shared lock on the sidecar lock file (writers take it
+            # exclusively); skipped inside an active transaction, which
+            # already holds the exclusive lock.
+            if self._txn_depth() == 0:
+                lock_fd = self._acquire_lock(_LOCK_SH)
             raw = self._config_path.read_text(encoding="utf-8")
         except OSError as exc:
             raise ConfigError(f"Cannot read config file {self._config_path}: {exc}") from exc
         except UnicodeDecodeError as exc:
             raise ConfigError(f"Config file is not valid UTF-8 text: {exc}") from exc
         finally:
-            if fd is not None:
-                _try_flock(fd, _LOCK_UN)
-                os.close(fd)
+            self._release_lock(lock_fd)
 
         try:
             data = json.loads(raw)
@@ -306,12 +402,15 @@ class ConfigStore:
         Creates the config directory if it does not exist.
         Uses atomic write to ensure the file is never on disk with
         permissions broader than 0600 (prevents TOCTOU race condition).
+        Before the atomic rename, the previous config.json is copied to
+        config.json.bak as a recovery safety net (issue #477).
 
         Raises:
             ConfigError: If the file cannot be written.
         """
         logger.debug("Saving config to %s", self._config_path)
         lock_fd: int | None = None
+        tmp_path = self._config_path.with_suffix(".tmp")
         try:
             self._config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             self._ensure_gitignore()
@@ -328,33 +427,52 @@ class ConfigStore:
             json_str = json.dumps(payload, indent=2, ensure_ascii=False)
             data = (json_str + "\n").encode("utf-8")
 
-            # Acquire an exclusive lock on the target file before writing.
-            # The lock file is opened (or created) with 0600 permissions.
-            lock_fd = os.open(str(self._config_path), os.O_RDONLY | os.O_CREAT, 0o600)
-            _try_flock(lock_fd, _LOCK_EX)
+            # Exclusive lock on the sidecar lock file -- never on config.json
+            # itself, so a failed save can't leave an empty O_CREAT artifact
+            # behind (issue #477). Skipped inside an active transaction, which
+            # already holds the lock. The fd never points at config.json or
+            # the temp file, so os.replace works on Windows too.
+            if self._txn_depth() == 0:
+                lock_fd = self._acquire_lock(_LOCK_EX)
+
+            self._write_backup()
 
             # Write to a temp file created with 0600 from the start,
             # then atomically rename into place. This avoids any window
             # where the config file exists with world-readable permissions.
-            tmp_path = self._config_path.with_suffix(".tmp")
             fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
                 os.write(fd, data)
             finally:
                 os.close(fd)
-            # On Windows (no fcntl), close the lock fd before os.replace —
-            # Windows cannot atomically replace a file that is currently open.
-            # On POSIX the fd stays open (flock is still held) until the finally block.
-            if not _HAS_FCNTL and lock_fd is not None:
-                os.close(lock_fd)
-                lock_fd = None
             os.replace(str(tmp_path), str(self._config_path))
         except OSError as exc:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
             raise ConfigError(f"Cannot write config file {self._config_path}: {exc}") from exc
         finally:
-            if lock_fd is not None:
-                _try_flock(lock_fd, _LOCK_UN)
-                os.close(lock_fd)
+            self._release_lock(lock_fd)
+
+    def _write_backup(self) -> None:
+        """Copy the current config.json to config.json.bak (0600), best-effort.
+
+        Runs under the exclusive lock right before the atomic replace, so the
+        backup always holds the last pre-rewrite state -- if config.json is
+        ever lost or clobbered, stored tokens can be recovered from the backup
+        instead of being re-entered by hand (issue #477). A backup failure
+        must never block the save itself.
+        """
+        if not self._config_path.exists():
+            return
+        try:
+            current = self._config_path.read_bytes()
+            fd = os.open(str(self._backup_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, current)
+            finally:
+                os.close(fd)
+        except OSError:
+            logger.debug("Could not write config backup %s", self._backup_path)
 
     def _ensure_gitignore(self) -> None:
         """Create a .gitignore inside the config directory to protect tokens.
@@ -386,13 +504,32 @@ class ConfigStore:
         Raises:
             ConfigError: If the alias already exists.
         """
+        with self.transaction():
+            config = self.load()
+            if alias in config.projects:
+                raise ConfigError(
+                    f"Project '{alias}' already exists. Use 'project edit' to modify it."
+                )
+            config.projects[alias] = project
+            if not config.default_project:
+                config.default_project = alias
+            self.save(config)
+
+    def ensure_removable(self, alias: str) -> None:
+        """Validate that ``alias`` can be removed, without mutating anything.
+
+        Raises the same errors a real ``remove_project`` would: ``ConfigError``
+        if the alias does not exist, or if it is an ephemeral ``__env__``
+        project synthesized from the environment. Shared by the live remove and
+        the bulk dry-run preview so both paths stay in sync (read-only).
+
+        Raises:
+            ConfigError: If the alias is missing or ephemeral.
+        """
         config = self.load()
-        if alias in config.projects:
-            raise ConfigError(f"Project '{alias}' already exists. Use 'project edit' to modify it.")
-        config.projects[alias] = project
-        if not config.default_project:
-            config.default_project = alias
-        self.save(config)
+        if alias not in config.projects:
+            raise self.project_not_found_error(alias)
+        self._reject_ephemeral_mutation(config, alias, "removed")
 
     def remove_project(self, alias: str) -> None:
         """Remove a project from the configuration.
@@ -403,16 +540,18 @@ class ConfigStore:
             alias: The project alias to remove.
 
         Raises:
-            ConfigError: If the alias does not exist.
+            ConfigError: If the alias does not exist, or is an ephemeral
+                ``__env__`` project.
         """
-        config = self.load()
-        if alias not in config.projects:
-            raise ConfigError(f"Project '{alias}' not found.")
-        self._reject_ephemeral_mutation(config, alias, "removed")
-        del config.projects[alias]
-        if config.default_project == alias:
-            config.default_project = next(iter(config.projects), "")
-        self.save(config)
+        with self.transaction():
+            config = self.load()
+            if alias not in config.projects:
+                raise self.project_not_found_error(alias)
+            self._reject_ephemeral_mutation(config, alias, "removed")
+            del config.projects[alias]
+            if config.default_project == alias:
+                config.default_project = next(iter(config.projects), "")
+            self.save(config)
 
     def get_project(self, alias: str) -> ProjectConfig | None:
         """Get a project by alias, or None if not found."""
@@ -429,12 +568,13 @@ class ConfigStore:
         Raises:
             ConfigError: If the alias does not exist.
         """
-        config = self.load()
-        if alias not in config.projects:
-            raise ConfigError(f"Project '{alias}' not found.")
-        self._reject_ephemeral_mutation(config, alias, "modified")
-        config.projects[alias].active_branch_id = branch_id
-        self.save(config)
+        with self.transaction():
+            config = self.load()
+            if alias not in config.projects:
+                raise self.project_not_found_error(alias)
+            self._reject_ephemeral_mutation(config, alias, "modified")
+            config.projects[alias].active_branch_id = branch_id
+            self.save(config)
 
     def edit_project(self, alias: str, **kwargs: str | int | None) -> None:
         """Update fields on an existing project.
@@ -448,16 +588,17 @@ class ConfigStore:
         Raises:
             ConfigError: If the alias does not exist.
         """
-        config = self.load()
-        if alias not in config.projects:
-            raise ConfigError(f"Project '{alias}' not found.")
-        self._reject_ephemeral_mutation(config, alias, "edited")
-        project = config.projects[alias]
-        for key, value in kwargs.items():
-            if hasattr(project, key) and value is not None:
-                setattr(project, key, value)
-        config.projects[alias] = project
-        self.save(config)
+        with self.transaction():
+            config = self.load()
+            if alias not in config.projects:
+                raise self.project_not_found_error(alias)
+            self._reject_ephemeral_mutation(config, alias, "edited")
+            project = config.projects[alias]
+            for key, value in kwargs.items():
+                if hasattr(project, key) and value is not None:
+                    setattr(project, key, value)
+            config.projects[alias] = project
+            self.save(config)
 
     def rename_project(self, old_alias: str, new_alias: str) -> None:
         """Rename a project alias in the persisted config.
@@ -476,19 +617,20 @@ class ConfigStore:
             ConfigError: If ``old_alias`` does not exist or ``new_alias``
                 is already in use by another project.
         """
-        config = self.load()
-        if old_alias not in config.projects:
-            raise ConfigError(f"Project '{old_alias}' not found.")
-        self._reject_ephemeral_mutation(config, old_alias, "renamed")
-        if new_alias in config.projects:
-            raise ConfigError(
-                f"Cannot rename '{old_alias}' to '{new_alias}': "
-                f"alias '{new_alias}' is already in use."
-            )
-        config.projects[new_alias] = config.projects.pop(old_alias)
-        if config.default_project == old_alias:
-            config.default_project = new_alias
-        self.save(config)
+        with self.transaction():
+            config = self.load()
+            if old_alias not in config.projects:
+                raise self.project_not_found_error(old_alias)
+            self._reject_ephemeral_mutation(config, old_alias, "renamed")
+            if new_alias in config.projects:
+                raise ConfigError(
+                    f"Cannot rename '{old_alias}' to '{new_alias}': "
+                    f"alias '{new_alias}' is already in use."
+                )
+            config.projects[new_alias] = config.projects.pop(old_alias)
+            if config.default_project == old_alias:
+                config.default_project = new_alias
+            self.save(config)
 
     def add_dev_portal_identity(self, alias: str, identity: DeveloperPortalIdentity) -> None:
         """Add a Developer Portal identity to the configuration.
@@ -498,16 +640,17 @@ class ConfigStore:
         Raises:
             ConfigError: If the alias already exists.
         """
-        config = self.load()
-        if alias in config.dev_portal_identities:
-            raise ConfigError(
-                f"Developer Portal identity '{alias}' already exists. "
-                "Use 'dev-portal identity edit' to modify it."
-            )
-        config.dev_portal_identities[alias] = identity
-        if not config.default_dev_portal_identity:
-            config.default_dev_portal_identity = alias
-        self.save(config)
+        with self.transaction():
+            config = self.load()
+            if alias in config.dev_portal_identities:
+                raise ConfigError(
+                    f"Developer Portal identity '{alias}' already exists. "
+                    "Use 'dev-portal identity edit' to modify it."
+                )
+            config.dev_portal_identities[alias] = identity
+            if not config.default_dev_portal_identity:
+                config.default_dev_portal_identity = alias
+            self.save(config)
 
     def remove_dev_portal_identity(self, alias: str) -> None:
         """Remove a Developer Portal identity.
@@ -517,13 +660,14 @@ class ConfigStore:
         Raises:
             ConfigError: If the alias does not exist.
         """
-        config = self.load()
-        if alias not in config.dev_portal_identities:
-            raise ConfigError(f"Developer Portal identity '{alias}' not found.")
-        del config.dev_portal_identities[alias]
-        if config.default_dev_portal_identity == alias:
-            config.default_dev_portal_identity = next(iter(config.dev_portal_identities), "")
-        self.save(config)
+        with self.transaction():
+            config = self.load()
+            if alias not in config.dev_portal_identities:
+                raise ConfigError(f"Developer Portal identity '{alias}' not found.")
+            del config.dev_portal_identities[alias]
+            if config.default_dev_portal_identity == alias:
+                config.default_dev_portal_identity = next(iter(config.dev_portal_identities), "")
+            self.save(config)
 
     def get_dev_portal_identity(self, alias: str) -> DeveloperPortalIdentity | None:
         """Get a Developer Portal identity by alias, or None if not found."""
@@ -538,15 +682,16 @@ class ConfigStore:
         Raises:
             ConfigError: If the alias does not exist.
         """
-        config = self.load()
-        if alias not in config.dev_portal_identities:
-            raise ConfigError(f"Developer Portal identity '{alias}' not found.")
-        ident = config.dev_portal_identities[alias]
-        for key, value in kwargs.items():
-            if hasattr(ident, key) and value is not None:
-                setattr(ident, key, value)
-        config.dev_portal_identities[alias] = ident
-        self.save(config)
+        with self.transaction():
+            config = self.load()
+            if alias not in config.dev_portal_identities:
+                raise ConfigError(f"Developer Portal identity '{alias}' not found.")
+            ident = config.dev_portal_identities[alias]
+            for key, value in kwargs.items():
+                if hasattr(ident, key) and value is not None:
+                    setattr(ident, key, value)
+            config.dev_portal_identities[alias] = ident
+            self.save(config)
 
     def rename_dev_portal_identity(self, old_alias: str, new_alias: str) -> None:
         """Rename a Developer Portal identity alias.
@@ -556,18 +701,19 @@ class ConfigStore:
         Raises:
             ConfigError: If old alias does not exist, or new alias is in use.
         """
-        config = self.load()
-        if old_alias not in config.dev_portal_identities:
-            raise ConfigError(f"Developer Portal identity '{old_alias}' not found.")
-        if new_alias in config.dev_portal_identities:
-            raise ConfigError(
-                f"Cannot rename '{old_alias}' to '{new_alias}': "
-                f"alias '{new_alias}' is already in use."
-            )
-        config.dev_portal_identities[new_alias] = config.dev_portal_identities.pop(old_alias)
-        if config.default_dev_portal_identity == old_alias:
-            config.default_dev_portal_identity = new_alias
-        self.save(config)
+        with self.transaction():
+            config = self.load()
+            if old_alias not in config.dev_portal_identities:
+                raise ConfigError(f"Developer Portal identity '{old_alias}' not found.")
+            if new_alias in config.dev_portal_identities:
+                raise ConfigError(
+                    f"Cannot rename '{old_alias}' to '{new_alias}': "
+                    f"alias '{new_alias}' is already in use."
+                )
+            config.dev_portal_identities[new_alias] = config.dev_portal_identities.pop(old_alias)
+            if config.default_dev_portal_identity == old_alias:
+                config.default_dev_portal_identity = new_alias
+            self.save(config)
 
     def set_default_dev_portal_identity(self, alias: str) -> None:
         """Set the default Developer Portal identity.
@@ -575,8 +721,9 @@ class ConfigStore:
         Raises:
             ConfigError: If the alias does not exist.
         """
-        config = self.load()
-        if alias not in config.dev_portal_identities:
-            raise ConfigError(f"Developer Portal identity '{alias}' not found.")
-        config.default_dev_portal_identity = alias
-        self.save(config)
+        with self.transaction():
+            config = self.load()
+            if alias not in config.dev_portal_identities:
+                raise ConfigError(f"Developer Portal identity '{alias}' not found.")
+            config.default_dev_portal_identity = alias
+            self.save(config)

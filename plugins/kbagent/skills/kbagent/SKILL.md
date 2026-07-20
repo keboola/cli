@@ -1,75 +1,20 @@
 ---
 name: kbagent
 description: >
-  Use when working with Keboola Connection projects via kbagent CLI.
-  Covers: exploring and searching configurations (extractors, writers, transformations),
-  browsing job history, analyzing cross-project data lineage, calling MCP tools
-  across multiple projects, managing development branches, debugging SQL in
-  temporary workspaces, bulk-onboarding organizations, syncing project configs
-  as local files (GitOps), git-branching with Keboola dev branch isolation,
-  sharing buckets across projects, linking shared data,
-  encrypting secrets for MCP tool call workflows,
-  uploading/downloading Storage Files with tag management,
-  and syncing storage metadata and job history. Triggers: kbagent, Keboola project,
-  keboola configs, keboola jobs, keboola lineage, keboola transformations,
-  keboola MCP tools, keboola workspace, SQL debugging, keboola branches,
-  keboola organization, keboola sharing, bucket sharing, link bucket,
-  keboola sync, keboola git,
-  keboola gitops, sync pull, sync push, sync diff, branch-link,
-  search configs, find in configurations, audit configurations,
-  input mapping migration, remove input mapping, Snowflake paths,
-  MULTI_STATEMENT_COUNT, statement count error, SQL transformation migration,
-  keboola encrypt, encrypt secrets, encrypt credentials, encrypt password,
-  keboola encryption API, #password, #api_token, KBC::ProjectSecure,
-  safe config write, dry-run preview, fresh fetch before edit,
-  stale local config file, config version overwrite,
-  default bucket, output bucket, default_bucket, storage.output,
-  raw mode bucket override, custom output bucket name,
-  data app, data apps, keboola data app, streamlit app, streamlit deployment,
-  flask app, fastapi app, node app, python-js, deploy data app,
-  data-app create, data-app deploy, data-app password, data-app start,
-  data-app logs, container logs, app logs, tail logs, build logs,
-  app stdout, app stderr, troubleshoot data app, debug data app,
-  app proxy, simpleAuth, app auto-suspend, configVersion, redeploy contract,
-  Data Science API, /apps endpoint, app password, KBC::Project ciphertext,
-  data-app secrets, app secrets, app runtime secrets, secrets-set,
-  secrets-list, secrets-get, secrets-remove, encrypt app secret,
-  app environment variable, validate repo, validate-repo,
-  data-app golden rule, pre-flight repo check, repo structure check,
-  managed git repo, use-managed-git-repo, Keboola-hosted repo,
-  git-credentials, git-credentials-create, git-repo,
-  git-branches, git-entrypoints, deploy from git, managed repository,
-  data app runs, deploy attempts, deploy failure reason, why deploy stopped,
-  local workspace, project directory, kbagent init,
-  invite user, invite member, project invitation, manage members,
-  list members, remove member, change role, project role,
-  bulk invite, invite from CSV, project access, member management,
-  manage token prompt, --allow-env-manage-token, KBC_MANAGE_API_TOKEN,
-  feature flag, feature flags, list features, project features, user features,
-  enable feature, disable feature, set feature flag, add feature, remove feature,
-  early-adopter-preview, direct-access, pay-as-you-go, /manage/features,
-  super admin token, super-admin feature, stack feature catalogue,
-  data stream, data streams, keboola data streams, stream source, OTLP,
-  OpenTelemetry, otel, OTLP endpoint, OTEL_EXPORTER_OTLP_ENDPOINT, telemetry ingest,
-  logs metrics traces, stream create-source, stream detail, stream list,
-  stream delete, otlp source, http source, stream-in, ingest endpoint,
-  semantic-layer, semantic layer, semantic-layer model, metastore,
-  semantic-metric, semantic-dataset, semantic-relationship,
-  semantic-constraint, semantic-glossary, add metric, edit metric,
-  rename metric, remove metric, validate model, validate semantic layer,
-  promote model, semantic-layer build, semantic-layer export,
-  semantic-layer diff, semantic-layer import, semantic-layer token,
-  metric SQL, dataset FQN, constraint rule, threshold constraint,
-  4-band health, _critical _warning _healthy _review, CODE_METRIC,
-  DIM_METRIC_THRESHOLD, dangling metric FK, orphaned constraint,
-  phantom field, AGG on STRING, SUM on PCT, deep validate,
-  sl, kbagent sl, semantic layer wizard, sl-build, sl-add, sl-edit,
-  reference data, semantic-layer reference-data, chart of accounts, COA,
-  dimension members, account list, dimension data, member list,
-  developer portal, dev-portal, apps-api, register component, vendor app,
-  portal property, ui-options, encryption portal, defaultBucket portal,
-  app icon, configurationSchema portal, publish component, deprecate component,
-  kbagent dev-portal, portal identity, vendor login, service account portal.
+  Use when working with Keboola Connection projects via the kbagent CLI.
+  Covers: exploring and searching component configurations, job history and
+  job runs, cross-project data lineage, Keboola MCP tools, development
+  branches, SQL debugging in temporary workspaces, GitOps sync of configs as
+  local files (pull/push/diff/clone), bucket sharing and linking, encrypting
+  secrets, Storage tables and files, data apps (create/deploy/logs/secrets),
+  conditional flows and schedules, project members and invitations, feature
+  flags, OTLP data streams, scoped Storage tokens, the semantic layer
+  (models, datasets, metrics, constraints, reference data), and the Keboola
+  Developer Portal. Triggers: kbagent, Keboola, keboola config, keboola job,
+  keboola lineage, keboola sync, gitops, dev branch, workspace SQL, data app,
+  streamlit deploy, semantic layer, sl, dev-portal, data stream, OTLP,
+  scoped token, bucket sharing, encrypt secrets, feature flag, flow schedule,
+  invite member.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -147,6 +92,9 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show feature flags assigned to a user | `kbagent feature user-show --project PROJECT --email EMAIL` |
 | Enable a feature flag on a user | `kbagent feature user-add --project PROJECT --email EMAIL --feature FEATURE` |
 | Disable a feature flag on a user (destructive) | `kbagent feature user-remove --project PROJECT --email EMAIL --feature FEATURE` |
+| Mint a scoped Storage API token (secret shown once) | `kbagent token create --project PROJECT --description DESCRIPTION` |
+| Revoke a Storage API token immediately (destructive; only non-master tokens) | `kbagent token delete --project PROJECT --token-id TOKEN-ID` |
+| Rotate a token: generate a new value and invalidate the old one (secret shown once) | `kbagent token refresh --project PROJECT --token-id TOKEN-ID` |
 | List available components from connected projects | `kbagent component list` |
 | Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
 | List configurations from connected projects | `kbagent config list` |
@@ -181,8 +129,6 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List a data app's recent deployment attempts (runs), newest first | `kbagent data-app runs --project PROJECT --app-id APP-ID` |
 | Pre-flight check that a git repo follows the Keboola data-app Golden Rule | `kbagent data-app validate-repo --git-repo GIT-REPO` |
 | Show the clone URLs of a data app's configured git repository | `kbagent data-app git-repo --project PROJECT --app-id APP-ID` |
-| List the remote branches of a data app's git repository | `kbagent data-app git-branches --project PROJECT --app-id APP-ID` |
-| List root-level .py entrypoint files of a data app's git repository | `kbagent data-app git-entrypoints --project PROJECT --app-id APP-ID` |
 | List the credentials of a data app's MANAGED git repository | `kbagent data-app git-credentials --project PROJECT --app-id APP-ID` |
 | Create a git credential (SSH key or HTTP token) for a MANAGED repo | `kbagent data-app git-credentials-create --project PROJECT --app-id APP-ID --type CRED-TYPE --permissions PERMISSIONS` |
 | Encrypt and write app-runtime secrets to the linked Storage config | `kbagent data-app secrets-set --project PROJECT --app-id APP-ID` |

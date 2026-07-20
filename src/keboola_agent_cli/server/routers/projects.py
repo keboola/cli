@@ -29,6 +29,11 @@ class ProjectDescription(BaseModel):
     description: str
 
 
+class ProjectBulkDelete(BaseModel):
+    aliases: list[str]
+    dry_run: bool = False
+
+
 @router.get("", summary="List registered projects")
 def list_projects(registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
     """All registered project aliases."""
@@ -41,6 +46,19 @@ def add_project(
 ) -> dict[str, Any]:
     """Add a project. Verifies the storage token before persisting."""
     return registry.project.add_project(body.alias, body.stack_url, body.token)
+
+
+@router.post("/bulk-delete", summary="Remove multiple projects")
+def bulk_delete_projects(
+    body: ProjectBulkDelete, registry: ServiceRegistry = Depends(get_registry)
+) -> dict[str, Any]:
+    """Remove several projects at once, accumulating per-alias errors.
+
+    Returns ``{removed, failed, dry_run}``; one bad alias does not block the
+    rest. Mirrors `kbagent project remove` applied to a list. Declared before
+    the ``/{alias}`` routes so the literal path is matched first.
+    """
+    return registry.project.bulk_remove_projects(aliases=body.aliases, dry_run=body.dry_run)
 
 
 @router.delete("/{alias}", summary="Remove a project")

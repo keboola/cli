@@ -170,6 +170,11 @@ FILE_UPLOAD_TIMEOUT: httpx.Timeout = httpx.Timeout(
     connect=30.0, read=300.0, write=3600.0, pool=30.0
 )
 
+# Max chars of a failed cloud-storage response body to inspect/log. Provider
+# error XMLs are well under 1 KB; the cap keeps a pathological body from
+# bloating the DEBUG log or the error-code regex scan.
+CLOUD_UPLOAD_ERROR_BODY_LIMIT: int = 1500
+
 # --- File Download Timeout ---
 FILE_DOWNLOAD_TIMEOUT: httpx.Timeout = httpx.Timeout(
     connect=30.0, read=3600.0, write=10.0, pool=30.0

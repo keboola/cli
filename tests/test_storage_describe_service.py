@@ -689,6 +689,29 @@ class TestGetTableDetailDescriptionExtraction:
         assert isinstance(result["metadata"], list)
         assert len(result["metadata"]) == 3
 
+    def test_surfaces_bucket_backend(self, tmp_path: Path) -> None:
+        """The owning bucket's storage backend is exposed on the response.
+
+        Consumed by semantic-layer build to pick the INFORMATION_SCHEMA
+        dialect when resolving column types for alias / linked tables.
+        """
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {
+            "id": "in.c-sales.orders",
+            "name": "orders",
+            "displayName": "orders",
+            "bucket": {"id": "in.c-sales", "backend": "bigquery"},
+            "columns": ["order_id"],
+            "columnMetadata": {},
+            "metadata": [],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        assert result["backend"] == "bigquery"
+
     def test_columns_without_description_have_no_description_key(self, tmp_path: Path) -> None:
         """Columns without a matching KBC.column.{name}.description entry omit 'description'."""
         store = _make_store(tmp_path)

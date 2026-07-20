@@ -165,6 +165,30 @@ class TestClassifyFieldRole:
     def test_plain_dimension_default(self) -> None:
         assert _classify_field_role("USER_NAME", "STRING") == "dimension"
 
+    def test_numeric_basetype_measure_regression(self) -> None:
+        # Regression: NUMERIC is Keboola's basetype for Snowflake/BigQuery
+        # decimals. It used to be absent from the numeric whitelist, so every
+        # NUMERIC measure column was misclassified as a dimension.
+        assert _classify_field_role("TOTAL_REVENUE", "NUMERIC") == "measure"
+
+    def test_bigquery_native_numeric_types_are_measures(self) -> None:
+        # BigQuery native type names (surfaced when types are read straight
+        # from the warehouse) must classify like their Keboola basetypes.
+        assert _classify_field_role("COUNT_ORDERS", "INT64") == "measure"
+        assert _classify_field_role("REVENUE", "FLOAT64") == "measure"
+        assert _classify_field_role("PRICE", "BIGNUMERIC") == "measure"
+
+    def test_date_typed_column_is_timestamp_regardless_of_name(self) -> None:
+        # A DATE/TIMESTAMP column is temporal even when its name carries none
+        # of the timestamp tokens (e.g. a bare "date" column).
+        assert _classify_field_role("date", "DATE") == "timestamp"
+        assert _classify_field_role("_timestamp", "TIMESTAMP") == "timestamp"
+
+    def test_missing_basetype_stays_dimension(self) -> None:
+        # With no basetype (untyped column) the numeric test cannot fire, so a
+        # measure-named column falls back to dimension.
+        assert _classify_field_role("total_revenue", "") == "dimension"
+
 
 # ---------------------------------------------------------------------------
 # Model resolution
@@ -2064,6 +2088,10 @@ class TestNormalizeFieldType:
             ("DATE", "date"),
             ("TIMESTAMP_NTZ", "datetime"),
             ("VARIANT", "json"),
+            # BigQuery native type names.
+            ("INT64", "integer"),
+            ("FLOAT64", "decimal"),
+            ("BIGNUMERIC", "decimal"),
             # Unknown types fall through to `"string"` — safest default.
             ("CUSTOM_UDT", "string"),
             ("geography", "string"),
@@ -2085,7 +2113,8 @@ class TestBuildModel:
         mock.post_item.side_effect = [
             {"id": "new-model"},  # the model
             {"id": "d1"},  # dataset
-            {"id": "m1"},  # metric (count(*))
+            {"id": "m1"},  # measure metric (SUM of AMOUNT)
+            {"id": "m2"},  # row-count metric
             {"id": "g1"},  # glossary
         ]
         with patch(
@@ -2099,7 +2128,12 @@ class TestBuildModel:
             result = service.build_model("prod", table_ids=["out.c.t"])
         assert result["fallback_used"] == "heuristic"
         assert len(result["generated"]["datasets"]) == 1
-        assert len(result["generated"]["metrics"]) == 1
+        # One metric per measure field (AMOUNT -> SUM) + a row-count baseline.
+        metrics = result["generated"]["metrics"]
+        assert len(metrics) == 2
+        measure_metric = next(m for m in metrics if m["name"] != "fact_orders_row_count")
+        assert measure_metric["name"] == "total_amount"
+        assert measure_metric["sql"] == 'SUM("AMOUNT") FROM "KEBOOLA"."out.c"."t"'
         assert len(result["generated"]["glossary"]) == 1
         assert result["validated"] is True
         # Pin the warehouse → metastore type normalization: Storage hands us
@@ -2870,3 +2904,427 @@ class TestReferenceDataPermissions:
         assert OPERATION_REGISTRY["semantic-layer.reference-data.get"] == "read"
         assert OPERATION_REGISTRY["semantic-layer.reference-data.set"] == "write"
         assert OPERATION_REGISTRY["semantic-layer.reference-data.delete"] == "destructive"
+
+
+# ---------------------------------------------------------------------------
+# build --types-workspace: warehouse type resolution for alias/linked tables
+# ---------------------------------------------------------------------------
+
+
+class TestBuildInformationSchemaSql:
+    """SQL generation for the INFORMATION_SCHEMA type-resolution query."""
+
+    def test_bigquery_dataset_derivation(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            build_information_schema_sql,
+        )
+
+        sql = build_information_schema_sql(
+            "bigquery", "in.c-OUT_Shop_Category_Metrics", "out_category_metrics"
+        )
+        assert sql is not None
+        # bucketId `.`/`-` map to `_` for the BigQuery dataset name.
+        assert "`in_c_OUT_Shop_Category_Metrics`.INFORMATION_SCHEMA.COLUMNS" in sql
+        assert "table_name = 'out_category_metrics'" in sql
+        assert "column_name, data_type" in sql
+
+    def test_snowflake_keeps_bucket_id_as_schema(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            build_information_schema_sql,
+        )
+
+        sql = build_information_schema_sql("snowflake", "out.c-fake-ecommerce", "orders")
+        assert sql is not None
+        assert '"KEBOOLA".INFORMATION_SCHEMA.COLUMNS' in sql
+        assert "TABLE_SCHEMA = 'out.c-fake-ecommerce'" in sql
+        assert "TABLE_NAME = 'orders'" in sql
+
+    def test_unsupported_backend_returns_none(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            build_information_schema_sql,
+        )
+
+        assert build_information_schema_sql("redshift", "in.c-x", "t") is None
+        assert build_information_schema_sql("", "in.c-x", "t") is None
+
+    def test_unsafe_identifier_rejected(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            build_information_schema_sql,
+        )
+
+        # A quote in the table name must not be escaped-and-passed; it is
+        # rejected outright (defense in depth against SQL injection).
+        assert build_information_schema_sql("bigquery", "in.c-x", "t'; DROP TABLE") is None
+        assert build_information_schema_sql("bigquery", "in.c-x`", "t") is None
+
+
+class TestEnrichSchemasWithWorkspaceTypes:
+    """Backfilling missing column types from the warehouse INFORMATION_SCHEMA."""
+
+    @staticmethod
+    def _query_result(csv_data: str) -> dict[str, Any]:
+        return {"statements": [{"csv_data": csv_data}]}
+
+    def test_fills_missing_types_in_place(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            enrich_schemas_with_workspace_types,
+        )
+
+        schemas = {
+            "in.c-linked.metrics": {
+                "backend": "bigquery",
+                "bucket_id": "in.c-linked",
+                "name": "metrics",
+                "column_details": [
+                    {"name": "total_revenue"},  # no type (alias table)
+                    {"name": "order_date"},
+                ],
+            }
+        }
+        execute_query = MagicMock(
+            return_value=self._query_result(
+                "column_name,data_type\r\ntotal_revenue,NUMERIC\r\norder_date,DATE\r\n"
+            )
+        )
+        errors = enrich_schemas_with_workspace_types(
+            schemas_by_tid=schemas,
+            alias="prod",
+            resolve_workspace_id=lambda _backend: 42,
+            execute_query=execute_query,
+        )
+        assert errors == []
+        cols = {c["name"]: c["type"] for c in schemas["in.c-linked.metrics"]["column_details"]}
+        assert cols == {"total_revenue": "NUMERIC", "order_date": "DATE"}
+        execute_query.assert_called_once()
+        args = execute_query.call_args.args
+        assert args[0] == "prod" and args[1] == 42
+
+    def test_fully_typed_table_is_skipped(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            enrich_schemas_with_workspace_types,
+        )
+
+        schemas = {
+            "out.c-native.t": {
+                "backend": "snowflake",
+                "bucket_id": "out.c-native",
+                "name": "t",
+                "column_details": [{"name": "x", "type": "NUMERIC"}],
+            }
+        }
+        execute_query = MagicMock()
+        errors = enrich_schemas_with_workspace_types(
+            schemas_by_tid=schemas,
+            alias="prod",
+            resolve_workspace_id=lambda _backend: 1,
+            execute_query=execute_query,
+        )
+        assert errors == []
+        execute_query.assert_not_called()
+
+    def test_query_error_is_non_fatal(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            enrich_schemas_with_workspace_types,
+        )
+
+        schemas = {
+            "in.c-linked.t": {
+                "backend": "bigquery",
+                "bucket_id": "in.c-linked",
+                "name": "t",
+                "column_details": [{"name": "a"}],
+            }
+        }
+        execute_query = MagicMock(
+            side_effect=KeboolaApiError(message="boom", error_code=ErrorCode.API_ERROR)
+        )
+        errors = enrich_schemas_with_workspace_types(
+            schemas_by_tid=schemas,
+            alias="prod",
+            resolve_workspace_id=lambda _backend: 1,
+            execute_query=execute_query,
+        )
+        assert len(errors) == 1
+        assert errors[0]["table_id"] == "in.c-linked.t"
+        # column stays untyped -- build still proceeds, field defaults to dimension
+        assert "type" not in schemas["in.c-linked.t"]["column_details"][0]
+
+    def test_columns_absent_from_result_reported(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            enrich_schemas_with_workspace_types,
+        )
+
+        schemas = {
+            "in.c-linked.t": {
+                "backend": "bigquery",
+                "bucket_id": "in.c-linked",
+                "name": "t",
+                "column_details": [{"name": "a"}, {"name": "b"}],
+            }
+        }
+        execute_query = MagicMock(
+            return_value=self._query_result("column_name,data_type\r\na,INT64\r\n")
+        )
+        errors = enrich_schemas_with_workspace_types(
+            schemas_by_tid=schemas,
+            alias="prod",
+            resolve_workspace_id=lambda _backend: 1,
+            execute_query=execute_query,
+        )
+        assert schemas["in.c-linked.t"]["column_details"][0]["type"] == "INT64"
+        assert len(errors) == 1
+        assert "b" in errors[0]["error"]
+
+
+class TestBuildModelTypesWorkspace:
+    """`build_model(types_workspace_id=...)` wiring end to end (mocked)."""
+
+    def test_types_workspace_resolves_alias_types(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        mock.post_item.side_effect = [
+            {"id": "new-model"},
+            {"id": "d1"},
+            {"id": "m1"},
+            {"id": "g1"},
+        ]
+        with (
+            patch(
+                "keboola_agent_cli.services.semantic_layer_service.StorageService"
+            ) as MockStorageCls,
+            patch(
+                "keboola_agent_cli.services.semantic_layer_service.WorkspaceService"
+            ) as MockWorkspaceCls,
+        ):
+            MockStorageCls.return_value.get_table_detail.return_value = {
+                "display_name": "metrics",
+                "backend": "bigquery",
+                "bucket_id": "in.c-linked",
+                "name": "metrics",
+                # Alias table: columns carry no type.
+                "column_details": [{"name": "total_revenue"}],
+            }
+            MockWorkspaceCls.return_value.execute_query.return_value = {
+                "statements": [{"csv_data": "column_name,data_type\r\ntotal_revenue,NUMERIC\r\n"}]
+            }
+            result = service.build_model(
+                "prod", table_ids=["in.c-linked.metrics"], types_workspace_id=7, dry_run=True
+            )
+        assert result["type_resolution_errors"] == []
+        fields = result["generated"]["datasets"][0]["fields"]
+        # The alias column, untyped in Storage, is now resolved: the warehouse
+        # NUMERIC normalizes to the metastore `decimal`. (Whether a numeric
+        # measure column then becomes a `measure` role is the classifier's job,
+        # fixed in the companion field-role PR.)
+        assert fields[0]["type"] == "decimal"
+
+    def test_without_workspace_alias_types_stay_empty(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        with (
+            patch(
+                "keboola_agent_cli.services.semantic_layer_service.StorageService"
+            ) as MockStorageCls,
+            patch(
+                "keboola_agent_cli.services.semantic_layer_service.WorkspaceService"
+            ) as MockWorkspaceCls,
+        ):
+            MockStorageCls.return_value.get_table_detail.return_value = {
+                "display_name": "metrics",
+                "backend": "bigquery",
+                "bucket_id": "in.c-linked",
+                "name": "metrics",
+                "column_details": [{"name": "total_revenue"}],
+            }
+            result = service.build_model("prod", table_ids=["in.c-linked.metrics"], dry_run=True)
+            MockWorkspaceCls.return_value.execute_query.assert_not_called()
+        fields = result["generated"]["datasets"][0]["fields"]
+        # Untyped -> string, and the measure-named column defaults to dimension.
+        assert fields[0]["type"] == "string"
+        assert fields[0]["role"] == "dimension"
+
+    def test_auto_resolve_picks_workspace_per_backend(self, tmp_path: Path) -> None:
+        """`auto_resolve_types=True` (the server/UI default) picks a read-only
+        workspace itself -- no explicit id needed."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        mock.post_item.side_effect = [
+            {"id": "new-model"},
+            {"id": "d1"},
+            {"id": "m1"},
+            {"id": "g1"},
+        ]
+        with (
+            patch(
+                "keboola_agent_cli.services.semantic_layer_service.StorageService"
+            ) as MockStorageCls,
+            patch(
+                "keboola_agent_cli.services.semantic_layer_service.WorkspaceService"
+            ) as MockWorkspaceCls,
+        ):
+            MockStorageCls.return_value.get_table_detail.return_value = {
+                "display_name": "metrics",
+                "backend": "bigquery",
+                "bucket_id": "in.c-linked",
+                "name": "metrics",
+                "column_details": [{"name": "total_revenue"}],
+            }
+            ws = MockWorkspaceCls.return_value
+            # Two workspaces; only the BigQuery one matches the table backend.
+            ws.list_workspaces.return_value = {
+                "workspaces": [
+                    {"id": 111, "backend": "snowflake"},
+                    {"id": 222, "backend": "bigquery"},
+                ]
+            }
+            ws.execute_query.return_value = {
+                "statements": [{"csv_data": "column_name,data_type\r\ntotal_revenue,NUMERIC\r\n"}]
+            }
+            result = service.build_model(
+                "prod", table_ids=["in.c-linked.metrics"], auto_resolve_types=True, dry_run=True
+            )
+            # The backend-matching workspace (222) was used, not 111.
+            assert ws.execute_query.call_args.args[1] == 222
+        assert result["type_resolution_errors"] == []
+        assert result["generated"]["datasets"][0]["fields"][0]["type"] == "decimal"
+
+    def test_auto_resolve_no_workspace_reports_error(self, tmp_path: Path) -> None:
+        """Auto mode with no matching workspace is non-fatal: build proceeds,
+        the table is reported unresolved."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = []
+        with (
+            patch(
+                "keboola_agent_cli.services.semantic_layer_service.StorageService"
+            ) as MockStorageCls,
+            patch(
+                "keboola_agent_cli.services.semantic_layer_service.WorkspaceService"
+            ) as MockWorkspaceCls,
+        ):
+            MockStorageCls.return_value.get_table_detail.return_value = {
+                "display_name": "metrics",
+                "backend": "bigquery",
+                "bucket_id": "in.c-linked",
+                "name": "metrics",
+                "column_details": [{"name": "total_revenue"}],
+            }
+            MockWorkspaceCls.return_value.list_workspaces.return_value = {"workspaces": []}
+            result = service.build_model(
+                "prod", table_ids=["in.c-linked.metrics"], auto_resolve_types=True, dry_run=True
+            )
+            MockWorkspaceCls.return_value.execute_query.assert_not_called()
+        assert len(result["type_resolution_errors"]) == 1
+        assert "no workspace" in result["type_resolution_errors"][0]["error"]
+
+
+# ---------------------------------------------------------------------------
+# build: one metric per measure field (sl-toolkit-style), aggregate guessed
+# ---------------------------------------------------------------------------
+
+
+class TestEstimateMetricAggregation:
+    """Name-based aggregate guess for auto-generated metrics."""
+
+    def test_default_is_sum(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            _estimate_metric_aggregation,
+        )
+
+        assert _estimate_metric_aggregation("total_ppc_revenue") == "SUM"
+        # Additive daily counts sum to a total -- NOT COUNT().
+        assert _estimate_metric_aggregation("count_marketplace_orders") == "SUM"
+
+    def test_rate_and_percent_are_avg(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            _estimate_metric_aggregation,
+        )
+
+        assert _estimate_metric_aggregation("conversion_rate") == "AVG"
+        assert _estimate_metric_aggregation("offers_75_100_pct_pricelist") == "AVG"
+        assert _estimate_metric_aggregation("avg_order_value") == "AVG"
+
+    def test_min_max(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            _estimate_metric_aggregation,
+        )
+
+        assert _estimate_metric_aggregation("max_price") == "MAX"
+        assert _estimate_metric_aggregation("min_price") == "MIN"
+
+
+class TestHeuristicMetricPerMeasure:
+    """`heuristic_generate_model` emits one metric per measure + a row count."""
+
+    @staticmethod
+    def _identity_fqn(tid: str) -> str:
+        return f"FQN({tid})"
+
+    @staticmethod
+    def _role(name: str, basetype: str) -> str:
+        # Minimal stand-in classifier for the test: numeric measure-ish names.
+        if basetype.lower() in ("numeric", "integer", "decimal") and any(
+            t in name.lower() for t in ("revenue", "count", "rate")
+        ):
+            return "measure"
+        return "dimension"
+
+    def test_metric_per_measure_plus_row_count(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            heuristic_generate_model,
+        )
+
+        schemas = {
+            "in.c-x.t": {
+                "display_name": "t",
+                "column_details": [
+                    {"name": "total_revenue", "type": "NUMERIC"},
+                    {"name": "conversion_rate", "type": "NUMERIC"},
+                    {"name": "category_id", "type": "INTEGER"},  # dimension
+                ],
+            }
+        }
+        model = heuristic_generate_model(
+            schemas=schemas,
+            model_name="m",
+            derive_fqn=self._identity_fqn,
+            classify_role=self._role,
+        )
+        metrics = {m["name"]: m for m in model["metrics"]}
+        # 2 measures -> 2 metrics, + 1 row count = 3
+        assert len(metrics) == 3
+        assert metrics["total_total_revenue"]["sql"] == 'SUM("total_revenue") FROM FQN(in.c-x.t)'
+        assert metrics["avg_conversion_rate"]["sql"] == 'AVG("conversion_rate") FROM FQN(in.c-x.t)'
+        assert "t_row_count" in metrics
+        # The dimension column produced no metric.
+        assert not any("category_id" in name for name in metrics)
+
+    def test_duplicate_metric_names_deduped_across_tables(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import (
+            heuristic_generate_model,
+        )
+
+        # Same measure column name in two tables -> names must not collide.
+        schemas = {
+            "in.c-a.t": {
+                "display_name": "a",
+                "column_details": [{"name": "revenue", "type": "NUMERIC"}],
+            },
+            "in.c-b.t": {
+                "display_name": "b",
+                "column_details": [{"name": "revenue", "type": "NUMERIC"}],
+            },
+        }
+        model = heuristic_generate_model(
+            schemas=schemas,
+            model_name="m",
+            derive_fqn=self._identity_fqn,
+            classify_role=self._role,
+        )
+        names = [m["name"] for m in model["metrics"]]
+        assert len(names) == len(set(names)), f"duplicate metric names: {names}"
+        assert "total_revenue" in names
+        assert "total_revenue_2" in names
