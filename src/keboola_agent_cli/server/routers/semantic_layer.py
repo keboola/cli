@@ -188,6 +188,11 @@ class BuildRequest(BaseModel):
     name: str | None = None
     dry_run: bool = False
     keep_on_failure: bool = False
+    # Column-type resolution for alias / linked tables (empty Storage
+    # metadata). Provide a specific workspace, or leave auto-resolve on (the
+    # UI default) to have the server pick a read-only workspace per backend.
+    types_workspace_id: int | None = None
+    auto_resolve_types: bool = True
 
 
 class TokenEncryptRequest(BaseModel):
@@ -587,6 +592,8 @@ def build(body: BuildRequest, registry: ServiceRegistry = Depends(get_registry))
         model_name_or_uuid=body.model,
         dry_run=body.dry_run,
         keep_on_failure=body.keep_on_failure,
+        types_workspace_id=body.types_workspace_id,
+        auto_resolve_types=body.auto_resolve_types,
     )
 
 

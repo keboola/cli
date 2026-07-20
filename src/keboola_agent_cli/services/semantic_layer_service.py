@@ -39,6 +39,9 @@ from ._semantic_layer_internals import _normalize_field_type, collect_side_from_
 from ._semantic_layer_internals import build_export_snapshot as _build_export_snapshot
 from ._semantic_layer_internals import default_export_path as _default_export_path
 from ._semantic_layer_internals import diff_one_type as _diff_one_type_helper
+from ._semantic_layer_internals import (
+    enrich_schemas_with_workspace_types as _enrich_schemas_with_workspace_types,
+)
 from ._semantic_layer_internals import fetch_table_schemas as _fetch_table_schemas
 from ._semantic_layer_internals import heuristic_generate_model as _heuristic_generate_helper
 from ._semantic_layer_internals import push_built_model as _push_built_model
@@ -58,6 +61,7 @@ from ._semantic_layer_lookup import run_search_context as _run_search_context_he
 from .base import BaseService, ClientFactory
 from .encrypt_service import EncryptService
 from .storage_service import StorageService
+from .workspace_service import WorkspaceService
 
 # Constraint name regex enforced by the metastore server.
 CONSTRAINT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -1366,6 +1370,26 @@ class SemanticLayerService(BaseService):
     # Phase 7 — build (AI-assisted / heuristic greenfield)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _pick_types_workspace(workspace: WorkspaceService, alias: str, backend: str) -> int | None:
+        """Auto-pick a workspace able to read ``backend`` types via the Query
+        Service.
+
+        Prefers a Query-Service-compatible, read-only workspace whose backend
+        matches the table's (so ``INFORMATION_SCHEMA`` runs in the right
+        dialect). Returns its ID, or ``None`` if the project has none.
+        """
+        try:
+            listing = workspace.list_workspaces(aliases=[alias], qs_compatible_only=True)
+        except (KeboolaApiError, ConfigError):
+            return None
+        candidates = listing.get("workspaces", [])
+        for ws in candidates:
+            if not backend or (ws.get("backend", "") or "").lower() == backend.lower():
+                ws_id = ws.get("id")
+                return int(ws_id) if ws_id is not None else None
+        return None
+
     def build_model(
         self,
         alias: str,
@@ -1376,6 +1400,8 @@ class SemanticLayerService(BaseService):
         dry_run: bool = False,
         keep_on_failure: bool = False,
         output_path: Path | None = None,
+        types_workspace_id: int | None = None,
+        auto_resolve_types: bool = False,
     ) -> dict[str, Any]:
         """Build (or update) a semantic-layer model from a list of tableIds.
 
@@ -1413,6 +1439,37 @@ class SemanticLayerService(BaseService):
         )
         schemas_by_tid, fetch_errors = _fetch_table_schemas(storage, alias, table_ids)
 
+        # Opt-in: backfill column types that Storage does not carry locally
+        # (alias / linked-bucket tables) by querying the warehouse
+        # INFORMATION_SCHEMA via the supplied workspace. Without this, such
+        # tables reach the heuristic with empty basetypes and every field is
+        # classified as `dimension`.
+        type_resolution_errors: list[dict[str, str]] = []
+        if types_workspace_id is not None or auto_resolve_types:
+            workspace = WorkspaceService(
+                config_store=self._config_store, client_factory=self._client_factory
+            )
+            if types_workspace_id is not None:
+                # Explicit workspace: use it for every backend.
+                def resolve_workspace_id(_backend: str) -> int | None:
+                    return types_workspace_id
+            else:
+                # Auto mode (UI / server default): pick a Query-Service-capable
+                # read-only workspace per backend, cached across tables.
+                ws_cache: dict[str, int | None] = {}
+
+                def resolve_workspace_id(backend: str) -> int | None:
+                    if backend not in ws_cache:
+                        ws_cache[backend] = self._pick_types_workspace(workspace, alias, backend)
+                    return ws_cache[backend]
+
+            type_resolution_errors = _enrich_schemas_with_workspace_types(
+                schemas_by_tid=schemas_by_tid,
+                alias=alias,
+                resolve_workspace_id=resolve_workspace_id,
+                execute_query=workspace.execute_query,
+            )
+
         # Generate model JSON (heuristic). The internals helper takes the
         # FQN-derivation and role-classification callables as kwargs so its
         # module stays free of import-time coupling to this module.
@@ -1446,6 +1503,7 @@ class SemanticLayerService(BaseService):
             "keep_on_failure": keep_on_failure,
             "fallback_used": "heuristic",  # no AI endpoint shipped yet
             "fetch_errors": fetch_errors,
+            "type_resolution_errors": type_resolution_errors,
             "generated": generated,
             "validation": {"errors": errors, "warnings": warnings},
             "validated": len(errors) == 0,
