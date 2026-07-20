@@ -38,6 +38,7 @@ from .commands.stream import stream_app
 from .commands.sync import sync_app
 from .commands.token import token_app
 from .commands.tool import tool_app
+from .commands.transformation import transformation_app
 from .commands.version import update_command, version_command
 from .commands.workspace import workspace_app
 from .config_store import ConfigStore, resolve_config_dir
@@ -122,6 +123,7 @@ app.add_typer(sharing_app, name="sharing", rich_help_panel=_BROWSE)
 app.add_typer(lineage_app, name="lineage", rich_help_panel=_BROWSE)
 app.add_typer(kai_app, name="kai", rich_help_panel=_BROWSE)
 app.add_typer(docs_app, name="docs", rich_help_panel=_BROWSE)
+app.add_typer(transformation_app, name="transformation", rich_help_panel=_BROWSE)
 
 # -- Flows --
 _FLOWS = "Flows"

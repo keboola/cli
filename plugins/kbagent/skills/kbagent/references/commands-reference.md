@@ -207,6 +207,12 @@ Lifecycle for `keboola.data-apps`. Combines Storage API (config body, git block,
 - `tool list [--project NAME] [--branch ID]` -- list available MCP tools (multi_project annotation)
 - `tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]` -- call MCP tool (read = all projects, write = single). `--input` accepts inline JSON, `@file.json`, or `-` (stdin)
 
+## SQL Transformations (since v0.73.0)
+Ports the MCP `create_sql_transformation` / `update_sql_transformation` tools (#396). See [transformation-workflow.md](transformation-workflow.md) for the show-before-edit recipe.
+- `transformation create --project NAME --name NAME (--sql 'SELECT ...' | --sql-file PATH) [--created-table NAME ...] [--component-id ID] [--description D] [--branch ID] [--dry-run]` -- component id from project `default_backend` (snowflake/bigquery; else pass `--component-id`); SQL split one statement per `script[]` element into a single block `Blocks`/code `Code`; each `--created-table T` maps to `out.c-<cleaned-name>.<T>` (bucket derived from the transformation NAME -- renaming later breaks the match).
+- `transformation show --project NAME --config-id ID [--component-id ID] [--branch ID]` -- block/code tree with synthetic positional ids `b{i}`/`b{i}.c{j}` + storage. Probes all SQL transformation components when `--component-id` omitted. **Always show before edit** -- ids renumber after structural ops.
+- `transformation edit --project NAME --config-id ID --change-description TEXT (--op JSON ... | --op-file ops.json) [--storage JSON|@file|-] [--component-id ID] [--branch ID] [--dry-run]` -- 9 ops (`add_block`, `remove_block`, `rename_block`, `add_code`, `remove_code`, `rename_code`, `set_code`, `add_script`, `str_replace`) applied sequentially against batch-start ids. `--storage` REPLACES `configuration.storage` wholesale (include ALL mappings you want to keep). Unknown ids error with the list of valid ids.
+
 ## Documentation Q&A (since v0.73.0)
 - `docs query "QUESTION" [--project NAME]` -- natural-language answer from the Keboola documentation via the AI Service (server-side RAG, no local corpus). Returns answer text + source URLs; `--json` emits `{query, text, source_urls}`. Unlike `kai ask` it does NOT see project data, works with any token (no master-token / feature-flag requirement), and is the right tool for "how do I ..." questions. Ports the `docs_query` MCP tool.
 

@@ -189,6 +189,9 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Fetch the full message history of a single Kai chat | `kbagent kai chat-detail --chat-id CHAT-ID` |
 | List recent Kai chat sessions | `kbagent kai history` |
 | Ask the Keboola documentation a natural language question | `kbagent docs query <QUESTION>` |
+| Create a SQL transformation from a SQL script | `kbagent transformation create --name NAME` |
+| Show a SQL transformation's block/code tree with positional IDs | `kbagent transformation show --config-id CONFIG-ID` |
+| Edit a SQL transformation's blocks/codes with positional operations | `kbagent transformation edit --config-id CONFIG-ID --change-description CHANGE-DESCRIPTION` |
 | List conditional flows (keboola.flow) across projects | `kbagent flow list` |
 | Show detailed conditional-flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |
 | Print the conditional-flow YAML template, or --full for the JSON Schema | `kbagent flow schema` |

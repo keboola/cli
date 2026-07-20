@@ -587,6 +587,18 @@ kbagent kai chat --message "msg" [--chat-id ID] [--project NAME]
 kbagent kai chat-detail --chat-id ID [--project NAME]
 kbagent kai history [--project NAME] [--limit N]
 
+kbagent transformation create --project NAME --name NAME (--sql 'SELECT ...' | --sql-file PATH) [--created-table NAME ...] [--component-id ID] [--description D] [--branch ID] [--dry-run]
+kbagent transformation show --project NAME --config-id ID [--component-id ID] [--branch ID]
+kbagent transformation edit --project NAME --config-id ID --change-description TEXT (--op JSON ... | --op-file ops.json) [--storage JSON|@file|-] [--component-id ID] [--branch ID] [--dry-run]
+# transformation (0.73.0+): native SQL-transformation editing (port of MCP create/update_sql_transformation, #396).
+#   create: component derived from the project default_backend (snowflake|bigquery; other backends need
+#   --component-id); SQL split one-statement-per-script[] element; single block "Blocks"/code "Code";
+#   each --created-table T maps to out.c-<cleaned-name>.<T>. show: synthetic positional ids b{i}/b{i}.c{j};
+#   when --component-id omitted, all known SQL transformation components are tried. edit: 9 ops
+#   (add/remove/rename block+code, set_code, add_script, str_replace) applied sequentially against
+#   batch-start ids -- ALWAYS `transformation show` first, ids renumber after structural ops;
+#   --storage REPLACES configuration.storage wholesale; --dry-run previews without PUT.
+
 kbagent docs query "QUESTION" [--project NAME]
 # (0.73.0+) Documentation Q&A via the AI Service (server-side RAG). Unlike kai ask it does NOT
 #   see project data; works with any token. --json emits {query, text, source_urls}.

@@ -1288,6 +1288,31 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
   kbagent kai history [--project NAME] [--limit N]
     List recent Kai chat sessions. Default limit: 10.
 
+### SQL Transformations (since v0.73.0)
+
+  kbagent transformation create --project NAME --name NAME (--sql 'SELECT ...' | --sql-file PATH) [--created-table NAME ...] [--component-id ID] [--description D] [--branch ID] [--dry-run]
+    Create a SQL transformation. Component id derived from the project
+    default_backend (snowflake -> keboola.snowflake-transformation,
+    bigquery -> keboola.google-bigquery-transformation; other backends
+    require --component-id). SQL is split one statement per script element;
+    a single block "Blocks" with one code "Code" is created (UI/MCP parity).
+    Each --created-table T adds output mapping T -> out.c-<cleaned-name>.<T>.
+
+  kbagent transformation show --project NAME --config-id ID [--component-id ID] [--branch ID]
+    Print the block/code tree with synthetic positional ids b{{i}} / b{{i}}.c{{j}}
+    plus storage mappings. Without --component-id every known SQL
+    transformation component is probed (404s skipped). ALWAYS run show
+    before edit -- ids renumber after every structural change.
+
+  kbagent transformation edit --project NAME --config-id ID --change-description TEXT (--op JSON ... | --op-file ops.json) [--storage JSON|@file|-] [--component-id ID] [--branch ID] [--dry-run]
+    Apply structured ops to blocks/codes: add_block, remove_block,
+    rename_block, add_code, remove_code, rename_code, set_code, add_script,
+    str_replace. Ops in one batch apply sequentially against BATCH-START ids
+    (mid-batch structural changes do not renumber within the batch).
+    --storage REPLACES configuration.storage wholesale -- include every
+    mapping you want to keep. --dry-run previews the resulting tree + op
+    summary without writing.
+
 ### Documentation Q&A (since v0.73.0)
 
   kbagent docs query "QUESTION" [--project NAME]
