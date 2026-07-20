@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..config_store import project_not_found_error
 from ..constants import ENV_KBAGENT_PROJECT
 from ..errors import ConfigError, KeboolaApiError, mask_token
 from ..models import ProjectConfig, normalize_stack_url
@@ -194,7 +195,9 @@ class ProjectService(BaseService):
         """
         existing = self._config_store.get_project(alias)
         if existing is None:
-            raise ConfigError(f"Project '{alias}' not found.")
+            raise project_not_found_error(
+                alias, self._config_store.config_path, self._config_store.source
+            )
 
         # ``--new-alias`` matching the current alias is treated as no change
         # (rename-to-same-name idempotency). Combined with no url/token, it
@@ -556,7 +559,9 @@ class ProjectService(BaseService):
         # 2. Collision check via a read-only load (no rename_project mutation).
         config = self._config_store.load()
         if old_alias not in config.projects:
-            raise ConfigError(f"Project '{old_alias}' not found.")
+            raise project_not_found_error(
+                old_alias, self._config_store.config_path, self._config_store.source
+            )
         if new_alias in config.projects:
             raise ConfigError(
                 f"Cannot rename '{old_alias}' to '{new_alias}': "
@@ -699,17 +704,20 @@ class ProjectService(BaseService):
         if not updates:
             return
 
-        # Single transactional pass: load once, mutate all in-memory, save once.
-        config = self._config_store.load()
-        for alias, (new_id, new_name) in updates.items():
-            if alias not in config.projects:
-                continue
-            project = config.projects[alias]
-            if project.org_id is None and new_id is not None:
-                project.org_id = new_id
-            if not project.org_name and new_name:
-                project.org_name = new_name
-        self._config_store.save(config)
+        # Single transactional pass: load once, mutate all in-memory, save
+        # once -- under the exclusive config lock so a concurrent kbagent
+        # process cannot interleave its own read-modify-write (issue #477).
+        with self._config_store.transaction():
+            config = self._config_store.load()
+            for alias, (new_id, new_name) in updates.items():
+                if alias not in config.projects:
+                    continue
+                project = config.projects[alias]
+                if project.org_id is None and new_id is not None:
+                    project.org_id = new_id
+                if not project.org_name and new_name:
+                    project.org_name = new_name
+            self._config_store.save(config)
 
     def _check_project_status(
         self, alias: str, project: ProjectConfig
@@ -830,13 +838,16 @@ class ProjectService(BaseService):
         Raises:
             ConfigError: If the alias does not exist.
         """
-        config = self._config_store.load()
-        if alias not in config.projects:
-            raise ConfigError(f"Project '{alias}' not found.")
+        with self._config_store.transaction():
+            config = self._config_store.load()
+            if alias not in config.projects:
+                raise project_not_found_error(
+                    alias, self._config_store.config_path, self._config_store.source
+                )
 
-        previous = config.default_project or None
-        config.default_project = alias
-        self._config_store.save(config)
+            previous = config.default_project or None
+            config.default_project = alias
+            self._config_store.save(config)
 
         env_override = os.environ.get(ENV_KBAGENT_PROJECT)
         return {
@@ -909,7 +920,9 @@ class ProjectService(BaseService):
         """
         project = self._config_store.get_project(alias)
         if project is None:
-            raise ConfigError(f"Project '{alias}' not found.")
+            raise project_not_found_error(
+                alias, self._config_store.config_path, self._config_store.source
+            )
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -961,7 +974,9 @@ class ProjectService(BaseService):
 
         if explicit:
             if explicit not in config.projects:
-                raise ConfigError(f"Project '{explicit}' not found.")
+                raise project_not_found_error(
+                    explicit, self._config_store.config_path, self._config_store.source
+                )
             return explicit, "explicit"
 
         env_value = os.environ.get(ENV_KBAGENT_PROJECT)
