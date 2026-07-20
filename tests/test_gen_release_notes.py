@@ -40,28 +40,38 @@ _CHANGELOG = {
 
 
 class TestCollectVersions:
-    def test_single_version_without_previous(self) -> None:
-        assert collect_versions("0.70.1", None, _CHANGELOG) == ["0.70.1"]
+    def test_adjacent_released_version_yields_single_section(self) -> None:
+        assert collect_versions("0.71.0", {"0.70.1", "0.66.1"}, _CHANGELOG) == ["0.71.0"]
 
-    def test_catch_up_range_excludes_previous(self) -> None:
-        assert collect_versions("0.71.0", "0.66.1", _CHANGELOG) == [
+    def test_catch_up_walk_stops_at_first_released(self) -> None:
+        assert collect_versions("0.71.0", {"0.66.1"}, _CHANGELOG) == [
             "0.71.0",
             "0.70.1",
             "0.70.0",
         ]
 
     def test_version_not_in_changelog_returns_empty(self) -> None:
-        assert collect_versions("9.9.9", "0.66.1", _CHANGELOG) == []
+        assert collect_versions("9.9.9", {"0.66.1"}, _CHANGELOG) == []
 
-    def test_unknown_previous_falls_back_to_single(self) -> None:
-        assert collect_versions("0.71.0", "0.50.0", _CHANGELOG) == ["0.71.0"]
+    def test_version_itself_released_is_still_included(self) -> None:
+        # A pre-created release (or a pipeline re-run) lists the version being
+        # released among the released set; it must not stop the walk at itself.
+        assert collect_versions("0.71.0", {"0.71.0", "0.66.1"}, _CHANGELOG) == [
+            "0.71.0",
+            "0.70.1",
+            "0.70.0",
+        ]
 
-    def test_previous_newer_than_version_falls_back_to_single(self) -> None:
-        # A misordered dict (or a bad --previous) must not slice backwards.
-        assert collect_versions("0.70.0", "0.71.0", _CHANGELOG) == ["0.70.0"]
+    def test_old_line_hotfix_ignores_newer_releases(self) -> None:
+        # Tagging 0.70.0 while 0.71.0 is already out: newer releases are
+        # irrelevant, the walk stops at the first OLDER released version.
+        assert collect_versions("0.70.0", {"0.71.0", "0.66.1"}, _CHANGELOG) == ["0.70.0"]
 
-    def test_previous_equal_to_version_falls_back_to_single(self) -> None:
-        assert collect_versions("0.70.1", "0.70.1", _CHANGELOG) == ["0.70.1"]
+    def test_no_released_boundary_falls_back_to_single(self) -> None:
+        # Empty or changelog-disjoint released set: the boundary is unknowable,
+        # so never emit the entire history.
+        assert collect_versions("0.71.0", set(), _CHANGELOG) == ["0.71.0"]
+        assert collect_versions("0.71.0", {"0.50.0"}, _CHANGELOG) == ["0.71.0"]
 
 
 class TestRenderNotes:
@@ -115,6 +125,12 @@ class TestCli:
         result = self._run("--version", "0.66.1")
         assert result.returncode == 0
         assert "### v0.66.1" in result.stdout
+
+    def test_released_flag_bounds_the_walk(self) -> None:
+        result = self._run("--version", "0.66.1", "--released", "0.66.0")
+        assert result.returncode == 0
+        assert "### v0.66.1" in result.stdout
+        assert "### v0.66.0" not in result.stdout
 
     def test_missing_stable_version_fails(self) -> None:
         result = self._run("--version", "999.0.0")

@@ -128,18 +128,23 @@ jobs:
       # travels to github-release as an artifact. This is also the FORWARD gate:
       # a stable tag whose version has no CHANGELOG entry fails the release now,
       # before anything publishes (generate_changelog.py --check above only
-      # audits already-published releases). `--previous` is the latest stable
-      # release, so versions that were merged but never tagged ship in the next
-      # tag as one catch-up section per version.
+      # audits already-published releases). The full released-version list goes
+      # to the script, which walks the changelog from the tagged version toward
+      # older entries until it hits one that is already released — versions that
+      # were merged but never tagged ship in the next tag as one catch-up
+      # section per version, with no reliance on `gh release list` ordering (an
+      # old-line hotfix tagged after a newer release still gets exactly its own
+      # section).
       - name: Generate release notes from changelog.py
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.VERSION }}
           IS_PRERELEASE: ${{ needs.version.outputs.IS_PRERELEASE }}
         run: |
-          prev="$(gh release list --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName' || true)"
           args=(--version "$VERSION" --output release-notes.md)
-          if [ -n "$prev" ]; then args+=(--previous "${prev#v}"); fi
+          for tag in $(gh release list --limit 100 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName'); do
+            args+=(--released "${tag#v}")
+          done
           if [ "$IS_PRERELEASE" = "true" ]; then args+=(--allow-missing); fi
           uv run python scripts/gen_release_notes.py "${args[@]}"
       - uses: actions/upload-artifact@v4
@@ -320,7 +325,10 @@ jobs:
             echo "::warning::no release-notes artifact (pre-release without a changelog entry?); leaving the body as-is"
             exit 0
           fi
-          body="$(gh release view "v${VERSION}" --json body --jq .body)"
+          # `.body // ""` — the API can return the body as JSON null (not ""),
+          # which --jq would print as the literal string "null" and defeat the
+          # emptiness test below.
+          body="$(gh release view "v${VERSION}" --json body --jq '.body // ""')"
           if [ -n "$body" ]; then
             echo "release v${VERSION} already has notes (authored by hand); leaving them untouched"
             exit 0

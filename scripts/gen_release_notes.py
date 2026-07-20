@@ -6,9 +6,12 @@ GitHub Release from the bundled ``CHANGELOG`` dict, so the release page and
 ``kbagent changelog`` can never disagree: the entries are emitted verbatim.
 
 When releases are skipped (versions merged to ``main`` but never tagged), the
-next tag is a catch-up release: pass ``--previous`` (the latest *released*
-version) and every changelog entry newer than it is included, one section per
-version, so no shipped change ever goes unannounced.
+next tag is a catch-up release: pass the already-released versions via
+``--released`` (repeatable) and every changelog version between the tag and the
+first already-released one is included, one section per version, so no shipped
+change ever goes unannounced. Walking the changelog beats "latest release minus
+one": it needs no ordering assumptions about ``gh release list`` and an
+old-line hotfix tagged after a newer release still gets exactly its own section.
 
 The script doubles as the forward changelog gate: a *stable* version without a
 ``CHANGELOG`` entry is a hard error, failing the release before anything
@@ -17,7 +20,8 @@ ride on an unmerged feature branch, mirroring ``generate_changelog.py --check``)
 
 Usage:
     uv run python scripts/gen_release_notes.py --version 0.71.0 \
-        [--previous 0.66.1] [--allow-missing] [--output release-notes.md]
+        [--released 0.66.1 --released 0.66.0 ...] [--allow-missing] \
+        [--output release-notes.md]
 """
 
 from __future__ import annotations
@@ -25,29 +29,36 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 
 CHANGELOG_URL = "https://github.com/keboola/cli/blob/main/src/keboola_agent_cli/changelog.py"
 
 
 def collect_versions(
-    version: str, previous: str | None, changelog: Mapping[str, list[str]]
+    version: str, released: Collection[str], changelog: Mapping[str, list[str]]
 ) -> list[str]:
     """Return the changelog versions to include, newest first.
 
     Relies on ``CHANGELOG`` being ordered newest-first (documented invariant of
-    the dict). Includes ``version`` and everything after it down to — but
-    excluding — ``previous``. Falls back to just ``version`` when ``previous``
-    is absent, unknown, or not older than ``version`` in the dict order.
+    the dict). Starting at ``version``, walks toward older entries and stops at
+    the first one that is already in ``released`` — everything before the stop
+    is an untagged version the new release must announce. ``version`` itself is
+    always included even when it is in ``released`` (a pre-created release, or
+    a re-run of the pipeline). When no older entry is released (empty or
+    changelog-disjoint ``released``), the boundary is unknowable, so the
+    conservative answer is just ``version`` — never the entire history.
     """
     keys = list(changelog)
     if version not in keys:
         return []
     start = keys.index(version)
-    if previous is not None and previous in keys and keys.index(previous) > start:
-        return keys[start : keys.index(previous)]
-    return [version]
+    collected = [keys[start]]
+    for key in keys[start + 1 :]:
+        if key in released:
+            return collected
+        collected.append(key)
+    return [keys[start]]
 
 
 def render_notes(
@@ -86,8 +97,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="Version being released (PEP 440)")
     parser.add_argument(
-        "--previous",
-        help="Latest already-released version; entries newer than it are included",
+        "--released",
+        action="append",
+        default=[],
+        metavar="VERSION",
+        help="An already-released version (repeatable); the notes cover every "
+        "changelog version between --version and the first released one",
     )
     parser.add_argument(
         "--allow-missing",
@@ -100,7 +115,7 @@ def main() -> int:
     from keboola_agent_cli.changelog import CHANGELOG
     from keboola_agent_cli.commands.changelog import _PREFIX_RE
 
-    versions = collect_versions(args.version, args.previous, CHANGELOG)
+    versions = collect_versions(args.version, set(args.released), CHANGELOG)
     if not versions:
         if args.allow_missing:
             print(
