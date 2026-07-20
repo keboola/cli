@@ -42,6 +42,42 @@ CHANGELOG: dict[str, list[str]] = {
         "project vanishing from config.json when another command saved a stale snapshot. All "
         "ConfigStore mutation methods, `permissions set/reset`, the default-project pin, and "
         "the org-metadata backfill now run inside a transaction.",
+        "Fix (#482): `sync push` on a dev branch no longer creates duplicates of configs "
+        "inherited from main. After `branch use <dev>` + `sync pull`, the manifest is replaced "
+        "with the dev branch's entries, orphaning the previously pulled `main/` tree on disk; "
+        "the untracked-config walker kept that tree in scope, so every inherited config "
+        "surfaced as `added` (empty config_id) and a push CREATEd a duplicate on the branch. "
+        "diff/push now scan for untracked configs only in the resolved source-branch subtree, "
+        "and an untracked config whose id resolves on the target branch and is unclaimed by "
+        "the manifest diffs against the existing remote config (adopt-by-id) instead of "
+        "creating a duplicate.",
+        "New (#487): `semantic-layer build` resolves column types for alias / linked-bucket "
+        "tables from the warehouse INFORMATION_SCHEMA, fixing their all-`dimension` field "
+        "classification (an alias table carries no per-column datatype metadata in Storage, so "
+        "the role heuristic saw empty types). Pass `--types-workspace ID` explicitly or "
+        "`--auto-types-workspace` to auto-pick a read-only Query-Service-capable workspace per "
+        "backend; the `serve` UI build auto-resolves by default. A table with no resolvable "
+        "workspace is reported non-fatally in `type_resolution_errors` and the build proceeds.",
+        "New (#488): `semantic-layer build` emits one metric per `measure` field instead of a "
+        "single COUNT(*) placeholder per table. The aggregate is guessed from the column name "
+        "(avg/mean/rate/pct/percent/ratio/share -> AVG; max/peak -> MAX; min -> MIN; default "
+        "SUM), mirroring the semantic-layer toolkit's generator.",
+        "Improved (#492): cloud-storage upload failures now surface the provider's short error "
+        "code -- `Cloud storage upload failed (HTTP 403, AccessDenied)` instead of a bare "
+        "`HTTP 403` -- and `--verbose` logs the raw provider error body (truncated to 1500 "
+        "chars) at DEBUG before raising. Applies to `storage file-upload`, `storage "
+        "upload-table`, and every other upload path through the shared cloud-upload helper.",
+        "Fix (#495): names containing square brackets are no longer swallowed in human-mode "
+        "output. A project named `[e2e] - kbagent bigquery` rendered as ` - kbagent bigquery` "
+        "(`[e2e]` was parsed as a Rich markup tag) in `project add`/`list`/`status`/`info` and "
+        "storage tables; user- and API-sourced names are now escaped via `rich.markup.escape()` "
+        "across the project and storage groups. `--json` output always carried the correct "
+        "value.",
+        "Fix (#493, issue #447): the kbagent Claude Code skill loads again in Claude Desktop. "
+        "The SKILL.md frontmatter `description` had grown to 5069 characters; the Agent Skills "
+        "spec caps it at 1024 and Claude Desktop enforces the cap at load time, so the skill "
+        "failed to load entirely. Rewritten to 965 characters, still naming every command "
+        "domain and the highest-value trigger keywords.",
         "Improved: `Project '<alias>' not found` errors now name the RESOLVED config file and "
         "its source, e.g. `Project 'x' not found in /home/u/.kbagent/config.json (source: "
         "local). Run 'kbagent project list' to see configured projects.` Config resolution is "
@@ -56,6 +92,11 @@ CHANGELOG: dict[str, list[str]] = {
         "work for managed git repos and will be reworked later via git-service. This CLI was the "
         "sole remaining consumer. `data-app git-repo` (clone-URL introspection) and the "
         "`git-credentials` / `git-credentials-create` commands are unchanged.",
+        "Fix (#486): `semantic-layer build` and `add dataset --deep-fields` no longer classify "
+        "numeric measure columns as `dimension`. Field-role classification now normalizes "
+        "column types before matching, so Keboola's `NUMERIC` basetype and BigQuery-native "
+        "`INT64`/`FLOAT64`/`BIGNUMERIC` count as numeric (-> `measure`) and temporal variants "
+        "map to `timestamp`, on both Snowflake and BigQuery.",
     ],
     "0.69.0": [
         "New: `kbagent search --regex` opts into regex mode on the global-search endpoint "
@@ -97,6 +138,17 @@ CHANGELOG: dict[str, list[str]] = {
         "`create-table` runs a one-call backend pre-flight (token verify) when any of them "
         "is used and fails fast with a clear message on a non-BigQuery project, before "
         "issuing the create. A plain columns create is unaffected (no extra call).",
+        "New (#465): secret-write commands' `--json` envelopes now carry a `plaintext_written` "
+        "field -- the list of secret key-paths (never values) left in plaintext when "
+        "`--allow-plaintext-on-encrypt-failure` fell back; `[]` when encryption succeeded. "
+        "Covers `config update` / `config new --push` / `config row-create` / `config "
+        "row-update` / `config variables-set` and `data-app create` / `data-app secrets-set`. "
+        "GHSA-7jrf follow-up: agents and scripts see the leak in the envelope, not only in the "
+        "stderr warning.",
+        "Note (#490): `docs/error-codes.md` now documents all 66 `ErrorCode` members (was 46 -- "
+        "everything added since ~0.22.0 was missing: Flow, Data Apps, Developer Portal, the "
+        "`kbagent serve` envelope codes, and the newer Sync/Auth codes). A new `make "
+        "check-error-codes` gate keeps the doc in lockstep with the enum.",
     ],
     "0.66.1": [
         "Fix (#479): `flow schedule` now activates the schedule on the Scheduler Service, so the cron "
