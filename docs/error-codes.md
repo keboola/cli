@@ -19,6 +19,8 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `INVALID_TOKEN` | Storage API token is invalid or expired |
 | `ACCESS_DENIED` | Token lacks the required permission for this API call |
 | `PERMISSION_DENIED` | Operation blocked by the active kbagent permission policy |
+| `MISSING_MASTER_TOKEN` | Operation requires a master (admin) Storage token (e.g. `config oauth-url` pre-flight); maps to exit 3 |
+| `UNAUTHORIZED` | `kbagent serve` rejected the request's Bearer token |
 
 ### Network / transport
 
@@ -41,6 +43,8 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `USAGE_ERROR` | Incorrect CLI flag combination or missing required argument |
 | `MISSING_PARAMETER` | A required parameter was not supplied |
 | `UNKNOWN_ERROR` | Catch-all for unclassified errors |
+| `HTTP_ERROR` | Generic HTTP-layer error in the `kbagent serve` envelope (HTTPException passthrough) |
+| `INTERNAL_ERROR` | Uncaught exception inside a `kbagent serve` route handler (HTTP 500) |
 
 ### Configuration
 
@@ -60,6 +64,7 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `STORAGE_JOB_TIMEOUT` | Polling timed out waiting for a Storage async job |
 | `QUERY_JOB_FAILED` | Query Service job finished in a failed state |
 | `QUERY_JOB_TIMEOUT` | Polling timed out waiting for a Query Service job |
+| `JOB_TIMEOUT_TERMINATED` | `job run --wait` timeout expired and the remote job was successfully cancelled (exit 7; distinct from `QUEUE_JOB_TIMEOUT`, where the remote may still be running) |
 
 ### Variables
 
@@ -121,9 +126,39 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | Code | Description |
 |---|---|
 | `PARENT_CONFIG_NOT_TRACKED` | Row operation references a parent config not in the manifest |
+| `VARIABLE_LINK_UNRESOLVED` | `sync push` could not resolve a transformation's variables link to a tracked config |
+| `SYNC_CONFLICT` | `sync pull --force` aborted: local and remote both changed since the last pull (`details.conflicts` lists them) |
 
 ### Encryption
 
 | Code | Description |
 |---|---|
 | `ENCRYPTION_FAILED` | Secret encryption via the Encryption API failed |
+
+### Flow
+
+| Code | Description |
+|---|---|
+| `SCHEDULE_DELETE_FAILED` | Deleting or deregistering a flow schedule failed |
+| `INVALID_FLOW_DEFINITION` | Flow definition failed schema or semantic validation |
+
+### Data Apps
+
+| Code | Description |
+|---|---|
+| `DATA_APP_BUILD_FAILED` | Data app deploy/start poll loop ended in a failed build or setup state |
+| `DATA_APP_DEPLOY_TIMEOUT` | Polling timed out waiting for a data app deploy or start |
+| `DATA_APP_INVALID_GIT` | Data app git repository configuration is invalid or inaccessible |
+| `DATA_APP_INVALID_SECRET` | Data app secret key or value failed validation |
+| `DATA_APP_INVALID_REPO` | Reserved: repository failed data-app validation (not currently emitted; `validate-repo` reports findings with exit 1) |
+| `DATA_APP_REPO_VALIDATION_BLOCKING` | Reserved: blocking repo-validation findings (not currently emitted; `validate-repo` reports findings with exit 1) |
+
+### Developer Portal
+
+| Code | Description |
+|---|---|
+| `DP_LOGIN_FAILED` | Developer Portal login failed (bad credentials or unexpected auth response) |
+| `DP_MFA_REQUIRED` | Developer Portal account requires MFA, which the CLI login flow does not support |
+| `DP_APP_NOT_FOUND` | Developer Portal app not found under the vendor |
+| `DP_PUBLISH_REQUIREMENTS_MISSING` | App is missing required fields for publishing (fix via `dev-portal patch` first) |
+| `DP_ICON_UPLOAD_FAILED` | Uploading the app icon to the Developer Portal failed |
