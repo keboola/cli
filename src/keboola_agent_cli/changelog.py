@@ -24,6 +24,13 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.71.0": [
+        "Note: version-alignment release -- the first published release since v0.66.1. "
+        "Versions 0.67.0 through 0.70.1 were merged to main with their changelog entries but "
+        "never tagged or published (no GitHub Release, so auto-update never picked them up); "
+        "0.71.0 ships everything listed under those versions in one update. No functional "
+        "change beyond what 0.67.0-0.70.1 describe.",
+    ],
     "0.70.1": [
         "Fix: config.json reliability hardening (issue #477). Every rewrite now first copies the "
         "previous config.json to `config.json.bak` (0600, same directory), so stored project "
