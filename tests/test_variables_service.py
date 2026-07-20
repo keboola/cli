@@ -402,6 +402,105 @@ class TestSetVariablesEncryption:
         # best_practices.md §5: try/finally close() must still fire on error.
         client.close.assert_called_once()
 
+    def test_plaintext_written_empty_on_successful_encryption(self, tmp_config_dir: Path) -> None:
+        """A successful encryption leaves plaintext_written empty."""
+        client = _mock_client()
+        client.get_config_detail.side_effect = [
+            {
+                "id": "cfg-1",
+                "name": "my-transform",
+                "configuration": {
+                    "variables_id": "vars-1",
+                    "variables_values_id": "row-1",
+                },
+            },
+            {
+                "id": "vars-1",
+                "configuration": {"variables": []},
+                "rows": [{"id": "row-1", "configuration": {"values": []}}],
+            },
+        ]
+        client.update_config_row.return_value = {"id": "row-1"}
+        client.encrypt_values.side_effect = lambda *, project_id, component_id, data: {
+            k: "KBC::ComponentSecure::cipher" for k in data
+        }
+        svc = _service(tmp_config_dir, client)
+
+        result = svc.set_variables(
+            alias="prod",
+            component_id="keboola.x",
+            config_id="cfg-1",
+            variables={"#api_token": "plain-secret"},
+        )
+
+        assert result["plaintext_written"] == []
+
+    def test_plaintext_written_lists_leaked_keys_on_fallback(self, tmp_config_dir: Path) -> None:
+        """An allowed plaintext fallback surfaces the leaked key-PATH, never the value."""
+        client = _mock_client()
+        client.get_config_detail.side_effect = [
+            {
+                "id": "cfg-1",
+                "name": "my-transform",
+                "configuration": {
+                    "variables_id": "vars-1",
+                    "variables_values_id": "row-1",
+                },
+            },
+            {
+                "id": "vars-1",
+                "configuration": {"variables": []},
+                "rows": [{"id": "row-1", "configuration": {"values": []}}],
+            },
+        ]
+        client.update_config_row.return_value = {"id": "row-1"}
+        client.encrypt_values.side_effect = Exception("encryption unavailable")
+        svc = _service(tmp_config_dir, client)
+
+        result = svc.set_variables(
+            alias="prod",
+            component_id="keboola.x",
+            config_id="cfg-1",
+            variables={"#api_token": "plain-secret"},
+            allow_plaintext_fallback=True,
+        )
+
+        # The row-hoisted secret flattens to this path; the plaintext value
+        # must never appear in the structured field.
+        assert result["plaintext_written"] == ["#values.[0].#api_token"]
+        assert "plain-secret" not in result["plaintext_written"]
+        # The escape hatch wrote the row with plaintext intact.
+        put_kwargs = client.update_config_row.call_args.kwargs
+        values_sent = {v["name"]: v["value"] for v in put_kwargs["configuration"]["values"]}
+        assert values_sent["#api_token"] == "plain-secret"
+
+    def test_plaintext_written_lists_leaked_keys_on_fallback_auto_create(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Auto-create path also threads the leaked key-PATH out on fallback."""
+        client = _mock_client()
+        client.get_config_detail.return_value = {
+            "id": "cfg-1",
+            "name": "my-transform",
+            "configuration": {"parameters": {}},
+        }
+        client.create_config.return_value = {"id": "vars-auto-1"}
+        client.create_config_row.return_value = {"id": "row-auto-1"}
+        client.encrypt_values.side_effect = Exception("encryption unavailable")
+        svc = _service(tmp_config_dir, client)
+
+        result = svc.set_variables(
+            alias="prod",
+            component_id="keboola.snowflake-transformation",
+            config_id="cfg-1",
+            variables={"#api_token": "plain-secret"},
+            allow_plaintext_fallback=True,
+        )
+
+        assert result["action"] == "created"
+        assert result["plaintext_written"] == ["#values.[0].#api_token"]
+        assert "plain-secret" not in result["plaintext_written"]
+
 
 class TestSetVariablesValidation:
     def test_empty_variables_dict_raises(self, tmp_config_dir: Path) -> None:

@@ -22,7 +22,7 @@ from ..models import ComponentDetail, ProjectConfig
 from ..sync.code_extraction import normalize_blocks_codes_script
 from ..sync.manifest import Manifest, load_manifest, save_manifest
 from ..sync.naming import sanitize_name
-from ._encryption import collect_secrets, encrypt_secrets_in_config
+from ._encryption import collect_secrets, encrypt_secrets_in_config, find_plaintext_secret_keys
 from .base import BaseService, ClientFactory, sanitize_unexpected_error
 from .workspace_service import find_storage_workspace_for_sandbox_config
 
@@ -622,11 +622,16 @@ class ConfigService(BaseService):
             # Secrets present but the Encryption API call cannot be scoped.
             # Fail closed rather than silently write plaintext.
             if allow_plaintext_fallback:
+                # GHSA-7jrf: name the exact secret key-paths written in PLAINTEXT
+                # (keys only -- `secrets` maps flattened path -> value -- never the
+                # values), consistent with the encryption-failure warning in
+                # `encrypt_secrets_in_config`. No plaintext-write path stays silent.
                 logger.warning(
-                    "Cannot resolve project_id for %s; writing %d secret(s) as "
-                    "plaintext (allow_plaintext_fallback=True)",
+                    "Cannot resolve project_id for %s; --allow-plaintext-on-encrypt-failure "
+                    "is set, so %d secret value(s) are being written in PLAINTEXT: %s.",
                     component_id,
                     len(secrets),
+                    ", ".join(sorted(secrets)) or "(unable to enumerate)",
                 )
                 return configuration
             raise KeboolaApiError(
@@ -785,6 +790,12 @@ class ConfigService(BaseService):
         result["project_alias"] = alias
         result["branch_id"] = effective_branch_id
         result["normalizations"] = normalizations
+        # Surface a plaintext-on-encrypt-failure fallback structurally (not just
+        # via the stderr warning) so --json consumers see the leaked key-paths.
+        # find_plaintext_secret_keys returns [] when encryption succeeded.
+        result["plaintext_written"] = (
+            find_plaintext_secret_keys(final_config) if final_config else []
+        )
         return result
 
     def _resolve_configuration(
@@ -1601,6 +1612,8 @@ class ConfigService(BaseService):
 
         result["project_alias"] = alias
         result["branch_id"] = effective_branch_id
+        # Structurally surface any plaintext-fallback leak (empty when encrypted).
+        result["plaintext_written"] = find_plaintext_secret_keys(row_config) if row_config else []
         return result
 
     # ── config create (one-shot remote create via `config new --push`) ─────────
@@ -1726,6 +1739,10 @@ class ConfigService(BaseService):
         # empty -- but we annotate it anyway so JSON consumers can rely on
         # the key being present.
         result["validation_errors"] = validation_errors
+        # Structurally surface any plaintext-fallback leak (empty when encrypted).
+        result["plaintext_written"] = (
+            find_plaintext_secret_keys(encrypted_config) if encrypted_config else []
+        )
         return result
 
     def _validate_config_body(
@@ -1931,6 +1948,10 @@ class ConfigService(BaseService):
 
         result["project_alias"] = alias
         result["branch_id"] = effective_branch_id
+        # Structurally surface any plaintext-fallback leak (empty when encrypted).
+        result["plaintext_written"] = (
+            find_plaintext_secret_keys(final_config) if final_config else []
+        )
         return result
 
     def _resolve_row_configuration(

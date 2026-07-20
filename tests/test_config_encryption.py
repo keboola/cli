@@ -263,6 +263,109 @@ class TestDryRunNotEncrypted:
 
 
 # ---------------------------------------------------------------------------
+# plaintext_written: structured visibility of a plaintext-fallback leak
+# ---------------------------------------------------------------------------
+
+
+class TestPlaintextWrittenField:
+    """The service result must carry ``plaintext_written`` so --json consumers
+    see a plaintext-on-encrypt-failure fallback, not just the stderr warning.
+
+    Empty list after a successful encryption; the leaked key-PATHS (never the
+    plaintext value) after an allowed fallback.
+    """
+
+    LEAKED_PATH = "#parameters.#password"
+
+    def test_create_config_plaintext_written_empty_on_success(self, tmp_config_dir: Path) -> None:
+        service, _ = _make_service(tmp_config_dir)
+        result = service.create_config(
+            alias="prod",
+            component_id=COMPONENT_ID,
+            name="t",
+            configuration=_config_with_secret(),
+            validate=False,
+        )
+        assert result["plaintext_written"] == []
+
+    def test_update_config_plaintext_written_empty_on_success(self, tmp_config_dir: Path) -> None:
+        service, _ = _make_service(tmp_config_dir)
+        result = service.update_config(
+            alias="prod",
+            component_id=COMPONENT_ID,
+            config_id=CONFIG_ID,
+            configuration=_config_with_secret(),
+        )
+        assert result["plaintext_written"] == []
+
+    def test_update_config_no_secret_plaintext_written_empty(self, tmp_config_dir: Path) -> None:
+        service, _ = _make_service(tmp_config_dir)
+        result = service.update_config(
+            alias="prod",
+            component_id=COMPONENT_ID,
+            config_id=CONFIG_ID,
+            configuration=_config_without_secret(),
+        )
+        assert result["plaintext_written"] == []
+
+    def test_update_config_lists_leaked_keys_on_fallback(self, tmp_config_dir: Path) -> None:
+        service, client = _make_service(tmp_config_dir)
+        client.encrypt_values.side_effect = RuntimeError("API unavailable")
+        result = service.update_config(
+            alias="prod",
+            component_id=COMPONENT_ID,
+            config_id=CONFIG_ID,
+            configuration=_config_with_secret(),
+            allow_plaintext_fallback=True,
+        )
+        # Leaked key-PATH is surfaced; the plaintext value must never appear.
+        assert result["plaintext_written"] == [self.LEAKED_PATH]
+        assert "plain-secret" not in result["plaintext_written"]
+        # The plaintext write did happen (escape hatch), value left intact.
+        assert _written_secret(client.update_config.call_args) == "plain-secret"
+
+    def test_create_config_lists_leaked_keys_on_fallback(self, tmp_config_dir: Path) -> None:
+        service, client = _make_service(tmp_config_dir)
+        client.encrypt_values.side_effect = RuntimeError("API unavailable")
+        result = service.create_config(
+            alias="prod",
+            component_id=COMPONENT_ID,
+            name="t",
+            configuration=_config_with_secret(),
+            validate=False,
+            allow_plaintext_fallback=True,
+        )
+        assert result["plaintext_written"] == [self.LEAKED_PATH]
+        assert "plain-secret" not in result["plaintext_written"]
+
+    def test_create_config_row_lists_leaked_keys_on_fallback(self, tmp_config_dir: Path) -> None:
+        service, client = _make_service(tmp_config_dir)
+        client.encrypt_values.side_effect = RuntimeError("API unavailable")
+        result = service.create_config_row(
+            alias="prod",
+            component_id=COMPONENT_ID,
+            config_id=CONFIG_ID,
+            name="r",
+            configuration=_config_with_secret(),
+            allow_plaintext_fallback=True,
+        )
+        assert result["plaintext_written"] == [self.LEAKED_PATH]
+
+    def test_update_config_row_lists_leaked_keys_on_fallback(self, tmp_config_dir: Path) -> None:
+        service, client = _make_service(tmp_config_dir)
+        client.encrypt_values.side_effect = RuntimeError("API unavailable")
+        result = service.update_config_row(
+            alias="prod",
+            component_id=COMPONENT_ID,
+            config_id=CONFIG_ID,
+            row_id=ROW_ID,
+            configuration=_config_with_secret(),
+            allow_plaintext_fallback=True,
+        )
+        assert result["plaintext_written"] == [self.LEAKED_PATH]
+
+
+# ---------------------------------------------------------------------------
 # CLI wiring: --allow-plaintext-on-encrypt-failure reaches the service layer
 # ---------------------------------------------------------------------------
 
