@@ -50,7 +50,9 @@ class TestParseOps:
             ]
         )
         assert [o.op for o in ops] == ["add_block", "remove_block", "str_replace"]
-        assert ops[0].position == "end"  # default
+        first = ops[0]
+        assert isinstance(first, tf_ops.TfAddBlock)
+        assert first.position == "end"  # default
 
     def test_parse_unknown_op(self) -> None:
         with pytest.raises(ValueError, match="Invalid operation"):

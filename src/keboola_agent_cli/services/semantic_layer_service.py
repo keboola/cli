@@ -390,7 +390,7 @@ class SemanticLayerService(BaseService):
         }
 
     @staticmethod
-    def _fetch_resolved_schema(client: MetastoreClient, wire_type: str) -> dict[str, Any]:
+    def _fetch_resolved_schema(client: MetastoreClient, wire_type: SemanticType) -> dict[str, Any]:
         """Fetch the actual JSON Schema for a type, resolving the default version.
 
         Live metastore behavior (2026-07): the bare ``/api/v1/schema/{type}``
