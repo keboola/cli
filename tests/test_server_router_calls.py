@@ -290,6 +290,103 @@ def test_storage_describe_columns_passes_columns_kwarg(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# storage.py  POST /{p}  (create table)
+# Service: storage.create_table(source_table_id=..., time_partitioning_*=...,
+#          clustering_fields=...) -- the source-copy + BigQuery layout params
+#          must be forwarded so the web "repartition" flow reaches the service.
+# ---------------------------------------------------------------------------
+
+
+def test_storage_create_table_forwards_source_and_partition_kwargs(tmp_path: Path) -> None:
+    """Router must forward the source-copy + BigQuery partition/clustering body
+    fields to StorageService.create_table (the web repartition flow)."""
+    storage_svc = MagicMock()
+    storage_svc.create_table.return_value = {"table_id": "in.c-main.events_repart"}
+    registry = _mock_registry(storage=storage_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    body = {
+        "bucket_id": "in.c-main",
+        "name": "events_repart",
+        "source_table_id": "in.c-main.events",
+        "branch_id": 123,
+        "time_partitioning_type": "DAY",
+        "time_partitioning_field": "created_at",
+        "clustering_fields": ["tenant_id"],
+        "primary_key": ["id"],
+    }
+    with TestClient(app) as client:
+        res = client.post(f"/storage/tables/{PROJECT}", headers=AUTH, json=body)
+
+    assert res.status_code == 200, res.text
+    kwargs = storage_svc.create_table.call_args.kwargs
+    assert kwargs["source_table_id"] == "in.c-main.events"
+    assert kwargs["time_partitioning_type"] == "DAY"
+    assert kwargs["time_partitioning_field"] == "created_at"
+    assert kwargs["clustering_fields"] == ["tenant_id"]
+    # columns is optional now (source mode); router passes None, not a crash.
+    assert kwargs["columns"] is None
+
+
+def test_storage_create_table_columns_optional(tmp_path: Path) -> None:
+    """`columns` is no longer required by the request model -- a source-only
+    body must validate (HTTP 200), not 422."""
+    storage_svc = MagicMock()
+    storage_svc.create_table.return_value = {"table_id": "in.c-main.t"}
+    registry = _mock_registry(storage=storage_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/tables/{PROJECT}",
+            headers=AUTH,
+            json={"bucket_id": "in.c-main", "name": "t", "source_table_id": "in.c-main.src"},
+        )
+
+    assert res.status_code == 200, res.text
+
+
+def test_storage_create_table_columns_and_source_is_422(tmp_path: Path) -> None:
+    """Both columns and source_table_id given -> clean 422 at the request
+    boundary (not a 500 from the service)."""
+    storage_svc = MagicMock()
+    registry = _mock_registry(storage=storage_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/tables/{PROJECT}",
+            headers=AUTH,
+            json={
+                "bucket_id": "in.c-main",
+                "name": "t",
+                "columns": ["id:INTEGER"],
+                "source_table_id": "in.c-main.src",
+            },
+        )
+
+    assert res.status_code == 422, res.text
+    storage_svc.create_table.assert_not_called()
+
+
+def test_storage_create_table_neither_columns_nor_source_is_422(tmp_path: Path) -> None:
+    """Neither columns nor source_table_id -> clean 422, service untouched."""
+    storage_svc = MagicMock()
+    registry = _mock_registry(storage=storage_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/tables/{PROJECT}",
+            headers=AUTH,
+            json={"bucket_id": "in.c-main", "name": "t"},
+        )
+
+    assert res.status_code == 422, res.text
+    storage_svc.create_table.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # storage.py  GET /{p}/{fid}/file-download
 # Service: storage.download_file(output_path=...)  (was output_dir= in broken version)
 # ---------------------------------------------------------------------------

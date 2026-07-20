@@ -24,6 +24,20 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.71.0": [
+        "New (web UI): the `kbagent serve --ui` table detail now has a **Repartition** tab "
+        "for BigQuery tables. Pick a time or integer-range partitioning layout plus optional "
+        "clustering fields, and the UI copies the table into the new layout (`create-table "
+        "--source-table-id`) and atomically swaps it into place (`swap-tables`) -- the same "
+        "supported repartition flow as the CLI. After the swap it offers to delete the leftover "
+        "old table. Runs in the branch selected in the top bar; with no dev branch selected it "
+        "repartitions production behind an explicit confirm.",
+        "The `serve` create-table endpoint (`POST /storage/tables/{project}`) now forwards the "
+        "source-copy and BigQuery partition/clustering fields (`source_table_id`, "
+        "`time_partitioning_*`, `range_partitioning_*`, `clustering_fields`) and makes `columns` "
+        "optional, matching the CLI. Table detail responses now include the owning bucket's "
+        "`backend` so the UI can gate BigQuery-only features.",
+    ],
     "0.70.1": [
         "Fix: config.json reliability hardening (issue #477). Every rewrite now first copies the "
         "previous config.json to `config.json.bak` (0600, same directory), so stored project "

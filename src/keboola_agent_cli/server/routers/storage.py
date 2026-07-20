@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from ..dependencies import ServiceRegistry, get_registry
 
@@ -26,12 +26,43 @@ class CreateBucket(BaseModel):
 class CreateTable(BaseModel):
     bucket_id: str
     name: str
-    columns: list[str]
+    # Optional: exactly one of `columns` / `source_table_id` is required, mirroring
+    # the CLI. Source mode derives the schema from an existing (BigQuery) table.
+    columns: list[str] | None = None
     primary_key: list[str] | None = None
     not_null_columns: list[str] | None = None
     defaults: list[str] | None = None
     branch_id: int | None = None
     if_not_exists: bool = False
+    # Source-copy + BigQuery partition/clustering layout. BigQuery-only; the
+    # service applies a pre-flight backend guard. Shapes mirror
+    # `kbagent storage create-table` (see services.storage_service.create_table).
+    source_table_id: str | None = None
+    source_branch_id: int | None = None
+    time_partitioning_type: str | None = None
+    time_partitioning_field: str | None = None
+    time_partitioning_expiration_ms: str | None = None
+    range_partitioning_field: str | None = None
+    range_partitioning_start: str | None = None
+    range_partitioning_end: str | None = None
+    range_partitioning_interval: str | None = None
+    clustering_fields: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _columns_xor_source(self) -> CreateTable:
+        """Enforce the columns/source XOR at the request boundary so a bad body
+        returns a clean 422 instead of bubbling up as a 500 from the service.
+
+        This mirrors the first two checks in ``StorageService.create_table``;
+        the service stays the source of truth for the full ruleset (not-null /
+        default placement, partitioning completeness, the BigQuery backend
+        guard) and for the CLI path, so a small overlap here is deliberate.
+        """
+        if self.columns and self.source_table_id:
+            raise ValueError("columns and source_table_id are mutually exclusive")
+        if not self.columns and not self.source_table_id:
+            raise ValueError("one of columns or source_table_id is required")
+        return self
 
 
 class DescribeBucket(BaseModel):
@@ -267,6 +298,16 @@ def create_table(
         not_null_columns=body.not_null_columns,
         defaults=body.defaults,
         if_not_exists=body.if_not_exists,
+        source_table_id=body.source_table_id,
+        source_branch_id=body.source_branch_id,
+        time_partitioning_type=body.time_partitioning_type,
+        time_partitioning_field=body.time_partitioning_field,
+        time_partitioning_expiration_ms=body.time_partitioning_expiration_ms,
+        range_partitioning_field=body.range_partitioning_field,
+        range_partitioning_start=body.range_partitioning_start,
+        range_partitioning_end=body.range_partitioning_end,
+        range_partitioning_interval=body.range_partitioning_interval,
+        clustering_fields=body.clustering_fields,
     )
 
 

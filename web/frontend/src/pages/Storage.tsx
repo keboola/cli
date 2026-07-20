@@ -1,13 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
-import { Download, Eye, Info } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, Check, Download, Eye, Info, Layers, Loader2, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
-import type { Bucket, ProjectError, Table as TableT } from "../types";
+import type { Branch, Bucket, ProjectError, Table as TableT } from "../types";
 
 interface TablePreview {
   header: string[];
@@ -20,6 +20,7 @@ interface TableDetail {
   table_id: string;
   name: string;
   bucket_id: string;
+  backend: string;
   description: string;
   columns: string[];
   column_details: Array<{
@@ -181,7 +182,7 @@ function TableDetailDrawer({
   onClose: () => void;
 }) {
   const { branchId } = useUIState();
-  const [tab, setTab] = useState<"info" | "schema" | "preview" | "raw">("info");
+  const [tab, setTab] = useState<"info" | "schema" | "preview" | "raw" | "repartition">("info");
 
   const detailQ = useQuery<TableDetail>({
     queryKey: ["table-detail", table?.project_alias, table?.id, branchId],
@@ -234,7 +235,7 @@ function TableDetailDrawer({
     >
       <div className="space-y-4">
         <div className="flex gap-2">
-          {(["info", "schema", "preview", "raw"] as const).map((t) => (
+          {tabsFor(detailQ.data).map((t) => (
             <button
               key={t}
               type="button"
@@ -247,6 +248,8 @@ function TableDetailDrawer({
                 <Info className="w-3 h-3 inline mr-1" />
               ) : t === "preview" ? (
                 <Eye className="w-3 h-3 inline mr-1" />
+              ) : t === "repartition" ? (
+                <Layers className="w-3 h-3 inline mr-1" />
               ) : null}
               {t}
             </button>
@@ -270,8 +273,486 @@ function TableDetailDrawer({
           ) : null
         ) : null}
         {detailQ.data && tab === "raw" ? <JsonView data={detailQ.data} /> : null}
+        {detailQ.data && tab === "repartition" ? (
+          <RepartitionTab d={detailQ.data} onClose={onClose} />
+        ) : null}
       </div>
     </Drawer>
+  );
+}
+
+const REPARTITION_TAB = "repartition" as const;
+type DrawerTab = "info" | "schema" | "preview" | "raw" | typeof REPARTITION_TAB;
+
+// The repartition tab is BigQuery-only: partition/clustering layout changes are
+// a BigQuery feature, and the server enforces this with a pre-flight backend
+// guard anyway. Hide the tab elsewhere so the UI never offers an action that
+// the backend will reject.
+function tabsFor(d: TableDetail | undefined): DrawerTab[] {
+  const base: DrawerTab[] = ["info", "schema", "preview", "raw"];
+  if (d && d.backend.toLowerCase() === "bigquery" && !d.is_alias) {
+    base.push(REPARTITION_TAB);
+  }
+  return base;
+}
+
+const repartInputCls =
+  "w-full bg-transparent border border-zinc-200 dark:border-zinc-800 rounded px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300 focus:outline-none focus:border-keboola disabled:opacity-50 disabled:cursor-not-allowed";
+
+// BigQuery allows at most 4 clustering fields. We cap the picker so the server
+// never has to reject an over-long list with a less obvious error.
+const MAX_CLUSTERING_FIELDS = 4;
+
+// Repartition a (BigQuery) table into a new partition/clustering layout.
+//
+// There is no in-place "ALTER TABLE ... PARTITION BY" on a populated table; the
+// supported path is copy-into-new-layout then atomic swap:
+//   1. create-table --source-table-id <orig> --time/range-partitioning ... --clustering
+//      -> a sibling table (<name>_repartition) with the desired layout + copied rows
+//   2. swap-tables <orig> <sibling>  -> the original id now exposes the new layout
+//
+// swap-tables is branch-scoped; the active branch from the top bar is used.
+// Production (the default branch) is allowed and is the only branch whose swap
+// reaches the live table -- a dev-branch swap never merges back -- so we run in
+// production by default and gate it behind an explicit confirm.
+//
+// After the swap the OLD data/layout lives under the sibling id; we surface it
+// and let the user delete it (per their choice) rather than dropping it silently.
+function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void }) {
+  const { project, branchId } = useUIState();
+  const qc = useQueryClient();
+
+  // swap-tables needs a concrete branch id. When no dev branch is pinned in the
+  // top bar (branchId === null => production), resolve the project's default
+  // branch id from /branches.
+  const branchesQ = useQuery<{ branches: Branch[] }>({
+    queryKey: ["branches", project],
+    queryFn: () => api.get("/branches", { query: { project: project! } }),
+    enabled: !!project && branchId === null,
+  });
+  const defaultBranch = branchesQ.data?.branches.find((b) => b.isDefault) ?? null;
+  const effectiveBranchId = branchId ?? defaultBranch?.id ?? null;
+  const isProduction = branchId === null;
+
+  const [mode, setMode] = useState<"time" | "range" | "none">("time");
+  const [timeType, setTimeType] = useState("DAY");
+  const [timeField, setTimeField] = useState("");
+  const [timeExpirationMs, setTimeExpirationMs] = useState("");
+  const [rangeField, setRangeField] = useState("");
+  const [rangeStart, setRangeStart] = useState("");
+  const [rangeEnd, setRangeEnd] = useState("");
+  const [rangeInterval, setRangeInterval] = useState("");
+  const [clustering, setClustering] = useState<string[]>([]);
+  const tempName = `${d.name}_repartition`;
+  const tempTableId = `${d.bucket_id}.${tempName}`;
+
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "creating" | "swapping" | "done">("idle");
+  const [error, setError] = useState<string | null>(null);
+  // True once the copy exists but the swap failed: the sibling table is left
+  // behind, so we offer an explicit cleanup. (The copy itself is idempotent via
+  // if_not_exists, so plain "Repartition" also safely retries just the swap.)
+  const [swapFailed, setSwapFailed] = useState(false);
+
+  const rangeComplete = !!(rangeField && rangeStart && rangeEnd && rangeInterval);
+  // "none" => no partitioning (de-partition; clustering optional) and is always
+  // valid on its own. Time needs a type; range needs all four bounds.
+  const layoutValid = mode === "none" ? true : mode === "time" ? !!timeType : rangeComplete;
+  const branchReady = effectiveBranchId !== null;
+  const canSubmit = !!project && branchReady && layoutValid && phase === "idle";
+
+  const toggleCluster = (col: string) =>
+    setClustering((cur) => (cur.includes(col) ? cur.filter((c) => c !== col) : [...cur, col]));
+
+  const run = useMutation({
+    mutationFn: async () => {
+      setError(null);
+      setSwapFailed(false);
+      // 1) Create the new-layout copy from the source (original) table.
+      //    if_not_exists makes this idempotent: if a previous attempt already
+      //    created the copy (e.g. the swap then failed), the retry skips the
+      //    create and proceeds straight to the swap instead of erroring with
+      //    "table already exists".
+      setPhase("creating");
+      const createBody: Record<string, unknown> = {
+        bucket_id: d.bucket_id,
+        name: tempName,
+        source_table_id: d.table_id,
+        branch_id: effectiveBranchId,
+        if_not_exists: true,
+        primary_key: d.primary_key.length ? d.primary_key : undefined,
+        clustering_fields: clustering.length ? clustering : undefined,
+      };
+      if (mode === "time") {
+        createBody.time_partitioning_type = timeType;
+        if (timeField) createBody.time_partitioning_field = timeField;
+        if (timeExpirationMs) createBody.time_partitioning_expiration_ms = timeExpirationMs;
+      } else if (mode === "range") {
+        createBody.range_partitioning_field = rangeField;
+        createBody.range_partitioning_start = rangeStart;
+        createBody.range_partitioning_end = rangeEnd;
+        createBody.range_partitioning_interval = rangeInterval;
+      }
+      // mode === "none": no partitioning fields -- the copy is unpartitioned
+      // (clustering, if any, still applies).
+      await api.post(`/storage/tables/${encodeURIComponent(project!)}`, createBody);
+
+      // 2) Swap the new-layout copy into the original's place. If this fails the
+      //    copy is left behind, so flag it for the cleanup affordance.
+      setPhase("swapping");
+      try {
+        await api.post(
+          `/storage/tables/${encodeURIComponent(project!)}/${encodeURIComponent(d.table_id)}/swap`,
+          { target_table_id: tempTableId, branch_id: effectiveBranchId },
+        );
+      } catch (e) {
+        setSwapFailed(true);
+        throw e;
+      }
+      setPhase("done");
+    },
+    onError: (e) => {
+      setError(e instanceof ApiError ? e.message : String(e));
+      setPhase("idle");
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tables"] });
+      qc.invalidateQueries({ queryKey: ["table-detail"] });
+    },
+  });
+
+  // After the swap the sibling id holds the OLD data/layout. Deleting it is the
+  // user's call (they may want to verify the new table first).
+  const del = useMutation({
+    mutationFn: () =>
+      api.delete(`/storage/tables/${encodeURIComponent(project!)}`, {
+        query: {
+          table_id: tempTableId,
+          branch_id: effectiveBranchId ?? undefined,
+          force: true,
+        },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tables"] });
+      onClose();
+    },
+  });
+
+  // Cleanup after a failed swap: remove the leftover copy and return to the
+  // form so the user can adjust and try again (does not close the drawer).
+  const cleanup = useMutation({
+    mutationFn: () =>
+      api.delete(`/storage/tables/${encodeURIComponent(project!)}`, {
+        query: {
+          table_id: tempTableId,
+          branch_id: effectiveBranchId ?? undefined,
+          force: true,
+        },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tables"] });
+      setSwapFailed(false);
+      setError(null);
+    },
+  });
+
+  const submit = () => {
+    if (isProduction && !confirmOpen) {
+      setConfirmOpen(true);
+      return;
+    }
+    setConfirmOpen(false);
+    run.mutate();
+  };
+
+  if (phase === "done") {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-start gap-2 rounded border border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-950/30 px-3 py-2 text-sm text-green-800 dark:text-green-300">
+          <Check className="w-4 h-4 mt-0.5 shrink-0" />
+          <div>
+            <div className="font-bold">Repartition complete.</div>
+            <div className="text-xs mt-1">
+              <span className="font-mono text-accent">{d.table_id}</span> now uses the new layout.
+              The previous data &amp; layout are preserved under{" "}
+              <span className="font-mono text-accent">{tempTableId}</span>.
+            </div>
+          </div>
+        </div>
+        {del.isError ? <ErrorBox message={(del.error as Error).message} /> : null}
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-2">
+            Delete the old table?
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="nerd-btn text-xs flex items-center gap-1 hover:text-red-600 dark:hover:text-red-400"
+              disabled={del.isPending}
+              onClick={() => del.mutate()}
+            >
+              {del.isPending ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <Trash2 className="w-3 h-3" />
+              )}
+              Delete {tempName}
+            </button>
+            <button type="button" className="nerd-btn text-xs" onClick={onClose}>
+              Keep it
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const busy = phase === "creating" || phase === "swapping";
+
+  return (
+    <div className="space-y-4">
+      <div className="text-xs text-zinc-500">
+        Copy <span className="font-mono text-accent">{d.table_id}</span> into a new
+        partition/clustering layout, then atomically swap it into place.
+      </div>
+
+      {isProduction ? (
+        <div className="flex items-start gap-2 rounded border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>
+            No dev branch is selected — this runs against{" "}
+            <strong>production{defaultBranch ? ` (branch #${defaultBranch.id})` : ""}</strong> and
+            changes the live table. A swap in a dev branch never merges back, so production is the
+            only branch that actually repartitions the real table.
+          </span>
+        </div>
+      ) : (
+        <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+          Runs in branch #{effectiveBranchId}
+        </div>
+      )}
+
+      {/* Partitioning mode */}
+      <div className="space-y-2">
+        <div className="text-[10px] uppercase tracking-wider text-zinc-500">Partitioning</div>
+        <div className="flex gap-2">
+          {(["time", "range", "none"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={`nerd-btn text-xs disabled:opacity-50 disabled:cursor-not-allowed ${
+                mode === m ? "border-keboola text-keboola" : ""
+              }`}
+              disabled={busy}
+              onClick={() => setMode(m)}
+            >
+              {m === "time" ? "Time" : m === "range" ? "Range (integer)" : "None"}
+            </button>
+          ))}
+        </div>
+
+        {mode === "none" ? (
+          <div className="text-xs text-zinc-500">
+            No partitioning — the table is copied unpartitioned (clustering below still
+            applies). Use this to remove an existing partition layout.
+          </div>
+        ) : mode === "time" ? (
+          <div className="grid grid-cols-3 gap-2">
+            <label className="space-y-1">
+              <span className="text-[10px] text-zinc-500">Type</span>
+              <select
+                className={repartInputCls}
+                value={timeType}
+                disabled={busy}
+                onChange={(e) => setTimeType(e.target.value)}
+              >
+                {["DAY", "HOUR", "MONTH", "YEAR"].map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-[10px] text-zinc-500">Field (blank = ingestion time)</span>
+              <select
+                className={repartInputCls}
+                value={timeField}
+                disabled={busy}
+                onChange={(e) => setTimeField(e.target.value)}
+              >
+                <option value="">(ingestion time)</option>
+                {d.columns.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-[10px] text-zinc-500">Expiration ms (optional)</span>
+              <input
+                className={repartInputCls}
+                value={timeExpirationMs}
+                disabled={busy}
+                onChange={(e) => setTimeExpirationMs(e.target.value)}
+                placeholder="e.g. 7776000000"
+              />
+            </label>
+          </div>
+        ) : (
+          <div className="grid grid-cols-4 gap-2">
+            <label className="space-y-1">
+              <span className="text-[10px] text-zinc-500">Field</span>
+              <select
+                className={repartInputCls}
+                value={rangeField}
+                disabled={busy}
+                onChange={(e) => setRangeField(e.target.value)}
+              >
+                <option value="">(select)</option>
+                {d.columns.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-[10px] text-zinc-500">Start</span>
+              <input
+                className={repartInputCls}
+                value={rangeStart}
+                disabled={busy}
+                onChange={(e) => setRangeStart(e.target.value)}
+                placeholder="0"
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-[10px] text-zinc-500">End</span>
+              <input
+                className={repartInputCls}
+                value={rangeEnd}
+                disabled={busy}
+                onChange={(e) => setRangeEnd(e.target.value)}
+                placeholder="100000"
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-[10px] text-zinc-500">Interval</span>
+              <input
+                className={repartInputCls}
+                value={rangeInterval}
+                disabled={busy}
+                onChange={(e) => setRangeInterval(e.target.value)}
+                placeholder="1000"
+              />
+            </label>
+          </div>
+        )}
+      </div>
+
+      {/* Clustering */}
+      <div className="space-y-2">
+        <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+          Clustering fields (optional, ordered by selection, max {MAX_CLUSTERING_FIELDS})
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {d.columns.map((c) => {
+            const idx = clustering.indexOf(c);
+            const on = idx !== -1;
+            const atLimit = !on && clustering.length >= MAX_CLUSTERING_FIELDS;
+            return (
+              <button
+                key={c}
+                type="button"
+                className={`nerd-btn text-xs disabled:opacity-50 disabled:cursor-not-allowed ${
+                  on ? "border-keboola text-keboola" : ""
+                }`}
+                disabled={busy || atLimit}
+                onClick={() => toggleCluster(c)}
+              >
+                {on ? `${idx + 1}. ` : ""}
+                {c}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {error ? <ErrorBox message={error} /> : null}
+
+      {swapFailed ? (
+        <div className="flex items-start gap-2 rounded border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <div className="space-y-2">
+            <div>
+              The copy <span className="font-mono">{tempTableId}</span> was created but the swap
+              failed. Click <strong>Repartition</strong> to retry just the swap, or delete the
+              leftover copy.
+            </div>
+            <button
+              type="button"
+              className="nerd-btn text-xs flex items-center gap-1 hover:text-red-600 dark:hover:text-red-400"
+              disabled={cleanup.isPending}
+              onClick={() => cleanup.mutate()}
+            >
+              {cleanup.isPending ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <Trash2 className="w-3 h-3" />
+              )}
+              Delete leftover {tempName}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {confirmOpen ? (
+        <div className="flex items-start gap-2 rounded border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <div className="space-y-2">
+            <div>
+              This swaps the <strong>production</strong> table{" "}
+              <span className="font-mono">{d.table_id}</span> into the new layout. Continue?
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="nerd-btn text-xs border-keboola text-keboola"
+                onClick={submit}
+              >
+                Yes, repartition production
+              </button>
+              <button type="button" className="nerd-btn text-xs" onClick={() => setConfirmOpen(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="flex items-center gap-3 pt-1">
+        <button
+          type="button"
+          className="nerd-btn text-xs flex items-center gap-1 hover:text-keboola disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={!canSubmit}
+          onClick={submit}
+        >
+          {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Layers className="w-3 h-3" />}
+          Repartition
+        </button>
+        <span className="text-[10px] text-zinc-500">
+          {busy
+            ? phase === "creating"
+              ? `Creating ${tempName} (copying rows)...`
+              : "Swapping into place..."
+            : branchReady
+              ? `Creates ${tempName}, then swaps it into ${d.name}.`
+              : "Resolving branch..."}
+        </span>
+      </div>
+    </div>
   );
 }
 
