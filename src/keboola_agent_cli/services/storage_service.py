@@ -697,8 +697,9 @@ class StorageService(BaseService):
             "display_name": table.get("displayName", ""),
             "bucket_id": table.get("bucket", {}).get("id", ""),
             # Storage backend of the owning bucket (e.g. "snowflake",
-            # "bigquery"); needed to pick the right INFORMATION_SCHEMA dialect
-            # when resolving column types for alias / linked tables.
+            # "bigquery"). Consumers: the web UI keys BigQuery-only features
+            # (repartition) off it, and type resolution picks the matching
+            # INFORMATION_SCHEMA dialect for alias / linked tables.
             "backend": table.get("bucket", {}).get("backend", ""),
             "description": description,
             "columns": columns,

@@ -25,11 +25,26 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.71.0": [
-        "Note: version-alignment release -- the first published release since v0.66.1. "
-        "Versions 0.67.0 through 0.70.1 were merged to main with their changelog entries but "
-        "never tagged or published (no GitHub Release, so auto-update never picked them up); "
-        "0.71.0 ships everything listed under those versions in one update. No functional "
-        "change beyond what 0.67.0-0.70.1 describe.",
+        "Note: catch-up release -- the first published release since v0.66.1. Versions 0.67.0 "
+        "through 0.70.1 were merged to main with their changelog entries but never tagged or "
+        "published (no GitHub Release, so auto-update never picked them up); updating to 0.71.0 "
+        "ships everything listed under those versions in one step.",
+        "New (web UI): the `kbagent serve --ui` table detail now has a **Repartition** tab "
+        "for BigQuery tables. Pick a time or integer-range partitioning layout plus optional "
+        "clustering fields, and the UI copies the table into the new layout (`create-table "
+        "--source-table-id`) and atomically swaps it into place (`swap-tables`) -- the same "
+        "supported repartition flow as the CLI. After the swap it offers to delete the leftover "
+        "old table. Runs in the branch selected in the top bar; with no dev branch selected it "
+        "repartitions production behind an explicit confirm.",
+        "The `serve` create-table endpoint (`POST /storage/tables/{project}`) now forwards the "
+        "source-copy and BigQuery partition/clustering fields (`source_table_id`, "
+        "`time_partitioning_*`, `range_partitioning_*`, `clustering_fields`) and makes `columns` "
+        "optional, matching the CLI. Table detail responses now include the owning bucket's "
+        "`backend` so the UI can gate BigQuery-only features.",
+        "New (#500): every GitHub Release now ships a `command-reference.md` asset generated "
+        "from the live Typer command tree of the exact built wheel (238 commands, 27 groups) -- "
+        "a zero-drift command reference that cannot disagree with the shipped CLI. Locally: "
+        "`make gen-command-reference`.",
     ],
     "0.70.1": [
         "Fix: config.json reliability hardening (issue #477). Every rewrite now first copies the "
