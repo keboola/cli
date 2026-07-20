@@ -20,6 +20,7 @@ from urllib.parse import quote
 import httpx
 
 from .constants import (
+    CLOUD_UPLOAD_ERROR_BODY_LIMIT,
     DEFAULT_GROUPED_JOBS_LIMIT,
     DEFAULT_JOB_LIMIT,
     DEFAULT_JOBS_PER_CONFIG,
@@ -1921,8 +1922,20 @@ class KeboolaClient(BaseHttpClient):
             success_codes = (200, 201)
 
         if response.status_code not in success_codes:
+            # The provider's error body names the exact denial (service
+            # account, missing permission) -- essential when diagnosing e.g.
+            # a platform-side IAM misconfiguration -- but it may embed signed
+            # URLs, so the full text goes to the DEBUG log only; the raised
+            # message carries just the short whitelisted error code.
+            logger.debug(
+                "Cloud storage error response (HTTP %d): %s",
+                response.status_code,
+                response.text[:CLOUD_UPLOAD_ERROR_BODY_LIMIT],
+            )
+            provider_code = _extract_cloud_error_code(response)
+            code_suffix = f", {provider_code}" if provider_code else ""
             raise KeboolaApiError(
-                message=f"Cloud storage upload failed (HTTP {response.status_code})",
+                message=(f"Cloud storage upload failed (HTTP {response.status_code}{code_suffix})"),
                 status_code=response.status_code,
                 error_code=ErrorCode.UPLOAD_FAILED,
                 retryable=False,
@@ -3343,6 +3356,26 @@ def _build_abs_upload_url(abs_params: dict[str, Any]) -> str:
     sas = parts.get("SharedAccessSignature", "")
 
     return f"{blob_endpoint}/{container}/{blob_name}?{sas}"
+
+
+# Strict charset: provider error codes are short alphanumeric tokens (GCS/S3
+# "AccessDenied", Azure "AuthorizationFailure"). Anything else in the response
+# -- signed URLs, credentials, free-form messages -- must never reach the
+# user-facing error string.
+_CLOUD_ERROR_CODE_RE = re.compile(r"<Code>([A-Za-z0-9._-]{1,64})</Code>")
+
+
+def _extract_cloud_error_code(response: httpx.Response) -> str | None:
+    """Best-effort short error code from a failed cloud-storage response.
+
+    Azure surfaces it in the ``x-ms-error-code`` header; GCS and S3 return an
+    XML body with a ``<Code>`` element. Returns ``None`` when neither matches.
+    """
+    header_code = response.headers.get("x-ms-error-code", "")
+    if header_code and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", header_code):
+        return header_code
+    match = _CLOUD_ERROR_CODE_RE.search(response.text[:CLOUD_UPLOAD_ERROR_BODY_LIMIT])
+    return match.group(1) if match else None
 
 
 # ---------------------------------------------------------------------------
