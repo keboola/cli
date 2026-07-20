@@ -191,7 +191,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Ask the Keboola documentation a natural language question | `kbagent docs query <QUESTION>` |
 | List conditional flows (keboola.flow) across projects | `kbagent flow list` |
 | Show detailed conditional-flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |
-| Print the conditional-flow YAML template, or --full for the live JSON Schema | `kbagent flow schema` |
+| Print the conditional-flow YAML template, or --full for the JSON Schema | `kbagent flow schema` |
+| Show bundled example flow configurations (offline, no project needed) | `kbagent flow examples` |
 | Validate a conditional-flow definition (schema + semantic checks) | `kbagent flow validate --file FILE` |
 | Create a new conditional-flow (keboola.flow) configuration | `kbagent flow new --project PROJECT --name NAME` |
 | Update a flow's name, description, or phases/tasks | `kbagent flow update --project PROJECT --flow-id FLOW-ID` |

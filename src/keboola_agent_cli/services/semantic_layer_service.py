@@ -171,6 +171,17 @@ TYPE_ALIAS: dict[str, SemanticType] = {
     "glossary": "semantic-glossary",
 }
 
+# Accepted ``--type`` values for ``semantic-layer schema``: every child type
+# from TYPE_ALIAS plus the model envelope itself. Kept as a separate dict
+# (rather than adding ``model`` to TYPE_ALIAS in place) because ``show
+# --type model`` has no plural payload key in ``_PLURAL_BY_TYPE`` — widening
+# TYPE_ALIAS would let ``show`` accept ``model`` and then KeyError while
+# rendering. Insertion order is the canonical ``--all`` fetch order.
+SCHEMA_TYPE_ALIAS: dict[str, SemanticType] = {
+    "model": "semantic-model",
+    **TYPE_ALIAS,
+}
+
 # Child-types order used everywhere we fan out per-type fetches.
 CHILD_TYPES: tuple[SemanticType, ...] = (
     "semantic-dataset",
@@ -316,6 +327,57 @@ class SemanticLayerService(BaseService):
             child_types=CHILD_TYPES,
             context_id=context_id,
         )
+
+    def get_schema(self, alias: str, types: list[str]) -> dict[str, Any]:
+        """Fetch the server-side JSON Schema for one or more semantic types.
+
+        ``types`` holds CLI-singular names (``metric``, ``model``, ...) as
+        accepted by :data:`SCHEMA_TYPE_ALIAS`. Unknown names fail fast
+        before any network call. Duplicates are collapsed (first occurrence
+        wins the ordering). Multiple types fan out in parallel, mirroring
+        :meth:`_fetch_children_parallel`.
+
+        Returns:
+            ``{"project": alias, "schemas": [{"type": <requested singular>,
+            "schema": <raw server schema dict>}]}`` in requested order.
+        """
+        requested = list(dict.fromkeys(types))
+        unknown = [t for t in requested if t not in SCHEMA_TYPE_ALIAS]
+        if unknown:
+            raise ConfigError(
+                f"Unknown semantic type(s): {', '.join(unknown)}. "
+                f"Valid types: {', '.join(SCHEMA_TYPE_ALIAS)}."
+            )
+        if not requested:
+            raise ConfigError(
+                f"No semantic types requested. Valid types: {', '.join(SCHEMA_TYPE_ALIAS)}."
+            )
+
+        project = self._resolve_one_project(alias)
+        results: dict[str, dict[str, Any]] = {}
+        with self._new_metastore_client(project) as client:
+            if len(requested) == 1:
+                results[requested[0]] = client.get_schema(SCHEMA_TYPE_ALIAS[requested[0]])
+            else:
+                with ThreadPoolExecutor(max_workers=len(requested)) as pool:
+                    future_to_type = {
+                        pool.submit(client.get_schema, SCHEMA_TYPE_ALIAS[t]): t for t in requested
+                    }
+                    errors: list[Exception] = []
+                    for future in future_to_type:
+                        try:
+                            results[future_to_type[future]] = future.result()
+                        # Future.result() re-raises arbitrary worker exceptions
+                        # (KeboolaApiError, httpx errors, ...); collect and
+                        # surface the first rather than masking the others.
+                        except Exception as exc:
+                            errors.append(exc)
+                    if errors:
+                        raise errors[0]
+        return {
+            "project": alias,
+            "schemas": [{"type": t, "schema": results[t]} for t in requested],
+        }
 
     # Internal helpers (model-scoped fetches).
 
