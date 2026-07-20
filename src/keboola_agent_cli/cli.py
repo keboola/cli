@@ -253,7 +253,7 @@ def main(
         "--allow-env-manage-token",
         help="Read KBC_MANAGE_API_TOKEN from the environment. Without this "
         "flag the env var is ignored (with a warning) and an interactive "
-        "TTY prompt is required. Default-deny since 0.28.0; closes the "
+        "TTY prompt is required. Default-deny since 0.29.0; closes the "
         "AI-exfiltration risk where subprocesses inherit the manage token.",
     ),
 ) -> None:
