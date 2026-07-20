@@ -2583,7 +2583,8 @@ class TestIssue267Regressions:
     def test_walker_finds_untracked_with_empty_configurations(self, tmp_path: Path) -> None:
         """``_find_untracked_configs`` surfaces a scaffold under a non-default
         branch even when ``manifest.configurations: []``, given that the
-        branch is the resolved one for this op (Bug B fix)."""
+        branch is the resolved *source* tree for this op (Bug B fix; the
+        walker takes the source branch path since issue #482)."""
         project_root = tmp_path / "project"
         project_root.mkdir()
 
@@ -2630,10 +2631,12 @@ class TestIssue267Regressions:
 
         manifest = load_manifest(project_root)
         svc = SyncService(config_store=MagicMock())
+        # diff/push resolve the source tree first (the scaffold materializes
+        # branch-99999) and pass its path to the walker.
         added = svc._find_untracked_configs(
             project_root,
             manifest,
-            resolved_branch_id=99999,
+            only_branch_path="branch-99999",
         )
 
         assert len(added) == 1
@@ -2641,8 +2644,8 @@ class TestIssue267Regressions:
 
     def test_walker_skips_orphaned_branch_dirs(self, tmp_path: Path) -> None:
         """Phantom-add protection still holds: a directory under a branch
-        whose id is neither tracked, default, nor explicitly resolved is
-        ignored. Guards against regression of Bug B in the wrong direction."""
+        other than the resolved source tree is ignored. Guards against
+        regression of Bug B in the wrong direction."""
         project_root = tmp_path / "project"
         project_root.mkdir()
         keboola_dir = project_root / KEBOOLA_DIR_NAME
@@ -2687,10 +2690,13 @@ class TestIssue267Regressions:
 
         manifest = load_manifest(project_root)
         svc = SyncService(config_store=MagicMock())
+        # Nothing on disk under the resolved branch 99999, so diff/push
+        # promote the default tree ("main") as the source -- branch-orphan
+        # must stay out of scope.
         added = svc._find_untracked_configs(
             project_root,
             manifest,
-            resolved_branch_id=99999,  # nothing on disk under this branch
+            only_branch_path="main",
         )
         assert added == []
 
@@ -2742,6 +2748,196 @@ class TestIssue267Regressions:
             pytest.raises(ConfigError, match="not linked"),
         ):
             SyncService._resolve_branch_id(project, manifest, project_root)
+
+
+# ===================================================================
+# Issue #482 regression tests
+# ===================================================================
+
+
+class TestIssue482BranchSwitchDuplicates:
+    """Regression coverage for issue #482.
+
+    ``sync pull`` replaces ``manifest.configurations`` with the pulled
+    branch's entries, so after ``branch use <dev>`` + ``pull`` the previously
+    pulled ``main/`` tree is orphaned on disk. The untracked-config walker
+    used to keep the default branch tree in scope unconditionally, so every
+    orphaned file surfaced as ``added`` (with empty ``config_id``) and
+    ``sync push`` created a duplicate config on the dev branch for each of
+    them -- 100 duplicates from a single push in the report.
+
+    The fix scopes the walker to the resolved *source* branch tree (the one
+    push reads from) and adds an adopt-by-id guard: an untracked file whose
+    ``_keboola.config_id`` resolves on the target branch and is unclaimed by
+    the manifest diffs against the existing remote config instead of
+    creating a duplicate.
+    """
+
+    def _init_and_pull_main(
+        self,
+        tmp_config_dir: Path,
+        project_root: Path,
+        components: list,
+    ) -> ConfigStore:
+        """Helper: init + pull production so ``main/`` is materialized."""
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        init_svc.init_sync(alias="prod", project_root=project_root)
+
+        pull_client = _make_sync_mock_client(components_response=components)
+        pull_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+        pull_svc.pull(alias="prod", project_root=project_root)
+        return store
+
+    def test_push_on_dev_branch_after_pull_is_noop(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """The issue's exact repro: pull main, pull a dev branch that inherits
+        the same configs, then push with zero local edits -- must be a no-op
+        instead of duplicating every config orphaned under ``main/``."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_and_pull_main(tmp_config_dir, project_root, SAMPLE_COMPONENTS)
+
+        # Pull the dev branch: it inherits the same configs from main.
+        dev_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS,
+            branches_response=SAMPLE_BRANCHES_WITH_DEV,
+        )
+        dev_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: dev_client,
+        )
+        dev_svc.pull(alias="prod", project_root=project_root, branch_override=99999)
+
+        # Bug precondition: the manifest now tracks only the dev branch while
+        # the previously pulled main/ tree is still on disk.
+        manifest = load_manifest(project_root)
+        assert {cfg.branch_id for cfg in manifest.configurations} == {99999}
+        assert (project_root / "main").is_dir()
+        assert (project_root / "feature-x").is_dir()
+
+        diff_result = dev_svc.diff(alias="prod", project_root=project_root, branch_override=99999)
+        assert diff_result["changes"] == []
+        assert diff_result["summary"]["added"] == 0
+
+        push_result = dev_svc.push(alias="prod", project_root=project_root, branch_override=99999)
+        assert push_result["status"] == "no_changes"
+        assert push_result["created"] == 0
+        dev_client.create_config.assert_not_called()
+
+    def test_untracked_file_with_known_remote_id_updates_instead_of_creating(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """Adopt-by-id guard: an untracked ``_config.yml`` whose
+        ``_keboola.config_id`` exists on the target branch and is not claimed
+        by any manifest entry is diffed as ``modified`` (an update), never
+        ``added`` (a duplicate create)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_and_pull_main(tmp_config_dir, project_root, SAMPLE_COMPONENTS_NO_ROWS)
+
+        # Hand-drop an untracked config dir carrying the id of a remote
+        # config the manifest does not track (e.g. rebuilt/lost manifest).
+        adopted_dir = project_root / "main" / "extractor" / "keboola.ex-http" / "orphaned-extractor"
+        adopted_dir.mkdir(parents=True)
+        (adopted_dir / CONFIG_FILENAME).write_text(
+            yaml.safe_dump(
+                {
+                    "version": 2,
+                    "name": "Orphaned Extractor",
+                    "parameters": {"baseUrl": "https://changed.example.com"},
+                    "_keboola": {
+                        "component_id": "keboola.ex-http",
+                        "config_id": "cfg-777",
+                    },
+                }
+            )
+        )
+
+        remote = [
+            {
+                **SAMPLE_COMPONENTS_NO_ROWS[0],
+                "configurations": [
+                    *SAMPLE_COMPONENTS_NO_ROWS[0]["configurations"],
+                    {
+                        "id": "cfg-777",
+                        "name": "Orphaned Extractor",
+                        "description": "",
+                        "configuration": {
+                            "parameters": {"baseUrl": "https://original.example.com"},
+                        },
+                        "rows": [],
+                    },
+                ],
+            }
+        ]
+        client = _make_sync_mock_client(components_response=remote)
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: client,
+        )
+
+        diff_result = svc.diff(alias="prod", project_root=project_root)
+        assert diff_result["summary"]["added"] == 0
+        assert diff_result["summary"]["modified"] == 1
+        modified = [c for c in diff_result["changes"] if c["change_type"] == "modified"]
+        assert modified[0]["config_id"] == "cfg-777"
+
+        push_result = svc.push(alias="prod", project_root=project_root)
+        assert push_result["created"] == 0
+        assert push_result["updated"] == 1
+        client.create_config.assert_not_called()
+        client.update_config.assert_called_once()
+        assert client.update_config.call_args.kwargs["config_id"] == "cfg-777"
+
+    def test_untracked_copy_of_tracked_config_still_creates_fresh(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """Forking by copying a tracked config dir keeps the CREATE semantics:
+        the copy carries the original's ``_keboola.config_id``, but that id is
+        claimed by a manifest entry, so the copy must not be adopted (which
+        would overwrite the original remote config)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_and_pull_main(tmp_config_dir, project_root, SAMPLE_COMPONENTS_NO_ROWS)
+
+        manifest = load_manifest(project_root)
+        entry = next(c for c in manifest.configurations if c.id == "cfg-001")
+        src_dir = project_root / "main" / entry.path
+        copy_dir = src_dir.parent / f"{src_dir.name}-copy"
+        copy_dir.mkdir()
+        data = yaml.safe_load((src_dir / CONFIG_FILENAME).read_text(encoding="utf-8"))
+        data["name"] = "Forked Extractor"
+        (copy_dir / CONFIG_FILENAME).write_text(yaml.safe_dump(data))
+
+        client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_NO_ROWS)
+        client.create_config.return_value = {"id": "cfg-fresh-001"}
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: client,
+        )
+
+        diff_result = svc.diff(alias="prod", project_root=project_root)
+        added = [c for c in diff_result["changes"] if c["change_type"] == "added"]
+        assert len(added) == 1
+        assert added[0]["config_id"] == ""  # fresh create, id not reused
+        assert diff_result["summary"]["modified"] == 0
+
+        push_result = svc.push(alias="prod", project_root=project_root)
+        assert push_result["created"] == 1
+        client.create_config.assert_called_once()
+        client.update_config.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

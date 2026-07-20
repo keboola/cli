@@ -1225,26 +1225,48 @@ class SyncService(BaseService):
                 }
             )
 
-        # Also add untracked local configs (new files)
-        for added_cfg in self._find_untracked_configs(project_root, manifest, branch_id):
-            branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
-            config_dir = project_root / branch_path / added_cfg["path"]
+        # Build set of manifest-tracked keys so that compute_changeset only
+        # flags configs that were previously pulled (not brand-new remote ones).
+        tracked_keys = {f"{cfg.component_id}/{cfg.id}" for cfg in manifest.configurations}
+
+        # Also add untracked local configs (new files). Scan ONLY the branch
+        # subtree push reads from -- scanning another branch's tree (e.g.
+        # ``main/`` while targeting a dev branch) turned configs orphaned by a
+        # branch switch into phantom "added" entries, and push then created a
+        # duplicate on the target branch for each of them (issue #482).
+        source_branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
+        for added_cfg in self._find_untracked_configs(
+            project_root, manifest, only_branch_path=source_branch_path
+        ):
+            config_dir = project_root / source_branch_path / added_cfg["path"]
             local_data = self._read_config_file(config_dir)
             if local_data is None:
                 continue
+            component_id = added_cfg.get("component_id", "unknown")
+            merge_code_files(component_id, local_data, config_dir)
+            # Adopt-by-id guard (issue #482): an untracked file whose
+            # ``_keboola.config_id`` resolves on the target branch and is not
+            # claimed by any manifest entry refers to an EXISTING remote
+            # config -- diff against it (unchanged/modified) instead of
+            # letting push create a duplicate. A claimed id means the user
+            # copied a tracked config dir to fork it: keep the create.
+            untracked_id = added_cfg.get("config_id", "")
+            untracked_key = f"{component_id}/{untracked_id}"
+            if not (
+                untracked_id
+                and untracked_key in remote_configs
+                and untracked_key not in tracked_keys
+            ):
+                untracked_id = ""  # new config, push creates it
             local_configs.append(
                 {
-                    "component_id": added_cfg.get("component_id", "unknown"),
-                    "config_id": "",  # new config, no ID yet
+                    "component_id": component_id,
+                    "config_id": untracked_id,
                     "config_name": local_data.get("name", ""),
                     "path": added_cfg["path"],
                     "data": local_data,
                 }
             )
-
-        # Build set of manifest-tracked keys so that compute_changeset only
-        # flags configs that were previously pulled (not brand-new remote ones).
-        tracked_keys = {f"{cfg.component_id}/{cfg.id}" for cfg in manifest.configurations}
 
         # Build base hashes for 3-way diff.
         # Preferred: pull_config_hash (normalized hash stored at pull time).
@@ -2141,20 +2163,28 @@ class SyncService(BaseService):
         self,
         project_root: Path,
         manifest: Manifest,
-        resolved_branch_id: int | None = None,
+        only_branch_path: str | None = None,
     ) -> list[dict[str, str]]:
         """Scan for _config.yml files that are not tracked in the manifest.
 
-        Scans branch directories that the user is actively working with:
-        branches that already have tracked configs, the default branch
-        (production), and the branch the caller resolved for the current
-        operation (when provided). This supports the documented
-        "scaffold locally then push" workflow on git-branching workspaces
-        with empty ``manifest.configurations`` (issue #267, Bug B).
+        When ``only_branch_path`` is given, scan exactly that branch subtree.
+        ``diff`` / ``push`` pass the resolved *source* branch path (the tree
+        push reads configs from) so that files belonging to a different
+        branch's tree can never be classified as "added" for the target
+        branch: after a branch switch, ``sync pull`` re-targets
+        ``manifest.configurations`` to the new branch, orphaning the previous
+        branch's tree on disk -- and every orphaned file used to surface as
+        "added", making ``sync push`` create a duplicate config on the target
+        branch for each of them (issue #482).
 
-        Branches outside this scope are skipped to avoid phantom "added"
-        configs from orphaned dev-branch directories left over from
-        previous work.
+        Without ``only_branch_path`` (``sync status``), scan branch
+        directories the user is actively working with: branches that already
+        have tracked configs and the default branch (production). The default
+        branch is always in scope so the documented "scaffold locally then
+        push" workflow works on workspaces with empty
+        ``manifest.configurations`` (issue #267, Bug B). Branches outside
+        this scope are skipped to avoid phantom "added" configs from
+        orphaned dev-branch directories left over from previous work.
         """
         tracked_paths: set[str] = set()
         in_scope_branch_ids: set[int] = set()
@@ -2168,14 +2198,12 @@ class SyncService(BaseService):
         if manifest.branches:
             in_scope_branch_ids.add(manifest.branches[0].id)
 
-        # The branch the caller resolved is in scope (linked feature branch
-        # the user explicitly switched to via git checkout + branch-link).
-        if resolved_branch_id is not None:
-            in_scope_branch_ids.add(resolved_branch_id)
-
         added: list[dict[str, str]] = []
         for branch in manifest.branches:
-            if branch.id not in in_scope_branch_ids:
+            if only_branch_path is not None:
+                if branch.path != only_branch_path:
+                    continue
+            elif branch.id not in in_scope_branch_ids:
                 continue
             branch_dir = project_root / branch.path
             if not branch_dir.exists():
