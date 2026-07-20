@@ -11,9 +11,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from ..client import KeboolaClient
-from ..config_store import ConfigStore
+from ..config_store import ConfigStore, project_not_found_error
 from ..constants import ENV_MAX_PARALLEL_WORKERS, UNEXPECTED_ERROR_MAX_MESSAGE_LEN
-from ..errors import ConfigError
 from ..models import ProjectConfig
 
 logger = logging.getLogger(__name__)
@@ -85,7 +84,9 @@ class BaseService:
         resolved: dict[str, ProjectConfig] = {}
         for alias in aliases:
             if alias not in config.projects:
-                raise ConfigError(f"Project '{alias}' not found.")
+                raise project_not_found_error(
+                    alias, self._config_store.config_path, self._config_store.source
+                )
             resolved[alias] = config.projects[alias]
 
         return resolved

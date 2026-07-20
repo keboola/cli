@@ -3,12 +3,13 @@
 import json
 import os
 import stat
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from keboola_agent_cli.config_store import CURRENT_CONFIG_VERSION, ConfigStore
+from keboola_agent_cli.config_store import _HAS_FCNTL, CURRENT_CONFIG_VERSION, ConfigStore
 from keboola_agent_cli.errors import ConfigError
 from keboola_agent_cli.models import AppConfig, DeveloperPortalIdentity, ProjectConfig
 
@@ -978,3 +979,147 @@ class TestEnvProjectInjection:
 
         on_disk = json.loads((tmp_config_dir / "config.json").read_text())
         assert on_disk["default_project"] == ""
+
+
+class TestBackupOnSave:
+    """Tests for the config.json.bak safety net written before every rewrite (issue #477)."""
+
+    def _project(self, name: str = "P") -> ProjectConfig:
+        return ProjectConfig(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+            project_name=name,
+        )
+
+    def test_first_save_creates_no_backup(self, tmp_config_dir: Path) -> None:
+        """With no pre-existing config there is nothing to back up."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.save(AppConfig(projects={"a": self._project()}))
+
+        assert not (tmp_config_dir / "config.json.bak").exists()
+
+    def test_save_backs_up_previous_state(self, tmp_config_dir: Path) -> None:
+        """The backup holds the pre-rewrite state, not the freshly written one."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.save(AppConfig(projects={"a": self._project("First")}))
+        store.save(AppConfig(projects={"a": self._project("First"), "b": self._project("Second")}))
+
+        backup = json.loads((tmp_config_dir / "config.json.bak").read_text())
+        assert set(backup["projects"]) == {"a"}
+        current = json.loads((tmp_config_dir / "config.json").read_text())
+        assert set(current["projects"]) == {"a", "b"}
+
+    def test_backup_has_owner_only_permissions(self, tmp_config_dir: Path) -> None:
+        """The backup contains tokens, so it must be 0600 like config.json."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.save(AppConfig(projects={"a": self._project()}))
+        store.save(AppConfig(projects={}))
+
+        mode = stat.S_IMODE(os.stat(tmp_config_dir / "config.json.bak").st_mode)
+        assert mode == 0o600
+
+
+class TestFailedSaveLeavesNoArtifact:
+    """A failed save must never leave an empty config.json or a stray temp file (issue #477)."""
+
+    def test_failed_replace_leaves_no_config_or_tmp(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-fix, the lock's O_CREAT left a 0-byte config.json behind on failure."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+
+        def boom(src: str, dst: str) -> None:
+            raise OSError("simulated disk failure")
+
+        monkeypatch.setattr("keboola_agent_cli.config_store.os.replace", boom)
+        with pytest.raises(ConfigError, match="Cannot write config file"):
+            store.save(AppConfig())
+
+        assert not (tmp_config_dir / "config.json").exists()
+        assert not (tmp_config_dir / "config.tmp").exists()
+
+    def test_existing_config_survives_failed_save(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed rewrite leaves the previous config.json fully intact."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.save(
+            AppConfig(
+                projects={
+                    "keep": ProjectConfig(
+                        stack_url="https://connection.keboola.com",
+                        token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+                    )
+                }
+            )
+        )
+
+        def boom(src: str, dst: str) -> None:
+            raise OSError("simulated disk failure")
+
+        monkeypatch.setattr("keboola_agent_cli.config_store.os.replace", boom)
+        with pytest.raises(ConfigError):
+            store.save(AppConfig())
+
+        loaded = ConfigStore(config_dir=tmp_config_dir).load()
+        assert "keep" in loaded.projects
+
+
+class TestTransaction:
+    """Tests for the exclusive lock held across load -> mutate -> save (issue #477)."""
+
+    def _project(self) -> ProjectConfig:
+        return ProjectConfig(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        )
+
+    def test_mutations_inside_transaction_are_reentrant(self, tmp_config_dir: Path) -> None:
+        """Nested load()/save() inside a transaction must not self-deadlock."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        with store.transaction():
+            store.add_project("a", self._project())
+            store.add_project("b", self._project())
+
+        loaded = store.load()
+        assert set(loaded.projects) == {"a", "b"}
+
+    @pytest.mark.skipif(not _HAS_FCNTL, reason="flock is POSIX-only; no locking on Windows")
+    def test_concurrent_add_project_loses_no_updates(self, tmp_config_dir: Path) -> None:
+        """Parallel read-modify-write cycles serialize on the sidecar lock.
+
+        Each thread uses its own ConfigStore instance, mimicking separate
+        kbagent processes. Pre-fix, concurrent load->mutate->save cycles
+        overwrote each other and freshly added projects vanished.
+        """
+        errors: list[Exception] = []
+
+        def add(i: int) -> None:
+            try:
+                ConfigStore(config_dir=tmp_config_dir).add_project(f"p{i}", self._project())
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=add, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        loaded = ConfigStore(config_dir=tmp_config_dir).load()
+        assert set(loaded.projects) == {f"p{i}" for i in range(8)}
+
+
+class TestProjectNotFoundError:
+    """The canonical not-found error names the resolved config path and source (issue #477)."""
+
+    def test_error_names_resolved_path_and_source(self, tmp_config_dir: Path) -> None:
+        store = ConfigStore(config_dir=tmp_config_dir, source="local")
+        with pytest.raises(ConfigError) as excinfo:
+            store.remove_project("ghost")
+
+        message = str(excinfo.value)
+        assert "Project 'ghost' not found" in message
+        assert str(tmp_config_dir / "config.json") in message
+        assert "(source: local)" in message

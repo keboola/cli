@@ -22,6 +22,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 
+from ..config_store import project_not_found_error
 from ..constants import (
     DEFAULT_MCP_INIT_TIMEOUT,
     DEFAULT_MCP_MAX_SESSIONS,
@@ -866,7 +867,9 @@ class McpService(BaseService):
                 )
 
         if alias not in config.projects:
-            raise ConfigError(f"Project '{alias}' not found.")
+            raise project_not_found_error(
+                alias, self._config_store.config_path, self._config_store.source
+            )
 
         return alias, config.projects[alias]
 

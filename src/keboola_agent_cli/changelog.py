@@ -24,6 +24,31 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.70.1": [
+        "Fix: config.json reliability hardening (issue #477). Every rewrite now first copies the "
+        "previous config.json to `config.json.bak` (0600, same directory), so stored project "
+        "tokens are recoverable if the config is ever lost or clobbered -- no more re-entering "
+        "tokens by hand. The backup is best-effort and never blocks the save.",
+        "Fix: file locking moved from config.json itself to a sidecar `config.json.lock`. "
+        "Pre-fix, `save()` opened config.json with O_CREAT to lock it, so a save that failed "
+        "before the atomic rename left behind an empty 0-byte config.json that broke the next "
+        "load with 'not valid JSON'. A failed save now leaves no artifact at all (the temp file "
+        "is cleaned up too) and the previous config survives intact. Side effect: the Windows "
+        "close-before-replace special case is gone -- the lock fd never points at config.json.",
+        "Fix: config mutations are now transactional. `ConfigStore.transaction()` holds the "
+        "exclusive lock across the whole load -> mutate -> save cycle (reentrant per thread), "
+        "closing the lost-update race where two concurrent kbagent processes doing "
+        "read-modify-write silently dropped each other's changes -- e.g. a freshly added "
+        "project vanishing from config.json when another command saved a stale snapshot. All "
+        "ConfigStore mutation methods, `permissions set/reset`, the default-project pin, and "
+        "the org-metadata backfill now run inside a transaction.",
+        "Improved: `Project '<alias>' not found` errors now name the RESOLVED config file and "
+        "its source, e.g. `Project 'x' not found in /home/u/.kbagent/config.json (source: "
+        "local). Run 'kbagent project list' to see configured projects.` Config resolution is "
+        "cwd- and env-dependent (--config-dir > KBAGENT_CONFIG_DIR > nearest .kbagent/ walking "
+        "up from cwd > global), so two shells can silently talk to different configs; the "
+        "enriched error makes that split-brain visible instead of opaque (issue #477).",
+    ],
     "0.70.0": [
         "BREAKING: Removed `data-app git-branches` and `data-app git-entrypoints` (and their "
         "`kbagent serve` endpoints). The sandboxes-service backend dropped the underlying "

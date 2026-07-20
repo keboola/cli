@@ -249,15 +249,15 @@ def permissions_set(
     require_random_code_confirmation("update permission policy")
 
     config_store: ConfigStore = get_service(ctx, "config_store")
-    config = config_store.load()
-
     policy = PermissionPolicy(
         mode=mode,
         allow=allow or [],
         deny=deny or [],
     )
-    config.permissions = policy
-    config_store.save(config)
+    with config_store.transaction():
+        config = config_store.load()
+        config.permissions = policy
+        config_store.save(config)
 
     if formatter.json_mode:
         formatter.output(
@@ -296,10 +296,10 @@ def permissions_reset(
     require_random_code_confirmation("remove permission policy")
 
     config_store: ConfigStore = get_service(ctx, "config_store")
-    config = config_store.load()
-
-    config.permissions = None
-    config_store.save(config)
+    with config_store.transaction():
+        config = config_store.load()
+        config.permissions = None
+        config_store.save(config)
 
     if formatter.json_mode:
         formatter.output({"status": "ok", "message": "Permission policy removed"})
