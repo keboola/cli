@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,10 @@ def _load_script():
     )
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
+    # Register BEFORE exec: the script's @dataclass under
+    # `from __future__ import annotations` resolves its module via
+    # sys.modules[cls.__module__] at class-creation time.
+    sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
 

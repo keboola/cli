@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -81,11 +82,20 @@ def _render_command(path: tuple[str, ...], cmd: click.Command, ctx: click.Contex
     return lines
 
 
+@dataclass(frozen=True)
+class LeafCommand:
+    """One visible leaf command with the context it renders under."""
+
+    path: tuple[str, ...]
+    command: click.Command
+    ctx: click.Context
+
+
 def _walk(
     group: click.Group, ctx: click.Context, prefix: tuple[str, ...] = ()
-) -> list[tuple[tuple[str, ...], click.Command, click.Context]]:
-    """Collect (path, command, ctx) for every visible leaf, depth-first."""
-    leaves: list[tuple[tuple[str, ...], click.Command, click.Context]] = []
+) -> list[LeafCommand]:
+    """Collect every visible leaf command, depth-first."""
+    leaves: list[LeafCommand] = []
     for name in group.list_commands(ctx):
         cmd = group.get_command(ctx, name)
         if cmd is None or cmd.hidden:
@@ -95,7 +105,7 @@ def _walk(
             with click.Context(cmd, parent=ctx, info_name=name) as sub_ctx:
                 leaves.extend(_walk(cmd, sub_ctx, path))
         else:
-            leaves.append((path, cmd, ctx))
+            leaves.append(LeafCommand(path=path, command=cmd, ctx=ctx))
     return leaves
 
 
@@ -128,8 +138,8 @@ def build_reference() -> str:
                 if group_help:
                     out += [group_help, ""]
                 with click.Context(cmd, parent=root_ctx, info_name=name) as group_ctx:
-                    for path, leaf, leaf_ctx in _walk(cmd, group_ctx, (name,)):
-                        out += _render_command(path, leaf, leaf_ctx)
+                    for leaf in _walk(cmd, group_ctx, (name,)):
+                        out += _render_command(leaf.path, leaf.command, leaf.ctx)
             else:
                 top_level += [_render_command((name,), cmd, root_ctx)]
         if top_level:

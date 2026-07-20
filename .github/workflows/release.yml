@@ -123,7 +123,15 @@ jobs:
         # the released CLI. Downstream consumers (help.keboola.com CLI section,
         # the Claude Code plugin) fetch it pinned to the release tag instead of
         # hand-copying command lists.
+        #
+        # The job checks out the release tag, so a workflow_dispatch backfill
+        # of a tag that predates this script has no generator to run -- skip
+        # instead of failing, or backfills could never attach their wheel.
         run: |
+          if [ ! -f scripts/gen_command_reference.py ]; then
+            echo "scripts/gen_command_reference.py not present at $TAG (pre-existing release backfill); skipping the reference asset."
+            exit 0
+          fi
           tag="$TAG"
           version="${tag#v}"
           uv run --no-project --with "dist/keboola_cli-${version}-py3-none-any.whl" \
@@ -133,5 +141,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # --clobber makes a re-run idempotent (overwrites instead of erroring on
-        # "asset already exists").
-        run: gh release upload "$TAG" dist/*.whl dist/command-reference.md --clobber
+        # "asset already exists"). command-reference.md uploads only when the
+        # generation step produced it (skipped on pre-existing-tag backfills).
+        run: |
+          gh release upload "$TAG" dist/*.whl --clobber
+          if [ -f dist/command-reference.md ]; then
+            gh release upload "$TAG" dist/command-reference.md --clobber
+          fi
