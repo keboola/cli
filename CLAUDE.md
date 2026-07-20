@@ -386,6 +386,14 @@ kbagent feature user-show --project ALIAS --email EMAIL
 kbagent feature user-add --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
 kbagent feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
 
+# token: scoped Storage tokens (Keboola single-bucket-write pattern; acting token needs canManageTokens; secret shown once).
+kbagent token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]
+kbagent token delete --project NAME --token-id ID [--yes]
+kbagent token refresh --project NAME --token-id ID [--yes]
+# SDK (importable Client(url,token)) now exposes create_scoped_token / delete_token / refresh_token /
+# create_stream_source / get_stream_source / list_stream_sources / delete_stream_source: dicts on .raw,
+# typed ScopedTokenResult / StreamSourceResult on the facade. See docs/sdk.md.
+
 # permissions: session write/destructive firewall. The top-level --deny-writes / --deny-destructive
 # flags are the one-shot form; `permissions set` persists a policy (mode allow|deny + allow/deny patterns
 # like cli:write, cli:destructive, tool:write). The agent guards rails against mistakes; not a sandbox.
@@ -586,6 +594,9 @@ kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
 # flow validate: with --project fetches the live schema (full validation; fetch failure ->
 #   semantic-only + note); without --project runs semantic-only + a note. flow schema --full
 #   requires --project (fetches live schema); plain flow schema is the offline YAML template.
+# flow schedule (0.66.1+) also activates the config on the Scheduler Service so the cron fires;
+#   activation failure keeps the config written, sets activated=false + warning, exit stays 0.
+#   flow schedule-remove deregisters from the service before deleting each config.
 # Execute a flow with: kbagent job run --project NAME --component-id keboola.flow --config-id ID
 
 kbagent schedule list [--project NAME ...] [--enabled-only] [--branch ID]

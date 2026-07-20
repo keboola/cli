@@ -11,6 +11,49 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## `token` group mints/rotates/revokes SCOPED Storage tokens; secret shown ONCE (since v0.66.0)
+
+- **`kbagent token create --project P --description D [--bucket-write B ...]
+  [--bucket-read B ...] [--component-access ID ...] [--can-read-all-file-uploads]
+  [--expires-in N]`** mints a NEW Storage token scoped by bucket permissions,
+  `token refresh --token-id ID` rotates the secret in place, `token delete
+  --token-id ID` revokes. All three back the SDK facade
+  (`Client.create_scoped_token` / `refresh_token` / `delete_token`) and the same
+  service layer.
+- **The acting token must carry `canManageTokens`.** Without it the create/refresh
+  `POST /v2/storage/tokens[...]` returns 403. A normal project-admin storage token
+  has it; a narrowly-scoped device token does NOT — you cannot bootstrap tokens
+  from a token you just minted unless you granted it `canManageTokens`.
+- **The secret is a ONE-TIME reveal.** `create` / `refresh` print the token value
+  once (human mode: inside a Rich panel; `--json`: the `token` field). It is never
+  retrievable again — persist only the `id` (to revoke/refresh later) and `expires`.
+  Lost the secret? `token refresh --token-id ID` mints a new one.
+
+## Files-upload permission: `canReadAllFileUploads` gates READING, not the UPLOAD (since v0.66.0)
+
+- **Any valid Storage token can upload its OWN Files.** Uploading is NOT gated by
+  `canReadAllFileUploads` or by `componentAccess`. `canReadAllFileUploads` controls
+  whether the token may *read/list other tokens'* file uploads — it has nothing to
+  do with the upload action itself. `componentAccess` is unrelated to Files entirely
+  (it scopes which components' configs the token may touch).
+- **To scope a DEVICE token that uploads into a bucket, grant
+  `bucketPermissions[<sinkBucket>]=write`** (`token create --bucket-write
+  in.c-otlp-<source>`). That write grant on the destination bucket is the
+  load-bearing scope — not `--component-access`, not `--can-read-all-file-uploads`.
+- Practical enrollment pairing: `stream create-source` provisions the OTLP source +
+  its `in.c-otlp-<source_id>` sink bucket, then `token create --bucket-write
+  in.c-otlp-<source_id> --expires-in 3600` mints exactly the token the device holds.
+
+## `stream create-source` uses a NORMAL Storage token — there is NO master-token gate (since v0.66.0)
+
+- Creating a Data Streams source (`kbagent stream create-source` /
+  `Client.create_stream_source`) authenticates with the ordinary project Storage
+  token — **NOT** a master token. There is **no `stream.api.masterTokenRequired`
+  error code**; do not code against one or tell a user they need a master token.
+- The documented create-time errors are `stream.api.sourceAlreadyExists` (HTTP 409
+  — use `stream create-source --if-not-exists` to make it idempotent) and
+  `stream.api.resourceLimitReached` (HTTP 422 — the project hit its source quota).
+
 ## `sync status` + `doctor` flag plaintext `#`-secrets in synced configs (since v0.55.0)
 
 - **What it catches.** The v0.54.0 fix is forward-looking -- it does NOT
@@ -2267,6 +2310,21 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
 - To inspect or remove schedules: `kbagent flow schedule-remove` deletes all
   scheduler configs that target the flow. Pair it with `--dry-run` to see the
   affected configs (cron + timezone) without calling `delete_config`.
+
+## Flow: `schedule` activates on the Scheduler Service (since v0.66.1)
+
+- `kbagent flow schedule` registers the `keboola.scheduler` config with the
+  **Scheduler Service** (`POST /schedules`) after writing it — writing the
+  Storage config alone leaves the cron trigger dormant. Older versions only
+  wrote the config: a schedule they created shows `state: enabled` but never
+  fires until `flow schedule` is re-run on v0.66.1+ (or the schedule is
+  re-saved in the UI).
+- Activation failure is **non-fatal**: the config stays written, the result
+  carries `activated: false` + a warning, and the exit code stays 0. Typical
+  cause is a Storage token without the schedule-management privilege — re-run
+  with an admin token to activate.
+- `flow schedule-remove` (v0.66.1+) deregisters each schedule from the
+  Scheduler Service before deleting its config, so removal stops the trigger.
 
 ## `search` is a top-level command, not `config search` (since v0.30.0)
 

@@ -648,6 +648,129 @@ class TestFlowSchedule:
         assert call_kwargs["timezone"] == "Europe/Prague"
         assert call_kwargs["enabled"] is False
 
+    def test_schedule_json_includes_activation_result(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.set_flow_schedule.return_value = {
+            "status": "created",
+            "project_alias": "prod",
+            "schedule_id": "sched-99",
+            "schedule_name": "Daily Run (Schedule)",
+            "component_id": "keboola.flow",
+            "config_id": "flow-1",
+            "cron_tab": "0 6 * * *",
+            "timezone": "UTC",
+            "state": "enabled",
+            "activated": False,
+            "branch_id": None,
+            "warnings": ["Schedule config sched-99 was created but could not be activated"],
+        }
+        result = _invoke(
+            store,
+            mock_flow,
+            [
+                "--json",
+                "flow",
+                "schedule",
+                "--project",
+                "prod",
+                "--flow-id",
+                "flow-1",
+                "--cron",
+                "0 6 * * *",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["data"]["activated"] is False
+        assert len(data["data"]["warnings"]) == 1
+
+    def test_schedule_human_mode_prints_activation_warning(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.set_flow_schedule.return_value = {
+            "status": "created",
+            "project_alias": "prod",
+            "schedule_id": "sched-99",
+            "schedule_name": "Daily Run (Schedule)",
+            "component_id": "keboola.flow",
+            "config_id": "flow-1",
+            "cron_tab": "0 6 * * *",
+            "timezone": "UTC",
+            "state": "enabled",
+            "activated": False,
+            "branch_id": None,
+            "warnings": ["could not be activated on the Scheduler Service"],
+        }
+        result = _invoke(
+            store,
+            mock_flow,
+            ["flow", "schedule", "--project", "prod", "--flow-id", "flow-1", "--cron", "0 6 * * *"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "could not be activated" in result.output
+
+    def test_schedule_human_mode_reports_activated(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.set_flow_schedule.return_value = {
+            "status": "created",
+            "project_alias": "prod",
+            "schedule_id": "sched-99",
+            "schedule_name": "Daily Run (Schedule)",
+            "component_id": "keboola.flow",
+            "config_id": "flow-1",
+            "cron_tab": "0 6 * * *",
+            "timezone": "UTC",
+            "state": "enabled",
+            "activated": True,
+            "branch_id": None,
+            "warnings": [],
+        }
+        result = _invoke(
+            store,
+            mock_flow,
+            ["flow", "schedule", "--project", "prod", "--flow-id", "flow-1", "--cron", "0 6 * * *"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "created and activated" in result.output
+
+    def test_schedule_human_mode_reports_deactivated_when_disabled(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.set_flow_schedule.return_value = {
+            "status": "created",
+            "project_alias": "prod",
+            "schedule_id": "sched-99",
+            "schedule_name": "Daily Run (Schedule)",
+            "component_id": "keboola.flow",
+            "config_id": "flow-1",
+            "cron_tab": "0 6 * * *",
+            "timezone": "UTC",
+            "state": "disabled",
+            "activated": True,
+            "branch_id": None,
+            "warnings": [],
+        }
+        result = _invoke(
+            store,
+            mock_flow,
+            [
+                "flow",
+                "schedule",
+                "--project",
+                "prod",
+                "--flow-id",
+                "flow-1",
+                "--cron",
+                "0 6 * * *",
+                "--disabled",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "created and deactivated" in result.output
+        assert "and activated" not in result.output
+
 
 # ---------------------------------------------------------------------------
 # flow schedule-remove
@@ -685,6 +808,27 @@ class TestFlowScheduleRemove:
         data = json.loads(result.output)
         assert data["data"]["deleted_count"] == 1
         assert "component_id" not in mock_flow.remove_flow_schedule.call_args.kwargs
+
+    def test_remove_human_mode_prints_deregistration_warning(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.remove_flow_schedule.return_value = {
+            "status": "removed",
+            "project_alias": "prod",
+            "component_id": "keboola.flow",
+            "config_id": "flow-1",
+            "deleted_schedule_ids": ["sched-1"],
+            "deleted_count": 1,
+            "branch_id": None,
+            "warnings": ["Schedule sched-1 could not be deregistered from the Scheduler Service"],
+        }
+        result = _invoke(
+            store,
+            mock_flow,
+            ["flow", "schedule-remove", "--project", "prod", "--flow-id", "flow-1", "--yes"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "could not be deregistered" in result.output
 
     def test_schedule_remove_dry_run_lists_schedules(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
