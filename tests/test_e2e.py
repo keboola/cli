@@ -7851,10 +7851,10 @@ class TestE2EDataAppLifecycle:
 
     @skip_without_data_app_public
     def test_data_app_git_repo_introspection(self) -> None:
-        """git-repo / git-branches / git-entrypoints against a deployed public app.
+        """git-repo against a deployed public app.
 
-        The three introspection endpoints (sandboxes-service
-        ``/apps/{id}/git-repo/*``) return 409 "no Git repository configured"
+        The git-repo introspection endpoint (sandboxes-service
+        ``GET /apps/{id}/git-repo``) returns 409 "no Git repository configured"
         until the app has been DEPLOYED at least once -- the git block is
         synced from the Storage config into the Data Science app record at
         deploy time. We fire a deploy (no ``--wait``, so we don't block on a
@@ -7910,35 +7910,7 @@ class TestE2EDataAppLifecycle:
         assert repo_data["https_url"] or repo_data["ssh_url"], "expected a clone URL"
         assert "is_managed_git_repo" in repo_data
 
-        _step(4, "git-branches returns commit metadata")
-        branches = _json_ok(
-            _invoke(
-                self.config_dir,
-                ["--json", "data-app", "git-branches", "--project", self.alias, "--app-id", app_id],
-            )
-        )["data"]
-        assert branches["count"] >= 1
-        assert branches["branches"][0]["branch"]
-        assert "author" in branches["branches"][0]
-
-        _step(5, "git-entrypoints returns a (possibly empty) list of root .py files")
-        entry = _json_ok(
-            _invoke(
-                self.config_dir,
-                [
-                    "--json",
-                    "data-app",
-                    "git-entrypoints",
-                    "--project",
-                    self.alias,
-                    "--app-id",
-                    app_id,
-                ],
-            )
-        )["data"]
-        assert isinstance(entry["entrypoints"], list)
-
-        _step(6, "git-credentials on an external repo lists no managed credentials")
+        _step(4, "git-credentials on an external repo lists no managed credentials")
         cred_res = _invoke(
             self.config_dir,
             ["--json", "data-app", "git-credentials", "--project", self.alias, "--app-id", app_id],

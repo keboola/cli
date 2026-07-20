@@ -24,6 +24,14 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.70.0": [
+        "BREAKING: Removed `data-app git-branches` and `data-app git-entrypoints` (and their "
+        "`kbagent serve` endpoints). The sandboxes-service backend dropped the underlying "
+        "`GET /apps/{id}/git-repo/branches` and `/git-repo/entrypoints` endpoints -- they cannot "
+        "work for managed git repos and will be reworked later via git-service. This CLI was the "
+        "sole remaining consumer. `data-app git-repo` (clone-URL introspection) and the "
+        "`git-credentials` / `git-credentials-create` commands are unchanged.",
+    ],
     "0.69.0": [
         "New: `kbagent search --regex` opts into regex mode on the global-search endpoint "
         "(DMD-1716). Forwards `mode=regex` to the Storage API -- a case-insensitive whole-term "
