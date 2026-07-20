@@ -9317,6 +9317,37 @@ class TestE2EMcpParityCommands:
             assert "global-search" in err["message"]
         # If feature is enabled, results may or may not be empty; both are valid.
 
+    def test_search_regex_returns_results_or_feature_gate_error(self) -> None:
+        """`--regex` (mode=regex) obeys the same feature-gate-aware contract:
+        results OR a clean FEATURE_NOT_ENABLED error -- never a raw 4xx."""
+        result = self._run_ok("search", ".*", "--regex", "--project", self.alias, "--limit", "5")
+        data = result["data"]
+        assert "results" in data
+        assert "errors" in data
+        assert "stats" in data
+
+        if data["errors"]:
+            err = data["errors"][0]
+            assert err["error_code"] == "FEATURE_NOT_ENABLED", err
+            assert "global-search" in err["message"]
+        else:
+            # Regex matches entity names only -- matched_columns is always empty here.
+            for row in data["results"]:
+                assert row.get("matched_columns", []) == []
+
+    def test_search_regex_with_config_based_is_usage_error(self) -> None:
+        """`--regex` + `--search-type config-based` fails fast (exit 2)."""
+        result = self._run(
+            "search",
+            ".*",
+            "--regex",
+            "--search-type",
+            "config-based",
+            "--project",
+            self.alias,
+        )
+        assert result.exit_code == 2
+
     # ------------------------------------------------------------------
     # config oauth-url (master-token gate)
     # ------------------------------------------------------------------

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.errors import ConfigError
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services.search_service import (
     SearchService,
@@ -343,6 +344,8 @@ class TestSearchServiceConfigBased:
         assert result["results"][0]["id"] == "123"
         assert result["results"][0]["name"] == "My Extractor"
         assert result["results"][0]["component_id"] == "keboola.ex-db-snowflake"
+        # Uniform JSON shape: config-based results also carry matched_columns.
+        assert result["results"][0]["matched_columns"] == []
 
     def test_config_based_empty_result(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path, {"prod": {"token": TEST_TOKEN}})
@@ -509,3 +512,62 @@ class TestDataAppPostFilter:
         result = service.search(query="x", item_types=["config", "data-app"])
 
         assert len(result["results"]) == 2
+
+
+class TestSearchRegexThreading:
+    """regex flag is forwarded to client.global_search on the textual path."""
+
+    def test_regex_true_forwarded_to_client(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path, {"prod": {}})
+        mock_client = _make_mock_client()
+        service = SearchService(config_store=store, client_factory=lambda url, tok: mock_client)
+
+        service.search(query=".*orders.*", search_type="textual", regex=True)
+
+        _, kwargs = mock_client.global_search.call_args
+        assert kwargs["regex"] is True
+
+    def test_regex_defaults_false(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path, {"prod": {}})
+        mock_client = _make_mock_client()
+        service = SearchService(config_store=store, client_factory=lambda url, tok: mock_client)
+
+        service.search(query="orders", search_type="textual")
+
+        _, kwargs = mock_client.global_search.call_args
+        assert kwargs["regex"] is False
+
+    def test_regex_with_config_based_raises_config_error(self, tmp_path: Path) -> None:
+        """Validated in the service so both the CLI and REST /search inherit it."""
+        store = _make_store(tmp_path, {"prod": {}})
+        mock_client = _make_mock_client()
+        service = SearchService(config_store=store, client_factory=lambda url, tok: mock_client)
+
+        with pytest.raises(ConfigError, match="config-based"):
+            service.search(query=".*orders.*", search_type="config-based", regex=True)
+
+        mock_client.global_search.assert_not_called()
+
+
+class TestNormaliseMatchedColumns:
+    """_normalise_item surfaces matchedColumns as matched_columns."""
+
+    def test_matched_columns_parsed(self) -> None:
+        item = {
+            "type": "table",
+            "id": "in.c-main.orders",
+            "name": "orders",
+            "matchedColumns": ["email", "name"],
+        }
+        result = _normalise_item("prod", item)
+        assert result["matched_columns"] == ["email", "name"]
+
+    def test_matched_columns_absent_defaults_empty(self) -> None:
+        item = {"type": "table", "id": "in.c-main.orders", "name": "orders"}
+        result = _normalise_item("prod", item)
+        assert result["matched_columns"] == []
+
+    def test_matched_columns_explicit_null_defaults_empty(self) -> None:
+        item = {"type": "table", "id": "in.c-main.orders", "name": "orders", "matchedColumns": None}
+        result = _normalise_item("prod", item)
+        assert result["matched_columns"] == []

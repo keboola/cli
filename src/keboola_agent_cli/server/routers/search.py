@@ -18,6 +18,7 @@ def search(
     type: list[str] | None = Query(None),
     search_type: str = "textual",
     limit: int = 50,
+    regex: bool = False,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Search tables, buckets, configs and flows across one or more projects. Mirrors `kbagent search`."""
@@ -27,4 +28,5 @@ def search(
         item_types=type,
         search_type=search_type,
         limit=limit,
+        regex=regex,
     )
