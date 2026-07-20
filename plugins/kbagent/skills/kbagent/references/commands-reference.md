@@ -203,9 +203,10 @@ Lifecycle for `keboola.data-apps`. Combines Storage API (config body, git block,
 - `data-app git-credentials --project NAME --app-id ID` (since 0.63.3) -- list the credentials of the app's MANAGED git repo (`id`, `type`, `permissions`, `name`, `owner_admin_id`, `created_at`). The secret is NEVER returned here. Needs an admin storage token; external repos have none.
 - `data-app git-credentials-create --project NAME --app-id ID --type ssh_key|http_token --permissions readOnly|readWrite [--public-key KEY | --public-key-file PATH] [--name LABEL] [--yes]` (since 0.63.3) -- mint a git credential for the app's MANAGED git repo. `ssh_key` requires a public key; `http_token` returns a ONE-TIME secret (shown once, never retrievable again -- mirrors `data-app password`). Needs an admin storage token. Apps from `data-app create --git-repo` are EXTERNAL => 409 `no managed Git repository`. Confirmation unless `--yes`/`--json`. For a managed-repo app this credential authenticates YOUR `git push` of the code; the deploy itself uses the platform's injected clone credentials -- no further wiring needed.
 
-## MCP Tools
-- `tool list [--project NAME] [--branch ID]` -- list available MCP tools (multi_project annotation)
-- `tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]` -- call MCP tool (read = all projects, write = single). `--input` accepts inline JSON, `@file.json`, or `-` (stdin)
+## MCP Tools (DEPRECATED since v0.74.0 -- epic #390)
+Every catalog tool has a native command; `tool list` prints a `cli_equivalent` column and `tool call` warns with the exact replacement. The group will be removed after the deprecation window. Prefer native commands in all new workflows.
+- `tool list [--project NAME] [--branch ID]` -- list available MCP tools (multi_project annotation + `cli_equivalent` since 0.74.0)
+- `tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]` -- call MCP tool (read = all projects, write = single). `--input` accepts inline JSON, `@file.json`, or `-` (stdin). Emits a deprecation warning naming the native equivalent (stderr in human mode, additive `deprecation` key in `--json`)
 
 ## SQL Transformations (since v0.73.0)
 Ports the MCP `create_sql_transformation` / `update_sql_transformation` tools (#396). See [transformation-workflow.md](transformation-workflow.md) for the show-before-edit recipe.

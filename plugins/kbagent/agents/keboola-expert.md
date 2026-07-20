@@ -228,7 +228,7 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
   dirs; `is_disabled: true` in `_config.yml` = config disabled (absent =
   enabled); a `never_fetched` warning on diff/push = run `sync pull` first.
   `sync status` is local-only -- audit real drift with `sync diff`.
-- **MCP passthrough is deprecating; firewall is fail-closed** (0.73.0+):
+- **MCP passthrough is DEPRECATED (0.74.0+); firewall fail-closed since 0.73.0**:
   prefer native parity commands over `tool call` -- `docs query`,
   `config examples`, `semantic-layer schema`, `component sync-action`,
   `transformation create|show|edit`, `flow examples`; `workspace query`

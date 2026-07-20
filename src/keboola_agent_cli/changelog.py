@@ -24,6 +24,23 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.74.0": [
+        "MCP passthrough deprecation (#478 phase 2, epic #390): `tool call` / `tool list` "
+        "/ `agent --type mcp_tool` are now formally deprecated in favor of native commands. "
+        "Nothing breaks yet -- everything keeps working through the deprecation window.",
+        "`tool call` warns with the EXACT native replacement for the tool being called "
+        "(stderr in human mode; additive `deprecation` key in the `--json` envelope). "
+        "`tool list` gains a `cli_equivalent` column/field sourced from the new parity map.",
+        "New: `src/keboola_agent_cli/mcp_parity.py` -- the tool->command parity map as code, "
+        "with offline tests pinning every entry to a registered CLI operation, and a weekly "
+        "`mcp-parity-canary` GitHub workflow (`make parity-check`) that diffs the live "
+        "keboola-mcp-server catalog against it so a new upstream tool turns the canary red "
+        "instead of silently widening the gap.",
+        "`agent create/update/test --type mcp_tool` warn and point at `--type cli_command` "
+        "with the native command; existing mcp_tool tasks keep running unchanged.",
+        "Serve: `/mcp/tools*` routes are marked deprecated in OpenAPI "
+        "(`/mcp/server-status` stays -- it reports embedded-server health).",
+    ],
     "0.73.0": [
         "MCP parity + fail-closed firewall (#478 phase 0, epic #390 phase 1): six native "
         "commands port the remaining keboola-mcp-server tools, and MCP tool classification "

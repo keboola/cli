@@ -2,6 +2,11 @@
 
 Thin CLI layer: parses arguments, calls McpService, formats output.
 No business logic belongs here.
+
+The whole ``tool`` group is DEPRECATED (epic #390 phase 2): every MCP tool
+has a native kbagent command (see ``mcp_parity.MCP_TOOL_PARITY``). Both
+subcommands surface the deprecation -- human mode on stderr, JSON mode via
+an additive ``deprecation`` key -- without changing behavior.
 """
 
 import json
@@ -12,6 +17,7 @@ import typer
 
 from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, PermissionDeniedError
+from ..mcp_parity import deprecation_message, native_equivalent
 from ..output import OutputFormatter, format_tool_result, format_tools_table
 from ._helpers import (
     EXIT_PERMISSION_DENIED,
@@ -24,6 +30,13 @@ from ._helpers import (
 )
 
 tool_app = typer.Typer(help="MCP tools - interact with Keboola via MCP server")
+
+# Generic deprecation banner for `tool list` (epic #390 phase 2). Per-tool
+# messages for `tool call` come from mcp_parity.deprecation_message().
+TOOL_LIST_DEPRECATION = (
+    "The MCP passthrough is deprecated (epic #390); every tool has a native "
+    "command -- see the cli_equivalent column."
+)
 
 
 @tool_app.callback(invoke_without_command=True)
@@ -80,7 +93,11 @@ def tool_list(
         help="Development branch ID (requires --project or active branch)",
     ),
 ) -> None:
-    """List available MCP tools from the keboola-mcp-server."""
+    """List available MCP tools from the keboola-mcp-server.
+
+    DEPRECATED (epic #390): every tool maps to a native kbagent command --
+    see the cli_equivalent column in the output.
+    """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "mcp_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -105,10 +122,20 @@ def tool_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    # Enrich each tool with its native CLI equivalent (epic #390). Done in the
+    # command layer on purpose: the service dict stays byte-identical to what
+    # the MCP server reports; cli_equivalent / deprecation are additive keys.
+    for tool in result.get("tools", []):
+        entry = native_equivalent(tool.get("name", ""))
+        tool["cli_equivalent"] = entry.command if entry is not None else ""
+
     if formatter.json_mode:
+        result["deprecation"] = TOOL_LIST_DEPRECATION
         formatter.output(result)
     else:
         format_tools_table(formatter.console, result)
+        if result.get("tools"):
+            formatter.console.print(f"[bold yellow]{TOOL_LIST_DEPRECATION}[/bold yellow]")
         emit_project_warnings(formatter, result)
 
 
@@ -133,6 +160,9 @@ def tool_call(
     ),
 ) -> None:
     """Call an MCP tool on keboola-mcp-server.
+
+    DEPRECATED (epic #390): prefer the native kbagent command for the tool
+    (run `kbagent tool list` and read the cli_equivalent column).
 
     Read tools (list_*, get_*, search, docs_query, find_*) run across ALL
     connected projects in parallel and return aggregated results.
@@ -160,6 +190,12 @@ def tool_call(
         except PermissionDeniedError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.PERMISSION_DENIED)
             raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
+
+    # Deprecation surface (epic #390): stderr warning in human mode (never
+    # pollutes stdout); JSON mode injects the message into the success
+    # envelope below instead (error paths carry no deprecation key).
+    deprecation = deprecation_message(tool_name)
+    formatter.warning(deprecation)
 
     validate_branch_requires_project(formatter, branch, project)
 
@@ -215,6 +251,7 @@ def tool_call(
         raise typer.Exit(code=exit_code) from None
 
     if formatter.json_mode:
+        result["deprecation"] = deprecation
         formatter.output(result)
     else:
         format_tool_result(formatter.console, result)

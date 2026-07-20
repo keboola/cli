@@ -1,5 +1,12 @@
 # MCP Tools Workflow
 
+> **DEPRECATED (since v0.74.0, epic #390).** The MCP passthrough (`tool list`,
+> `tool call`, `agent --type mcp_tool`) is on a removal track: every catalog
+> tool has a native CLI command. Run `kbagent tool list` and use the
+> `cli_equivalent` column, or see the parity map in
+> `src/keboola_agent_cli/mcp_parity.py`. Prefer native commands in ALL new
+> workflows; this document remains only for reading existing setups.
+
 MCP tools let you interact with Keboola components directly -- creating configs,
 running components, fetching schemas -- through the keboola-mcp-server.
 
