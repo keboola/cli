@@ -955,6 +955,7 @@ _FIELD_TYPE_MAP: dict[str, str] = {
     "bigint": "integer",
     "smallint": "integer",
     "tinyint": "integer",
+    "int64": "integer",  # BigQuery
     # decimals
     "decimal": "decimal",
     "numeric": "decimal",
@@ -963,6 +964,8 @@ _FIELD_TYPE_MAP: dict[str, str] = {
     "double": "decimal",
     "real": "decimal",
     "money": "decimal",
+    "float64": "decimal",  # BigQuery
+    "bignumeric": "decimal",  # BigQuery
     # booleans
     "boolean": "boolean",
     "bool": "boolean",

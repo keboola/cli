@@ -165,6 +165,30 @@ class TestClassifyFieldRole:
     def test_plain_dimension_default(self) -> None:
         assert _classify_field_role("USER_NAME", "STRING") == "dimension"
 
+    def test_numeric_basetype_measure_regression(self) -> None:
+        # Regression: NUMERIC is Keboola's basetype for Snowflake/BigQuery
+        # decimals. It used to be absent from the numeric whitelist, so every
+        # NUMERIC measure column was misclassified as a dimension.
+        assert _classify_field_role("TOTAL_REVENUE", "NUMERIC") == "measure"
+
+    def test_bigquery_native_numeric_types_are_measures(self) -> None:
+        # BigQuery native type names (surfaced when types are read straight
+        # from the warehouse) must classify like their Keboola basetypes.
+        assert _classify_field_role("COUNT_ORDERS", "INT64") == "measure"
+        assert _classify_field_role("REVENUE", "FLOAT64") == "measure"
+        assert _classify_field_role("PRICE", "BIGNUMERIC") == "measure"
+
+    def test_date_typed_column_is_timestamp_regardless_of_name(self) -> None:
+        # A DATE/TIMESTAMP column is temporal even when its name carries none
+        # of the timestamp tokens (e.g. a bare "date" column).
+        assert _classify_field_role("date", "DATE") == "timestamp"
+        assert _classify_field_role("_timestamp", "TIMESTAMP") == "timestamp"
+
+    def test_missing_basetype_stays_dimension(self) -> None:
+        # With no basetype (untyped column) the numeric test cannot fire, so a
+        # measure-named column falls back to dimension.
+        assert _classify_field_role("total_revenue", "") == "dimension"
+
 
 # ---------------------------------------------------------------------------
 # Model resolution
@@ -2064,6 +2088,10 @@ class TestNormalizeFieldType:
             ("DATE", "date"),
             ("TIMESTAMP_NTZ", "datetime"),
             ("VARIANT", "json"),
+            # BigQuery native type names.
+            ("INT64", "integer"),
+            ("FLOAT64", "decimal"),
+            ("BIGNUMERIC", "decimal"),
             # Unknown types fall through to `"string"` — safest default.
             ("CUSTOM_UDT", "string"),
             ("geography", "string"),
