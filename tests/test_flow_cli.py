@@ -272,11 +272,24 @@ class TestFlowSchema:
         data = json.loads(result.output)
         assert "phases" in data["data"]["schema"]
 
-    def test_schema_full_without_project_errors(self, tmp_path: Path) -> None:
+    def test_schema_full_without_project_serves_bundled_snapshot(self, tmp_path: Path) -> None:
+        # Since issue #397 the authoritative conditional-flow JSON Schema is
+        # bundled: --full without --project serves the offline snapshot
+        # (previously exit 2) and tags it with source=bundled.
+        store = _setup_config(tmp_path)
+        result = _invoke(store, MagicMock(), ["--json", "flow", "schema", "--full"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["data"]["format"] == "json-schema"
+        assert payload["data"]["source"] == "bundled"
+        assert "phases" in payload["data"]["schema"]["properties"]
+
+    def test_schema_full_without_project_human_mentions_bundled(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path)
         result = _invoke(store, MagicMock(), ["flow", "schema", "--full"])
-        assert result.exit_code == 2
-        assert "--project" in result.output
+        assert result.exit_code == 0, result.output
+        assert "Bundled" in result.output
+        assert "--project" in result.output  # hint how to get the live schema
 
     def test_schema_full_with_project_dumps_live_schema(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path, {"prod": {}})
