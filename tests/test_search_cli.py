@@ -355,3 +355,153 @@ class TestSearchCommandHuman:
 
         assert result.exit_code == 0
         assert "No results" in result.output
+
+
+class TestSearchRegexFlag:
+    """`--regex` flag wiring + config-based incompatibility."""
+
+    def test_regex_flag_passed_to_service(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _make_store(config_dir, {"prod": {"token": TEST_TOKEN}})
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SearchService") as MockSearchService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = MagicMock(spec=ProjectService)
+            mock_svc = MockSearchService.return_value
+            mock_svc.search.return_value = _make_service_result()
+
+            result = runner.invoke(app, ["search", ".*orders.*", "--regex", "--project", "prod"])
+
+        assert result.exit_code == 0
+        _, kwargs = mock_svc.search.call_args
+        assert kwargs["regex"] is True
+
+    def test_regex_default_false(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _make_store(config_dir, {"prod": {"token": TEST_TOKEN}})
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SearchService") as MockSearchService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = MagicMock(spec=ProjectService)
+            mock_svc = MockSearchService.return_value
+            mock_svc.search.return_value = _make_service_result()
+
+            result = runner.invoke(app, ["search", "orders", "--project", "prod"])
+
+        assert result.exit_code == 0
+        _, kwargs = mock_svc.search.call_args
+        assert kwargs["regex"] is False
+
+    def test_regex_with_config_based_is_usage_error(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _make_store(config_dir, {"prod": {"token": TEST_TOKEN}})
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SearchService"),
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = MagicMock(spec=ProjectService)
+
+            result = runner.invoke(
+                app,
+                ["search", ".*", "--regex", "--search-type", "config-based", "--project", "prod"],
+            )
+
+        assert result.exit_code == 2
+
+
+class TestSearchMatchedColumns:
+    """Matched columns rendering (human table) + JSON passthrough."""
+
+    def _table_result(self) -> dict:
+        return _make_service_result(
+            results=[
+                {
+                    "project_alias": "prod",
+                    "type": "table",
+                    "id": "in.c-main.orders",
+                    "name": "orders",
+                    "component_id": None,
+                    "matched_columns": ["email", "name"],
+                }
+            ]
+        )
+
+    def test_matched_columns_rendered_in_table(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _make_store(config_dir, {"prod": {"token": TEST_TOKEN}})
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SearchService") as MockSearchService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = MagicMock(spec=ProjectService)
+            MockSearchService.return_value.search.return_value = self._table_result()
+
+            result = runner.invoke(app, ["search", "email", "--project", "prod"])
+
+        assert result.exit_code == 0
+        assert "Matched columns" in result.stdout
+        assert "email" in result.stdout
+
+    def test_matched_columns_in_json(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _make_store(config_dir, {"prod": {"token": TEST_TOKEN}})
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SearchService") as MockSearchService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = MagicMock(spec=ProjectService)
+            MockSearchService.return_value.search.return_value = self._table_result()
+
+            result = runner.invoke(app, ["--json", "search", "email", "--project", "prod"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload["data"]["results"][0]["matched_columns"] == ["email", "name"]
+
+    def test_matched_columns_column_hidden_when_no_matches(self, tmp_path: Path) -> None:
+        """The 'Matched columns' column is omitted when no result matched via a column."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _make_store(config_dir, {"prod": {"token": TEST_TOKEN}})
+        plain = _make_service_result(
+            results=[
+                {
+                    "project_alias": "prod",
+                    "type": "table",
+                    "id": "in.c-main.orders",
+                    "name": "orders",
+                    "component_id": None,
+                    "matched_columns": [],
+                }
+            ]
+        )
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SearchService") as MockSearchService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = MagicMock(spec=ProjectService)
+            MockSearchService.return_value.search.return_value = plain
+
+            result = runner.invoke(app, ["search", "orders", "--project", "prod"])
+
+        assert result.exit_code == 0
+        assert "Matched columns" not in result.stdout

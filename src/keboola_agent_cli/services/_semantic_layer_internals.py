@@ -25,6 +25,8 @@ Helpers grouped by feature:
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import os
@@ -807,6 +809,143 @@ def fetch_table_schemas(
     return schemas_by_tid, fetch_errors
 
 
+# ── build: warehouse type resolution (opt-in `--types-workspace`) ────
+
+# Keboola bucket/table identifiers are restricted to this character set. We
+# interpolate them into INFORMATION_SCHEMA SQL, so an identifier containing
+# anything else is rejected rather than escaped -- defense in depth even
+# though the Storage API would never mint such an id.
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+
+
+def build_information_schema_sql(backend: str, bucket_id: str, table_name: str) -> str | None:
+    """Build an ``INFORMATION_SCHEMA.COLUMNS`` query for a table's real types.
+
+    Returns a query projecting ``(column_name, data_type)`` for the given
+    backend, or ``None`` when the backend is unsupported or an identifier
+    contains an unexpected character (see ``_SAFE_IDENTIFIER_RE``).
+    """
+    if not (
+        _SAFE_IDENTIFIER_RE.match(bucket_id or "") and _SAFE_IDENTIFIER_RE.match(table_name or "")
+    ):
+        return None
+    normalized_backend = (backend or "").lower()
+    if normalized_backend == "bigquery":
+        # Keboola maps a bucket to a BigQuery dataset by replacing `.` and `-`
+        # with `_` (e.g. `in.c-Foo-Bar` -> `in_c_Foo_Bar`).
+        dataset = bucket_id.replace(".", "_").replace("-", "_")
+        return (
+            "SELECT column_name, data_type "
+            f"FROM `{dataset}`.INFORMATION_SCHEMA.COLUMNS "
+            f"WHERE table_name = '{table_name}'"
+        )
+    if normalized_backend == "snowflake":
+        # Keboola's Snowflake mapping keeps the bucketId verbatim as the schema
+        # name inside the KEBOOLA database (mirrors ``_derive_fqn``).
+        return (
+            "SELECT COLUMN_NAME AS column_name, DATA_TYPE AS data_type "
+            'FROM "KEBOOLA".INFORMATION_SCHEMA.COLUMNS '
+            f"WHERE TABLE_SCHEMA = '{bucket_id}' AND TABLE_NAME = '{table_name}'"
+        )
+    return None
+
+
+def _parse_information_schema_result(result: dict[str, Any]) -> dict[str, str]:
+    """Extract a ``{column_name: data_type}`` map from an execute_query result.
+
+    Reads the first statement's synthesized ``csv_data`` (always present on the
+    fast inline path), which carries a ``column_name,data_type`` header.
+    """
+    statements = result.get("statements") or []
+    if not statements:
+        return {}
+    csv_data = statements[0].get("csv_data")
+    if not csv_data:
+        return {}
+    type_map: dict[str, str] = {}
+    for row in csv.DictReader(io.StringIO(csv_data)):
+        name = (row.get("column_name") or row.get("COLUMN_NAME") or "").strip()
+        dtype = (row.get("data_type") or row.get("DATA_TYPE") or "").strip()
+        if name and dtype:
+            type_map[name] = dtype
+    return type_map
+
+
+def enrich_schemas_with_workspace_types(
+    *,
+    schemas_by_tid: dict[str, dict[str, Any]],
+    alias: str,
+    resolve_workspace_id: Callable[[str], int | None],
+    execute_query: Callable[..., dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Backfill missing column ``type``s from the warehouse INFORMATION_SCHEMA.
+
+    Alias / linked-bucket tables carry no per-column datatype metadata in
+    Storage -- the types live on the source table -- so the build heuristic
+    sees empty basetypes and classifies every field as ``dimension``. When a
+    workspace is available, query the warehouse for the real types and fill
+    them in on each ``column_details`` entry in place.
+
+    ``resolve_workspace_id`` maps a storage backend (e.g. ``"bigquery"``) to a
+    workspace ID that can run SQL against it -- either a fixed id supplied by
+    the caller, or one auto-picked per backend. Returning ``None`` means no
+    suitable workspace, and the table is reported as unresolved.
+
+    Returns a list of ``{"table_id", "error"}`` for tables that could not be
+    (fully) resolved. These are non-fatal and surfaced in the build result.
+    """
+    unresolved: list[dict[str, str]] = []
+    for tid, detail in schemas_by_tid.items():
+        cols = detail.get("column_details") or []
+        if not any(not col.get("type") for col in cols):
+            continue  # already fully typed (or no columns) -- nothing to do
+        backend = detail.get("backend", "")
+        sql = build_information_schema_sql(
+            backend,
+            detail.get("bucket_id", ""),
+            detail.get("name", "") or tid.split(".")[-1],
+        )
+        if sql is None:
+            unresolved.append(
+                {
+                    "table_id": tid,
+                    "error": f"type resolution unsupported for backend {backend!r}",
+                }
+            )
+            continue
+        workspace_id = resolve_workspace_id(backend)
+        if workspace_id is None:
+            unresolved.append(
+                {
+                    "table_id": tid,
+                    "error": f"no workspace available to read {backend!r} types",
+                }
+            )
+            continue
+        try:
+            result = execute_query(alias, workspace_id, sql)
+        except (KeboolaApiError, ConfigError) as exc:
+            unresolved.append({"table_id": tid, "error": str(exc)})
+            continue
+        type_map = _parse_information_schema_result(result)
+        if not type_map:
+            unresolved.append(
+                {"table_id": tid, "error": "INFORMATION_SCHEMA returned no column types"}
+            )
+            continue
+        for col in cols:
+            if not col.get("type"):
+                dtype = type_map.get(col.get("name", ""))
+                if dtype:
+                    col["type"] = dtype
+        missing = [col.get("name", "") for col in cols if not col.get("type")]
+        if missing:
+            unresolved.append(
+                {"table_id": tid, "error": f"no type found for column(s): {', '.join(missing)}"}
+            )
+    return unresolved
+
+
 def resolve_model_uuid(
     client: Any,
     model_name_or_uuid: str | None,
@@ -955,6 +1094,7 @@ _FIELD_TYPE_MAP: dict[str, str] = {
     "bigint": "integer",
     "smallint": "integer",
     "tinyint": "integer",
+    "int64": "integer",  # BigQuery
     # decimals
     "decimal": "decimal",
     "numeric": "decimal",
@@ -963,6 +1103,8 @@ _FIELD_TYPE_MAP: dict[str, str] = {
     "double": "decimal",
     "real": "decimal",
     "money": "decimal",
+    "float64": "decimal",  # BigQuery
+    "bignumeric": "decimal",  # BigQuery
     # booleans
     "boolean": "boolean",
     "bool": "boolean",

@@ -2,15 +2,27 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Plus, RefreshCw, Trash2, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ApiError, api } from "../api/client";
+import { ConfirmModal } from "../components/ConfirmModal";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
 import type { Project, ProjectStatus } from "../types";
 
+interface BulkDeleteResult {
+  removed: string[];
+  failed: { alias: string; error: string }[];
+  dry_run: boolean;
+}
+
 export function ProjectsPage() {
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [selected, setSelected] = useState<Project | null>(null);
+  const [selectedAliases, setSelectedAliases] = useState<Set<string>>(new Set());
+  // Aliases pending a remove-confirmation (single trash button or bulk action).
+  const [confirmAliases, setConfirmAliases] = useState<string[] | null>(null);
+  // Inline banner for remove failures (partial or total request error).
+  const [removeNotice, setRemoveNotice] = useState<string | null>(null);
 
   const projectsQ = useQuery<{ projects: Project[] }>({
     queryKey: ["projects"],
@@ -29,15 +41,70 @@ export function ProjectsPage() {
     if (statusQ.data) qc.invalidateQueries({ queryKey: ["projects"] });
   }, [statusQ.data, qc]);
 
-  const removeMu = useMutation({
-    mutationFn: (alias: string) => api.delete(`/projects/${encodeURIComponent(alias)}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
-  });
-
   const useMu = useMutation({
     mutationFn: (alias: string) => api.post(`/projects/use/${encodeURIComponent(alias)}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
   });
+
+  const bulkDeleteMu = useMutation({
+    mutationFn: (aliases: string[]) =>
+      api.post<BulkDeleteResult>("/projects/bulk-delete", { aliases }),
+    onSuccess: (res) => {
+      setSelectedAliases(new Set());
+      // The detail pane may be showing a project that was just removed.
+      if (selected && res.removed.includes(selected.alias)) setSelected(null);
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      if (res.failed.length > 0) {
+        const lines = res.failed.map((f) => `${f.alias} (${f.error})`).join(", ");
+        setRemoveNotice(
+          `Removed ${res.removed.length}; ${res.failed.length} failed: ${lines}`,
+        );
+      } else {
+        setRemoveNotice(null);
+      }
+    },
+    onError: (err) => {
+      // A total request failure (network / 5xx) would otherwise be silent --
+      // the modal closes via onSettled with no feedback.
+      setRemoveNotice(err instanceof ApiError ? err.message : (err as Error).message);
+    },
+  });
+
+  const projects = projectsQ.data?.projects ?? [];
+
+  // Keep the selection in sync with the live project list: drop any alias that
+  // no longer exists (e.g. removed in another tab) so stale keys never linger.
+  useEffect(() => {
+    setSelectedAliases((prev) => {
+      const live = new Set(projects.map((p) => p.alias));
+      const next = new Set([...prev].filter((a) => live.has(a)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [projects]);
+
+  const toggleRow = (alias: string, checked: boolean) =>
+    setSelectedAliases((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(alias);
+      else next.delete(alias);
+      return next;
+    });
+
+  const toggleAll = (checked: boolean) =>
+    setSelectedAliases(checked ? new Set(projects.map((p) => p.alias)) : new Set());
+
+  const requestBulkRemove = () => {
+    if (selectedAliases.size === 0) return;
+    setConfirmAliases([...selectedAliases]);
+  };
+
+  const confirmRemove = () => {
+    if (!confirmAliases) return;
+    setRemoveNotice(null);
+    bulkDeleteMu.mutate(confirmAliases, {
+      onSettled: () => setConfirmAliases(null),
+    });
+  };
 
   const statusByAlias = new Map(statusQ.data?.status?.map((s) => [s.alias, s]) ?? []);
 
@@ -48,6 +115,17 @@ export function ProjectsPage() {
         description="Keboola projects registered in this kbagent config."
         actions={
           <>
+            {selectedAliases.size > 0 ? (
+              <button
+                type="button"
+                className="nerd-btn flex items-center gap-1 text-red-400 border-red-700 hover:bg-red-950/40"
+                disabled={bulkDeleteMu.isPending}
+                onClick={requestBulkRemove}
+              >
+                <Trash2 className="w-3 h-3" />{" "}
+                {bulkDeleteMu.isPending ? "Removing..." : "Remove from kbagent"}
+              </button>
+            ) : null}
             <button
               type="button"
               className="nerd-btn flex items-center gap-1"
@@ -65,6 +143,19 @@ export function ProjectsPage() {
           </>
         }
       />
+
+      {removeNotice ? (
+        <div className="flex items-start justify-between gap-2">
+          <ErrorBox message={removeNotice} />
+          <button
+            type="button"
+            className="nerd-btn text-xs shrink-0"
+            onClick={() => setRemoveNotice(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       {showAdd ? (
         <AddProject
@@ -85,9 +176,12 @@ export function ProjectsPage() {
         />
       ) : (
         <DataTable
-          rows={projectsQ.data?.projects ?? []}
+          rows={projects}
           rowKey={(p) => p.alias}
           onRowClick={(p) => setSelected(p)}
+          selectedKeys={selectedAliases}
+          onToggleRow={toggleRow}
+          onToggleAll={toggleAll}
           columns={[
             {
               header: "Alias",
@@ -177,9 +271,7 @@ export function ProjectsPage() {
                     className="nerd-btn text-xs hover:text-red-400 hover:border-red-700"
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (confirm(`Remove project '${p.alias}' from kbagent?`)) {
-                        removeMu.mutate(p.alias);
-                      }
+                      setConfirmAliases([p.alias]);
                     }}
                   >
                     <Trash2 className="w-3 h-3" />
@@ -201,6 +293,30 @@ export function ProjectsPage() {
           </div>
           <ProjectInfo alias={selected.alias} />
         </div>
+      ) : null}
+
+      {confirmAliases ? (
+        <ConfirmModal
+          danger
+          title={
+            confirmAliases.length === 1
+              ? "Remove project from kbagent"
+              : `Remove ${confirmAliases.length} projects from kbagent`
+          }
+          body={
+            <>
+              This only unregisters{" "}
+              {confirmAliases.length === 1 ? "this project" : "these projects"} locally (edits the
+              kbagent config). It does <strong>not</strong> delete the Keboola{" "}
+              {confirmAliases.length === 1 ? "project" : "projects"}.
+            </>
+          }
+          items={confirmAliases}
+          confirmLabel="Remove from kbagent"
+          busy={bulkDeleteMu.isPending}
+          onConfirm={confirmRemove}
+          onCancel={() => setConfirmAliases(null)}
+        />
       ) : null}
     </div>
   );

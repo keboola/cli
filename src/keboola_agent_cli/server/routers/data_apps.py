@@ -338,22 +338,6 @@ def git_repo(
     return registry.data_app_git.get_data_app_git_repo(alias=project, app_id=app_id)
 
 
-@router.get("/{project}/{app_id}/git-repo/branches", summary="List a data app's git branches")
-def git_branches(
-    project: str, app_id: str, registry: ServiceRegistry = Depends(get_registry)
-) -> dict[str, Any]:
-    """List remote branches of the app's git repo. Mirrors `kbagent data-app git-branches`."""
-    return registry.data_app_git.list_data_app_git_branches(alias=project, app_id=app_id)
-
-
-@router.get("/{project}/{app_id}/git-repo/entrypoints", summary="List a data app's git entrypoints")
-def git_entrypoints(
-    project: str, app_id: str, registry: ServiceRegistry = Depends(get_registry)
-) -> dict[str, Any]:
-    """List root-level .py entrypoints. Mirrors `kbagent data-app git-entrypoints`."""
-    return registry.data_app_git.list_data_app_git_entrypoints(alias=project, app_id=app_id)
-
-
 @router.get("/{project}/{app_id}/git-repo/credentials", summary="List managed git credentials")
 def git_credentials(
     project: str, app_id: str, registry: ServiceRegistry = Depends(get_registry)

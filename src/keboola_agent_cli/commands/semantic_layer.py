@@ -335,6 +335,13 @@ def _print_build_result(console: Console, data: dict) -> None:
             console.print(f"  [red]✗[/red] {e['type']} {e['item']} — {e['detail']}")
     if warns:
         console.print(f"\n[bold yellow]Validation: {len(warns)} warning(s)[/bold yellow]")
+    type_errs = data.get("type_resolution_errors") or []
+    if type_errs:
+        console.print(
+            f"\n[bold yellow]Type resolution: {len(type_errs)} table(s) unresolved[/bold yellow]"
+        )
+        for e in type_errs:
+            console.print(f"  [yellow]![/yellow] {e['table_id']} — {e['error']}")
     if data.get("created"):
         console.print(f"\nCreated: {data['created']}")
     elif data.get("dry_run"):
@@ -434,6 +441,24 @@ def semantic_layer_build(
     output: Path | None = typer.Option(
         None, "--output", help="Also write the generated JSON to this file."
     ),
+    types_workspace: int | None = typer.Option(
+        None,
+        "--types-workspace",
+        help=(
+            "Workspace ID used to read real column types from the warehouse "
+            "INFORMATION_SCHEMA for tables whose Storage metadata carries none "
+            "(alias / linked-bucket tables). Without it such tables reach the "
+            "heuristic untyped and every field becomes a dimension."
+        ),
+    ),
+    auto_types_workspace: bool = typer.Option(
+        False,
+        "--auto-types-workspace",
+        help=(
+            "Auto-pick a read-only workspace per backend for column-type "
+            "resolution (instead of passing --types-workspace explicitly)."
+        ),
+    ),
 ) -> None:
     """Build a semantic-layer model from a list of storage tables (non-interactive).
 
@@ -471,6 +496,8 @@ def semantic_layer_build(
         dry_run=dry_run,
         keep_on_failure=keep_on_failure,
         output_path=output,
+        types_workspace_id=types_workspace,
+        auto_resolve_types=auto_types_workspace,
     )
     formatter.output(result, _print_build_result)
 

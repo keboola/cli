@@ -1359,6 +1359,11 @@ class DataAppService(BaseService):
                 "secrets_set": secrets_set,
                 "secrets_unchanged": unchanged,
                 "shadowed_by_runtime": shadowed,
+                # Keys whose ciphertext check failed but were written anyway under
+                # --allow-plaintext-on-encrypt-failure (empty on full encryption).
+                # Surfaces the plaintext leak structurally in --json, not just the
+                # stderr warning above.
+                "plaintext_written": sorted(problems),
                 "config_version_before": old_version,
                 "config_version_after": new_version,
                 "deploy_required": True,

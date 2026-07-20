@@ -473,6 +473,13 @@ class TestFullE2E:
         _step(15, "storage load-file", "upload CSV as file then load into table")
         self._test_load_file(table_id)
 
+        _step(
+            "15.1",
+            "storage create-table --source-table-id + swap-tables",
+            "BigQuery repartition workflow (backend-aware)",
+        )
+        self._test_create_table_from_source(bucket_id, table_id)
+
         # ==============================================================
         # PHASE 4: Config operations (create via API, test via CLI)
         # ==============================================================
@@ -836,6 +843,83 @@ class TestFullE2E:
         table_id = data["data"]["table_id"]
         assert table_id
         return table_id
+
+    def _test_create_table_from_source(self, bucket_id: str, source_table_id: str) -> None:
+        """create-table --source-table-id (+ swap-tables). BigQuery-only feature.
+
+        On a BigQuery project: copy the populated source into a new table with a
+        clustering layout, then swap the two. On any other backend: assert the
+        pre-flight guard rejects the request (exit 2) before issuing the create.
+        """
+        detail = self._run_ok(
+            "storage", "bucket-detail", "--project", self.alias, "--bucket-id", bucket_id
+        )["data"]
+        backend = (detail.get("backend") or detail.get("sql_dialect") or "").lower()
+
+        repart_name = f"{RUN_ID.replace('-', '_')}_repart"
+        repart_id = f"{bucket_id}.{repart_name}"
+
+        if backend != "bigquery":
+            # Pre-flight guard: a non-BigQuery backend fails fast with exit 2 and
+            # never issues the create (no table is left behind).
+            result = self._run(
+                "storage",
+                "create-table",
+                "--project",
+                self.alias,
+                "--bucket-id",
+                bucket_id,
+                "--name",
+                repart_name,
+                "--source-table-id",
+                source_table_id,
+                "--clustering-field",
+                "id",
+            )
+            assert result.exit_code == 2, (
+                f"Expected exit 2 from BigQuery guard, got {result.exit_code}:\n{result.output}"
+            )
+            assert "BigQuery" in result.output
+            return
+
+        # BigQuery: create the repartitioned copy from the populated source.
+        created = self._run_ok(
+            "storage",
+            "create-table",
+            "--project",
+            self.alias,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            repart_name,
+            "--source-table-id",
+            source_table_id,
+            "--clustering-field",
+            "id",
+            "--primary-key",
+            "id",
+        )["data"]
+        assert created["table_id"] == repart_id
+        assert created["source_table_id"] == source_table_id
+
+        # Swap the repartitioned copy into the original table's place. Storage
+        # swap requires a branch; the default branch works.
+        branch_id = self._run_ok("branch", "list", "--project", self.alias)["data"]["branches"][0][
+            "id"
+        ]
+        self._run_ok(
+            "storage",
+            "swap-tables",
+            "--project",
+            self.alias,
+            "--table-id",
+            source_table_id,
+            "--target-table-id",
+            repart_id,
+            "--branch",
+            str(branch_id),
+            "--yes",
+        )
 
     def _test_upload_table(self, table_id: str) -> None:
         """Upload CSV data to the table."""
@@ -7767,10 +7851,10 @@ class TestE2EDataAppLifecycle:
 
     @skip_without_data_app_public
     def test_data_app_git_repo_introspection(self) -> None:
-        """git-repo / git-branches / git-entrypoints against a deployed public app.
+        """git-repo against a deployed public app.
 
-        The three introspection endpoints (sandboxes-service
-        ``/apps/{id}/git-repo/*``) return 409 "no Git repository configured"
+        The git-repo introspection endpoint (sandboxes-service
+        ``GET /apps/{id}/git-repo``) returns 409 "no Git repository configured"
         until the app has been DEPLOYED at least once -- the git block is
         synced from the Storage config into the Data Science app record at
         deploy time. We fire a deploy (no ``--wait``, so we don't block on a
@@ -7826,35 +7910,7 @@ class TestE2EDataAppLifecycle:
         assert repo_data["https_url"] or repo_data["ssh_url"], "expected a clone URL"
         assert "is_managed_git_repo" in repo_data
 
-        _step(4, "git-branches returns commit metadata")
-        branches = _json_ok(
-            _invoke(
-                self.config_dir,
-                ["--json", "data-app", "git-branches", "--project", self.alias, "--app-id", app_id],
-            )
-        )["data"]
-        assert branches["count"] >= 1
-        assert branches["branches"][0]["branch"]
-        assert "author" in branches["branches"][0]
-
-        _step(5, "git-entrypoints returns a (possibly empty) list of root .py files")
-        entry = _json_ok(
-            _invoke(
-                self.config_dir,
-                [
-                    "--json",
-                    "data-app",
-                    "git-entrypoints",
-                    "--project",
-                    self.alias,
-                    "--app-id",
-                    app_id,
-                ],
-            )
-        )["data"]
-        assert isinstance(entry["entrypoints"], list)
-
-        _step(6, "git-credentials on an external repo lists no managed credentials")
+        _step(4, "git-credentials on an external repo lists no managed credentials")
         cred_res = _invoke(
             self.config_dir,
             ["--json", "data-app", "git-credentials", "--project", self.alias, "--app-id", app_id],
@@ -9232,6 +9288,37 @@ class TestE2EMcpParityCommands:
             assert err["error_code"] == "FEATURE_NOT_ENABLED", err
             assert "global-search" in err["message"]
         # If feature is enabled, results may or may not be empty; both are valid.
+
+    def test_search_regex_returns_results_or_feature_gate_error(self) -> None:
+        """`--regex` (mode=regex) obeys the same feature-gate-aware contract:
+        results OR a clean FEATURE_NOT_ENABLED error -- never a raw 4xx."""
+        result = self._run_ok("search", ".*", "--regex", "--project", self.alias, "--limit", "5")
+        data = result["data"]
+        assert "results" in data
+        assert "errors" in data
+        assert "stats" in data
+
+        if data["errors"]:
+            err = data["errors"][0]
+            assert err["error_code"] == "FEATURE_NOT_ENABLED", err
+            assert "global-search" in err["message"]
+        else:
+            # Regex matches entity names only -- matched_columns is always empty here.
+            for row in data["results"]:
+                assert row.get("matched_columns", []) == []
+
+    def test_search_regex_with_config_based_is_usage_error(self) -> None:
+        """`--regex` + `--search-type config-based` fails fast (exit 2)."""
+        result = self._run(
+            "search",
+            ".*",
+            "--regex",
+            "--search-type",
+            "config-based",
+            "--project",
+            self.alias,
+        )
+        assert result.exit_code == 2
 
     # ------------------------------------------------------------------
     # config oauth-url (master-token gate)

@@ -209,6 +209,19 @@ def data_app_secrets_set(
                 style="yellow",
             )
 
+    # Plaintext-on-encrypt-failure fallback -- name the secret key-paths written
+    # in PLAINTEXT (keys only) so the leak is visible. JSON mode carries the same
+    # list on the envelope via plaintext_written, so warn only in human mode.
+    plaintext_written = result.get("plaintext_written")
+    if plaintext_written and not formatter.json_mode:
+        formatter.warning(
+            f"{len(plaintext_written)} secret(s) were written in PLAINTEXT (encryption "
+            f"failed and --allow-plaintext-on-encrypt-failure was set): "
+            f"{', '.join(plaintext_written)}. Rotate these credentials and re-encrypt "
+            f"once the Encryption API is reachable -- config version history retains the "
+            f"plaintext copy."
+        )
+
     if no_hint_next and isinstance(result, dict):
         result.pop("next_step", None)
 

@@ -8,11 +8,10 @@ its hard ceiling, so this distinct concern (the sandboxes-service
 See :class:`~keboola_agent_cli.data_science_client.DataScienceClient` for the
 response-shape gotchas. Two functional groups:
 
-* Repo introspection (git-repo, branches, entrypoints) -- works for any
-  configured repo (managed or external); needs only the project storage token.
-  Returns 409 until the app has been deployed at least once (the git block is
-  synced from the Storage config into the Data Science app record at deploy
-  time).
+* Repo introspection (git-repo) -- works for any configured repo (managed or
+  external); needs only the project storage token. Returns 409 until the app has
+  been deployed at least once (the git block is synced from the Storage config
+  into the Data Science app record at deploy time).
 * Credential management (credentials GET + POST) -- only for a *managed* git
   repo (``app.managedGitRepoId`` set); apps created via
   ``data-app create --git-repo <url>`` are external, so these return 409. Needs
@@ -61,52 +60,6 @@ class DataAppGitService(BaseService):
             "ssh_url": repo.get("sshUrl"),
             "https_url": repo.get("httpsUrl"),
             "is_managed_git_repo": bool(repo.get("isManagedGitRepo", False)),
-        }
-
-    def list_data_app_git_branches(self, alias: str, app_id: str) -> dict[str, Any]:
-        """List the remote branches of a data app's git repository."""
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
-        ds_client = self._ds_client_factory(project.stack_url, project.token)
-        try:
-            branches = ds_client.list_git_branches(app_id)
-        finally:
-            ds_client.close()
-        normalized = [
-            {
-                "branch": b.get("branch", ""),
-                "sha": b.get("sha", ""),
-                "comment": b.get("comment", ""),
-                "author": {
-                    "name": (b.get("author") or {}).get("name", ""),
-                    "email": (b.get("author") or {}).get("email", ""),
-                },
-                "date": b.get("date", ""),
-            }
-            for b in branches
-            if isinstance(b, dict)
-        ]
-        return {
-            "project_alias": alias,
-            "app_id": str(app_id),
-            "branches": normalized,
-            "count": len(normalized),
-        }
-
-    def list_data_app_git_entrypoints(self, alias: str, app_id: str) -> dict[str, Any]:
-        """List root-level ``.py`` entrypoint files of a data app's repo."""
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
-        ds_client = self._ds_client_factory(project.stack_url, project.token)
-        try:
-            entrypoints = ds_client.list_git_entrypoints(app_id)
-        finally:
-            ds_client.close()
-        return {
-            "project_alias": alias,
-            "app_id": str(app_id),
-            "entrypoints": entrypoints,
-            "count": len(entrypoints),
         }
 
     def list_data_app_git_credentials(self, alias: str, app_id: str) -> dict[str, Any]:

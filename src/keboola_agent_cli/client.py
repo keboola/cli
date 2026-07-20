@@ -596,6 +596,7 @@ class KeboolaClient(BaseHttpClient):
         branch_id: int | None = None,
         limit: int = 50,
         offset: int = 0,
+        regex: bool = False,
     ) -> dict[str, Any]:
         """Search for items by name across the project using the Storage API global-search endpoint.
 
@@ -614,6 +615,9 @@ class KeboolaClient(BaseHttpClient):
             branch_id: Required when ``branch_type="development"``; ignored otherwise.
             limit: Maximum number of results to return (default 50, max 100).
             offset: Pagination offset (default 0).
+            regex: When True, run the query as a case-insensitive whole-term
+                   regular expression over entity names (Storage API
+                   ``mode=regex``). Omitted from the request otherwise.
 
         Returns:
             Raw API response dict with keys ``"all"`` (total count) and
@@ -630,6 +634,8 @@ class KeboolaClient(BaseHttpClient):
         }
         if types:
             params["types[]"] = types
+        if regex:
+            params["mode"] = "regex"
         if branch_type == "development" and branch_id is not None:
             params["branchTypes[]"] = "development"
             params["branchIds[]"] = branch_id
@@ -1729,19 +1735,38 @@ class KeboolaClient(BaseHttpClient):
         self,
         bucket_id: str,
         name: str,
-        columns: list[dict[str, Any]],
+        columns: list[dict[str, Any]] | None = None,
         primary_key: list[str] | None = None,
         branch_id: int | None = None,
+        source: dict[str, Any] | None = None,
+        time_partitioning: dict[str, Any] | None = None,
+        range_partitioning: dict[str, Any] | None = None,
+        clustering: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a new table with typed columns (async, waits for completion).
+
+        Hits the typed ``tables-definition`` endpoint. Exactly one of ``columns``
+        or ``source`` is expected (the caller enforces this): with ``columns`` an
+        empty table is created from the definition; with ``source`` (BigQuery
+        only) the new table's schema is derived from the source table and its
+        rows are copied into the requested partition/clustering layout.
 
         Args:
             bucket_id: Target bucket ID (e.g. "in.c-my-bucket").
             name: Table name.
             columns: List of column dicts with "name" and "definition.type" keys,
                      e.g. [{"name": "id", "definition": {"type": "INTEGER"}}].
+                     Omitted when ``source`` is set (forbidden together).
             primary_key: Optional list of column names for the primary key.
             branch_id: If set, create table in a specific dev branch.
+            source: Optional ``{"tableId": str, "branchId"?: int}`` to copy the new
+                    table from (BigQuery only). Forbidden together with ``columns``.
+            time_partitioning: Optional ``{"type": str, "field"?: str,
+                    "expirationMs"?: str}`` (BigQuery). Mutually exclusive with
+                    ``range_partitioning``.
+            range_partitioning: Optional ``{"field": str, "range": {"start": str,
+                    "end": str, "interval": str}}`` (BigQuery).
+            clustering: Optional ``{"fields": list[str]}`` (BigQuery).
 
         Returns:
             Completed storage job results dict.
@@ -1751,8 +1776,19 @@ class KeboolaClient(BaseHttpClient):
         body: dict[str, Any] = {
             "name": name,
             "primaryKeysNames": primary_key or [],
-            "columns": columns,
         }
+        # Send exactly one of columns / source. The Storage API rejects supplying
+        # both; the service layer enforces this before we get here.
+        if columns is not None:
+            body["columns"] = columns
+        if source is not None:
+            body["source"] = source
+        if time_partitioning is not None:
+            body["timePartitioning"] = time_partitioning
+        if range_partitioning is not None:
+            body["rangePartitioning"] = range_partitioning
+        if clustering is not None:
+            body["clustering"] = clustering
         response = self._request("POST", f"{prefix}/buckets/{safe_id}/tables-definition", json=body)
         job = self._wait_for_storage_job(response.json())
         return job.get("results", {})

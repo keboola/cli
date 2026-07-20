@@ -24,6 +24,55 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.70.0": [
+        "BREAKING: Removed `data-app git-branches` and `data-app git-entrypoints` (and their "
+        "`kbagent serve` endpoints). The sandboxes-service backend dropped the underlying "
+        "`GET /apps/{id}/git-repo/branches` and `/git-repo/entrypoints` endpoints -- they cannot "
+        "work for managed git repos and will be reworked later via git-service. This CLI was the "
+        "sole remaining consumer. `data-app git-repo` (clone-URL introspection) and the "
+        "`git-credentials` / `git-credentials-create` commands are unchanged.",
+    ],
+    "0.69.0": [
+        "New: `kbagent search --regex` opts into regex mode on the global-search endpoint "
+        "(DMD-1716). Forwards `mode=regex` to the Storage API -- a case-insensitive whole-term "
+        "match against ENTITY NAMES only (`report` does not match `monthly_report`; use "
+        "`.*report.*`). Textual-search only: combining it with `--search-type config-based` is a "
+        "usage error. Regex does NOT match column names, so `matched_columns` is always empty "
+        "under `--regex`.",
+        "New: textual search results now report which column names matched (DMD-1717). Table "
+        "results matched via a column name surface the API's `matchedColumns`: a `matched_columns` "
+        "field on every result in `--json` (always present; `[]` when the entity name itself "
+        'matched) and a "Matched columns" column in the human table, shown only when at least one '
+        "result actually matched via a column, so it never adds an empty column.",
+        "Note: the Global Search re-architecture's rebuilt index / ranking upgrade is server-side "
+        "and flows through the CLI unchanged. Both new contracts were verified live against a "
+        "real stack before release.",
+    ],
+    "0.68.0": [
+        "New: bulk-remove projects from the `kbagent serve` Web UI. The Projects table now has "
+        "per-row checkboxes plus a select-all header, and a `Remove from kbagent` action that "
+        "unregisters several projects at once. A styled confirmation modal lists the affected "
+        "aliases and makes clear this only edits the local kbagent config -- it does NOT delete "
+        "the Keboola projects. Backed by a new `POST /projects/bulk-delete` REST endpoint "
+        "(`ProjectService.bulk_remove_projects`) with per-alias error accumulation and a "
+        "`dry_run` mode; one bad alias never blocks the rest.",
+    ],
+    "0.67.0": [
+        "New: `storage create-table` can copy from an existing table and apply a "
+        "BigQuery partition/clustering layout. `--source-table-id` (with optional "
+        "`--source-branch-id`) derives the new table's schema from a source table and "
+        "copies its rows into the requested layout -- the supported way to repartition "
+        "a populated BigQuery table, then flip it into place with `storage swap-tables`. "
+        "`--column` is now optional and mutually exclusive with `--source-table-id`. "
+        "New layout flags (also usable on a plain columns create): "
+        "`--time-partitioning-type`/`-field`/`-expiration-ms`, `--range-partitioning-field`/"
+        "`-start`/`-end`/`-interval`, and `--clustering-field` (repeatable). Time and range "
+        "partitioning are mutually exclusive. Mirrors keboola/connection#7697.",
+        "Note: the source-copy and partition/clustering flags are BigQuery-only. "
+        "`create-table` runs a one-call backend pre-flight (token verify) when any of them "
+        "is used and fails fast with a clear message on a non-BigQuery project, before "
+        "issuing the create. A plain columns create is unaffected (no extra call).",
+    ],
     "0.66.1": [
         "Fix (#479): `flow schedule` now activates the schedule on the Scheduler Service, so the cron "
         "trigger actually fires. Previously the command only wrote the `keboola.scheduler` Storage "

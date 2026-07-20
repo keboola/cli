@@ -1577,6 +1577,33 @@ One project failing does not block others. Check the `errors` array:
 See [storage-types-workflow.md](storage-types-workflow.md) for the full
 type inventory and examples.
 
+## `storage create-table --source-table-id` + partition/clustering are BigQuery-only (since 0.66.0)
+
+- **`--source-table-id` copies an existing table instead of building from `--column`.**
+  The new table's schema is derived from the source and its rows are copied into the
+  requested partition/clustering layout (`INSERT … SELECT`, preserving NOT NULL + primary
+  key). This is the supported way to repartition a populated BigQuery table; promote it
+  with `storage swap-tables`. Mirrors keboola/connection#7697.
+- **`--column` and `--source-table-id` are mutually exclusive.** Supplying both, or
+  neither, exits 2 (`INVALID_ARGUMENT`) before any API call. `--not-null` / `--default`
+  attach to `--column` definitions, so they are also rejected in source mode.
+- **Partition/clustering flags also work on a plain `--column` create** (BigQuery only):
+  `--time-partitioning-type` (DAY/HOUR/MONTH/YEAR; required when any `--time-partitioning-*`
+  is set) + optional `--time-partitioning-field`/`-expiration-ms`; OR
+  `--range-partitioning-field`/`-start`/`-end`/`-interval` (all four required together).
+  **Range bounds are strings** in the API, and time vs range partitioning are mutually
+  exclusive (BigQuery allows one partitioning kind per table).
+- **BigQuery-only with a pre-flight guard.** When any source/partition/clustering flag is
+  used, `create-table` verifies the project backend (one token-verify call) and fails fast
+  with exit 2 + a clear `… require a BigQuery backend` message on a non-BigQuery project,
+  before issuing the create. A plain `--column` create makes no extra call. The connection
+  API also rejects these server-side (422 `storage.tables.backendDoesNotSupportSourceTable`,
+  `sourceAliasNotPersisted`, `sourceTableMissingReferencedColumn`; 404
+  `sourceTableNotFound`) as a backstop.
+- **Aliases and linked-bucket tables are valid sources.** A persisted alias (materialized
+  view) is queryable; a non-persisted alias (project lacks `bigquery-persisted-alias-views`)
+  is rejected 422.
+
 ## Legacy fake-branch storage warning on `--branch` writes (since 0.25.2)
 
 - **What it is.** Projects without the `storage-branches` feature flag use
@@ -2665,31 +2692,32 @@ forking `kbagent`, and never needs those super-admin credentials. `KBC_TOKEN`
 (storage) is retained, and `cli_command` tasks are unchanged. (Private advisory
 GHSA-wm54-r2hh-cxm9.)
 
-## `data-app git-repo` / `git-branches` / `git-entrypoints` need a deployed app (since v0.63.3)
+## `data-app git-repo` needs a deployed app (since v0.63.3)
 
-The three git-repo introspection commands (sandboxes-service
-`GET /apps/{id}/git-repo`, `/branches`, `/entrypoints`) return **409 "App has no
-Git repository configured"** until the app has been **deployed at least once** --
-even though `data-app create --git-repo <url>` already wrote the git block into
-the Storage config. The git block is synced from the Storage config into the
-Data Science app record at *deploy* time; a `--no-deploy` app has no git repo
-from the service's point of view. Fix: run `kbagent data-app deploy` (the sync
-happens before the container build, so it works even if the build later fails),
-then re-run the git-repo command.
+The git-repo introspection command (sandboxes-service
+`GET /apps/{id}/git-repo`) returns **409 "App has no Git repository
+configured"** until the app has been **deployed at least once** -- even though
+`data-app create --git-repo <url>` already wrote the git block into the Storage
+config. The git block is synced from the Storage config into the Data Science
+app record at *deploy* time; a `--no-deploy` app has no git repo from the
+service's point of view. Fix: run `kbagent data-app deploy` (the sync happens
+before the container build, so it works even if the build later fails), then
+re-run the git-repo command.
+
+> **Removed in v0.66.1:** `data-app git-branches` and `data-app git-entrypoints`
+> were dropped -- the sandboxes-service backend removed the underlying
+> `/git-repo/branches` and `/git-repo/entrypoints` endpoints (they cannot work
+> for managed git repos and will be reworked via git-service). Use `git-repo`
+> for clone-URL introspection.
 
 Other behaviors of this family:
 
-- `git-branches` returns a **raw top-level JSON array** of
-  `{branch, sha, comment, author{...}, date}` (not wrapped in
-  `{branches: [...]}`); `git-entrypoints` returns a **raw `array<string>`** of
-  root-level filenames. The service hardcodes the entrypoint extension to `.py`,
-  so non-Python entrypoints are never listed.
 - `git-credentials` / `git-credentials-create` only apply to a **managed** git
   repo (`app.managedGitRepoId` set). Apps created via
   `data-app create --git-repo <url>` are **external**, so
   `git-credentials-create` returns **409 "no managed Git repository"** for them.
   These two endpoints also need an **admin** storage token
-  (`CanManageAppRepoCredentials`), unlike the read trio which need only the
+  (`CanManageAppRepoCredentials`), unlike `git-repo` which needs only the
   ordinary project storage token.
 - For `--type http_token`, the create response carries a **one-time secret**
   that is printed once and can never be retrieved again (mirrors
@@ -2714,9 +2742,9 @@ The end-to-end flow that is **verified to deploy and serve** (tic-tac-toe on
 3. `git push https://<token>@<managed-host>/.../app-<id>.git <local>:main`
    (token authenticates as the username, Gitea-style; or as the password with any
    username).
-4. `data-app git-repo` / `git-branches` / `git-entrypoints` introspect the repo
-   immediately -- **unlike external repos, no prior deploy is needed** (managed
-   resolves via `managedGitRepoId`, returns `is_managed_git_repo: true` + URLs).
+4. `data-app git-repo` introspects the repo immediately -- **unlike external
+   repos, no prior deploy is needed** (managed resolves via `managedGitRepoId`,
+   returns `is_managed_git_repo: true` + URLs).
 5. `data-app deploy` -> clones + builds + runs. **No credential wiring needed:**
    the platform injects the `git clone` credentials at deploy time (per the
    sandboxes-service `tests/e2e/scripts/testManagedGitRepo.sh` contract), so a
@@ -2884,3 +2912,28 @@ things to internalise:
   new/empty target. Re-running clone with the same `--target-dir` is idempotent
   (`no_changes`), because after the first push the local manifest carries the new
   ULIDs that match the target remote.
+
+### `search --regex` matches entity names only; `matched_columns` is textual-only (since v0.67.0)
+
+`kbagent search --regex` opts into the Storage API `mode=regex` global-search
+path. Three things verified live against a real stack (2026-07-02):
+- Regex is a **whole-term, case-insensitive** match — `report` will NOT match
+  `monthly_report`; you must write `.*report.*`. An invalid pattern returns a
+  clean 400 (`storage.globalSearch.invalidQuery`), surfaced as an API error.
+- Regex runs over **entity names only**, not column names. So `matched_columns`
+  is **always empty under `--regex`** — column matching is a textual-mode signal.
+- `--regex` is textual-only; combining it with `--search-type config-based` is a
+  usage error (exit 2 from the CLI; HTTP 400 from the `serve` REST `/search`).
+- On a stack whose Storage API predates the regex mode, the unknown `mode=regex`
+  query param may be silently ignored — the search then runs as plain fulltext
+  over the literal pattern string (typically 0 results) with no error or
+  warning. An unexpectedly empty `--regex` result on an older stack is NOT
+  proof that nothing matches; retry without `--regex` to distinguish.
+
+In plain textual mode, a `table` that matched via one of its column names carries
+`matched_columns: ["col", ...]` in `--json` output and a populated "Matched
+columns" column in the human table. The key is present on **every** result for
+shape consistency and is empty (`[]`) when the table matched on its own name
+(only column matches populate it). The human table adds
+the "Matched columns" column **only when at least one result actually matched via
+a column** -- a plain search that hit nothing by column shows no extra column.

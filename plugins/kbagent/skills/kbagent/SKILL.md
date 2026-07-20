@@ -38,7 +38,7 @@ description: >
   data-app golden rule, pre-flight repo check, repo structure check,
   managed git repo, use-managed-git-repo, Keboola-hosted repo,
   git-credentials, git-credentials-create, git-repo,
-  git-branches, git-entrypoints, deploy from git, managed repository,
+  deploy from git, managed repository,
   data app runs, deploy attempts, deploy failure reason, why deploy stopped,
   local workspace, project directory, kbagent init,
   invite user, invite member, project invitation, manage members,
@@ -189,8 +189,6 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List a data app's recent deployment attempts (runs), newest first | `kbagent data-app runs --project PROJECT --app-id APP-ID` |
 | Pre-flight check that a git repo follows the Keboola data-app Golden Rule | `kbagent data-app validate-repo --git-repo GIT-REPO` |
 | Show the clone URLs of a data app's configured git repository | `kbagent data-app git-repo --project PROJECT --app-id APP-ID` |
-| List the remote branches of a data app's git repository | `kbagent data-app git-branches --project PROJECT --app-id APP-ID` |
-| List root-level .py entrypoint files of a data app's git repository | `kbagent data-app git-entrypoints --project PROJECT --app-id APP-ID` |
 | List the credentials of a data app's MANAGED git repository | `kbagent data-app git-credentials --project PROJECT --app-id APP-ID` |
 | Create a git credential (SSH key or HTTP token) for a MANAGED repo | `kbagent data-app git-credentials-create --project PROJECT --app-id APP-ID --type CRED-TYPE --permissions PERMISSIONS` |
 | Encrypt and write app-runtime secrets to the linked Storage config | `kbagent data-app secrets-set --project PROJECT --app-id APP-ID` |
@@ -206,7 +204,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List storage tables from one or more projects | `kbagent storage tables` |
 | Show detailed table info including columns and types | `kbagent storage table-detail --project PROJECT --table-id TABLE-ID` |
 | Create a new storage bucket | `kbagent storage create-bucket --project PROJECT --stage STAGE --name NAME` |
-| Create a new storage table with typed columns | `kbagent storage create-table --project PROJECT --bucket-id BUCKET-ID --name NAME --column COLUMN` |
+| Create a new storage table with typed columns | `kbagent storage create-table --project PROJECT --bucket-id BUCKET-ID --name NAME` |
 | Upload a CSV file into a storage table | `kbagent storage upload-table --project PROJECT --table-id TABLE-ID --file FILE` |
 | Export a storage table to a local CSV file | `kbagent storage download-table --project PROJECT --table-id TABLE-ID` |
 | Delete one or more storage tables | `kbagent storage delete-table --project PROJECT --table-id TABLE-ID` |
