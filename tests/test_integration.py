@@ -309,3 +309,46 @@ class TestCheckErrorCodesGuard:
                     violations.append(kw.value.value)
 
         assert violations == [], "Enum usage should not be flagged as a violation"
+
+
+@pytest.mark.integration
+class TestErrorCodesDocCompleteness:
+    """Verify the enum-vs-docs/error-codes.md completeness guard."""
+
+    @staticmethod
+    def _load_script():
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "check_error_codes", Path("scripts") / "check_error_codes.py"
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_doc_matches_enum(self) -> None:
+        """docs/error-codes.md documents exactly the ErrorCode members."""
+        mod = self._load_script()
+        assert mod._enum_members() == mod._documented_codes()
+
+    def test_detects_missing_code(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Removing one documented code from the doc makes the check fail."""
+        mod = self._load_script()
+        doc_lines = mod.DOC_PATH.read_text(encoding="utf-8").splitlines(keepends=True)
+        pruned = [line for line in doc_lines if not line.startswith("| `INVALID_TOKEN` |")]
+        assert len(pruned) == len(doc_lines) - 1
+        stripped_doc = tmp_path / "error-codes.md"
+        stripped_doc.write_text("".join(pruned), encoding="utf-8")
+        monkeypatch.setattr(mod, "DOC_PATH", stripped_doc)
+        assert mod._check_doc_completeness() is False
+
+    def test_detects_stale_code(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A doc row for a code that is not in the enum makes the check fail."""
+        mod = self._load_script()
+        doc = mod.DOC_PATH.read_text(encoding="utf-8")
+        doc += "| `NO_SUCH_CODE_EVER` | Planted stale row |\n"
+        stale_doc = tmp_path / "error-codes.md"
+        stale_doc.write_text(doc, encoding="utf-8")
+        monkeypatch.setattr(mod, "DOC_PATH", stale_doc)
+        assert mod._check_doc_completeness() is False

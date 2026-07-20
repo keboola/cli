@@ -24,13 +24,52 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
-    "0.66.1": [
+    "0.70.0": [
         "BREAKING: Removed `data-app git-branches` and `data-app git-entrypoints` (and their "
         "`kbagent serve` endpoints). The sandboxes-service backend dropped the underlying "
         "`GET /apps/{id}/git-repo/branches` and `/git-repo/entrypoints` endpoints -- they cannot "
         "work for managed git repos and will be reworked later via git-service. This CLI was the "
         "sole remaining consumer. `data-app git-repo` (clone-URL introspection) and the "
         "`git-credentials` / `git-credentials-create` commands are unchanged.",
+    ],
+    "0.68.0": [
+        "New: bulk-remove projects from the `kbagent serve` Web UI. The Projects table now has "
+        "per-row checkboxes plus a select-all header, and a `Remove from kbagent` action that "
+        "unregisters several projects at once. A styled confirmation modal lists the affected "
+        "aliases and makes clear this only edits the local kbagent config -- it does NOT delete "
+        "the Keboola projects. Backed by a new `POST /projects/bulk-delete` REST endpoint "
+        "(`ProjectService.bulk_remove_projects`) with per-alias error accumulation and a "
+        "`dry_run` mode; one bad alias never blocks the rest.",
+    ],
+    "0.67.0": [
+        "New: `storage create-table` can copy from an existing table and apply a "
+        "BigQuery partition/clustering layout. `--source-table-id` (with optional "
+        "`--source-branch-id`) derives the new table's schema from a source table and "
+        "copies its rows into the requested layout -- the supported way to repartition "
+        "a populated BigQuery table, then flip it into place with `storage swap-tables`. "
+        "`--column` is now optional and mutually exclusive with `--source-table-id`. "
+        "New layout flags (also usable on a plain columns create): "
+        "`--time-partitioning-type`/`-field`/`-expiration-ms`, `--range-partitioning-field`/"
+        "`-start`/`-end`/`-interval`, and `--clustering-field` (repeatable). Time and range "
+        "partitioning are mutually exclusive. Mirrors keboola/connection#7697.",
+        "Note: the source-copy and partition/clustering flags are BigQuery-only. "
+        "`create-table` runs a one-call backend pre-flight (token verify) when any of them "
+        "is used and fails fast with a clear message on a non-BigQuery project, before "
+        "issuing the create. A plain columns create is unaffected (no extra call).",
+    ],
+    "0.66.1": [
+        "Fix (#479): `flow schedule` now activates the schedule on the Scheduler Service, so the cron "
+        "trigger actually fires. Previously the command only wrote the `keboola.scheduler` Storage "
+        "config; the schedule looked `enabled` but never ran until re-saved in the UI. The command "
+        "now calls `POST /schedules` on the Scheduler Service after the config upsert (also for "
+        "`--disabled`, which deregisters the trigger). An activation failure -- e.g. a token without "
+        "the schedule-management privilege -- keeps the config written, reports `activated: false` + "
+        "a warning, and exits 0. Schedules created by older kbagent versions stay dormant until "
+        "`flow schedule` is re-run on 0.66.1+.",
+        "Fix (#479): `flow schedule-remove` now deregisters each schedule from the Scheduler Service "
+        "(`DELETE /configurations/{id}`) before deleting its Storage config, so removed schedules "
+        "stop firing. Deregistration failures other than 404 are surfaced as warnings and do not "
+        "block the config deletion.",
     ],
     "0.66.0": [
         "New: device-enrollment primitives on the importable library -- a hosted Data App can now mint "

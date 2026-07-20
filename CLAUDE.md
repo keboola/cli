@@ -328,7 +328,8 @@ kbagent storage bucket-detail --project NAME --bucket-id ID [--branch ID]
 kbagent storage tables [--project NAME ...] [--bucket-id ID] [--branch ID]
 kbagent storage table-detail --project NAME --table-id ID [--branch ID]
 kbagent storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
-kbagent storage create-table --project NAME --bucket-id ID --name NAME --column COL:TYPE[(length)] [...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--branch ID] [--if-not-exists]
+kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
+# --column XOR --source-table-id (0.66.0+, BigQuery only): --source-table-id copies an existing table's data into the requested partition/clustering layout (schema derived from source) -> swap into place with swap-tables. Partition/clustering flags work in both modes (BigQuery only); time vs range partitioning are mutually exclusive. A non-BigQuery project fails fast (pre-flight backend check).
 kbagent storage upload-table --project NAME --table-id ID --file PATH [--incremental] [--branch ID]
 kbagent storage download-table --project NAME --table-id ID [--output FILE] [--columns COL ...] [--limit N] [--where-column COL --where-value VAL ... [--where-operator eq|neq]] [--changed-since WHEN] [--changed-until WHEN] [--branch ID]
 kbagent storage add-column --project NAME --table-id ID --column COL:TYPE[(length)] [--not-null] [--default VALUE] [--branch ID]
@@ -591,6 +592,9 @@ kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
 # flow validate: with --project fetches the live schema (full validation; fetch failure ->
 #   semantic-only + note); without --project runs semantic-only + a note. flow schema --full
 #   requires --project (fetches live schema); plain flow schema is the offline YAML template.
+# flow schedule (0.66.1+) also activates the config on the Scheduler Service so the cron fires;
+#   activation failure keeps the config written, sets activated=false + warning, exit stays 0.
+#   flow schedule-remove deregisters from the service before deleting each config.
 # Execute a flow with: kbagent job run --project NAME --component-id keboola.flow --config-id ID
 
 kbagent schedule list [--project NAME ...] [--enabled-only] [--branch ID]
