@@ -139,6 +139,16 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent component detail --component-id ID [--project NAME]
     Show component docs, config schema, and examples count.
 
+  kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--config-id ID [--row-id ID] | --config-data JSON|@file|-) [--branch ID] [--timeout N]
+    (since 0.73.0) Run a synchronous component action (testConnection, getTables,
+    ...) on the dedicated sync-actions service. ACTION_NAME is freeform --
+    valid names are component-defined (see component detail synchronous_actions).
+    --row-id shallow-merges the row over the root config at TOP level only
+    (row parameters/storage keys replace root wholesale -- NOT a deep merge;
+    MCP run_sync_action parity). --config-data sends explicit configData
+    verbatim and skips the config fetch. Response shape is action-specific
+    (opaque pass-through).
+
 ### Configuration Browsing
 
   kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID] [--include-rows]
@@ -207,6 +217,12 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [-i] [-r] [--branch ID]
     Search config bodies for string/regex. Reports match location in JSON tree. Branch-aware.
+
+  kbagent config examples --component-id ID [--project NAME] [--row]
+    (since 0.73.0) Sample root/row configurations for a component, straight from
+    the AI-service component detail (same data the UI shows). --row limits to
+    row examples. --json emits {{component_id, root_examples, row_examples}} --
+    structured dicts, ideal as a starting point before config new / row-create.
 
   kbagent config variables-set --project NAME --component-id ID --config-id ID --var KEY=VALUE [--var ...] [--replace] [--variables-id ID] [--values-id ID] [--branch ID] [--dry-run]
     Assign variables to any config. Auto-creates the backing keboola.variables + default row

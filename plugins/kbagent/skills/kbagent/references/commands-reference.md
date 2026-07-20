@@ -63,6 +63,8 @@ Requires a **super-admin** Manage API token (same kind as `org setup`). Same def
 - `feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]` -- disable a feature on a user (`DELETE /manage/users/{email}/features/{name}`).
 
 ## Component Discovery
+- `component sync-action ACTION_NAME --component-id ID --project ALIAS (--config-id ID [--row-id ID] | --config-data JSON|@file|-) [--branch ID] [--timeout N]` (since 0.73.0) -- run a synchronous component action (`testConnection`, `getTables`, ...) on the `sync-actions.{stack}` service. `ACTION_NAME` is freeform (component-defined; discover via `component detail` `synchronous_actions`). `--row-id` shallow-merges the row over the root config at TOP level only (row `parameters`/`storage` replace root wholesale -- NOT deep merge; MCP `run_sync_action` parity). `--config-data` sends explicit `configData` verbatim. Response is action-specific pass-through. Ports the `run_sync_action` MCP tool.
+- `config examples --component-id ID [--project NAME] [--row]` (since 0.73.0) -- sample root/row configurations from the AI-service component detail. `--json` emits `{component_id, root_examples, row_examples}`; `--row` limits to row examples. Ports the `get_config_examples` MCP tool.
 - `component list [--project NAME] [--type TYPE] [--query "text"]` -- list/search components (AI-powered with `--query`)
 - `component detail --component-id ID [--project NAME]` -- show component schema, docs URL, examples
 

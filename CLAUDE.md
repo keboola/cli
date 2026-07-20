@@ -468,6 +468,12 @@ kbagent data-app git-credentials-create --project NAME --app-id ID --type ssh_ke
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
+kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--config-id ID [--row-id ID] | --config-data JSON|@file|-) [--branch ID] [--timeout N]
+# sync-action (0.73.0+): POST sync-actions.{stack}/actions; ACTION_NAME freeform (component-defined,
+#   e.g. testConnection/getTables); --row-id shallow-merges row over root at TOP level only (row
+#   parameters/storage keys replace root wholesale, MCP parity -- NOT deep merge); --config-data
+#   sends explicit configData verbatim (skips fetch); branchId omitted from body for production.
+kbagent config examples --component-id ID [--project NAME] [--row]
 kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR] [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run --allow-plaintext-on-encrypt-failure]
 
 # sync: GitOps -- configs as local files. init/pull/push/diff are filesystem-local (no serve REST surface).
