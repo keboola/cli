@@ -1,6 +1,10 @@
 {
   "name": "kbagent",
+<<<<<<< HEAD
   "version": "0.70.0",
+=======
+  "version": "0.69.0",
+>>>>>>> origin/main
   "description": "AI-friendly interface to Keboola Connection projects — explore configs, jobs, lineage, call MCP tools, manage dev branches, and debug SQL in workspaces",
   "author": {
     "name": "Keboola",

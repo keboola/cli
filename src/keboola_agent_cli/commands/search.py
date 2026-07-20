@@ -69,6 +69,17 @@ def search_command(
         max=100,
         help="Maximum number of results per project (textual search only, 1-100).",
     ),
+    regex: bool = typer.Option(
+        False,
+        "--regex",
+        "-r",
+        help=(
+            "Run the query as a regular expression (opt-in). Case-insensitive "
+            "whole-term match against entity names only (not column names): "
+            "'report' will NOT match 'monthly_report' -- use '.*report.*'. "
+            "Textual search only."
+        ),
+    ),
 ) -> None:
     """Search for items across one or more Keboola projects.
 
@@ -113,6 +124,14 @@ def search_command(
         )
         raise typer.Exit(code=2)
 
+    # Regex mode exists only on the global-search (textual) endpoint.
+    if regex and search_type == "config-based":
+        formatter.error(
+            message="--regex is only supported with textual search (not --search-type config-based).",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+
     try:
         result = service.search(
             query=query,
@@ -120,6 +139,7 @@ def search_command(
             item_types=item_type or None,
             search_type=search_type,
             limit=limit,
+            regex=regex,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -131,14 +151,16 @@ def search_command(
     if formatter.json_mode:
         formatter.output(result)
     else:
-        _format_search_results(formatter.console, result, query, search_type)
+        _format_search_results(formatter.console, result, query, search_type, regex)
         emit_project_warnings(formatter, result)
 
 
 # ── Human-readable output ──────────────────────────────────────────────────
 
 
-def _format_search_results(console: Any, result: dict, query: str, search_type: str) -> None:
+def _format_search_results(
+    console: Any, result: dict, query: str, search_type: str, regex: bool = False
+) -> None:
     """Render search results as a Rich table with stats header."""
     stats = result.get("stats", {})
     projects_searched = stats.get("projects_searched", 0)
@@ -146,6 +168,8 @@ def _format_search_results(console: Any, result: dict, query: str, search_type: 
     errors = result.get("errors", [])
 
     mode_label = "config-based" if search_type == "config-based" else "textual"
+    if regex:
+        mode_label += ", regex"
     console.print(
         f'[bold]Search results[/bold] for [yellow]"{query}"[/yellow] '
         f"([dim]{mode_label}[/dim]) — "
@@ -159,20 +183,28 @@ def _format_search_results(console: Any, result: dict, query: str, search_type: 
         console.print("[dim]No results found.[/dim]")
         return
 
+    # Hide the column unless something actually matched via a column name.
+    show_matched = any(row.get("matched_columns") for row in rows)
+
     table = Table(show_header=True, header_style="bold blue", show_lines=False)
     table.add_column("Project", style="cyan", no_wrap=True)
     table.add_column("Type", style="magenta", no_wrap=True)
     table.add_column("ID", style="green", overflow="fold")
     table.add_column("Name", overflow="fold")
     table.add_column("Component ID", style="dim", overflow="fold")
+    if show_matched:
+        table.add_column("Matched columns", style="yellow", overflow="fold")
 
     for row in rows:
-        table.add_row(
+        cells = [
             row.get("project_alias", ""),
             row.get("type", ""),
             row.get("id", ""),
             row.get("name", ""),
             row.get("component_id") or "",
-        )
+        ]
+        if show_matched:
+            cells.append(", ".join(row.get("matched_columns") or []))
+        table.add_row(*cells)
 
     console.print(table)

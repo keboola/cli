@@ -253,10 +253,14 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Cross-Project Search
 
-  kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--limit N]
+  kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--limit N]
     Search for items across one or more projects. Textual mode (default) searches item names
     via the Storage API global-search endpoint. Config-based mode scans full configuration JSON bodies.
     --type is repeatable. --limit applies per project in textual mode (1-100, default 50).
+    --regex (0.67.0+): opt-in regex mode. Case-insensitive whole-term match on ENTITY NAMES only
+    ('report' != 'monthly_report'; use '.*report.*'). Textual only (error with --search-type config-based);
+    regex does NOT match columns, so matched_columns stays empty under --regex. In textual mode, tables
+    matched via a column name carry matched_columns (JSON) / a "Matched columns" column.
 
 ### Job History
 

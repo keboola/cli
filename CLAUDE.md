@@ -316,7 +316,12 @@ kbagent config row-update --project NAME --component-id ID --config-id ID --row-
 kbagent config row-delete --project NAME --component-id ID --config-id ID --row-id ID [--branch ID] [--yes]
 kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL]
 
-kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--limit N]
+kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--limit N]
+# --regex (0.67.0+): opt-in regex mode (mode=regex). Case-insensitive whole-term match on ENTITY NAMES
+#   only ('report' != 'monthly_report'; use '.*report.*'). Textual only -- error with --search-type
+#   config-based. Regex does NOT match column names, so matched_columns is always empty under --regex.
+#   In textual mode, table results matched via a column name carry matched_columns (JSON) / a
+#   "Matched columns" table column.
 
 kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
 kbagent job detail --project NAME --job-id ID

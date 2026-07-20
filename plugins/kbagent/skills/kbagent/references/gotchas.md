@@ -2912,3 +2912,28 @@ things to internalise:
   new/empty target. Re-running clone with the same `--target-dir` is idempotent
   (`no_changes`), because after the first push the local manifest carries the new
   ULIDs that match the target remote.
+
+### `search --regex` matches entity names only; `matched_columns` is textual-only (since v0.67.0)
+
+`kbagent search --regex` opts into the Storage API `mode=regex` global-search
+path. Three things verified live against a real stack (2026-07-02):
+- Regex is a **whole-term, case-insensitive** match — `report` will NOT match
+  `monthly_report`; you must write `.*report.*`. An invalid pattern returns a
+  clean 400 (`storage.globalSearch.invalidQuery`), surfaced as an API error.
+- Regex runs over **entity names only**, not column names. So `matched_columns`
+  is **always empty under `--regex`** — column matching is a textual-mode signal.
+- `--regex` is textual-only; combining it with `--search-type config-based` is a
+  usage error (exit 2 from the CLI; HTTP 400 from the `serve` REST `/search`).
+- On a stack whose Storage API predates the regex mode, the unknown `mode=regex`
+  query param may be silently ignored — the search then runs as plain fulltext
+  over the literal pattern string (typically 0 results) with no error or
+  warning. An unexpectedly empty `--regex` result on an older stack is NOT
+  proof that nothing matches; retry without `--regex` to distinguish.
+
+In plain textual mode, a `table` that matched via one of its column names carries
+`matched_columns: ["col", ...]` in `--json` output and a populated "Matched
+columns" column in the human table. The key is present on **every** result for
+shape consistency and is empty (`[]`) when the table matched on its own name
+(only column matches populate it). The human table adds
+the "Matched columns" column **only when at least one result actually matched via
+a column** -- a plain search that hit nothing by column shows no extra column.
