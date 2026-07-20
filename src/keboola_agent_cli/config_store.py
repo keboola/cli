@@ -394,6 +394,22 @@ class ConfigStore:
             config.default_project = alias
         self.save(config)
 
+    def ensure_removable(self, alias: str) -> None:
+        """Validate that ``alias`` can be removed, without mutating anything.
+
+        Raises the same errors a real ``remove_project`` would: ``ConfigError``
+        if the alias does not exist, or if it is an ephemeral ``__env__``
+        project synthesized from the environment. Shared by the live remove and
+        the bulk dry-run preview so both paths stay in sync (read-only).
+
+        Raises:
+            ConfigError: If the alias is missing or ephemeral.
+        """
+        config = self.load()
+        if alias not in config.projects:
+            raise ConfigError(f"Project '{alias}' not found.")
+        self._reject_ephemeral_mutation(config, alias, "removed")
+
     def remove_project(self, alias: str) -> None:
         """Remove a project from the configuration.
 
@@ -403,7 +419,8 @@ class ConfigStore:
             alias: The project alias to remove.
 
         Raises:
-            ConfigError: If the alias does not exist.
+            ConfigError: If the alias does not exist, or is an ephemeral
+                ``__env__`` project.
         """
         config = self.load()
         if alias not in config.projects:

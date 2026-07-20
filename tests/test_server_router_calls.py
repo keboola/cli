@@ -914,3 +914,73 @@ def test_data_app_runs_endpoint_calls_service(tmp_path: Path) -> None:
 
     assert res.status_code == 200, res.text
     data_app_svc.list_app_runs.assert_called_once_with(PROJECT, APP_ID, limit=3)
+
+
+# ---------------------------------------------------------------------------
+# projects.py  POST /projects/bulk-delete
+# Service: project.bulk_remove_projects(aliases=..., dry_run=...)
+# ---------------------------------------------------------------------------
+
+
+def test_bulk_delete_projects_passes_aliases(tmp_path: Path) -> None:
+    """POST /projects/bulk-delete must call ProjectService.bulk_remove_projects."""
+    project_svc = MagicMock()
+    project_svc.bulk_remove_projects.return_value = {
+        "removed": ["a", "b"],
+        "failed": [],
+        "dry_run": False,
+    }
+    registry = _mock_registry(project=project_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/projects/bulk-delete",
+            headers=AUTH,
+            json={"aliases": ["a", "b"]},
+        )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["removed"] == ["a", "b"]
+    project_svc.bulk_remove_projects.assert_called_once_with(aliases=["a", "b"], dry_run=False)
+
+
+def test_bulk_delete_projects_forwards_dry_run(tmp_path: Path) -> None:
+    """The dry_run flag in the body must reach the service."""
+    project_svc = MagicMock()
+    project_svc.bulk_remove_projects.return_value = {
+        "removed": ["a"],
+        "failed": [],
+        "dry_run": True,
+    }
+    registry = _mock_registry(project=project_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/projects/bulk-delete",
+            headers=AUTH,
+            json={"aliases": ["a"], "dry_run": True},
+        )
+
+    assert res.status_code == 200, res.text
+    project_svc.bulk_remove_projects.assert_called_once_with(aliases=["a"], dry_run=True)
+
+
+def test_bulk_delete_route_not_shadowed_by_alias_delete(tmp_path: Path) -> None:
+    """The literal /projects/bulk-delete POST must not be swallowed by /{alias}.
+
+    A DELETE /{alias} exists; the bulk route is a POST to a literal path, so it
+    must resolve to bulk_remove_projects, never remove_project('bulk-delete').
+    """
+    project_svc = MagicMock()
+    project_svc.bulk_remove_projects.return_value = {"removed": [], "failed": [], "dry_run": False}
+    registry = _mock_registry(project=project_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post("/projects/bulk-delete", headers=AUTH, json={"aliases": []})
+
+    assert res.status_code == 200, res.text
+    project_svc.bulk_remove_projects.assert_called_once()
+    project_svc.remove_project.assert_not_called()
