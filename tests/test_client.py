@@ -2167,6 +2167,114 @@ class TestConfigRowMethods:
             assert excinfo.value.status_code == 404
 
 
+class TestConfigIsDisabledField:
+    """isDisabled form-field contract on create_config / update_config (issue #467).
+
+    Tri-state semantics on update: True -> "1", False -> "0", None -> field
+    omitted so the remote enabled/disabled state stays untouched. Create is
+    boolean: True -> "1", default False omits the field.
+    """
+
+    TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
+    CONFIG_URL = (
+        "https://connection.keboola.com/v2/storage/components/keboola.ex-http/configs/cfg-1"
+    )
+    CREATE_URL = "https://connection.keboola.com/v2/storage/components/keboola.ex-http/configs"
+
+    @staticmethod
+    def _parse_form_body(request: httpx.Request) -> dict[str, str]:
+        """Parse form-encoded request body to a flat str->str dict."""
+        parsed = parse_qs(request.content.decode("utf-8"), keep_blank_values=True)
+        return {k: v[0] for k, v in parsed.items()}
+
+    def test_update_config_is_disabled_true_sends_1(self, httpx_mock) -> None:
+        """update_config(is_disabled=True) sends form field isDisabled=1."""
+        httpx_mock.add_response(
+            url=self.CONFIG_URL, method="PUT", json={"id": "cfg-1"}, status_code=200
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            client.update_config(
+                component_id="keboola.ex-http",
+                config_id="cfg-1",
+                name="Cfg",
+                configuration={"parameters": {}},
+                is_disabled=True,
+            )
+
+        body = self._parse_form_body(httpx_mock.get_requests()[0])
+        assert body["isDisabled"] == "1"
+
+    def test_update_config_is_disabled_false_sends_0(self, httpx_mock) -> None:
+        """update_config(is_disabled=False) sends isDisabled=0 (explicit re-enable)."""
+        httpx_mock.add_response(
+            url=self.CONFIG_URL, method="PUT", json={"id": "cfg-1"}, status_code=200
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            client.update_config(
+                component_id="keboola.ex-http",
+                config_id="cfg-1",
+                name="Cfg",
+                configuration={"parameters": {}},
+                is_disabled=False,
+            )
+
+        body = self._parse_form_body(httpx_mock.get_requests()[0])
+        assert body["isDisabled"] == "0"
+
+    def test_update_config_is_disabled_none_omits_field(self, httpx_mock) -> None:
+        """update_config(is_disabled=None) leaves the remote state untouched."""
+        httpx_mock.add_response(
+            url=self.CONFIG_URL, method="PUT", json={"id": "cfg-1"}, status_code=200
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            client.update_config(
+                component_id="keboola.ex-http",
+                config_id="cfg-1",
+                name="Cfg",
+                configuration={"parameters": {}},
+                is_disabled=None,
+            )
+
+        body = self._parse_form_body(httpx_mock.get_requests()[0])
+        assert "isDisabled" not in body
+
+    def test_create_config_is_disabled_true_sends_1(self, httpx_mock) -> None:
+        """create_config(is_disabled=True) creates the config disabled."""
+        httpx_mock.add_response(
+            url=self.CREATE_URL, method="POST", json={"id": "cfg-new"}, status_code=201
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            client.create_config(
+                component_id="keboola.ex-http",
+                name="Cfg",
+                configuration={"parameters": {}},
+                is_disabled=True,
+            )
+
+        body = self._parse_form_body(httpx_mock.get_requests()[0])
+        assert body["isDisabled"] == "1"
+
+    def test_create_config_default_omits_is_disabled(self, httpx_mock) -> None:
+        """create_config without is_disabled omits the field entirely."""
+        httpx_mock.add_response(
+            url=self.CREATE_URL, method="POST", json={"id": "cfg-new"}, status_code=201
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            client.create_config(
+                component_id="keboola.ex-http",
+                name="Cfg",
+                configuration={"parameters": {}},
+            )
+
+        body = self._parse_form_body(httpx_mock.get_requests()[0])
+        assert "isDisabled" not in body
+
+
 class TestLoadWorkspaceTablesPreserve:
     """Tests for load_workspace_tables() preserve parameter."""
 

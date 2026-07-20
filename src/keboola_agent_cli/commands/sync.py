@@ -181,8 +181,14 @@ def _format_pull_result(formatter: Any, result: dict) -> None:
     storage = result.get("storage", {})
     jobs_written = result.get("jobs_written", 0)
     has_extra = bool(storage.get("buckets") or storage.get("tables") or jobs_written)
+    # Row-only refetches (e.g. `pull --theirs` restoring an edited row file)
+    # produce no config-level detail entries but DO write files -- do not
+    # report "Already up to date" when anything was written.
+    has_writes = bool(
+        result.get("configs_pulled") or result.get("rows_pulled") or result.get("files_written")
+    )
 
-    if not has_changes and not skipped_cfgs and not has_extra:
+    if not has_changes and not skipped_cfgs and not has_extra and not has_writes:
         formatter.console.print("[green]Already up to date.[/green] No changes from remote.")
         return
     elif is_dry:
@@ -234,14 +240,35 @@ def _format_pull_result(formatter: Any, result: dict) -> None:
             formatter.console.print(f"    ! {d['component_id']}/{d['config_name']}")
 
 
+def _format_never_fetched(formatter: Any, never_fetched: list[dict]) -> None:
+    """Warn about manifest entries that were registered but never materialized."""
+    if not never_fetched:
+        return
+    formatter.console.print(
+        f"\n  [yellow]Warning: {len(never_fetched)} manifest entr"
+        f"{'y was' if len(never_fetched) == 1 else 'ies were'} registered but "
+        f"never fetched (no local files). They are excluded from push planning "
+        f"-- run 'kbagent sync pull' to materialize them:[/yellow]"
+    )
+    for item in never_fetched:
+        formatter.console.print(
+            f"    ? {item.get('component_id')}/{item.get('config_id')}  "
+            f"[dim]{item.get('path', '')}[/dim]"
+        )
+
+
 def _format_diff_result(formatter: Any, result: dict) -> None:
     """Format a single-project diff result for human output."""
     changes = result["changes"]
     summary = result["summary"]
     remote_only = result.get("remote_only", [])
+    never_fetched = result.get("never_fetched", [])
 
     if not changes and not remote_only:
-        formatter.console.print("[green]No differences.[/green]")
+        if never_fetched:
+            _format_never_fetched(formatter, never_fetched)
+        else:
+            formatter.console.print("[green]No differences.[/green]")
         return
 
     local_changes = [c for c in changes if c["change_type"] in ("added", "modified", "deleted")]
@@ -266,6 +293,7 @@ def _format_diff_result(formatter: Any, result: dict) -> None:
             formatter.console.print(f"  ! CONFLICT {_change_label(change)}")
     if remote_only:
         formatter.console.print(f"  {len(remote_only)} new remote-only config(s)")
+    _format_never_fetched(formatter, never_fetched)
 
 
 def _format_conflict_list(formatter: Any, conflicts: list[dict[str, str]]) -> None:
@@ -290,6 +318,7 @@ def _format_push_result(formatter: Any, result: dict) -> None:
     status = result.get("status", "")
     if status == "no_changes":
         formatter.console.print("  No changes to push.")
+        _format_never_fetched(formatter, result.get("never_fetched", []))
         return
     if status == "dry_run":
         summary = result.get("summary", {})
@@ -298,12 +327,14 @@ def _format_push_result(formatter: Any, result: dict) -> None:
             f"update {summary.get('modified', 0)}, "
             f"delete {summary.get('deleted', 0)}"
         )
+        _format_never_fetched(formatter, result.get("never_fetched", []))
         return
     formatter.console.print(
         f"  {result.get('created', 0)} created, "
         f"{result.get('updated', 0)} updated, "
         f"{result.get('deleted', 0)} deleted"
     )
+    _format_never_fetched(formatter, result.get("never_fetched", []))
     # Show name drift warnings
     drift_warnings = result.get("name_drift_warnings", [])
     if drift_warnings:
@@ -453,6 +484,17 @@ def sync_pull(
             "aborts the pull so you can resolve it."
         ),
     ),
+    theirs: bool = typer.Option(
+        False,
+        "--theirs",
+        help=(
+            "Discard local changes and make the tree match remote (the "
+            "supported reconcile path for a drifted tree). Overwrites "
+            "locally-modified configs, restores deleted/missing files, and "
+            "resolves merge conflicts by taking the remote version instead "
+            "of aborting."
+        ),
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -537,6 +579,7 @@ def sync_pull(
                 with_samples=with_samples,
                 sample_limit=sample_limit,
                 max_samples=max_samples,
+                theirs=theirs,
             )
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -572,6 +615,7 @@ def sync_pull(
             sample_limit=sample_limit,
             max_samples=max_samples,
             branch_override=branch,
+            theirs=theirs,
         )
     except SyncConflictError as exc:
         if not formatter.json_mode:
@@ -639,8 +683,12 @@ def sync_status(
 
         if not modified and not added and not deleted:
             formatter.console.print(
-                f"[green]No changes detected.[/green] ({unchanged} configurations tracked)"
+                f"[green]No local changes detected.[/green] "
+                f"({unchanged} configurations tracked) "
+                f"[dim]Local check only -- run 'kbagent sync diff --project "
+                f"<alias>' to compare against the remote.[/dim]"
             )
+            _format_never_fetched(formatter, result.get("never_fetched", []))
         else:
             if modified:
                 formatter.console.print(f"\n[yellow]Modified ({len(modified)}):[/yellow]")
@@ -656,6 +704,8 @@ def sync_status(
                 formatter.console.print(f"\n[red]Deleted ({len(deleted)}):[/red]")
                 for d in deleted:
                     formatter.console.print(f"  D {d['path']}")
+
+            _format_never_fetched(formatter, result.get("never_fetched", []))
 
             formatter.console.print(
                 f"\n{len(modified)} modified, {len(added)} added, "
@@ -768,9 +818,12 @@ def sync_diff(
         remote_only = result.get("remote_only", [])
 
         if not changes and not remote_only:
-            formatter.console.print(
-                "[green]No differences found.[/green] Local and remote are in sync."
-            )
+            if result.get("never_fetched"):
+                _format_never_fetched(formatter, result["never_fetched"])
+            else:
+                formatter.console.print(
+                    "[green]No differences found.[/green] Local and remote are in sync."
+                )
             return
 
         # Categorize changes by direction
@@ -850,6 +903,8 @@ def sync_diff(
             for cfg in remote_only:
                 name = cfg.get("config_name", cfg.get("config_id", ""))
                 formatter.console.print(f"  [cyan]+ NEW {cfg['component_id']}/{name}[/cyan]")
+
+        _format_never_fetched(formatter, result.get("never_fetched", []))
 
 
 @sync_app.command("push")
@@ -983,6 +1038,7 @@ def sync_push(
             skipped_reason = result.get("skipped_reason")
             if skipped_reason:
                 formatter.console.print(f"  [yellow]{skipped_reason}[/yellow]")
+            _format_never_fetched(formatter, result.get("never_fetched", []))
             return
 
         if status == "dry_run":
@@ -995,6 +1051,7 @@ def sync_push(
                 f"\nWould create {summary['added']}, update {summary['modified']}, "
                 f"delete {summary['deleted']}"
             )
+            _format_never_fetched(formatter, result.get("never_fetched", []))
             return
 
         formatter.success(
@@ -1002,6 +1059,7 @@ def sync_push(
             f"{result['updated']} updated, "
             f"{result['deleted']} deleted"
         )
+        _format_never_fetched(formatter, result.get("never_fetched", []))
         for change in result.get("pushed_details", []):
             label = _change_label(change)
             action = change["change_type"].upper()

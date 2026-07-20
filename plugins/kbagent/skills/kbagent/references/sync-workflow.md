@@ -67,6 +67,38 @@ kbagent sync push --all-projects             # apply
 
 Each project gets its own subdirectory (named by alias). Projects are processed in parallel.
 
+## Reconciling a drifted tree with production (since v0.72.0)
+
+When production was edited directly (by people or other tooling) and the local
+tree no longer matches, `--theirs` is the supported reset -- never hand-edit
+`.keboola/manifest.json`:
+
+```bash
+# Audit drift first (3-way: local vs pull-time snapshot vs remote)
+kbagent sync diff --project prod
+
+# Remote wins everywhere: overwrites locally-modified configs/rows, restores
+# deleted/missing files, resolves true merge conflicts by taking remote.
+kbagent sync pull --project prod --theirs
+
+# Verify: must report "No differences found"
+kbagent sync diff --project prod
+```
+
+Related semantics (all since v0.72.0):
+
+- Plain `sync pull` re-materializes a tracked config whose local dir was
+  deleted (delete-dir-then-pull refetches; delete-dir-then-PUSH still deletes
+  the remote config -- the direction of the command picks the winner).
+- Config-level enabled/disabled state round-trips: `_config.yml` carries
+  `is_disabled: true` for disabled configs (absent = enabled), `sync diff`
+  shows the drift, push updates the remote state when the key is present.
+- A manifest entry that was registered but never materialized (empty
+  `pull_hash`, no files -- pre-0.72 name-collision phantom) is excluded from
+  push delete-planning and reported as `never_fetched`; pull heals it.
+- `sync status` is a LOCAL-only check (says so explicitly) -- use `sync diff`
+  for a local-vs-production audit.
+
 ## Per-invocation dev-branch override (since v0.47.0)
 
 `sync push`, `sync pull`, and `sync diff` accept `--branch <id>` to target a

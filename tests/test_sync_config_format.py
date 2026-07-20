@@ -465,3 +465,107 @@ class TestLocalRowToApiComponentIdParam:
         _, _, configuration = local_row_to_api(local, "keboola.variables")
 
         assert configuration == {"values": [{"name": "region", "value": "eu", "type": "string"}]}
+
+
+class TestIsDisabledSerialization:
+    """Sparse ``is_disabled`` emission and round-trip hygiene (issue #467).
+
+    The key is emitted ONLY when the API reports ``isDisabled`` truthy --
+    absence means enabled, so trees pulled before the field existed do not
+    show a spurious diff on every config. On the way back, ``is_disabled``
+    is local metadata: it must never leak into the API ``configuration``
+    body (it travels as the top-level ``isDisabled`` form field instead).
+    """
+
+    @staticmethod
+    def _api_config(**extra: Any) -> dict[str, Any]:
+        return {
+            "id": "cfg-1",
+            "name": "Cfg",
+            "description": "",
+            "configuration": {"parameters": {"a": 1}},
+            **extra,
+        }
+
+    @staticmethod
+    def _api_row(**extra: Any) -> dict[str, Any]:
+        return {
+            "id": "row-1",
+            "name": "Row",
+            "description": "",
+            "configuration": {"parameters": {"a": 1}},
+            **extra,
+        }
+
+    # -- api_config_to_local ------------------------------------------------
+
+    def test_config_is_disabled_true_emitted(self) -> None:
+        """isDisabled=True lands as ``is_disabled: True`` in the local YAML."""
+        local = api_config_to_local("comp", self._api_config(isDisabled=True), "cfg-1")
+        assert local["is_disabled"] is True
+
+    def test_config_is_disabled_false_absent(self) -> None:
+        """isDisabled=False is sparse -- the key is NOT emitted."""
+        local = api_config_to_local("comp", self._api_config(isDisabled=False), "cfg-1")
+        assert "is_disabled" not in local
+
+    def test_config_is_disabled_missing_absent(self) -> None:
+        """No isDisabled key in the API response -> no local key either."""
+        local = api_config_to_local("comp", self._api_config(), "cfg-1")
+        assert "is_disabled" not in local
+
+    # -- api_row_to_local ---------------------------------------------------
+
+    def test_row_is_disabled_true_emitted(self) -> None:
+        """Row isDisabled=True lands as ``is_disabled: True``."""
+        local = api_row_to_local(self._api_row(isDisabled=True), "keboola.ex-db-snowflake")
+        assert local["is_disabled"] is True
+
+    def test_row_is_disabled_false_absent(self) -> None:
+        """Row isDisabled=False is sparse -- the key is NOT emitted."""
+        local = api_row_to_local(self._api_row(isDisabled=False), "keboola.ex-db-snowflake")
+        assert "is_disabled" not in local
+
+    def test_row_is_disabled_missing_absent(self) -> None:
+        """Row without isDisabled -> no local key."""
+        local = api_row_to_local(self._api_row(), "keboola.ex-db-snowflake")
+        assert "is_disabled" not in local
+
+    # -- local -> API body hygiene -------------------------------------------
+
+    def test_variables_row_is_disabled_not_hoisted_into_configuration(self) -> None:
+        """keboola.variables hoist keeps ``is_disabled`` OUT of the API body.
+
+        ``is_disabled`` is in ``_ROW_LOCAL_RESERVED_KEYS`` -- only real payload
+        keys (``values``) are hoisted back into ``configuration``.
+        """
+        local = {
+            "version": 2,
+            "name": "Main",
+            "description": "",
+            "is_disabled": True,
+            "values": [{"name": "year_start", "value": "2016", "type": "string"}],
+        }
+
+        _, _, configuration = local_row_to_api(local, "keboola.variables")
+
+        assert "is_disabled" not in configuration
+        assert configuration == {
+            "values": [{"name": "year_start", "value": "2016", "type": "string"}]
+        }
+
+    def test_local_config_to_api_never_includes_is_disabled(self) -> None:
+        """``is_disabled`` never lands inside the config's API configuration."""
+        local = {
+            "version": 2,
+            "name": "Cfg",
+            "description": "",
+            "is_disabled": True,
+            "parameters": {"a": 1},
+            "_keboola": {"component_id": "comp", "config_id": "cfg-1"},
+        }
+
+        _, _, configuration = local_config_to_api(local)
+
+        assert "is_disabled" not in configuration
+        assert configuration == {"parameters": {"a": 1}}

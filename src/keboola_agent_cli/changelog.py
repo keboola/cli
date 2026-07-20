@@ -24,6 +24,36 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.72.0": [
+        "Sync trust cluster (#466, #467, #472, #497): four reliability fixes that make "
+        "`kbagent sync` safe to run against production trees edited by other people.",
+        'New: `sync pull --theirs` (#466) -- the supported "discard local changes, take '
+        'production" reconcile path. Overwrites locally-modified configs and rows, restores '
+        "deleted/missing files, and resolves true merge conflicts by taking the remote version "
+        "instead of aborting. No more hand-editing `.keboola/manifest.json` to reconcile a "
+        "drifted tree; the SYNC_CONFLICT error message now points at it.",
+        "Fixed (#472): `sync push --force` can no longer plan a DELETE of a remote config "
+        "that was never fetched. A manifest entry with an empty `pull_hash` and no local files "
+        "(a phantom left by a pre-0.72 name-collision pull) is excluded from delete planning "
+        "and surfaced as a `never_fetched` warning on diff/push; the next `sync pull` "
+        "materializes it. Deleting a properly-pulled config locally still deletes on push.",
+        "Fixed (#466/#472): `sync pull` enforces the manifest<->disk invariant -- a tracked "
+        "config whose local directory was deleted is re-materialized on the next pull even "
+        'when the remote is unchanged (previously: silent "Already up to date"), and pull '
+        "can no longer register a manifest entry without writing its files.",
+        "New (#467): config-level `isDisabled` round-trips through sync. Pull writes a sparse "
+        "`is_disabled: true` into `_config.yml` (absent key = enabled, so existing trees do "
+        "not mass-diff), `sync diff` surfaces enabled/disabled drift (a flow disabled in "
+        'production no longer reports "in sync"), and push updates the remote state when '
+        "the key is present (absent key leaves remote untouched). Rows too; `config new "
+        "--push`/`sync clone` create disabled configs when the local file says so.",
+        "Fixed (#497): pushing an untracked local config whose `_keboola.config_id` resolves "
+        "on the target branch (adopted-by-id update, #482) now writes the manifest entry with "
+        "fresh hashes, so follow-up diffs are stable and a later local deletion is detected.",
+        '`sync status` all-clear output now says "No local changes detected ... Local check '
+        'only" and points at `sync diff` -- status never contacts the API, so it cannot see '
+        "remote drift (#466).",
+    ],
     "0.71.0": [
         "Note: catch-up release -- the first published release since v0.66.1. Versions 0.67.0 "
         "through 0.70.1 were merged to main with their changelog entries but never tagged or "

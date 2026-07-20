@@ -206,7 +206,9 @@ class SyncConflictError(Exception):
             f"conflict). `sync pull --force` refuses to overwrite them so your "
             f"local work is not lost. Resolve each conflict first: review with "
             f"`kbagent sync diff`, then either `kbagent sync push` your local "
-            f"edits or discard them, and pull again."
+            f"edits or discard them and pull again -- or run "
+            f"`kbagent sync pull --theirs` to discard ALL local changes and "
+            f"take the remote version."
         )
         super().__init__(message)
         self.message = message

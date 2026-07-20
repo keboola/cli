@@ -4336,6 +4336,155 @@ class TestE2ESyncWorkflow:
                 except Exception as exc:
                     print(f"  [cleanup] Failed to delete {TEST_COMPONENT_ID}/{cfg_id}: {exc}")
 
+    def test_sync_theirs_reconcile_and_is_disabled(self) -> None:
+        """Sync trust cluster (0.72.0, issues #466/#467/#472), end-to-end.
+
+        * ``pull --theirs`` resolves a true conflict by taking remote (no abort).
+        * Deleting a config dir + plain ``pull`` re-materializes it (#466 pt3).
+        * Config-level ``isDisabled`` round-trips: remote disable -> pulled as
+          ``is_disabled: true``; explicit local ``is_disabled: false`` push
+          re-enables the remote config (#467).
+        * A phantom manifest entry (empty pull_hash, no dir) is excluded from
+          push delete-planning and reported as ``never_fetched`` (#472).
+
+        Creates + cleans up a dedicated config so the test is idempotent.
+        """
+        import yaml as _yaml
+
+        from keboola_agent_cli.client import KeboolaClient
+        from keboola_agent_cli.constants import CONFIG_FILENAME
+
+        cfg: dict = {}
+        try:
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                cfg = api.create_config(
+                    component_id=TEST_COMPONENT_ID,
+                    name=f"{RUN_ID}-trustcluster",
+                    description="E2E sync trust-cluster fixture",
+                    configuration={"parameters": {"db": {"host": "orig.example.com"}}},
+                )
+            cfg_id = str(cfg["id"])
+
+            _step("8a", "sync init + pull (trust-cluster fixture)")
+            self._run_ok(
+                "sync", "init", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            matches = [
+                p
+                for p in self.project_dir.rglob(CONFIG_FILENAME)
+                if "rows" not in p.relative_to(self.project_dir).parts
+                and str(
+                    _yaml.safe_load(p.read_text(encoding="utf-8"))
+                    .get("_keboola", {})
+                    .get("config_id")
+                )
+                == cfg_id
+            ]
+            assert len(matches) == 1, f"config YAML not found after pull: {matches}"
+            config_file = matches[0]
+            config_dir = config_file.parent
+
+            # --- (a) true conflict: local edit + remote edit -> --theirs wins ---
+            _step("8b", "pull --theirs resolves a true conflict by taking remote")
+            local = _yaml.safe_load(config_file.read_text(encoding="utf-8"))
+            local.setdefault("parameters", {})["_e2e_local"] = "keep-me-not"
+            config_file.write_text(_yaml.dump(local, default_flow_style=False), encoding="utf-8")
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                api.update_config(
+                    component_id=TEST_COMPONENT_ID,
+                    config_id=cfg_id,
+                    configuration={"parameters": {"db": {"host": "theirs.example.com"}}},
+                    change_description="e2e theirs conflict",
+                )
+            self._run_ok(
+                "sync",
+                "pull",
+                "--project",
+                self.alias,
+                "--directory",
+                str(self.project_dir),
+                "--theirs",
+            )
+            after = _yaml.safe_load(config_file.read_text(encoding="utf-8"))
+            assert after["parameters"]["db"]["host"] == "theirs.example.com"
+            assert "_e2e_local" not in after.get("parameters", {}), (
+                "--theirs must overwrite local edits with remote"
+            )
+
+            # --- (b) delete dir + plain pull -> re-materialized (#466 pt3) ---
+            _step("8c", "plain pull re-materializes a deleted config dir")
+            shutil.rmtree(config_dir)
+            self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            assert config_file.exists(), "deleted config dir must be refetched by plain pull"
+
+            # --- (c) isDisabled round-trip (#467) ---
+            _step("8d", "isDisabled: remote disable -> pull; local false -> push re-enables")
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                api.update_config(
+                    component_id=TEST_COMPONENT_ID,
+                    config_id=cfg_id,
+                    is_disabled=True,
+                    change_description="e2e disable",
+                )
+            self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            pulled = _yaml.safe_load(config_file.read_text(encoding="utf-8"))
+            assert pulled.get("is_disabled") is True, "disabled state must be pulled (#467)"
+            pulled["is_disabled"] = False
+            config_file.write_text(_yaml.dump(pulled, default_flow_style=False), encoding="utf-8")
+            self._run_ok(
+                "sync", "push", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                detail = api.get_config_detail(component_id=TEST_COMPONENT_ID, config_id=cfg_id)
+            assert detail.get("isDisabled") is False, "explicit is_disabled: false must re-enable"
+
+            # --- (d) phantom manifest entry never planned as DELETE (#472) ---
+            _step("8e", "never-fetched phantom entry excluded from push delete-planning")
+            manifest_path = self.project_dir / ".keboola" / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for entry in manifest["configurations"]:
+                if entry["id"] == cfg_id:
+                    entry["metadata"]["pull_hash"] = ""
+                    entry["metadata"]["pull_config_hash"] = ""
+                    entry["metadata"]["pull_extra_hashes"] = {}
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            shutil.rmtree(config_dir)
+            push_dry = self._run_ok(
+                "sync",
+                "push",
+                "--project",
+                self.alias,
+                "--directory",
+                str(self.project_dir),
+                "--force",
+                "--dry-run",
+            )
+            envelope = push_dry["data"]
+            planned_deletes = [
+                c
+                for c in envelope.get("changes", [])
+                if c["change_type"] == "deleted" and c["config_id"] == cfg_id
+            ]
+            assert not planned_deletes, "phantom entry must never be planned as a remote DELETE"
+            assert any(item["config_id"] == cfg_id for item in envelope.get("never_fetched", [])), (
+                f"phantom entry must be reported as never_fetched: {envelope}"
+            )
+        finally:
+            cfg_id = cfg.get("id") if cfg else None
+            if cfg_id:
+                try:
+                    with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                        api.delete_config(component_id=TEST_COMPONENT_ID, config_id=cfg_id)
+                except Exception as exc:
+                    print(f"  [cleanup] Failed to delete {TEST_COMPONENT_ID}/{cfg_id}: {exc}")
+
     def test_sync_push_variable_row_round_trip(self) -> None:
         """PR1 P0-1 acceptance: edit a keboola.variables values row, push, pull back.
 

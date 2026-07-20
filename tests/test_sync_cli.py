@@ -546,6 +546,96 @@ class TestSyncPullCli:
         assert payload["error"]["code"] == "SYNC_CONFLICT"
         assert payload["error"]["details"]["conflicts"][0]["config_id"] == "cfg-001"
 
+    def _theirs_pull_result(self) -> dict:
+        return {
+            "status": "pulled",
+            "project_alias": "prod",
+            "branch_id": 12345,
+            "branch_dir": "main",
+            "configs_pulled": 2,
+            "rows_pulled": 0,
+            "files_written": 2,
+        }
+
+    def test_sync_pull_theirs_without_force_passes_flag(self, tmp_path: Path) -> None:
+        """`sync pull --theirs` alone invokes service.pull with theirs=True.
+
+        --theirs is a standalone reconcile mode (issue #466); it must not
+        require --force.
+        """
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.pull.return_value = self._theirs_pull_result()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "pull",
+                    "--project",
+                    "prod",
+                    "--theirs",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        kwargs = mock_sync.pull.call_args.kwargs
+        assert kwargs["theirs"] is True
+        assert kwargs["force"] is False
+
+    def test_sync_pull_theirs_combines_with_force(self, tmp_path: Path) -> None:
+        """`sync pull --force --theirs` passes both flags to the service."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.pull.return_value = self._theirs_pull_result()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "sync",
+                    "pull",
+                    "--project",
+                    "prod",
+                    "--force",
+                    "--theirs",
+                    "--directory",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        kwargs = mock_sync.pull.call_args.kwargs
+        assert kwargs["theirs"] is True
+        assert kwargs["force"] is True
+
 
 # ===================================================================
 # sync status CLI tests
@@ -594,7 +684,10 @@ class TestSyncStatusCli:
             )
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
-        assert "No changes detected" in result.output
+        assert "No local changes detected" in result.output
+        # Local-only check must say so and point at `sync diff` for remote drift
+        # (issue #466 -- "in sync" was misread as a remote-drift audit).
+        assert "Local check only" in result.output
         assert "5" in result.output  # number of tracked configs
 
     def test_sync_status_json_output(self, tmp_path: Path) -> None:

@@ -396,6 +396,31 @@ class SyncService(BaseService):
     # pull
     # ------------------------------------------------------------------
 
+    def _local_files_match_pull_state(
+        self,
+        config_dir: Path,
+        pull_hash: str,
+        extra_hashes: dict[str, str],
+    ) -> bool:
+        """True iff every file recorded at pull time is present and unmodified.
+
+        Used by ``pull --theirs`` to decide whether an idempotent skip is
+        safe: the main ``_config.yml`` must byte-match ``pull_hash`` and every
+        companion code file in ``pull_extra_hashes`` must exist with its
+        recorded hash.  Any missing or edited file means the config must be
+        re-materialized from remote.
+        """
+        config_file = config_dir / CONFIG_FILENAME
+        if not pull_hash or not config_file.exists():
+            return False
+        if self._file_hash(config_file) != pull_hash:
+            return False
+        for fname, stored_hash in extra_hashes.items():
+            fpath = config_dir / fname
+            if not fpath.exists() or self._file_hash(fpath) != stored_hash:
+                return False
+        return True
+
     def _is_conflict(
         self,
         config_file: Path,
@@ -514,6 +539,7 @@ class SyncService(BaseService):
         sample_limit: int = DEFAULT_SAMPLE_LIMIT,
         max_samples: int = DEFAULT_MAX_SAMPLES,
         branch_override: int | None = None,
+        theirs: bool = False,
     ) -> dict[str, Any]:
         """Download all configurations from Keboola to local filesystem.
 
@@ -521,6 +547,11 @@ class SyncService(BaseService):
             alias: Project alias from config store.
             project_root: Root directory of the sync working tree.
             force: If True, overwrite existing local files without checking.
+            theirs: Remote wins everywhere (issue #466): locally-modified
+                configs/rows are overwritten with the remote state, true
+                merge conflicts are resolved by taking remote instead of
+                aborting, and missing local files are re-materialized.
+                The supported "discard local changes" reconcile path.
             dry_run: If True, compute what would be pulled but don't write.
             job_limit: Max jobs per config to pull (default 5).
             no_storage: Skip storage metadata download.
@@ -618,6 +649,12 @@ class SyncService(BaseService):
             f"{c.component_id}/{c.id}": c.metadata.get("pull_hash", "")
             for c in manifest.configurations
         }
+        # Companion-file hashes (transform.sql, _description.md, ...) recorded
+        # at pull time; ``--theirs`` uses them to restore deleted code files.
+        existing_extra_hashes: dict[str, dict[str, str]] = {
+            f"{c.component_id}/{c.id}": c.metadata.get("pull_extra_hashes", {}) or {}
+            for c in manifest.configurations
+        }
         # Track branch_id per config to detect branch switches
         existing_branch_ids: dict[str, int] = {
             f"{c.component_id}/{c.id}": c.branch_id for c in manifest.configurations
@@ -644,7 +681,9 @@ class SyncService(BaseService):
         # API fetch above has already happened; nothing is on disk yet), so the
         # user can resolve them.  Non-force pull preserves locally-modified
         # files and surfaces conflicts via ``sync diff``, so it needs no abort.
-        if force:
+        # ``--theirs`` skips the guard entirely: the user explicitly asked for
+        # remote to win, so conflicts are resolved by overwriting, not aborting.
+        if force and not theirs:
             conflicts = self._detect_force_pull_conflicts(
                 components,
                 branch_dir,
@@ -744,8 +783,9 @@ class SyncService(BaseService):
                 # unchanged), and re-stamping the baseline from the edited file
                 # would silently strand the un-pushed edits.  Preserving keeps
                 # the pending delta visible to ``sync push``.
+                # ``--theirs`` disables the preserve entirely: remote wins.
                 locally_modified = False
-                if not is_new:
+                if not is_new and not theirs:
                     old_file_hash = existing_file_hashes.get(lookup_key, "")
                     if old_file_hash:
                         config_file = config_dir / CONFIG_FILENAME
@@ -784,21 +824,38 @@ class SyncService(BaseService):
                     # If pull_config_hash matches AND branch hasn't changed,
                     # skip write (idempotent).  A branch switch means files
                     # live in a different directory, so we must re-write.
+                    # The file-existence guard enforces the manifest<->disk
+                    # invariant (issues #472/#466): a tracked config whose
+                    # local file is missing (deleted dir, or a pre-0.72
+                    # name-collision phantom entry) is re-materialized instead
+                    # of being registered with an empty pull_hash -- which
+                    # ``sync push --force`` would then plan as a remote DELETE.
                     old_cfg_hash = existing_config_hashes.get(lookup_key, "")
                     branch_switched = existing_branch_ids.get(lookup_key, branch_id or 0) != (
                         branch_id or 0
                     )
+                    config_file = config_dir / CONFIG_FILENAME
                     remote_unchanged = (
                         not is_new
                         and not branch_switched
                         and old_cfg_hash
                         and old_cfg_hash == api_cfg_hash
+                        and config_file.exists()
                     )
+                    if remote_unchanged and theirs:
+                        # ``--theirs``: an idempotent skip is only allowed when
+                        # the local files still byte-match the pull state --
+                        # otherwise the edited/partial files must be overwritten
+                        # with the remote version.
+                        remote_unchanged = self._local_files_match_pull_state(
+                            config_dir,
+                            existing_file_hashes.get(lookup_key, ""),
+                            existing_extra_hashes.get(lookup_key, {}),
+                        )
 
                     if remote_unchanged:
                         # Nothing changed -- reuse existing file hash
-                        config_file = config_dir / CONFIG_FILENAME
-                        file_hash = self._file_hash(config_file) if config_file.exists() else ""
+                        file_hash = self._file_hash(config_file)
                     else:
                         # Extract code files (SQL, Python) if applicable.
                         # This modifies local_data in place (removes
@@ -866,8 +923,9 @@ class SyncService(BaseService):
                     # modified row has passed the conflict guard (remote
                     # unchanged), so preserve the row rather than re-stamp its
                     # baseline from the edited file and strand the edits.
+                    # ``--theirs`` disables the preserve: remote wins.
                     row_locally_modified = False
-                    if existing_row and old_row_file_hash and row_file.exists():
+                    if not theirs and existing_row and old_row_file_hash and row_file.exists():
                         row_locally_modified = self._file_hash(row_file) != old_row_file_hash
 
                     if row_locally_modified:
@@ -888,11 +946,14 @@ class SyncService(BaseService):
                         and old_row_cfg_hash
                         and old_row_cfg_hash == row_api_cfg_hash
                         and row_file.exists()
+                        and (not theirs or self._file_hash(row_file) == old_row_file_hash)
                     ):
                         # Idempotent: remote unchanged since last pull, file untouched.
                         # Guard: row_file.exists() ensures we don't skip writing when
                         # the directory is new (e.g. first pull of a dev branch that
                         # clones main -- same hash but no file on disk yet).
+                        # Under ``--theirs`` an edited row file additionally falls
+                        # through to the write branch so remote wins.
                         row_file_hash = (
                             self._file_hash(row_file) if row_file.exists() else old_row_file_hash
                         )
@@ -1044,6 +1105,7 @@ class SyncService(BaseService):
 
         modified: list[dict[str, str]] = []
         deleted: list[dict[str, str]] = []
+        never_fetched: list[dict[str, str]] = []
         unchanged = 0
 
         # Check each manifest entry against local files
@@ -1053,13 +1115,18 @@ class SyncService(BaseService):
             config_file = config_dir / CONFIG_FILENAME
 
             if not config_file.exists():
-                deleted.append(
-                    {
-                        "component_id": cfg.component_id,
-                        "config_id": cfg.id,
-                        "path": str(cfg.path),
-                    }
-                )
+                entry = {
+                    "component_id": cfg.component_id,
+                    "config_id": cfg.id,
+                    "path": str(cfg.path),
+                }
+                # A missing file with an EMPTY pull_hash was never
+                # materialized (pre-0.72 phantom, issue #472) -- reporting it
+                # as "deleted" would suggest a push should delete the remote.
+                if cfg.metadata.get("pull_hash"):
+                    deleted.append(entry)
+                else:
+                    never_fetched.append(entry)
                 continue
 
             # Compare file hash against the hash stored at pull time.
@@ -1108,6 +1175,7 @@ class SyncService(BaseService):
             "modified": modified,
             "added": added,
             "deleted": deleted,
+            "never_fetched": never_fetched,
             "unchanged": unchanged,
             "total_tracked": len(manifest.configurations),
             "plaintext_secret_warnings": plaintext_secret_warnings,
@@ -1227,7 +1295,32 @@ class SyncService(BaseService):
 
         # Build set of manifest-tracked keys so that compute_changeset only
         # flags configs that were previously pulled (not brand-new remote ones).
-        tracked_keys = {f"{cfg.component_id}/{cfg.id}" for cfg in manifest.configurations}
+        # Never-fetched guard (issue #472): an entry with an EMPTY pull_hash
+        # and no file on disk was registered but never materialized (e.g. by a
+        # pre-0.72 name-collision pull).  Treating it as tracked would classify
+        # it "deleted" and ``push --force`` would delete a remote config nobody
+        # ever deleted.  Exclude it and surface it so callers can warn; the
+        # next ``sync pull`` re-materializes it.
+        tracked_keys: set[str] = set()
+        never_fetched: list[dict[str, str]] = []
+        for cfg in manifest.configurations:
+            key = f"{cfg.component_id}/{cfg.id}"
+            if not cfg.metadata.get("pull_hash"):
+                branch_path = self._find_branch_path(manifest, cfg.branch_id)
+                cfg_file = project_root / branch_path / cfg.path / CONFIG_FILENAME
+                if not cfg_file.exists():
+                    never_fetched.append(
+                        {
+                            "component_id": cfg.component_id,
+                            "config_id": cfg.id,
+                            "path": cfg.path,
+                        }
+                    )
+                    continue
+            tracked_keys.add(key)
+        never_fetched_keys = {
+            f"{item['component_id']}/{item['config_id']}" for item in never_fetched
+        }
 
         # Also add untracked local configs (new files). Scan ONLY the branch
         # subtree push reads from -- scanning another branch's tree (e.g.
@@ -1300,6 +1393,10 @@ class SyncService(BaseService):
         tracked_row_keys: set[str] = set()
         row_base_hashes: dict[str, str] = {}
         for cfg in manifest.configurations:
+            if f"{cfg.component_id}/{cfg.id}" in never_fetched_keys:
+                # Rows of a never-fetched parent were never materialized either;
+                # tracking them would plan remote row deletes (issue #472).
+                continue
             branch_path = self._find_branch_path(manifest, cfg.branch_id)
             parent_dir = project_root / branch_path / cfg.path
             for row in cfg.rows:
@@ -1359,7 +1456,7 @@ class SyncService(BaseService):
         } | tracked_keys
         remote_only: list[dict[str, str]] = []
         for remote_key, remote_data in remote_configs.items():
-            if remote_key not in local_keys:
+            if remote_key not in local_keys and remote_key not in never_fetched_keys:
                 parts = remote_key.split("/", 1)
                 remote_only.append(
                     {
@@ -1372,6 +1469,7 @@ class SyncService(BaseService):
         return {
             "changes": [c.to_dict() for c in changeset],
             "remote_only": remote_only,
+            "never_fetched": never_fetched,
             "summary": {
                 "added": len(added),
                 "modified": len(modified),
@@ -1384,6 +1482,7 @@ class SyncService(BaseService):
                 - len(remote_modified)
                 - len(conflicts),
                 "remote_only": len(remote_only),
+                "never_fetched": len(never_fetched),
             },
         }
 
@@ -1430,6 +1529,7 @@ class SyncService(BaseService):
         """
         diff_result = self.diff(alias, project_root, branch_override=branch_override)
         all_changes = diff_result["changes"]
+        never_fetched = diff_result.get("never_fetched", [])
 
         # Only push local-side changes (added, modified, deleted).
         # Skip remote_modified (need pull) and conflict (need resolution).
@@ -1450,14 +1550,19 @@ class SyncService(BaseService):
             if skipped:
                 result["skipped"] = len(skipped)
                 result["skipped_reason"] = "Remote changes detected. Run 'sync pull' first."
+            if never_fetched:
+                result["never_fetched"] = never_fetched
             return result
 
         if dry_run:
-            return {
+            dry_result: dict[str, Any] = {
                 "status": "dry_run",
                 "changes": changes,
                 "summary": diff_result["summary"],
             }
+            if never_fetched:
+                dry_result["never_fetched"] = never_fetched
+            return dry_result
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -1577,12 +1682,30 @@ class SyncService(BaseService):
                         config_file = config_dir / CONFIG_FILENAME
                         if config_file.exists():
                             hashes = self._compute_config_hashes(config_dir, component_id)
+                            entry_found = False
                             for cfg in manifest.configurations:
                                 if cfg.component_id == component_id and cfg.id == config_id:
                                     cfg.metadata["pull_hash"] = hashes.file_hash
                                     cfg.metadata["pull_config_hash"] = hashes.cfg_hash
                                     cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
+                                    entry_found = True
                                     break
+                            if not entry_found:
+                                # Adopted-by-id config (issue #497): the update
+                                # targeted an existing remote config that had no
+                                # manifest entry (untracked local file whose
+                                # _keboola.config_id resolved on the branch).
+                                # Register it now so subsequent diffs read a
+                                # stable entry and a local deletion is detected.
+                                writeback_create_config_in_manifest(
+                                    manifest=manifest,
+                                    component_id=component_id,
+                                    branch_id=branch_id,
+                                    config_path_str=config_path_str,
+                                    new_id=config_id,
+                                    file_hash=hashes.file_hash,
+                                    cfg_hash=hashes.cfg_hash,
+                                )
                             manifest_dirty = True
                         updated += 1
                         pushed_details.append(change)
@@ -1718,6 +1841,8 @@ class SyncService(BaseService):
             result_data["flow_task_remaps"] = flow_binding.tasks_remapped
         if name_drift_warnings and not no_name_drift_warnings:
             result_data["name_drift_warnings"] = name_drift_warnings
+        if never_fetched:
+            result_data["never_fetched"] = never_fetched
         return result_data
 
     def clone_project(
@@ -1820,6 +1945,7 @@ class SyncService(BaseService):
         with_samples: bool = False,
         sample_limit: int = DEFAULT_SAMPLE_LIMIT,
         max_samples: int = DEFAULT_MAX_SAMPLES,
+        theirs: bool = False,
     ) -> dict[str, Any]:
         """Pull all registered projects in parallel (see ``_sync_bulk.pull_all``)."""
         return _bulk_pull_all(
@@ -1833,6 +1959,7 @@ class SyncService(BaseService):
             with_samples=with_samples,
             sample_limit=sample_limit,
             max_samples=max_samples,
+            theirs=theirs,
         )
 
     def diff_all(self, base_dir: Path) -> dict[str, Any]:

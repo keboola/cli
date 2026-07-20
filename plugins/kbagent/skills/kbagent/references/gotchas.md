@@ -2937,3 +2937,42 @@ shape consistency and is empty (`[]`) when the table matched on its own name
 (only column matches populate it). The human table adds
 the "Matched columns" column **only when at least one result actually matched via
 a column** -- a plain search that hit nothing by column shows no extra column.
+
+## Sync trust cluster: --theirs reconcile, manifest<->disk invariant, isDisabled round-trip, never-fetched guard (since v0.72.0)
+
+Four related sync-engine behaviors landed together (issues #466 / #467 / #472 / #497):
+
+- **`sync pull --theirs` is the supported "discard local, take production" path.**
+  It overwrites locally-modified configs AND rows, restores deleted/missing
+  files, and resolves true merge conflicts by taking the remote version instead
+  of aborting. No `.keboola/manifest.json` hand-editing is ever needed to
+  reconcile a drifted tree. Works standalone (does not require `--force`).
+- **Plain `sync pull` re-materializes missing local dirs.** A tracked config
+  whose directory/`_config.yml` was deleted locally is re-fetched on the next
+  pull even when the remote is unchanged (manifest<->disk invariant). The old
+  behavior silently reported "Already up to date". NOTE the interplay with the
+  GitOps delete flow: delete-dir-then-PUSH still deletes the remote config;
+  delete-dir-then-PULL now restores it instead of doing nothing.
+- **Config-level `isDisabled` round-trips.** Pull writes a sparse
+  `is_disabled: true` line into `_config.yml` (absent key = enabled -- old trees
+  do not mass-diff), `sync diff` surfaces enabled/disabled drift (a config
+  disabled in production no longer looks "in sync"), and push sends the state:
+  an explicit `is_disabled:` key in the local YAML updates the remote; an
+  absent key leaves the remote state untouched. Same semantics for rows.
+- **Never-fetched guard.** A manifest entry with an EMPTY `pull_hash` and no
+  local files (a phantom left by a pre-0.72 name-collision pull, issue #472) is
+  excluded from delete planning: `sync push --force` will NOT delete that
+  remote config. diff/push report it under `never_fetched` (JSON key + human
+  warning); the next `sync pull` materializes it. A properly-pulled config
+  (non-empty `pull_hash`) that you delete locally is still planned as a remote
+  DELETE on push -- the guard only protects entries that were never on disk.
+- **Adopted-by-id push writes the manifest.** Pushing an untracked local file
+  whose `_keboola.config_id` resolves on the target branch (the #482
+  adopt-update path) now also creates the manifest entry (fresh
+  `pull_hash`/`pull_config_hash`), so the very next `sync diff` reads a stable
+  entry and a later local deletion is detected -- previously the config stayed
+  untracked until the next pull (#497).
+- **`sync status` wording.** The all-clear line now reads "No local changes
+  detected ... Local check only -- run 'kbagent sync diff'": `status` never
+  contacts the API, so it cannot see remote drift; treating it as a
+  local-vs-production audit was the #466 trap.
