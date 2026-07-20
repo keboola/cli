@@ -216,6 +216,10 @@ class TestCreateTableService:
             ],
             primary_key=["id"],
             branch_id=None,
+            source=None,
+            time_partitioning=None,
+            range_partitioning=None,
+            clustering=None,
         )
         mock_client.close.assert_called_once()
 
@@ -258,6 +262,10 @@ class TestCreateTableService:
             columns=[{"name": "x", "definition": {"type": "STRING"}}],
             primary_key=None,
             branch_id=None,
+            source=None,
+            time_partitioning=None,
+            range_partitioning=None,
+            clustering=None,
         )
 
     def test_unknown_type_is_passed_through_to_api(self, tmp_path: Path) -> None:
@@ -1084,6 +1092,13 @@ class TestCreateTableIfNotExists:
         assert result["action"] == "skipped"
         assert result["skip_reason"] == "table already exists"
         assert result["table_id"] == "in.c-b.users"
+        # The skipped envelope carries the same source/layout keys as the
+        # "created" path (null here) so the JSON schema stays consistent.
+        assert result["source_table_id"] is None
+        assert result["source_branch_id"] is None
+        assert result["time_partitioning"] is None
+        assert result["range_partitioning"] is None
+        assert result["clustering"] is None
         mock_client.get_table_detail.assert_called_once_with("in.c-b.users", branch_id=None)
         mock_client.close.assert_called_once()
 
@@ -1401,6 +1416,16 @@ class TestCreateTableCLI:
             not_null_columns=None,
             defaults=None,
             if_not_exists=False,
+            source_table_id=None,
+            source_branch_id=None,
+            time_partitioning_type=None,
+            time_partitioning_field=None,
+            time_partitioning_expiration_ms=None,
+            range_partitioning_field=None,
+            range_partitioning_start=None,
+            range_partitioning_end=None,
+            range_partitioning_interval=None,
+            clustering_fields=None,
         )
 
     def test_create_table_native_types_and_attributes(self, tmp_path: Path) -> None:
@@ -1854,6 +1879,10 @@ class TestCreateTableBranch:
             columns=[{"name": "id", "definition": {"type": "INTEGER"}}],
             primary_key=None,
             branch_id=77,
+            source=None,
+            time_partitioning=None,
+            range_partitioning=None,
+            clustering=None,
         )
         # In a branch we check bucket existence first (auto-materialize).
         mock_client.get_bucket_detail.assert_called_once_with("in.c-b", branch_id=77)

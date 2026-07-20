@@ -15,15 +15,44 @@ from __future__ import annotations
 
 import copy
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from ..errors import ConfigError, KeboolaApiError
-from ._encryption import encrypt_secrets_in_config
+from ._encryption import encrypt_secrets_in_config, find_plaintext_secret_keys
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
 
 VARIABLES_COMPONENT_ID = "keboola.variables"
+
+
+@dataclass(frozen=True)
+class _CreatedLinkedVariables:
+    """Result of the auto-create path -- a new ``keboola.variables`` config + row.
+
+    Named fields replace a positional tuple (CONTRIBUTING.md: multi-value returns
+    use a dataclass, never a bare tuple beyond two values).
+    """
+
+    variables_id: str
+    values_id: str
+    values: dict[str, str]
+    plaintext_written: list[str]
+
+
+@dataclass(frozen=True)
+class _UpdatedLinkedVariables:
+    """Result of the update path -- an existing config's default values row.
+
+    ``plaintext_written`` holds the secret key-paths left unencrypted by an
+    allowed plaintext-on-encrypt-failure fallback (``[]`` when encryption
+    succeeded, never the values).
+    """
+
+    values_id: str
+    values: dict[str, str]
+    plaintext_written: list[str]
 
 
 class VariablesService(BaseService):
@@ -144,11 +173,7 @@ class VariablesService(BaseService):
             action = "updated"
 
             if not linked_vars_id:
-                (
-                    linked_vars_id,
-                    linked_values_id,
-                    final_values,
-                ) = self._create_linked_variables(
+                created = self._create_linked_variables(
                     client=client,
                     project_id=project_id,
                     parent_name=parent_name,
@@ -158,9 +183,13 @@ class VariablesService(BaseService):
                     branch_id=branch_id,
                     allow_plaintext_fallback=allow_plaintext_fallback,
                 )
+                linked_vars_id = created.variables_id
+                linked_values_id = created.values_id
+                final_values = created.values
+                plaintext_written = created.plaintext_written
                 action = "created"
             else:
-                linked_values_id, final_values = self._update_linked_variables(
+                updated = self._update_linked_variables(
                     client=client,
                     project_id=project_id,
                     variables_id=linked_vars_id,
@@ -170,6 +199,9 @@ class VariablesService(BaseService):
                     branch_id=branch_id,
                     allow_plaintext_fallback=allow_plaintext_fallback,
                 )
+                linked_values_id = updated.values_id
+                final_values = updated.values
+                plaintext_written = updated.plaintext_written
 
             # Ensure the parent config carries the link. Existing-linked path
             # may no-op; auto-create path always writes.
@@ -196,6 +228,9 @@ class VariablesService(BaseService):
                 "action": action,
                 "values": final_values,
                 "encrypted_keys": encrypted_keys,
+                # Empty unless an allowed plaintext-on-encrypt-failure fallback
+                # left secret key-paths unencrypted in the row that was written.
+                "plaintext_written": plaintext_written,
             }
         finally:
             client.close()
@@ -258,7 +293,7 @@ class VariablesService(BaseService):
         variables: dict[str, str],
         branch_id: int | None,
         allow_plaintext_fallback: bool,
-    ) -> tuple[str, str, dict[str, str]]:
+    ) -> _CreatedLinkedVariables:
         """Auto-create path: new variables config + default row, parent not yet linked."""
         var_name = (parent_name or parent_config_id) + "-vars"
         schema = [{"name": k, "type": "string"} for k in variables]
@@ -278,6 +313,7 @@ class VariablesService(BaseService):
             variables=variables,
             allow_plaintext_fallback=allow_plaintext_fallback,
         )
+        plaintext_written = find_plaintext_secret_keys(row_config)
 
         new_row = client.create_config_row(
             component_id=VARIABLES_COMPONENT_ID,
@@ -287,7 +323,12 @@ class VariablesService(BaseService):
             description="Auto-created default row by kbagent",
             branch_id=branch_id,
         )
-        return variables_id, new_row["id"], dict(variables)
+        return _CreatedLinkedVariables(
+            variables_id=variables_id,
+            values_id=new_row["id"],
+            values=dict(variables),
+            plaintext_written=plaintext_written,
+        )
 
     def _update_linked_variables(
         self,
@@ -300,7 +341,7 @@ class VariablesService(BaseService):
         replace: bool,
         branch_id: int | None,
         allow_plaintext_fallback: bool,
-    ) -> tuple[str, dict[str, str]]:
+    ) -> _UpdatedLinkedVariables:
         """Update path: parent already linked (or explicit --variables-id). Merge or replace."""
         vars_cfg = client.get_config_detail(
             VARIABLES_COMPONENT_ID, variables_id, branch_id=branch_id
@@ -315,6 +356,7 @@ class VariablesService(BaseService):
                 variables=variables,
                 allow_plaintext_fallback=allow_plaintext_fallback,
             )
+            plaintext_written = find_plaintext_secret_keys(row_config)
             new_row = client.create_config_row(
                 component_id=VARIABLES_COMPONENT_ID,
                 config_id=variables_id,
@@ -329,7 +371,11 @@ class VariablesService(BaseService):
                 variables=variables,
                 branch_id=branch_id,
             )
-            return new_row["id"], dict(variables)
+            return _UpdatedLinkedVariables(
+                values_id=new_row["id"],
+                values=dict(variables),
+                plaintext_written=plaintext_written,
+            )
 
         existing_values = target_row.get("configuration", {}).get("values", [])
         existing_dict = {v["name"]: v["value"] for v in existing_values}
@@ -348,6 +394,7 @@ class VariablesService(BaseService):
             variables=final_values,
             allow_plaintext_fallback=allow_plaintext_fallback,
         )
+        plaintext_written = find_plaintext_secret_keys(row_config)
 
         client.update_config_row(
             component_id=VARIABLES_COMPONENT_ID,
@@ -364,7 +411,11 @@ class VariablesService(BaseService):
             variables=final_values,
             branch_id=branch_id,
         )
-        return target_row["id"], final_values
+        return _UpdatedLinkedVariables(
+            values_id=target_row["id"],
+            values=final_values,
+            plaintext_written=plaintext_written,
+        )
 
     @staticmethod
     def _build_encrypted_row_configuration(
@@ -380,6 +431,10 @@ class VariablesService(BaseService):
         transformation runner both key off it). :func:`encrypt_secrets_in_config`
         recognizes the ``{name, value}`` list shape directly, so no pre-flatten
         dance is needed.
+
+        Returns the encrypted row config. Callers surface any plaintext-fallback
+        leak by passing the returned config to :func:`find_plaintext_secret_keys`
+        (key-paths only, never the values).
         """
         row_config: dict[str, Any] = {
             "values": [{"name": k, "value": v} for k, v in variables.items()],

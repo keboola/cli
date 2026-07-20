@@ -169,6 +169,107 @@ def _parse_default_assignments(defaults: list[str] | None) -> dict[str, str]:
     return result
 
 
+def _build_source(
+    source_table_id: str | None,
+    source_branch_id: int | None,
+) -> dict[str, Any] | None:
+    """Build the optional ``source`` object for the tables-definition endpoint.
+
+    Returns ``None`` when no source is requested. ``branchId`` is only included
+    when explicitly given; otherwise the API defaults it to the request branch.
+    """
+    if source_table_id is None:
+        return None
+    if not source_table_id.strip():
+        raise ValueError("--source-table-id must not be empty.")
+    source: dict[str, Any] = {"tableId": source_table_id}
+    if source_branch_id is not None:
+        source["branchId"] = source_branch_id
+    return source
+
+
+def _build_bigquery_layout(
+    time_partitioning_type: str | None,
+    time_partitioning_field: str | None,
+    time_partitioning_expiration_ms: str | None,
+    range_partitioning_field: str | None,
+    range_partitioning_start: str | None,
+    range_partitioning_end: str | None,
+    range_partitioning_interval: str | None,
+    clustering_fields: list[str] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
+    """Assemble the BigQuery partition/clustering objects from typed flags.
+
+    Mirrors the shapes the Storage API already expects (connection's
+    ``BigqueryCreateTableDefinitionRequest``):
+
+    - ``timePartitioning`` ``{"type", "field"?, "expirationMs"?}`` -- ``type`` required.
+    - ``rangePartitioning`` ``{"field", "range": {"start", "end", "interval"}}`` --
+      all four required together; range bounds are **strings** in the API.
+    - ``clustering`` ``{"fields": [...]}``.
+
+    ``timePartitioning`` and ``rangePartitioning`` are mutually exclusive
+    (BigQuery allows only one partitioning kind). Returns ``(None, None, None)``
+    when nothing is requested.
+
+    Raises:
+        ValueError: incomplete/conflicting partitioning flags.
+    """
+    has_time = any(
+        v is not None
+        for v in (time_partitioning_type, time_partitioning_field, time_partitioning_expiration_ms)
+    )
+    range_parts = (
+        range_partitioning_field,
+        range_partitioning_start,
+        range_partitioning_end,
+        range_partitioning_interval,
+    )
+    has_range = any(v is not None for v in range_parts)
+
+    if has_time and has_range:
+        raise ValueError(
+            "--time-partitioning-* and --range-partitioning-* are mutually exclusive; "
+            "BigQuery supports only one partitioning kind per table."
+        )
+
+    time_partitioning: dict[str, Any] | None = None
+    if has_time:
+        if not time_partitioning_type:
+            raise ValueError(
+                "--time-partitioning-type is required when any --time-partitioning-* "
+                "flag is set (e.g. DAY, HOUR, MONTH, YEAR)."
+            )
+        time_partitioning = {"type": time_partitioning_type}
+        if time_partitioning_field is not None:
+            time_partitioning["field"] = time_partitioning_field
+        if time_partitioning_expiration_ms is not None:
+            time_partitioning["expirationMs"] = time_partitioning_expiration_ms
+
+    range_partitioning: dict[str, Any] | None = None
+    if has_range:
+        if not all(v is not None for v in range_parts):
+            raise ValueError(
+                "--range-partitioning requires all of --range-partitioning-field, "
+                "--range-partitioning-start, --range-partitioning-end and "
+                "--range-partitioning-interval."
+            )
+        range_partitioning = {
+            "field": range_partitioning_field,
+            "range": {
+                "start": range_partitioning_start,
+                "end": range_partitioning_end,
+                "interval": range_partitioning_interval,
+            },
+        }
+
+    clustering: dict[str, Any] | None = None
+    if clustering_fields:
+        clustering = {"fields": list(clustering_fields)}
+
+    return time_partitioning, range_partitioning, clustering
+
+
 def _ensure_bucket_exists_in_branch(
     client: Any,
     bucket_id: str,
@@ -731,14 +832,24 @@ class StorageService(BaseService):
         alias: str,
         bucket_id: str,
         name: str,
-        columns: list[str],
+        columns: list[str] | None = None,
         primary_key: list[str] | None = None,
         branch_id: int | None = None,
         not_null_columns: list[str] | None = None,
         defaults: list[str] | None = None,
         if_not_exists: bool = False,
+        source_table_id: str | None = None,
+        source_branch_id: int | None = None,
+        time_partitioning_type: str | None = None,
+        time_partitioning_field: str | None = None,
+        time_partitioning_expiration_ms: str | None = None,
+        range_partitioning_field: str | None = None,
+        range_partitioning_start: str | None = None,
+        range_partitioning_end: str | None = None,
+        range_partitioning_interval: str | None = None,
+        clustering_fields: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Create a new table with typed columns.
+        """Create a new table with typed columns, or by copying a source table.
 
         Column specs accept base Keboola types (STRING, INTEGER, NUMERIC,
         FLOAT, BOOLEAN, DATE, TIMESTAMP) *and* native backend types with
@@ -746,6 +857,14 @@ class StorageService(BaseService):
         ``pk:VARCHAR(40)``, ``ts:TIMESTAMP_TZ``, ``meta:VARIANT``. The Keboola
         Storage API derives ``basetype`` automatically and returns precise
         errors for invalid type/length pairs per backend.
+
+        Exactly one of ``columns`` or ``source_table_id`` must be given. With
+        ``source_table_id`` (BigQuery only) the new table's schema is derived
+        from the source table and its rows are copied into the requested
+        partition/clustering layout -- the supported way to repartition a
+        populated BigQuery table, then flip it into place with
+        ``swap_tables``. The partition/clustering flags also apply to a normal
+        ``columns`` create (BigQuery only).
 
         When ``branch_id`` targets a dev branch and the bucket has not been
         materialized there yet, this method auto-creates it (mirrors the
@@ -757,15 +876,25 @@ class StorageService(BaseService):
             bucket_id: Target bucket ID (e.g. ``in.c-my-bucket``).
             name: Table name.
             columns: List of column specs -- ``name``, ``name:TYPE``, or
-                ``name:TYPE(length)``.
+                ``name:TYPE(length)``. Forbidden together with
+                ``source_table_id``.
             primary_key: Optional list of primary-key column names.
             branch_id: If set, create the table in this dev branch and
                 auto-materialize the bucket when missing.
             not_null_columns: Column names to mark NOT NULL (``nullable=false``
-                in the API definition).
+                in the API definition). Not valid in source mode.
             defaults: ``NAME=VALUE`` assignments for DEFAULT expressions
                 (e.g. ``is_admin=false``, ``amount=0``). Boolean defaults
-                must be lowercase per Keboola API validation.
+                must be lowercase per Keboola API validation. Not valid in
+                source mode.
+            source_table_id: Storage table ID to copy from (BigQuery only).
+            source_branch_id: Optional branch the source is resolved in.
+            time_partitioning_type/field/expiration_ms: BigQuery time
+                partitioning (``type`` required when any is set).
+            range_partitioning_field/start/end/interval: BigQuery integer-range
+                partitioning (all four required together). Mutually exclusive
+                with time partitioning.
+            clustering_fields: BigQuery clustering columns.
 
         Returns:
             Dict with table details and ``auto_created_bucket`` flag.
@@ -778,16 +907,71 @@ class StorageService(BaseService):
             ``schema_drift`` is ``True`` when the two diverge.
 
         Raises:
-            ValueError: Malformed column spec or ``--default`` assignment,
-                or ``--not-null`` / ``--default`` references an unknown
-                column.
+            ValueError: Malformed column spec or ``--default`` assignment;
+                ``--not-null`` / ``--default`` references an unknown column;
+                ``columns`` and ``source`` both/neither given;
+                ``source_branch_id`` given without ``source_table_id``;
+                incomplete or conflicting partitioning flags; or BigQuery-only
+                features requested on a non-BigQuery backend.
         """
         not_null_set = set(not_null_columns or [])
         defaults_map = _parse_default_assignments(defaults)
 
-        parsed_columns = [
-            _parse_column_spec(col_spec, not_null_set, defaults_map) for col_spec in columns
-        ]
+        # --source-branch-id only qualifies a source table; on its own it would
+        # be silently dropped (source mode never activates). Fail fast instead.
+        if source_branch_id is not None and source_table_id is None:
+            raise ValueError("--source-branch-id requires --source-table-id.")
+
+        source = _build_source(source_table_id, source_branch_id)
+        time_partitioning, range_partitioning, clustering = _build_bigquery_layout(
+            time_partitioning_type,
+            time_partitioning_field,
+            time_partitioning_expiration_ms,
+            range_partitioning_field,
+            range_partitioning_start,
+            range_partitioning_end,
+            range_partitioning_interval,
+            clustering_fields,
+        )
+        uses_bigquery_features = (
+            source is not None
+            or time_partitioning is not None
+            or range_partitioning is not None
+            or clustering is not None
+        )
+        has_columns = bool(columns)
+
+        # Exactly one of columns / source. The Storage API forbids both and
+        # requires at least one; fail fast with a clear message.
+        if source is not None and has_columns:
+            raise ValueError(
+                "--column must not be combined with --source-table-id; in source "
+                "mode the column definition is derived from the source table."
+            )
+        if source is None and not has_columns:
+            raise ValueError(
+                "create-table requires either --column (one or more) or "
+                "--source-table-id (copy from an existing BigQuery table)."
+            )
+
+        # not-null / default attach to --column definitions; they have no
+        # meaning when columns are derived from a source table.
+        if source is not None and not_null_columns:
+            raise ValueError(
+                "--not-null is not valid with --source-table-id (columns are "
+                "derived from the source table)."
+            )
+        if source is not None and defaults:
+            raise ValueError(
+                "--default is not valid with --source-table-id (columns are "
+                "derived from the source table)."
+            )
+
+        parsed_columns = (
+            [_parse_column_spec(col_spec, not_null_set, defaults_map) for col_spec in columns]
+            if columns
+            else []
+        )
 
         # Reject attribute references to columns not actually defined. Without
         # this check a typo like `--not-null pk --column pkey:VARCHAR(40)`
@@ -812,14 +996,31 @@ class StorageService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         target_table_id = f"{bucket_id}.{name}"
         try:
+            # BigQuery pre-flight guard: source copy + partition/clustering are
+            # BigQuery-only. When any is requested, verify the project's backend
+            # before issuing the create so a non-BigQuery project fails fast with
+            # a clear message instead of a late driver-side 422.
+            if uses_bigquery_features:
+                backend = (client.verify_token().default_backend or "").lower()
+                if backend != "bigquery":
+                    raise ValueError(
+                        f"Project backend is '{backend or 'unknown'}'; "
+                        "--source-table-id and partition/clustering flags "
+                        "require a BigQuery backend."
+                    )
+
             auto_created_bucket = _ensure_bucket_exists_in_branch(client, bucket_id, branch_id)
             try:
                 results = client.create_table(
                     bucket_id=bucket_id,
                     name=name,
-                    columns=parsed_columns,
+                    columns=parsed_columns if columns else None,
                     primary_key=primary_key,
                     branch_id=branch_id,
+                    source=source,
+                    time_partitioning=time_partitioning,
+                    range_partitioning=range_partitioning,
+                    clustering=clustering,
                 )
             except KeboolaApiError as exc:
                 # IF-NOT-EXISTS: if the create failed because the table
@@ -868,11 +1069,28 @@ class StorageService(BaseService):
                             ),
                             "action": "skipped",
                             "skip_reason": "table already exists",
+                            # Keep the JSON envelope shape identical to the
+                            # "created" path; the existing table's layout is not
+                            # re-derived here, so the source/layout keys are null.
+                            "source_table_id": None,
+                            "source_branch_id": None,
+                            "time_partitioning": None,
+                            "range_partitioning": None,
+                            "clustering": None,
                         }
                 raise
             legacy_branch_storage = _detect_legacy_branch_storage(client, branch_id)
         finally:
             client.close()
+
+        # In columns mode the requested column names are authoritative. In source
+        # mode the schema is derived from the source, so surface whatever columns
+        # the completed create job reports (a list of names or column dicts).
+        if columns:
+            result_columns = [c["name"] for c in parsed_columns]
+        else:
+            raw_columns = results.get("columns") or []
+            result_columns = [c["name"] if isinstance(c, dict) else c for c in raw_columns]
 
         return {
             "project_alias": alias,
@@ -880,10 +1098,15 @@ class StorageService(BaseService):
             "name": name,
             "bucket_id": bucket_id,
             "primary_key": primary_key or [],
-            "columns": [c["name"] for c in parsed_columns],
+            "columns": result_columns,
             "auto_created_bucket": auto_created_bucket,
             "legacy_branch_storage": legacy_branch_storage,
             "action": "created",
+            "source_table_id": source_table_id,
+            "source_branch_id": source_branch_id,
+            "time_partitioning": time_partitioning,
+            "range_partitioning": range_partitioning,
+            "clustering": clustering,
         }
 
     def upload_table(

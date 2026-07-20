@@ -25,11 +25,63 @@ import time
 from typing import Any
 from urllib.parse import quote, urlparse
 
-from .constants import STREAM_API_TIMEOUT, STREAM_TASK_POLL_INTERVAL, STREAM_TASK_TIMEOUT
+from .constants import (
+    OTLP_BUCKET_PREFIX,
+    OTLP_SINK_COLUMNS,
+    OTLP_SINK_SIGNALS,
+    STREAM_API_TIMEOUT,
+    STREAM_TASK_POLL_INTERVAL,
+    STREAM_TASK_TIMEOUT,
+)
 from .errors import ErrorCode, KeboolaApiError
 from .http_base import BaseHttpClient
 
 logger = logging.getLogger(__name__)
+
+
+def stream_task_source_id(task: dict[str, Any]) -> str | None:
+    """Extract the created ``sourceId`` from a finished create-source ``Task``.
+
+    Shared by :class:`StreamService` (CLI path) and :class:`KeboolaClient`
+    (importable path) so both read the async task result the same way.
+    """
+    outputs = task.get("outputs")
+    if isinstance(outputs, dict):
+        source_id = outputs.get("sourceId")
+        if isinstance(source_id, str):
+            return source_id
+    return None
+
+
+def provision_otlp_sinks(client: StreamClient, branch: str, source_id: str) -> None:
+    """Create the standard logs/metrics/traces sinks for an OTLP source.
+
+    The raw Stream ``POST /sources`` creates only the bare source; the three
+    sinks are what make OTLP data actually land in Storage (bucket
+    ``in.c-otlp-<sourceId>``), so both the ``kbagent stream`` CLI and the
+    importable :meth:`KeboolaClient.create_stream_source` provision them here.
+
+    Idempotent: only signals without an existing sink are created, so a re-run
+    (or ``--if-not-exists`` against a half-provisioned source) heals the set
+    rather than erroring on a conflict.
+    """
+    existing_signals: set[str] = set()
+    for sink in client.list_sinks(branch, source_id).get("sinks", []):
+        existing_signals.update(sink.get("allowedSignals") or [])
+    columns = [dict(col) for col in OTLP_SINK_COLUMNS]
+    for signal in OTLP_SINK_SIGNALS:
+        if signal in existing_signals:
+            continue
+        table_id = f"{OTLP_BUCKET_PREFIX}{source_id}.{signal}"
+        task = client.create_sink(
+            branch,
+            source_id,
+            name=signal.capitalize(),
+            table_id=table_id,
+            columns=columns,
+            allowed_signals=[signal],
+        )
+        client.wait_for_task(task)
 
 
 class StreamClient(BaseHttpClient):

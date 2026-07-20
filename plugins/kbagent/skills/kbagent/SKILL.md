@@ -53,6 +53,11 @@ description: >
   OpenTelemetry, otel, OTLP endpoint, OTEL_EXPORTER_OTLP_ENDPOINT, telemetry ingest,
   logs metrics traces, stream create-source, stream detail, stream list,
   stream delete, otlp source, http source, stream-in, ingest endpoint,
+  scoped token, scoped storage token, token create, token delete, token refresh,
+  mint token, revoke token, rotate token, short-lived token, expiring token,
+  bucket-write token, single-bucket write token, canManageTokens, device enrollment,
+  per-device credential, per-device token, per-device stream source,
+  create_scoped_token, create_stream_source, delete_token, refresh_token,
   semantic-layer, semantic layer, semantic-layer model, metastore,
   semantic-metric, semantic-dataset, semantic-relationship,
   semantic-constraint, semantic-glossary, add metric, edit metric,
@@ -147,6 +152,9 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show feature flags assigned to a user | `kbagent feature user-show --project PROJECT --email EMAIL` |
 | Enable a feature flag on a user | `kbagent feature user-add --project PROJECT --email EMAIL --feature FEATURE` |
 | Disable a feature flag on a user (destructive) | `kbagent feature user-remove --project PROJECT --email EMAIL --feature FEATURE` |
+| Mint a scoped Storage API token (secret shown once) | `kbagent token create --project PROJECT --description DESCRIPTION` |
+| Revoke a Storage API token immediately (destructive; only non-master tokens) | `kbagent token delete --project PROJECT --token-id TOKEN-ID` |
+| Rotate a token: generate a new value and invalidate the old one (secret shown once) | `kbagent token refresh --project PROJECT --token-id TOKEN-ID` |
 | List available components from connected projects | `kbagent component list` |
 | Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
 | List configurations from connected projects | `kbagent config list` |
@@ -198,7 +206,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List storage tables from one or more projects | `kbagent storage tables` |
 | Show detailed table info including columns and types | `kbagent storage table-detail --project PROJECT --table-id TABLE-ID` |
 | Create a new storage bucket | `kbagent storage create-bucket --project PROJECT --stage STAGE --name NAME` |
-| Create a new storage table with typed columns | `kbagent storage create-table --project PROJECT --bucket-id BUCKET-ID --name NAME --column COLUMN` |
+| Create a new storage table with typed columns | `kbagent storage create-table --project PROJECT --bucket-id BUCKET-ID --name NAME` |
 | Upload a CSV file into a storage table | `kbagent storage upload-table --project PROJECT --table-id TABLE-ID --file FILE` |
 | Export a storage table to a local CSV file | `kbagent storage download-table --project PROJECT --table-id TABLE-ID` |
 | Delete one or more storage tables | `kbagent storage delete-table --project PROJECT --table-id TABLE-ID` |
