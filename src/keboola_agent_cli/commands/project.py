@@ -838,7 +838,7 @@ def _format_bulk_invite_result(console: Console, data: dict[str, Any]) -> None:
             row.get("email", ""),
             row.get("project", ""),
             row.get("role", ""),
-            row.get("note", ""),
+            escape(row.get("note", "")),
         )
     console.print(table)
 
@@ -894,7 +894,7 @@ def _format_invitation_list(console: Console, data: dict[str, Any]) -> None:
             str(inv.get("id", "")),
             inv.get("user", {}).get("email", ""),
             inv.get("role", ""),
-            inv.get("reason", ""),
+            escape(inv.get("reason", "")),
         )
     console.print(table)
 
