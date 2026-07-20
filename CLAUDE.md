@@ -515,6 +515,7 @@ kbagent semantic-layer model create --project P --name N [--description D] [--sq
 kbagent semantic-layer model delete --project P --model M [--yes]
 kbagent semantic-layer show --project P [--model M] [--type dataset|metric|relationship|constraint|glossary]
 kbagent semantic-layer search-context --project P [--pattern G ...] [--type model|dataset|metric|relationship|constraint|glossary|all] [--limit N]
+kbagent semantic-layer schema --project P (--type model|dataset|metric|relationship|constraint|glossary[,TYPE...] | --all)
 kbagent semantic-layer get-context --project P --context-id ID
 kbagent semantic-layer validate --project P [--model M] [--deep]
 kbagent semantic-layer export --project P [--model M] [--output PATH]
@@ -579,6 +580,10 @@ kbagent kai ask --message "question" [--project NAME]
 kbagent kai chat --message "msg" [--chat-id ID] [--project NAME]
 kbagent kai chat-detail --chat-id ID [--project NAME]
 kbagent kai history [--project NAME] [--limit N]
+
+kbagent docs query "QUESTION" [--project NAME]
+# (0.73.0+) Documentation Q&A via the AI Service (server-side RAG). Unlike kai ask it does NOT
+#   see project data; works with any token. --json emits {query, text, source_urls}.
 
 kbagent flow list [--project NAME] [--branch ID] [--with-schedules]
 kbagent flow detail --project NAME --flow-id ID [--branch ID]

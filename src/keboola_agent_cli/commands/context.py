@@ -1022,6 +1022,11 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Show a model's entities. --type filter: dataset|metric|relationship|constraint|glossary.
     Without --type prints a per-type count summary.
 
+  kbagent semantic-layer schema --project P (--type model|dataset|metric|relationship|constraint|glossary[,TYPE...] | --all)
+    (since 0.73.0) Live JSON Schema per semantic object type, fetched from the
+    deployed metastore (never bundled -- cannot drift). Exactly one of
+    --type/--all. --json emits {{project, schemas: [{{type, schema}}]}}.
+
   kbagent semantic-layer search-context --project P [--pattern G ...] [--type model|dataset|metric|relationship|constraint|glossary|all] [--limit N]
     (since 0.47.0) Project-wide glob search across semantic-layer entity names.
     Mirrors the upstream keboola-mcp-server search_semantic_context tool so a
@@ -1266,6 +1271,15 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   kbagent kai history [--project NAME] [--limit N]
     List recent Kai chat sessions. Default limit: 10.
+
+### Documentation Q&A (since v0.73.0)
+
+  kbagent docs query "QUESTION" [--project NAME]
+    Answer a natural-language question from the Keboola documentation via the
+    AI Service (server-side RAG; no local corpus). Returns the answer text
+    plus source URLs. --json emits {{query, text, source_urls}}. Unlike
+    `kai ask` this does NOT see project data -- it is documentation-only,
+    works with any token, and is the right tool for "how do I ..." questions.
 
 ### Developer Portal (since v0.49.0)
 
