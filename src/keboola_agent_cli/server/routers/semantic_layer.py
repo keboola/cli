@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
 from ...errors import ErrorCode
+from ...services.semantic_layer_service import SCHEMA_TYPE_ALIAS
 from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/semantic-layer", tags=["semantic-layer"])
@@ -298,6 +299,28 @@ def get_context(
 ) -> dict[str, Any]:
     """Single-entry fetch by id; probes every type until found."""
     return registry.semantic_layer.get_context(alias=project, context_id=context_id)
+
+
+@router.get("/schema", summary="Fetch JSON Schemas of semantic object types")
+def get_schema(
+    project: str,
+    type: list[str] | None = Query(
+        None,
+        description=(
+            "Semantic type(s) to fetch, repeatable "
+            "(model | dataset | metric | relationship | constraint | glossary). "
+            "Omitted = every known type (the CLI's --all)."
+        ),
+    ),
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Fetch the server-side JSON Schema for semantic object types.
+
+    Mirrors `kbagent semantic-layer schema`. Schemas are fetched live from
+    the project's metastore; unknown type names fail fast (HTTP 400).
+    """
+    types = type if type else list(SCHEMA_TYPE_ALIAS)
+    return registry.semantic_layer.get_schema(alias=project, types=types)
 
 
 @router.get("/export", summary="Export model snapshot")

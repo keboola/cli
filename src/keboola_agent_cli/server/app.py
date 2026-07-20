@@ -39,6 +39,7 @@ from .routers import (
     configs,
     data_apps,
     dev_portal,
+    docs,
     encrypt,
     feature,
     flows,
@@ -57,6 +58,7 @@ from .routers import (
     storage,
     stream,
     token,
+    transformation,
     workspaces,
 )
 
@@ -132,6 +134,15 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "Discover components (extractors, writers, applications, "
             "transformations) and fetch their JSON schemas. "
             "Mirrors `kbagent component list|detail`."
+        ),
+    },
+    {
+        "name": "transformations",
+        "description": (
+            "**Configurations.** "
+            "SQL transformations -- create from a SQL script, inspect the "
+            "block/code tree, and apply positional edit operations. "
+            "Mirrors `kbagent transformation create|show|edit`."
         ),
     },
     {
@@ -292,6 +303,17 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "documentation",
+        "description": (
+            "**AI & Tools.** "
+            "Ask the official Keboola documentation natural-language "
+            "questions (AI Service docs Q&A). Served under "
+            "`/documentation` -- NOT `/docs`, which is the auth-exempt "
+            "Swagger UI namespace. "
+            "Mirrors `kbagent docs query`."
+        ),
+    },
+    {
         "name": "ai-chat",
         "description": (
             "**AI & Tools.** "
@@ -345,11 +367,11 @@ Sections below are grouped roughly the same way `kbagent --help` groups
 its command tree:
 
 - **Project Management** -- projects, members, org, feature flags
-- **Configurations** -- configs, components, encrypt
+- **Configurations** -- configs, components, transformations, encrypt
 - **Data** -- storage, search, sharing
 - **Execution** -- jobs, flows, schedules, data-apps, workspaces
 - **Development** -- branches, lineage, semantic-layer
-- **AI & Tools** -- mcp, kai, ai-chat, agents
+- **AI & Tools** -- mcp, kai, documentation, ai-chat, agents
 - **System** -- health
 
 Most endpoints accept a `project` alias either in the body or as a
@@ -649,6 +671,8 @@ def create_app(
     app.include_router(encrypt.router)
     app.include_router(search.router)
     app.include_router(semantic_layer.router)
+    app.include_router(transformation.router)
+    app.include_router(docs.router)
     app.include_router(org.router)
     app.include_router(agents.router)
 

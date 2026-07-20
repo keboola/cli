@@ -22,6 +22,7 @@ from ..services.data_app_git_service import DataAppGitService
 from ..services.data_app_service import DataAppService
 from ..services.deep_lineage_service import DeepLineageService
 from ..services.dev_portal_service import DeveloperPortalService
+from ..services.docs_service import DocsService
 from ..services.doctor_service import DoctorService
 from ..services.encrypt_service import EncryptService
 from ..services.feature_service import FeatureService
@@ -42,6 +43,7 @@ from ..services.storage_service import StorageService
 from ..services.stream_service import StreamService
 from ..services.sync_service import SyncService
 from ..services.token_service import TokenService
+from ..services.transformation_service import TransformationService
 from ..services.variables_service import VariablesService
 from ..services.version_service import VersionService
 from ..services.workspace_service import WorkspaceService
@@ -92,6 +94,8 @@ class ServiceRegistry:
     doctor: DoctorService = field(init=False)
     version: VersionService = field(init=False)
     token: TokenService = field(init=False)
+    docs: DocsService = field(init=False)
+    transformation: TransformationService = field(init=False)
 
     def __post_init__(self) -> None:
         cs = self.config_store
@@ -131,6 +135,8 @@ class ServiceRegistry:
         self.doctor = DoctorService(config_store=cs, mcp_service=self.mcp)
         self.version = VersionService()
         self.token = TokenService(config_store=cs)
+        self.docs = DocsService(config_store=cs)
+        self.transformation = TransformationService(config_store=cs)
 
 
 def install_registry(app: FastAPI, registry: ServiceRegistry) -> None:
