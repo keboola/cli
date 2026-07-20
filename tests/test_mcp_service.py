@@ -120,20 +120,40 @@ class TestIsWriteTool:
             "list_configs",
             "get_config",
             "search",
+            "search_semantic_context",
             "docs_query",
+            "query_data",
+            "validate_semantic_query",
             "find_component_id",
-            "describe_table",
-            "show_bucket",
-            "retrieve_logs",
         ],
     )
     def test_read_tool_names_not_detected(self, tool_name: str) -> None:
-        """Tool names that do not start with write prefixes are read tools."""
+        """Known-read tool names fan out (not classified as write for dispatch)."""
         assert _is_write_tool(tool_name) is False
 
-    def test_empty_tool_name(self) -> None:
-        """Empty string is not a write tool."""
-        assert _is_write_tool("") is False
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            # Real catalog tools that the old prefix list mis-classified as
+            # reads and fanned out to every project (issue #478).
+            "run_job",
+            "run_sync_action",
+            "deploy_data_app",
+            "modify_flow",
+            # Unknown names fail closed to single-project dispatch.
+            "describe_table",
+            "show_bucket",
+            "retrieve_logs",
+            "truncate_table",
+        ],
+    )
+    def test_unknown_and_mutating_tools_are_write_for_dispatch(self, tool_name: str) -> None:
+        """Fail-closed (issue #478): anything not known-read stays single-project."""
+        assert _is_write_tool(tool_name) is True
+
+    def test_empty_tool_name_fails_closed(self) -> None:
+        """Empty string matches no read marker -> treated as write for dispatch."""
+        assert _is_write_tool("") is True
 
 
 # ---------------------------------------------------------------------------

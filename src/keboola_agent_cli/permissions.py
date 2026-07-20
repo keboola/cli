@@ -328,22 +328,53 @@ OPERATION_REGISTRY: dict[str, str] = {
     "permissions.check": "read",
 }
 
-# Prefixes for classifying MCP tools (mirrors mcp_service.py WRITE_PREFIXES)
-_MCP_WRITE_PREFIXES = ("create_", "update_", "add_", "set_")
-_MCP_DESTRUCTIVE_PREFIXES = ("delete_", "remove_")
+# Prefixes for classifying MCP tools. Single source of truth -- also drives
+# mcp_service.py multi-project dispatch (read tools fan out, others don't).
+# Order of evaluation: destructive > read > write > fail-closed default.
+_MCP_DESTRUCTIVE_PREFIXES = ("delete_", "remove_", "truncate_", "drop_", "purge_")
+# Read markers cover the whole current keboola-mcp-server catalog:
+# get_*, docs_query, query_data, search / search_*, find_component_id,
+# validate_semantic_query, list_* (future-proof).
+_MCP_READ_PREFIXES = ("get_", "list_", "find_", "search_", "docs_", "query_", "validate_", "read_")
+_MCP_READ_EXACT = frozenset({"search"})
+_MCP_WRITE_PREFIXES = (
+    "create_",
+    "update_",
+    "add_",
+    "set_",
+    "modify_",
+    "deploy_",
+    "run_",
+    "start_",
+    "stop_",
+    "cancel_",
+    "upload_",
+    "import_",
+    "push_",
+    "refresh_",
+)
 
 
 def classify_mcp_tool(tool_name: str) -> str:
-    """Classify an MCP tool by its name prefix.
+    """Classify an MCP tool by its name prefix -- FAIL-CLOSED (issue #478).
+
+    A tool that matches no known read or write marker is classified
+    ``'destructive'`` (the strictest category), so both ``--deny-writes``
+    and ``--deny-destructive`` block it and multi-project dispatch never
+    fans it out. Before 0.73.0 unknown tools fell through to ``'read'``,
+    which allowed e.g. ``run_job`` or a hypothetical ``truncate_table``
+    to pass a write-deny firewall and run on every configured project.
 
     Returns:
         Risk category: 'read', 'write', or 'destructive'.
     """
     if tool_name.startswith(_MCP_DESTRUCTIVE_PREFIXES):
         return "destructive"
+    if tool_name in _MCP_READ_EXACT or tool_name.startswith(_MCP_READ_PREFIXES):
+        return "read"
     if tool_name.startswith(_MCP_WRITE_PREFIXES):
         return "write"
-    return "read"
+    return "destructive"
 
 
 def _matches_pattern(operation: str, pattern: str) -> bool:
@@ -446,12 +477,21 @@ class PermissionEngine:
 
         # MCP tool categories (virtual entries for reference)
         mcp_categories = [
-            ("tool:read", "read", "All MCP read tools (get_*, list_*, search, find_*, docs_query)"),
-            ("tool:write", "write", "All MCP write tools (create_*, update_*, add_*, set_*)"),
+            (
+                "tool:read",
+                "read",
+                "All MCP read tools (get_*, list_*, search*, find_*, docs_*, query_*, validate_*)",
+            ),
+            (
+                "tool:write",
+                "write",
+                "All MCP write tools (create_*, update_*, add_*, set_*, modify_*, deploy_*, run_*)",
+            ),
             (
                 "tool:destructive",
                 "destructive",
-                "All MCP destructive tools (delete_*, remove_*)",
+                "All MCP destructive tools (delete_*, remove_*, truncate_*, drop_*, purge_*) "
+                "+ any tool matching no known prefix (fail-closed)",
             ),
         ]
         for name, category, description in mcp_categories:
