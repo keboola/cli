@@ -121,6 +121,34 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}  # gh release list needs auth; contents:read is enough scope
         run: uv run python scripts/generate_changelog.py --check
+      # Render the GitHub Release body from changelog.py so the release page can
+      # never disagree with `kbagent changelog` (v0.66.1 shipped with an EMPTY
+      # body: nobody pre-created the release by hand and the github-release job
+      # creates it bare). Runs here because gate already has the uv env; the file
+      # travels to github-release as an artifact. This is also the FORWARD gate:
+      # a stable tag whose version has no CHANGELOG entry fails the release now,
+      # before anything publishes (generate_changelog.py --check above only
+      # audits already-published releases). `--previous` is the latest stable
+      # release, so versions that were merged but never tagged ship in the next
+      # tag as one catch-up section per version.
+      - name: Generate release notes from changelog.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.VERSION }}
+          IS_PRERELEASE: ${{ needs.version.outputs.IS_PRERELEASE }}
+        run: |
+          prev="$(gh release list --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName' || true)"
+          args=(--version "$VERSION" --output release-notes.md)
+          if [ -n "$prev" ]; then args+=(--previous "${prev#v}"); fi
+          if [ "$IS_PRERELEASE" = "true" ]; then args+=(--allow-missing); fi
+          uv run python scripts/gen_release_notes.py "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+          # A pre-release without a changelog entry generates nothing (see
+          # --allow-missing); the fill step downstream warns and moves on.
+          if-no-files-found: ignore
 
   # ── Build the prebuilt wheel and publish to PyPI (for the `uv`/`pipx` audience).
   #    This is ADDITIONAL to the native binary, not the primary install path.
@@ -277,6 +305,28 @@ jobs:
           tag_name: v${{ env.VERSION }}
           files: release/*
           prerelease: ${{ needs.version.outputs.IS_PRERELEASE == 'true' }}
+      # Fill the release body from the changelog-derived notes the gate job
+      # rendered — but only when the body is EMPTY. softprops above creates the
+      # release bare on a plain tag push (that is how v0.66.1 shipped without
+      # notes); a release someone pre-created by hand keeps its hand-written
+      # body untouched.
+      - name: Fill release notes when the body is empty
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          notes="artifacts/release-notes/release-notes.md"
+          if [ ! -f "$notes" ]; then
+            echo "::warning::no release-notes artifact (pre-release without a changelog entry?); leaving the body as-is"
+            exit 0
+          fi
+          body="$(gh release view "v${VERSION}" --json body --jq .body)"
+          if [ -n "$body" ]; then
+            echo "release v${VERSION} already has notes (authored by hand); leaving them untouched"
+            exit 0
+          fi
+          gh release edit "v${VERSION}" --notes-file "$notes"
+          echo "filled release notes for v${VERSION} from changelog.py"
       # Attach the pip/uv wheel too. release.yml builds + uploads it (the asset that
       # auto-update and install.sh download) on `release: published`. A release this
       # job creates with GITHUB_TOKEN does NOT emit that event, so when no one
