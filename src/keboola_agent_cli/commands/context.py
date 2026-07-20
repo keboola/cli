@@ -915,24 +915,33 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
     Initialize sync working directory. --git-branching enables git-to-Keboola branch mapping.
 
-  kbagent sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
+  kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
     Download configs as local files. Idempotent, protects local modifications.
     --force (semantics corrected since 0.53.0): re-pull over locally-modified configs.
     A config edited locally whose remote is UNCHANGED is PRESERVED (its pending delta stays
     pushable -- NOT discarded, NOT silently re-stamped). A true merge conflict (the config
     changed BOTH locally and on the remote since the last pull) ABORTS the pull (exit 1,
     SYNC_CONFLICT) listing each conflict; resolve via sync diff then push-or-discard, then pull.
-    To intentionally drop local edits, delete the file/dir and pull. Applies to rows too.
+    --theirs (since 0.72.0): remote wins everywhere -- overwrites locally-modified configs
+    and rows, restores deleted/missing files, resolves conflicts by taking remote (no abort).
+    The supported way to reconcile a drifted tree with production (no manifest surgery).
+    Since 0.72.0 plain pull also re-materializes a tracked config whose local dir is missing
+    (manifest<->disk invariant), so delete-dir-then-pull refetches. Applies to rows too.
+    Config-level isDisabled round-trips (since 0.72.0) as sparse `is_disabled: true` in
+    _config.yml -- absent key means enabled; pull writes it, diff surfaces drift, push sends it.
     --job-limit controls max recent jobs per config (default 5). For large projects,
     automatically falls back to per-config job fetching to ensure all configs get job history.
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
     --branch (since 0.47.0): per-invocation dev-branch override. Same semantics as sync push/diff.
 
   kbagent sync status [--directory DIR]
-    Show local changes since last pull (SHA256-based). Also returns
-    plaintext_secret_warnings (since 0.55.0): in-sync configs/rows whose
-    #-secrets are still plaintext on the remote (pre-0.54.0 leak; #378). Fix =
-    re-push on >=0.54.0 + rotate (version history keeps the plaintext).
+    Show local changes since last pull (SHA256-based). LOCAL check only --
+    it never contacts the API, so it cannot see remote drift; use sync diff
+    for a local-vs-remote audit (human output says so since 0.72.0).
+    Also returns plaintext_secret_warnings (since 0.55.0): in-sync
+    configs/rows whose #-secrets are still plaintext on the remote
+    (pre-0.54.0 leak; #378). Fix = re-push on >=0.54.0 + rotate (version
+    history keeps the plaintext).
 
   kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
     3-way diff: local vs pull-time snapshot vs remote. Detects conflicts.
@@ -959,6 +968,13 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     the branch id.
     --no-name-drift-warnings (since 0.47.0): suppress the cosmetic name_drift_warnings
     array from the result envelope.
+    Never-fetched guard (since 0.72.0): a manifest entry with an empty pull_hash and no
+    local files (pre-0.72 name-collision phantom) is NEVER planned as a remote DELETE;
+    diff/push exclude it and report it under never_fetched with a warning -- run sync pull
+    to materialize it. Local deletion of a properly-pulled config still deletes on push.
+    Adopted-by-id writeback (since 0.72.0): pushing an untracked local file whose
+    _keboola.config_id resolves on the branch (adopt-update, #482) now also writes the
+    manifest entry, so follow-up diffs are stable and a later local delete is detected.
 
   kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]
     Clone a reference synced tree into a fresh target project + parameterize it

@@ -221,6 +221,12 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
 - **`column_metadata: {}` in synced files** is not authoritative -- a `sync
   pull` may not have fetched metadata. Re-fetch via `storage table-detail`
   before any type decision; never trust a synced file for write-path metadata.
+- **Drifted sync tree** (0.72.0+): reconcile with `sync pull --theirs` (remote
+  wins: overwrites local edits, restores deleted files, resolves conflicts) --
+  NEVER hand-edit `.keboola/manifest.json`. Plain pull re-materializes deleted
+  dirs; `is_disabled: true` in `_config.yml` = config disabled (absent =
+  enabled); a `never_fetched` warning on diff/push = run `sync pull` first.
+  `sync status` is local-only -- audit real drift with `sync diff`.
 - **Native types** (0.25.0+): `--column amount:NUMBER(18,2)` passes through;
   `BOOLEAN` defaults must be lowercase; `INTEGER(10)` is invalid (use
   `NUMBER(3,0)`); `--not-null` / `--default` must name a defined `--column`.

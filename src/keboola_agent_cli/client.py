@@ -1009,6 +1009,7 @@ class KeboolaClient(BaseHttpClient):
         configuration: dict[str, Any],
         description: str = "",
         branch_id: int | None = None,
+        is_disabled: bool = False,
     ) -> dict[str, Any]:
         """Create a new configuration for a component.
 
@@ -1020,19 +1021,24 @@ class KeboolaClient(BaseHttpClient):
             configuration: Configuration body (parameters, storage, etc.).
             description: Optional description.
             branch_id: If set, target a specific dev branch.
+            is_disabled: When True, the configuration is created in disabled
+                state (mirrors ``create_config_row``).
 
         Returns:
             Created configuration dict including the assigned 'id'.
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        data: dict[str, Any] = {
+            "name": name,
+            "description": description,
+            "configuration": json.dumps(configuration),
+        }
+        if is_disabled:
+            data["isDisabled"] = "1"
         resp = self._request(
             "POST",
             f"{prefix}/components/{quote(component_id)}/configs",
-            data={
-                "name": name,
-                "description": description,
-                "configuration": json.dumps(configuration),
-            },
+            data=data,
         )
         return resp.json()
 
@@ -1045,12 +1051,15 @@ class KeboolaClient(BaseHttpClient):
         description: str | None = None,
         change_description: str = "",
         branch_id: int | None = None,
+        is_disabled: bool | None = None,
     ) -> dict[str, Any]:
         """Update an existing configuration.
 
         PUT /v2/storage/[branch/{id}/]components/{comp_id}/configs/{config_id}
 
         Only provided (non-None) fields are sent in the request.
+        ``is_disabled=None`` leaves the remote enabled/disabled state
+        untouched (mirrors ``update_config_row``).
 
         Returns:
             Updated configuration dict.
@@ -1063,6 +1072,8 @@ class KeboolaClient(BaseHttpClient):
             data["description"] = description
         if configuration is not None:
             data["configuration"] = json.dumps(configuration)
+        if is_disabled is not None:
+            data["isDisabled"] = "1" if is_disabled else "0"
         if change_description:
             data["changeDescription"] = change_description
         resp = self._request(
