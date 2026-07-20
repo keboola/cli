@@ -55,6 +55,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "config.list": "read",
     "config.detail": "read",
     "config.search": "read",
+    "config.examples": "read",
     "config.update": "write",
     "config.set-default-bucket": "write",
     "config.rename": "write",
@@ -141,6 +142,15 @@ OPERATION_REGISTRY: dict[str, str] = {
     # Component discovery
     "component.list": "read",
     "component.detail": "read",
+    # sync-action executes component-defined code (testConnection, ...) --
+    # freeform action names, so conservatively a write (issue #395).
+    "component.sync-action": "write",
+    # Docs Q&A (issue #392)
+    "docs.query": "read",
+    # SQL transformation authoring (issue #396)
+    "transformation.create": "write",
+    "transformation.show": "read",
+    "transformation.edit": "write",
     # Developer Portal (since 0.48.0)
     # Developer Portal — top-level commands on `dev-portal` (the identity
     # sub-app's leaves are listed separately below under dev-portal.identity.*).
@@ -222,6 +232,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "encrypt.values": "write",
     # Semantic layer (metastore) — new in 0.41.0
     "semantic-layer.show": "read",
+    "semantic-layer.schema": "read",
     "semantic-layer.validate": "read",
     "semantic-layer.export": "read",
     "semantic-layer.diff": "read",
@@ -300,6 +311,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "flow.list": "read",
     "flow.detail": "read",
     "flow.schema": "read",
+    "flow.examples": "read",
     "flow.validate": "read",
     "flow.new": "write",
     "flow.update": "write",

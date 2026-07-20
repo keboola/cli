@@ -234,6 +234,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent semantic-layer promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
 | Replay a snapshot into a project. | `kbagent semantic-layer import --project PROJECT --file FILE` |
 | Show the entities in a semantic-layer model | `kbagent semantic-layer show --project PROJECT` |
+| Fetch the server-side JSON Schema of semantic object types | `kbagent semantic-layer schema --project PROJECT` |
 | Snapshot a semantic-layer model to a self-describing JSON file | `kbagent semantic-layer export --project PROJECT` |
 | Diff two semantic-layer snapshots (project↔project, project↔file, file↔file) | `kbagent semantic-layer diff` |
 | Validate a semantic-layer model | `kbagent semantic-layer validate --project PROJECT` |
@@ -266,6 +267,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent sl promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
 | Replay a snapshot into a project. | `kbagent sl import --project PROJECT --file FILE` |
 | Show the entities in a semantic-layer model | `kbagent sl show --project PROJECT` |
+| Fetch the server-side JSON Schema of semantic object types | `kbagent sl schema --project PROJECT` |
 | Snapshot a semantic-layer model to a self-describing JSON file | `kbagent sl export --project PROJECT` |
 | Diff two semantic-layer snapshots (project↔project, project↔file, file↔file) | `kbagent sl diff` |
 | Validate a semantic-layer model | `kbagent sl validate --project PROJECT` |
