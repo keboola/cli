@@ -151,9 +151,19 @@ jobs:
       matrix:
         # `platform` is the OS name baked into artifact/zip filenames (darwin/linux/
         # windows) — Homebrew/Chocolatey/WinGet URLs depend on these exact values.
+        #
+        # Linux legs are PINNED to the OLDEST GA runner, NOT ubuntu-latest: a
+        # PyInstaller binary requires the build machine's glibc (or newer) at
+        # runtime, so the build runner sets the compatibility floor for every
+        # end user. ubuntu-latest (24.04, glibc 2.39) produced a v0.71.0 binary
+        # that failed with "GLIBC_2.38 not found" on Ubuntu 22.04-era systems
+        # (caught by test-install's Homebrew leg, run 29752342509). Building on
+        # ubuntu-22.04 (glibc 2.35) keeps Ubuntu 22.04 / Debian 12 installable.
+        # Bump these only when the OS baseline is consciously dropped — never
+        # back to -latest.
         include:
-          - { os: ubuntu-latest, platform: linux, arch: amd64 }
-          - { os: ubuntu-24.04-arm, platform: linux, arch: arm64 }
+          - { os: ubuntu-22.04, platform: linux, arch: amd64 }
+          - { os: ubuntu-22.04-arm, platform: linux, arch: arm64 }
           # Single macOS environment (Apple Silicon). PyInstaller can't cross-compile,
           # so there's no Intel leg; Intel Macs use `uv tool install`. Re-add a
           # `{ os: macos-13, platform: darwin, arch: amd64 }` entry if native Intel is needed.
