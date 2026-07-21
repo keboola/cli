@@ -223,6 +223,13 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.file-delete": "destructive",
     "storage.swap-tables": "destructive",
     "storage.truncate-table": "destructive",
+    # Storage snapshots (issue #512). snapshot-delete removes only the backup
+    # (source table untouched) but forecloses restores -- destructive.
+    "storage.snapshots": "read",
+    "storage.snapshot-detail": "read",
+    "storage.snapshot-create": "write",
+    "storage.table-from-snapshot": "write",
+    "storage.snapshot-delete": "destructive",
     # Storage descriptions
     "storage.describe-bucket": "write",
     "storage.describe-table": "write",

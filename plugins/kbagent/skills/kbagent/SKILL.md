@@ -168,6 +168,11 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Delete one or more Storage Files | `kbagent storage file-delete --project PROJECT --file-id FILE-ID` |
 | Load a Storage File into a table | `kbagent storage load-file --project PROJECT --file-id FILE-ID --table-id TABLE-ID` |
 | Export a table to a Storage File | `kbagent storage unload-table --project PROJECT --table-id TABLE-ID` |
+| List snapshots of a table | `kbagent storage snapshots --project PROJECT --table-id TABLE-ID` |
+| Create a snapshot of a table (data + columns + primary key) | `kbagent storage snapshot-create --project PROJECT --table-id TABLE-ID` |
+| Show one snapshot's detail (source table, creation time, description) | `kbagent storage snapshot-detail --project PROJECT --snapshot-id SNAPSHOT-ID` |
+| Delete one or more table snapshots (the source tables are untouched) | `kbagent storage snapshot-delete --project PROJECT --snapshot-id SNAPSHOT-ID` |
+| Create a NEW table from an existing snapshot (snapshot restore) | `kbagent storage table-from-snapshot --project PROJECT --snapshot-id SNAPSHOT-ID --bucket-id BUCKET-ID --name NAME` |
 | List Data Streams sources in a project | `kbagent stream list --project PROJECT` |
 | Create an OTLP (or HTTP) source and return its endpoint | `kbagent stream create-source --project PROJECT --name NAME` |
 | Show a source's endpoints, protocol, and destination tables | `kbagent stream detail [SOURCE-ID] --project PROJECT` |

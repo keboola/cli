@@ -455,6 +455,13 @@ class TestFullE2E:
         )
         self._test_truncate_table_roundtrip(table_id)
 
+        _step(
+            11.2,
+            "storage snapshot-* + table-from-snapshot",
+            "snapshot lifecycle + restore as new table (issue #512)",
+        )
+        self._test_snapshot_roundtrip(bucket_id, table_id)
+
         _step(12, "storage tables + table-detail")
         self._test_table_listing(bucket_id, table_id)
 
@@ -1095,6 +1102,162 @@ class TestFullE2E:
         assert restored["rows_count"] == before["rows_count"], (
             f"restore failed: expected {before['rows_count']} rows, got {restored['rows_count']}"
         )
+
+    def _test_snapshot_roundtrip(self, bucket_id: str, table_id: str) -> None:
+        """Snapshot lifecycle + restore-as-new-table (issue #512).
+
+        create -> list -> detail -> table-from-snapshot (dry-run, then apply)
+        -> verify the restored table matches the source (rows, columns,
+        primary key) -> delete the restored table and the snapshot -> verify
+        the snapshot is gone. Leaves the source table untouched for the
+        downstream hops.
+        """
+        before = self._run_ok(
+            "storage",
+            "table-detail",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )["data"]
+        assert before["rows_count"] > 0, "snapshot roundtrip needs a non-empty table"
+        before_columns = sorted(c["name"] for c in before["column_details"])
+        before_pk = list(before.get("primary_key") or [])
+
+        # Create a snapshot; the receipt carries the new snapshot ID.
+        created = self._run_ok(
+            "storage",
+            "snapshot-create",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--description",
+            "kbagent E2E snapshot roundtrip",
+        )["data"]
+        snapshot_id = str(created["snapshot_id"])
+        assert snapshot_id, f"snapshot-create returned no snapshot_id: {created}"
+
+        # List: the new snapshot must appear for the source table.
+        listed = self._run_ok(
+            "storage",
+            "snapshots",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )["data"]
+        assert listed["count"] >= 1
+        assert snapshot_id in [str(s["id"]) for s in listed["snapshots"]]
+
+        # Detail: the snapshot must point back at the source table.
+        detail = self._run_ok(
+            "storage",
+            "snapshot-detail",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+        )["data"]
+        assert str(detail["snapshot"]["id"]) == snapshot_id
+        assert detail["snapshot"]["table"]["id"] == table_id
+
+        # Restore dry-run: receipt only, no table created.
+        restored_name = "e2e_snapshot_restore"
+        restored_table_id = f"{bucket_id}.{restored_name}"
+        dry = self._run_ok(
+            "storage",
+            "table-from-snapshot",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            restored_name,
+            "--dry-run",
+        )["data"]
+        assert dry["dry_run"] is True
+        tables = self._run_ok(
+            "storage", "tables", "--project", self.alias, "--bucket-id", bucket_id
+        )["data"]["tables"]
+        assert restored_table_id not in [t["id"] for t in tables], (
+            "dry-run must not create the table"
+        )
+
+        # Restore for real: a NEW table with the snapshot's data appears.
+        applied = self._run_ok(
+            "storage",
+            "table-from-snapshot",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            restored_name,
+        )["data"]
+        assert applied["dry_run"] is False
+        assert applied["table_id"] == restored_table_id
+
+        # The restored table must match the source: rows, columns, primary key.
+        restored = self._run_ok(
+            "storage",
+            "table-detail",
+            "--project",
+            self.alias,
+            "--table-id",
+            restored_table_id,
+        )["data"]
+        assert restored["rows_count"] == before["rows_count"], (
+            f"restored rows {restored['rows_count']} != source rows {before['rows_count']}"
+        )
+        assert sorted(c["name"] for c in restored["column_details"]) == before_columns
+        assert list(restored.get("primary_key") or []) == before_pk
+
+        # Drop the restored table so downstream bucket listings are unchanged.
+        self._run_ok(
+            "storage",
+            "delete-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            restored_table_id,
+            "--yes",
+        )
+
+        # Delete the snapshot (dry-run first) and verify it is gone.
+        del_dry = self._run_ok(
+            "storage",
+            "snapshot-delete",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+            "--dry-run",
+        )["data"]
+        assert del_dry["would_delete"] == [snapshot_id]
+        deleted = self._run_ok(
+            "storage",
+            "snapshot-delete",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+        )["data"]
+        assert deleted["deleted"] == [snapshot_id]
+        assert deleted["failed"] == []
+        after_delete = self._run_ok(
+            "storage",
+            "snapshots",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )["data"]
+        assert snapshot_id not in [str(s["id"]) for s in after_delete["snapshots"]]
 
     def _test_table_listing(self, bucket_id: str, table_id: str) -> None:
         """Verify table appears in listings and detail is correct."""
