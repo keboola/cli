@@ -282,7 +282,7 @@ def component_sync_action(
         help="Request timeout in seconds for the action call (long actions e.g. getTables)",
     ),
 ) -> None:
-    """Run a synchronous component action (e.g. testConnection).
+    """Run a synchronous component action such as testConnection.
 
     \b
     Valid action names are component-defined -- the API validates them

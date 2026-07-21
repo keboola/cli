@@ -97,7 +97,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Rotate a token: generate a new value and invalidate the old one (secret shown once) | `kbagent token refresh --project PROJECT --token-id TOKEN-ID` |
 | List available components from connected projects | `kbagent component list` |
 | Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
-| Run a synchronous component action (e.g. | `kbagent component sync-action <ACTION-NAME> --component-id COMPONENT-ID --project PROJECT` |
+| Run a synchronous component action such as testConnection | `kbagent component sync-action <ACTION-NAME> --component-id COMPONENT-ID --project PROJECT` |
 | List configurations from connected projects | `kbagent config list` |
 | Show detailed information about one or many configurations | `kbagent config detail --component-id COMPONENT-ID` |
 | Show sample configuration JSON examples for a component | `kbagent config examples --component-id COMPONENT-ID` |
@@ -370,6 +370,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | All commands cheat sheet | [commands-reference](references/commands-reference.md) |
 | **Safe config write workflow** (fetch → dry-run → confirm → push) | [safe-write-workflow](references/safe-write-workflow.md) |
 | Creating new configurations | [scaffold-workflow](references/scaffold-workflow.md) |
+| **SQL transformations** (create / show / edit; the show-before-edit rule for positional block/code ids) | [transformation-workflow](references/transformation-workflow.md) |
 | MCP tools (multi-project read/write) | [mcp-workflow](references/mcp-workflow.md) |
 | Workspace SQL debugging | [workspace-workflow](references/workspace-workflow.md) |
 | **Agent Tasks via CLI** (`kbagent agent` CRUD + run + cron-preview + prompt-improve; cron / manual / chained; mcp_tool / cli_command / ai_agent action flavours) | [agent-tasks-cli-workflow](references/agent-tasks-cli-workflow.md) |
