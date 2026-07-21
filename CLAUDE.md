@@ -410,6 +410,11 @@ kbagent permissions check OPERATION
 
 kbagent tool list [--project NAME] [--branch ID]
 kbagent tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]
+# tool group DEPRECATED (0.74.0+, epic #390): every catalog tool has a native command -- tool list
+#   prints a cli_equivalent column, tool call warns with the exact replacement (stderr; --json adds
+#   an additive "deprecation" key). Parity map = src/keboola_agent_cli/mcp_parity.py; weekly
+#   mcp-parity-canary workflow (make parity-check) diffs it against upstream TOOLS.md. The group
+#   (and `agent --type mcp_tool`) will be removed after the deprecation window.
 
 kbagent branch list [--project NAME]
 kbagent branch create --project ALIAS --name "..." [--description "..."]

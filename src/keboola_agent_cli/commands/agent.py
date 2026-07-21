@@ -30,6 +30,17 @@ from ._helpers import check_cli_permission, get_formatter, get_service
 
 agent_app = typer.Typer(help="Scheduled agent tasks (cron / manual / chained)")
 
+# The mcp_tool action flavour rides the deprecated MCP passthrough (epic
+# #390 phase 2). Tasks keep running -- this only surfaces the deprecation:
+# stderr warning in human mode, additive "deprecation" envelope key in
+# JSON mode. Creation is never blocked; agents.json / REST payloads are
+# unchanged.
+MCP_TOOL_ACTION_DEPRECATION = (
+    "agent action type 'mcp_tool' is deprecated (epic #390); prefer --type "
+    "cli_command with the native kbagent command (see `kbagent tool list` "
+    "cli_equivalent column)."
+)
+
 
 @agent_app.callback(invoke_without_command=True)
 def _agent_permission_check(ctx: typer.Context) -> None:
@@ -594,6 +605,8 @@ def agent_create(
         input_payload=input_payload,
         timeout=timeout,
     )
+    if action.type == "mcp_tool":
+        formatter.warning(MCP_TOOL_ACTION_DEPRECATION)
     trigger = _trigger_from_flags(trigger_task_id, trigger_on)
     try:
         task = service.create_task(
@@ -608,7 +621,10 @@ def agent_create(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
-    formatter.output(task.model_dump(mode="json"), _render_created_task)
+    payload = task.model_dump(mode="json")
+    if action.type == "mcp_tool" and formatter.json_mode:
+        payload["deprecation"] = MCP_TOOL_ACTION_DEPRECATION
+    formatter.output(payload, _render_created_task)
 
 
 @agent_app.command("update")
@@ -658,7 +674,15 @@ def agent_update(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
-    formatter.output(task.model_dump(mode="json"), _render_updated_task)
+    # `update` cannot change the action, so warn based on the task's
+    # persisted flavour: touching an mcp_tool task keeps it on the
+    # deprecated MCP passthrough (epic #390).
+    payload = task.model_dump(mode="json")
+    if task.action.type == "mcp_tool":
+        formatter.warning(MCP_TOOL_ACTION_DEPRECATION)
+        if formatter.json_mode:
+            payload["deprecation"] = MCP_TOOL_ACTION_DEPRECATION
+    formatter.output(payload, _render_updated_task)
 
 
 @agent_app.command("delete")
@@ -878,11 +902,18 @@ def agent_test(
         input_payload=input_payload,
         timeout=timeout,
     )
+    if action.type == "mcp_tool":
+        formatter.warning(MCP_TOOL_ACTION_DEPRECATION)
     if stream:
+        # NDJSON event lines mirror the SSE surface byte-for-byte; the
+        # deprecation is not injected into stream events on purpose.
         _stream_to_stdout(formatter, service.stream_test_action(action, name=name))
         return
     run = asyncio.run(service.test_action(action, name=name))
-    formatter.output(run.model_dump(mode="json"), _render_test_result)
+    payload = run.model_dump(mode="json")
+    if action.type == "mcp_tool" and formatter.json_mode:
+        payload["deprecation"] = MCP_TOOL_ACTION_DEPRECATION
+    formatter.output(payload, _render_test_result)
 
 
 @agent_app.command("cron-preview")

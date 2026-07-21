@@ -11,6 +11,24 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## MCP passthrough is DEPRECATED; parity map + canary (since v0.74.0)
+
+- **`tool call` / `tool list` / `agent --type mcp_tool` are on a removal
+  track** (epic #390 phase 2). `tool call` warns with the exact native
+  replacement (stderr in human mode; additive `deprecation` key in the
+  `--json` envelope -- parse-safe, no existing key changed). `tool list`
+  gains a `cli_equivalent` column/field. Serve `/mcp/tools*` routes are
+  marked `deprecated` in OpenAPI (`/mcp/server-status` stays).
+- **The parity map is code**: `src/keboola_agent_cli/mcp_parity.py` --
+  one entry per upstream tool; offline tests pin every entry to a real
+  OPERATION_REGISTRY key, and the weekly `mcp-parity-canary` workflow
+  (also `make parity-check`) diffs the live keboola-mcp-server `TOOLS.md`
+  against it, so a new upstream tool turns the canary red instead of
+  silently widening the gap.
+- **`agent --type mcp_tool` tasks keep working** through the deprecation
+  window -- creation just warns; migrate to `--type cli_command` with the
+  native command at your own pace before the removal release.
+
 ## MCP tool classification is FAIL-CLOSED; parity commands replace `tool call` (since v0.73.0)
 
 - **Unknown MCP tool names classify as `destructive`** -- blocked by BOTH

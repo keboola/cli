@@ -1251,10 +1251,16 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   See agent-tasks-cli-workflow.md skill reference for full walkthroughs.
 
-### MCP Tools (Multi-Project)
+### MCP Tools (Multi-Project) -- DEPRECATED since 0.74.0
+
+  The MCP passthrough is on a removal track (epic #390): every catalog tool
+  has a native command. Prefer the native command in ALL new work -- `tool
+  list` prints the replacement in the cli_equivalent column and `tool call`
+  warns with it (stderr in human mode; additive "deprecation" key in --json).
 
   kbagent tool list [--project NAME] [--branch ID]
-    List MCP tools with inputSchema. Use --json to inspect accepted parameters.
+    List MCP tools with inputSchema + cli_equivalent. Use --json to inspect
+    accepted parameters.
 
   kbagent tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]
     Call an MCP tool. Read tools auto-query all projects. Write tools need --project.
