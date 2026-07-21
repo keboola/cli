@@ -175,6 +175,7 @@ class KeboolaClient(BaseHttpClient):
         self._queue_client: httpx.Client | None = None
         self._query_client: httpx.Client | None = None
         self._encrypt_client: httpx.Client | None = None
+        self._sync_actions_client: httpx.Client | None = None
         # Lazily built on first Data Streams call (per-device OTLP sources); the
         # Stream control plane is a sibling host reachable from this stack+token.
         self._stream_client: StreamClient | None = None
@@ -197,6 +198,10 @@ class KeboolaClient(BaseHttpClient):
     def _encrypt_base_url(self) -> str:
         return self._derive_service_url(self._stack_url, "encryption")
 
+    @property
+    def _sync_actions_base_url(self) -> str:
+        return self._derive_service_url(self._stack_url, "sync-actions")
+
     def close(self) -> None:
         """Close the underlying HTTP clients."""
         super().close()
@@ -206,6 +211,8 @@ class KeboolaClient(BaseHttpClient):
             self._query_client.close()
         if self._encrypt_client is not None:
             self._encrypt_client.close()
+        if self._sync_actions_client is not None:
+            self._sync_actions_client.close()
         if self._stream_client is not None:
             self._stream_client.close()
 
@@ -290,6 +297,61 @@ class KeboolaClient(BaseHttpClient):
             params={"projectId": project_id, "componentId": component_id},
             json=data,
         )
+        return response.json()
+
+    def _sync_actions_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """Execute a Sync Actions API request with retry.
+
+        The Sync Actions service is a sibling host derived from the stack URL
+        (``sync-actions.{stack-suffix}``); the sub-client inherits the main
+        client's headers, so the ``X-StorageApi-Token`` auth carries over.
+        """
+        client = self._get_or_create_sub_client("_sync_actions_client", self._sync_actions_base_url)
+        return self._do_request(
+            method, path, client=client, base_url=self._sync_actions_base_url, **kwargs
+        )
+
+    def run_sync_action(
+        self,
+        component_id: str,
+        action: str,
+        config_data: dict[str, Any],
+        branch_id: int | None = None,
+        timeout: float | None = None,
+    ) -> Any:
+        """Run a synchronous component action via the Sync Actions API.
+
+        POSTs to ``/actions`` on the ``sync-actions.{stack-suffix}`` host.
+        Valid action names are component-defined (surfaced as
+        ``synchronous_actions`` in component metadata, e.g. ``testConnection``,
+        ``getTables``); the API validates them server-side.
+
+        Args:
+            component_id: Component identifier (e.g. 'keboola.ex-db-mysql').
+            action: Sync action name (freeform; component-defined).
+            config_data: The configData payload (typically
+                ``{"parameters": ..., "storage": ...}``). May carry secrets --
+                never log it.
+            branch_id: If set, sent as ``branchId``; omitted entirely for the
+                production branch (the API treats an absent key as default).
+            timeout: Optional per-request timeout in seconds (sync actions can
+                run long, e.g. ``getTables`` against a large database).
+
+        Returns:
+            The action result verbatim (opaque dict or list; shape is
+            action-specific).
+        """
+        body: dict[str, Any] = {
+            "configData": config_data,
+            "componentId": component_id,
+            "action": action,
+        }
+        if branch_id is not None:
+            body["branchId"] = branch_id
+        request_kwargs: dict[str, Any] = {"json": body}
+        if timeout is not None:
+            request_kwargs["timeout"] = timeout
+        response = self._sync_actions_request("POST", "/actions", **request_kwargs)
         return response.json()
 
     def verify_token(self) -> TokenVerifyResponse:

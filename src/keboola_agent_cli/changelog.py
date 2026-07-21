@@ -24,6 +24,33 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.73.0": [
+        "MCP parity + fail-closed firewall (#478 phase 0, epic #390 phase 1): six native "
+        "commands port the remaining keboola-mcp-server tools, and MCP tool classification "
+        "fails closed.",
+        "Security (#478): unknown MCP tool names now classify as `destructive` (strictest) "
+        "instead of falling through to `read`. Catalog tools `run_job`, `run_sync_action`, "
+        "`modify_*`, `deploy_*` move from read to write -- they previously passed "
+        "`--deny-writes` and fanned out to every configured project. Multi-project dispatch "
+        "is fail-closed too: only known-read tools fan out.",
+        "Security (#478): `tool call` now enforces the SESSION firewall per tool name -- "
+        "`--deny-destructive` blocks `tool call delete_bucket` (previously only the persisted "
+        "policy was checked at tool granularity).",
+        'New (#392): `kbagent docs query "QUESTION"` -- answers from the Keboola '
+        "documentation via the AI Service (ports `docs_query`).",
+        "New (#393): `kbagent config examples --component-id ID` -- sample root/row "
+        "configurations for a component (ports `get_config_examples`).",
+        "New (#394): `kbagent semantic-layer schema --type metric,dataset,...` -- live JSON "
+        "schemas of semantic object types from the metastore (ports `get_semantic_schema`).",
+        "New (#395): `kbagent component sync-action ACTION` -- run synchronous component "
+        "actions like testConnection (ports `run_sync_action`; shallow root+row config merge "
+        "identical to the MCP tool).",
+        "New (#396): `kbagent transformation create|show|edit` -- SQL transformation "
+        "authoring with the 9-op block/code edit engine (ports create/update_sql_"
+        "transformation; synthetic b{i}/b{i}.c{j} ids, dialect from project default_backend).",
+        "New (#397): `kbagent flow examples` + `flow schema` now serves the authoritative "
+        "bundled conditional-flow schema (ports `get_flow_examples`; fixes schema drift).",
+    ],
     "0.72.0": [
         "Sync trust cluster (#466, #467, #472, #497): four reliability fixes that make "
         "`kbagent sync` safe to run against production trees edited by other people.",

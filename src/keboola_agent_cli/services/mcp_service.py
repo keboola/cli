@@ -37,7 +37,7 @@ from ..constants import (
 )
 from ..errors import ConfigError
 from ..models import ProjectConfig
-from ..permissions import PermissionEngine
+from ..permissions import PermissionEngine, classify_mcp_tool
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
@@ -64,15 +64,10 @@ async def _semaphored(sem: asyncio.Semaphore, coro: Any) -> Any:
         return await coro
 
 
-# Prefixes that indicate write/mutating tools
-WRITE_PREFIXES = (
-    "create_",
-    "update_",
-    "delete_",
-    "add_",
-    "remove_",
-    "set_",
-)
+# Tool risk classification lives in permissions.classify_mcp_tool -- the single
+# source of truth shared with the permission firewall (issue #478). Dispatch is
+# fail-closed: only tools classified 'read' fan out across all projects; an
+# unknown tool is treated as destructive and targets a single project.
 
 # Tools that auto-expand when a required param is missing.
 # Maps tool_name -> config dict. When the param is absent from user input,
@@ -88,8 +83,13 @@ AUTO_EXPAND_TOOLS = {
 
 
 def _is_write_tool(tool_name: str) -> bool:
-    """Determine if a tool name indicates a write/mutating operation."""
-    return tool_name.startswith(WRITE_PREFIXES)
+    """True when the tool must NOT fan out across projects.
+
+    Everything except a known-read classification counts as a write for
+    dispatch purposes -- unknown tools are fail-closed to single-project
+    so a mutating tool can never run on every configured project at once.
+    """
+    return classify_mcp_tool(tool_name) != "read"
 
 
 def detect_mcp_server_command() -> list[str] | None:

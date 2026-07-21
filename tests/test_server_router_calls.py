@@ -1081,3 +1081,486 @@ def test_bulk_delete_route_not_shadowed_by_alias_delete(tmp_path: Path) -> None:
     assert res.status_code == 200, res.text
     project_svc.bulk_remove_projects.assert_called_once()
     project_svc.remove_project.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# docs.py  POST /documentation/query
+# Service: docs.ask_docs(alias=..., query=...)  (mirrors `kbagent docs query`)
+# ---------------------------------------------------------------------------
+
+
+def test_docs_query_passes_alias_and_query(tmp_path: Path) -> None:
+    """POST /documentation/query must call DocsService.ask_docs(alias=, query=)."""
+    docs_svc = MagicMock()
+    docs_svc.ask_docs.return_value = {"query": "q", "text": "answer", "source_urls": []}
+    registry = _mock_registry(docs=docs_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/documentation/query",
+            headers=AUTH,
+            json={"query": "How do incremental loads work?", "project": PROJECT},
+        )
+
+    assert res.status_code == 200, res.text
+    docs_svc.ask_docs.assert_called_once_with(alias=PROJECT, query="How do incremental loads work?")
+
+
+def test_docs_query_project_optional_defaults_to_none(tmp_path: Path) -> None:
+    """Omitting `project` passes alias=None (service picks the first project)."""
+    docs_svc = MagicMock()
+    docs_svc.ask_docs.return_value = {"query": "q", "text": "a", "source_urls": []}
+    registry = _mock_registry(docs=docs_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post("/documentation/query", headers=AUTH, json={"query": "q"})
+
+    assert res.status_code == 200, res.text
+    assert docs_svc.ask_docs.call_args.kwargs["alias"] is None
+
+
+def test_docs_query_config_error_is_400(tmp_path: Path) -> None:
+    """No projects configured -> ConfigError -> HTTP 400 error envelope."""
+    from keboola_agent_cli.errors import ConfigError
+
+    docs_svc = MagicMock()
+    docs_svc.ask_docs.side_effect = ConfigError("No projects configured.")
+    registry = _mock_registry(docs=docs_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post("/documentation/query", headers=AUTH, json={"query": "q"})
+
+    assert res.status_code == 400, res.text
+    assert "No projects configured" in res.json()["error"]["message"]
+
+
+def test_docs_query_requires_bearer_auth(tmp_path: Path) -> None:
+    """/documentation must NOT live in the auth-exempt /docs (Swagger) namespace.
+
+    The auth middleware exempts every path starting with /docs; the docs-QA
+    router therefore uses /documentation and must reject unauthenticated calls.
+    """
+    docs_svc = MagicMock()
+    registry = _mock_registry(docs=docs_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post("/documentation/query", json={"query": "q"})  # no auth header
+
+    assert res.status_code == 401, res.text
+    docs_svc.ask_docs.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# configs.py  GET /configs/examples/{component_id}
+# Service: component.get_config_examples(alias=..., component_id=...)
+# (method lives on ComponentService; mirrors `kbagent config examples`)
+# ---------------------------------------------------------------------------
+
+
+def test_config_examples_passes_alias_and_component_id(tmp_path: Path) -> None:
+    """GET /configs/examples/{c} must call ComponentService.get_config_examples."""
+    component_svc = MagicMock()
+    component_svc.get_config_examples.return_value = {
+        "component_id": COMPONENT,
+        "root_examples": [{"parameters": {}}],
+        "row_examples": [],
+    }
+    registry = _mock_registry(component=component_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(
+            f"/configs/examples/{COMPONENT}", headers=AUTH, params={"project": PROJECT}
+        )
+
+    assert res.status_code == 200, res.text
+    component_svc.get_config_examples.assert_called_once_with(alias=PROJECT, component_id=COMPONENT)
+
+
+def test_config_examples_project_optional(tmp_path: Path) -> None:
+    """Without ?project= the router passes alias=None (first configured project)."""
+    component_svc = MagicMock()
+    component_svc.get_config_examples.return_value = {
+        "component_id": COMPONENT,
+        "root_examples": [],
+        "row_examples": [],
+    }
+    registry = _mock_registry(component=component_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(f"/configs/examples/{COMPONENT}", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert component_svc.get_config_examples.call_args.kwargs["alias"] is None
+
+
+def test_config_examples_api_error_is_502(tmp_path: Path) -> None:
+    """AI Service failure (KeboolaApiError) -> HTTP 502 error envelope."""
+    from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+
+    component_svc = MagicMock()
+    component_svc.get_config_examples.side_effect = KeboolaApiError(
+        message="Component not found", status_code=404, error_code=ErrorCode.NOT_FOUND
+    )
+    registry = _mock_registry(component=component_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(f"/configs/examples/{COMPONENT}", headers=AUTH)
+
+    assert res.status_code == 502, res.text
+    assert "Component not found" in res.json()["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# components.py  POST /components/{component_id}/actions/{action}
+# Service: component.run_sync_action(...)  (mirrors `kbagent component sync-action`)
+# ---------------------------------------------------------------------------
+
+
+def test_component_sync_action_forwards_all_kwargs(tmp_path: Path) -> None:
+    """POST /components/{c}/actions/{a} must forward every body field by name."""
+    component_svc = MagicMock()
+    component_svc.run_sync_action.return_value = {
+        "component_id": COMPONENT,
+        "action": "testConnection",
+        "result": {"status": "success"},
+    }
+    registry = _mock_registry(component=component_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/components/{COMPONENT}/actions/testConnection",
+            headers=AUTH,
+            json={
+                "project": PROJECT,
+                "config_id": CONFIG_ID,
+                "row_id": ROW_ID,
+                "branch_id": 123,
+                "timeout": 60,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    component_svc.run_sync_action.assert_called_once_with(
+        alias=PROJECT,
+        component_id=COMPONENT,
+        action="testConnection",
+        config_id=CONFIG_ID,
+        row_id=ROW_ID,
+        branch_id=123,
+        config_data_override=None,
+        timeout=60,
+    )
+
+
+def test_component_sync_action_config_data_override(tmp_path: Path) -> None:
+    """`config_data` in the body reaches the service as config_data_override=."""
+    component_svc = MagicMock()
+    component_svc.run_sync_action.return_value = {"result": {}}
+    registry = _mock_registry(component=component_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    payload = {"parameters": {"db": {"host": "example.com"}}}
+    with TestClient(app) as client:
+        res = client.post(
+            f"/components/{COMPONENT}/actions/testConnection",
+            headers=AUTH,
+            json={"project": PROJECT, "config_data": payload},
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = component_svc.run_sync_action.call_args.kwargs
+    assert kwargs["config_data_override"] == payload
+    assert kwargs["config_id"] is None
+
+
+def test_component_sync_action_resolves_pinned_alias(tmp_path: Path) -> None:
+    """Without `project` in the body, the pinned alias is resolved (like detail/scaffold)."""
+    component_svc = MagicMock()
+    component_svc.run_sync_action.return_value = {"result": {}}
+    project_svc = MagicMock()
+    project_svc.resolve_pinned_alias.return_value = ("pinned-proj", "config")
+    registry = _mock_registry(component=component_svc, project=project_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/components/{COMPONENT}/actions/getTables",
+            headers=AUTH,
+            json={"config_id": CONFIG_ID},
+        )
+
+    assert res.status_code == 200, res.text
+    project_svc.resolve_pinned_alias.assert_called_once_with(None)
+    assert component_svc.run_sync_action.call_args.kwargs["alias"] == "pinned-proj"
+
+
+def test_component_sync_action_missing_inputs_is_400(tmp_path: Path) -> None:
+    """Service-side ConfigError (no config_id, no config_data) -> HTTP 400."""
+    from keboola_agent_cli.errors import ConfigError
+
+    component_svc = MagicMock()
+    component_svc.run_sync_action.side_effect = ConfigError(
+        "Either a configuration ID or explicit config data is required to run a sync action."
+    )
+    registry = _mock_registry(component=component_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/components/{COMPONENT}/actions/testConnection",
+            headers=AUTH,
+            json={"project": PROJECT},
+        )
+
+    assert res.status_code == 400, res.text
+    assert "configuration ID" in res.json()["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# semantic_layer.py  GET /semantic-layer/schema
+# Service: semantic_layer.get_schema(alias=..., types=[...])
+# (mirrors `kbagent semantic-layer schema`)
+# ---------------------------------------------------------------------------
+
+
+def test_semantic_layer_schema_forwards_types(tmp_path: Path) -> None:
+    """Repeated ?type= params must reach get_schema as an ordered list."""
+    sl = MagicMock()
+    sl.get_schema.return_value = {"project": PROJECT, "schemas": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl))
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/semantic-layer/schema",
+            headers=AUTH,
+            params=[("project", PROJECT), ("type", "metric"), ("type", "model")],
+        )
+
+    assert res.status_code == 200, res.text
+    sl.get_schema.assert_called_once_with(alias=PROJECT, types=["metric", "model"])
+
+
+def test_semantic_layer_schema_defaults_to_all_types(tmp_path: Path) -> None:
+    """Omitting ?type= fetches every known semantic type (the CLI's --all)."""
+    from keboola_agent_cli.services.semantic_layer_service import SCHEMA_TYPE_ALIAS
+
+    sl = MagicMock()
+    sl.get_schema.return_value = {"project": PROJECT, "schemas": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl))
+
+    with TestClient(app) as client:
+        res = client.get("/semantic-layer/schema", headers=AUTH, params={"project": PROJECT})
+
+    assert res.status_code == 200, res.text
+    sl.get_schema.assert_called_once_with(alias=PROJECT, types=list(SCHEMA_TYPE_ALIAS))
+
+
+def test_semantic_layer_schema_unknown_type_is_400(tmp_path: Path) -> None:
+    """Unknown type name -> service ConfigError -> HTTP 400 (fail fast, no network)."""
+    from keboola_agent_cli.errors import ConfigError
+
+    sl = MagicMock()
+    sl.get_schema.side_effect = ConfigError("Unknown semantic type(s): bogus.")
+    app = _make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl))
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/semantic-layer/schema",
+            headers=AUTH,
+            params={"project": PROJECT, "type": "bogus"},
+        )
+
+    assert res.status_code == 400, res.text
+    assert "Unknown semantic type" in res.json()["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# transformation.py  POST /{p} + GET /{p}/{cfg} + PATCH /{p}/{cfg}
+# Service: transformation.create/show/edit  (mirrors `kbagent transformation *`)
+# ---------------------------------------------------------------------------
+
+
+def test_transformation_create_forwards_kwargs(tmp_path: Path) -> None:
+    """POST /transformations/{p} must forward every create field by name."""
+    tf = MagicMock()
+    tf.create.return_value = {"config_id": "77", "name": "Orders"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(transformation=tf))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/transformations/{PROJECT}",
+            headers=AUTH,
+            json={
+                "name": "Orders",
+                "sql": 'CREATE TABLE "report" AS SELECT 1;',
+                "created_tables": ["report"],
+                "description": "demo",
+                "branch_id": 5,
+                "dry_run": True,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    tf.create.assert_called_once_with(
+        PROJECT,
+        name="Orders",
+        sql='CREATE TABLE "report" AS SELECT 1;',
+        created_tables=["report"],
+        component_id=None,
+        description="demo",
+        branch_id=5,
+        dry_run=True,
+    )
+
+
+def test_transformation_create_empty_sql_is_400(tmp_path: Path) -> None:
+    """Service ValueError (SQL contains no statements) -> HTTP 400, not 500."""
+    tf = MagicMock()
+    tf.create.side_effect = ValueError("SQL contains no statements (empty input)")
+    app = _make_app_with_registry(tmp_path, _mock_registry(transformation=tf))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/transformations/{PROJECT}",
+            headers=AUTH,
+            json={"name": "Empty", "sql": "   "},
+        )
+
+    assert res.status_code == 400, res.text
+    assert "no statements" in res.json()["error"]["message"]
+
+
+def test_transformation_show_forwards_kwargs(tmp_path: Path) -> None:
+    """GET /transformations/{p}/{cfg} must pass config_id/component_id/branch_id."""
+    tf = MagicMock()
+    tf.show.return_value = {"config_id": CONFIG_ID, "blocks": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(transformation=tf))
+
+    with TestClient(app) as client:
+        res = client.get(
+            f"/transformations/{PROJECT}/{CONFIG_ID}",
+            headers=AUTH,
+            params={"component_id": "keboola.snowflake-transformation", "branch_id": 9},
+        )
+
+    assert res.status_code == 200, res.text
+    tf.show.assert_called_once_with(
+        PROJECT,
+        config_id=CONFIG_ID,
+        component_id="keboola.snowflake-transformation",
+        branch_id=9,
+    )
+
+
+def test_transformation_show_not_found_is_502(tmp_path: Path) -> None:
+    """Config not found under any SQL component -> KeboolaApiError -> HTTP 502."""
+    from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+
+    tf = MagicMock()
+    tf.show.side_effect = KeboolaApiError(
+        message="Configuration '42' was not found under any SQL transformation component",
+        status_code=404,
+        error_code=ErrorCode.NOT_FOUND,
+    )
+    app = _make_app_with_registry(tmp_path, _mock_registry(transformation=tf))
+
+    with TestClient(app) as client:
+        res = client.get(f"/transformations/{PROJECT}/{CONFIG_ID}", headers=AUTH)
+
+    assert res.status_code == 502, res.text
+    assert "was not found" in res.json()["error"]["message"]
+
+
+def test_transformation_edit_forwards_kwargs(tmp_path: Path) -> None:
+    """PATCH /transformations/{p}/{cfg} must forward ops + change_description + storage."""
+    tf = MagicMock()
+    tf.edit.return_value = {"config_id": CONFIG_ID, "operations_applied": [], "blocks": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(transformation=tf))
+
+    ops = [{"op": "str_replace", "search_for": "a", "replace_with": "b"}]
+    storage = {"input": {"tables": []}, "output": {"tables": []}}
+    with TestClient(app) as client:
+        res = client.patch(
+            f"/transformations/{PROJECT}/{CONFIG_ID}",
+            headers=AUTH,
+            json={
+                "ops": ops,
+                "change_description": "Rename column",
+                "storage": storage,
+                "dry_run": True,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    tf.edit.assert_called_once_with(
+        PROJECT,
+        config_id=CONFIG_ID,
+        ops=ops,
+        change_description="Rename column",
+        component_id=None,
+        storage=storage,
+        branch_id=None,
+        dry_run=True,
+    )
+
+
+def test_transformation_edit_invalid_op_is_400(tmp_path: Path) -> None:
+    """Service ValueError (bad op schema) -> HTTP 400, not 500."""
+    tf = MagicMock()
+    tf.edit.side_effect = ValueError("Operation #0 has unknown op 'explode'")
+    app = _make_app_with_registry(tmp_path, _mock_registry(transformation=tf))
+
+    with TestClient(app) as client:
+        res = client.patch(
+            f"/transformations/{PROJECT}/{CONFIG_ID}",
+            headers=AUTH,
+            json={"ops": [{"op": "explode"}], "change_description": "boom"},
+        )
+
+    assert res.status_code == 400, res.text
+    assert "unknown op" in res.json()["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# flows.py  GET /flows/examples
+# Module-level flow_service.get_flow_examples (offline, bundled resources --
+# exercised for real, no mocks; mirrors `kbagent flow examples`).
+# ---------------------------------------------------------------------------
+
+
+def test_flow_examples_returns_bundled_conditional_examples(tmp_path: Path) -> None:
+    """Default component id serves the bundled keboola.flow examples."""
+    registry = _mock_registry(flow=MagicMock())
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/flows/examples", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["component_id"] == "keboola.flow"
+    assert body["count"] == len(body["examples"])
+    assert body["count"] > 0
+    assert all(isinstance(example, dict) for example in body["examples"])
+
+
+def test_flow_examples_unknown_component_is_400(tmp_path: Path) -> None:
+    """An unknown component id -> ValueError -> HTTP 400 (mirrors CLI exit 2)."""
+    registry = _mock_registry(flow=MagicMock())
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/flows/examples", headers=AUTH, params={"component_id": "keboola.nonsense"}
+        )
+
+    assert res.status_code == 400, res.text
+    assert "No bundled flow examples" in res.json()["error"]["message"]

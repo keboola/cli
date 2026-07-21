@@ -1,0 +1,633 @@
+{
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema",
+  "required": [
+    "phases",
+    "tasks"
+  ],
+  "properties": {
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "task",
+          "phase"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "task": {
+            "type": "object",
+            "oneOf": [
+              {
+                "anyOf": [
+                  {
+                    "required": [
+                      "configId"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "configData"
+                    ]
+                  }
+                ],
+                "required": [
+                  "type",
+                  "componentId",
+                  "mode"
+                ],
+                "properties": {
+                  "mode": {
+                    "enum": [
+                      "run"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "job"
+                    ],
+                    "type": "string"
+                  },
+                  "delay": {
+                    "type": [
+                      "string",
+                      "number"
+                    ],
+                    "description": "Initial delay in seconds before starting the job"
+                  },
+                  "retry": {
+                    "$ref": "#/definitions/retryConfiguration",
+                    "description": "Retry configuration specific to this job task. Takes precedence over phase-level retry configuration."
+                  },
+                  "configId": {
+                    "type": "string",
+                    "description": "ID of the component configuration to run"
+                  },
+                  "configData": {
+                    "type": "object",
+                    "description": "Inline component configuration parameters"
+                  },
+                  "componentId": {
+                    "type": "string",
+                    "description": "ID of the Keboola component to execute (e.g., 'keboola.ex-db-snowflake')"
+                  },
+                  "variableOverrides": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Controls which flow context variables are applied to this job task. Tri-state: omit the field to apply all flow variables, set to [] to apply none, or list specific variable names to apply only those. Flow variables only override values for variable names that already exist in the component's system variables (keboola.variables). This field is consumed by the flow runner and is not passed to the job itself."
+                  }
+                },
+                "description": "Job task that executes a Keboola component configuration"
+              },
+              {
+                "required": [
+                  "type",
+                  "recipients",
+                  "title"
+                ],
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "notification"
+                    ],
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string",
+                    "description": "Optional message body. For email: defaults to empty string if not provided. For webhook: defaults to null if not provided."
+                  },
+                  "recipients": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "allOf": [
+                        {
+                          "if": {
+                            "properties": {
+                              "channel": {
+                                "const": "email"
+                              }
+                            }
+                          },
+                          "then": {
+                            "properties": {
+                              "address": {
+                                "format": "email"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "if": {
+                            "properties": {
+                              "channel": {
+                                "const": "webhook"
+                              }
+                            }
+                          },
+                          "then": {
+                            "properties": {
+                              "address": {
+                                "format": "uri"
+                              }
+                            }
+                          }
+                        }
+                      ],
+                      "required": [
+                        "channel",
+                        "address"
+                      ],
+                      "properties": {
+                        "address": {
+                          "type": "string",
+                          "description": "Recipient address: email address for email channel, HTTP/HTTPS URL for webhook channel"
+                        },
+                        "channel": {
+                          "enum": [
+                            "email",
+                            "webhook"
+                          ],
+                          "type": "string",
+                          "description": "Delivery channel: 'email' for email notifications, 'webhook' for HTTP POST notifications"
+                        }
+                      }
+                    },
+                    "minItems": 1,
+                    "description": "List of notification recipients. Can mix email and webhook recipients."
+                  }
+                },
+                "description": "Notification task that sends messages via email or webhook"
+              },
+              {
+                "oneOf": [
+                  {
+                    "required": [
+                      "value"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "Name of the variable. Will be accessible in conditions throughout the flow. Flow variables are merged with each job task's system variables (from keboola.variables): they override values only for variable names that already exist in the component's variable set. Use variableOverrides on job tasks to control which flow variables are applied to a specific task."
+                      },
+                      "type": {
+                        "enum": [
+                          "variable"
+                        ],
+                        "type": "string"
+                      },
+                      "value": {
+                        "type": "string"
+                      }
+                    },
+                    "description": "Static variable with a fixed value"
+                  },
+                  {
+                    "required": [
+                      "source"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "Name of the variable. Will be accessible in conditions throughout the flow. Flow variables are merged with each job task's system variables (from keboola.variables): they override values only for variable names that already exist in the component's variable set. Use variableOverrides on job tasks to control which flow variables are applied to a specific task."
+                      },
+                      "type": {
+                        "enum": [
+                          "variable"
+                        ],
+                        "type": "string"
+                      },
+                      "source": {
+                        "$ref": "#/definitions/variableSourceObject",
+                        "description": "Source definition for computing the variable value dynamically from task results, phase status, constants, or functions"
+                      }
+                    },
+                    "description": "Dynamic variable computed from other task/phase results"
+                  }
+                ],
+                "required": [
+                  "type",
+                  "name"
+                ],
+                "description": "Variable task that defines a variable for use in conditions or job parameters"
+              }
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "description": "ID of the phase this task belongs to. Must reference an existing phase ID."
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether this task is enabled. Disabled tasks are skipped during execution. Defaults to true if not specified."
+          }
+        }
+      },
+      "description": "Array of tasks that perform the actual work. Tasks are executed within phases in this order: notification tasks first, then variable tasks, finally job tasks."
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "next": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "goto"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "goto": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Target phase ID to transition to, or null to end the flow. When using conditional transitions, always include a default transition (without a condition) as the last item to prevent flow execution errors."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Optional descriptive name for the transition - useful for debugging and monitoring"
+                },
+                "condition": {
+                  "$ref": "#/definitions/operatorCondition",
+                  "description": "Condition that must be met for this transition to be taken. If omitted, this serves as the default transition."
+                }
+              }
+            },
+            "description": "Array of conditional transitions to other phases. Conditions are evaluated after all tasks in the phase complete. Always include a default transition (without condition) as the last item to prevent execution errors."
+          },
+          "retry": {
+            "$ref": "#/definitions/retryConfiguration",
+            "description": "Retry configuration that will be applied to all job tasks in this phase that don't have their own retry configuration. Only applies to job tasks, not notification or variable tasks."
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "description": "A phase groups related tasks and defines transitions to other phases. Each phase must have at least one active task (enabled: true)."
+      },
+      "description": "Array of phases that group tasks and define execution order. Within each phase, tasks execute in this order: notification tasks first (sequentially), then variable tasks (sequentially), finally job tasks (in parallel). Phases themselves run sequentially based on dependencies and conditions. Phases cannot be empty and must have at least one enabled task."
+    }
+  },
+  "definitions": {
+    "taskCondition": {
+      "type": "object",
+      "required": [
+        "type",
+        "task",
+        "value"
+      ],
+      "properties": {
+        "task": {
+          "type": "string",
+          "description": "ID of the task to evaluate. The referenced task must have already completed execution. Set '*' when used with phase operators (ALL_TASKS_IN_PHASE, ANY_TASKS_IN_PHASE)"
+        },
+        "type": {
+          "enum": [
+            "task"
+          ],
+          "type": "string",
+          "description": "Returns task-level metadata or associated job metadata from a task that has already completed."
+        },
+        "value": {
+          "type": "string",
+          "description": "JMESPath expression evaluated against the task context. Basic top-level keys: 'taskId', 'phaseId', 'status' (success, user_error, application_error, terminated). Job properties available for job tasks: 'job.id', 'job.componentId', 'job.configId', 'job.status', 'job.result', 'job.startTime', 'job.endTime', 'job.duration' (in seconds), 'job.result.output.tables' (array), 'job.result.message' (string). JMESPath filters, projections, fallback (||), and functions (length, keys, etc.) are supported, e.g. \"job.result.output.variables[?name=='environment'] | [0].value\". Missing paths return null; syntactically invalid expressions throw an error."
+        }
+      }
+    },
+    "arrayCondition": {
+      "type": "object",
+      "required": [
+        "type",
+        "operands"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "array"
+          ],
+          "type": "string"
+        },
+        "operands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/variableSourceObject"
+          }
+        }
+      },
+      "description": "A condition that creates an array from multiple operands. Used primarily with the INCLUDES operator."
+    },
+    "phaseCondition": {
+      "type": "object",
+      "required": [
+        "type",
+        "phase",
+        "value"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "phase"
+          ],
+          "type": "string",
+          "description": "Returns phase-level metadata from a phase that has already completed."
+        },
+        "phase": {
+          "type": "string",
+          "description": "ID of the phase to evaluate. The referenced phase must have already completed execution."
+        },
+        "value": {
+          "type": "string",
+          "description": "JMESPath expression evaluated against the phase context. Available top-level keys: 'phaseId', 'status' (success, user_error, application_error, terminated). Simple dot-notation paths work unchanged; JMESPath filters, projections, fallback (||), and functions (length, keys, etc.) are also supported. Missing paths return null; syntactically invalid expressions throw an error."
+        }
+      }
+    },
+    "conditionObject": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/constantCondition"
+        },
+        {
+          "$ref": "#/definitions/phaseCondition"
+        },
+        {
+          "$ref": "#/definitions/taskCondition"
+        },
+        {
+          "$ref": "#/definitions/variableCondition"
+        },
+        {
+          "$ref": "#/definitions/operatorCondition"
+        },
+        {
+          "$ref": "#/definitions/functionCondition"
+        },
+        {
+          "$ref": "#/definitions/arrayCondition"
+        }
+      ]
+    },
+    "constantCondition": {
+      "type": "object",
+      "required": [
+        "type",
+        "value"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "const",
+            "constant"
+          ],
+          "type": "string"
+        },
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "array"
+          ]
+        }
+      }
+    },
+    "functionCondition": {
+      "type": "object",
+      "required": [
+        "type",
+        "function",
+        "operands"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "function"
+          ],
+          "type": "string"
+        },
+        "function": {
+          "enum": [
+            "COUNT",
+            "DATE"
+          ],
+          "type": "string",
+          "description": "Function type: 'COUNT' (counts elements in array, requires 1 operand), 'DATE' (formats current date/time using PHP DateTime::format, requires 1 operand with format string)"
+        },
+        "operands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/variableSourceObject"
+          },
+          "description": "Array of conditions that provide inputs to the function. Number of required operands depends on function type."
+        }
+      }
+    },
+    "operatorCondition": {
+      "type": "object",
+      "oneOf": [
+        {
+          "required": [
+            "operator",
+            "operands"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "operator"
+              ],
+              "type": "string"
+            },
+            "operands": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/conditionObject"
+              },
+              "description": "Array of conditions to apply the operator to. Number of required operands depends on operator type."
+            },
+            "operator": {
+              "enum": [
+                "AND",
+                "OR",
+                "EQUALS",
+                "NOT_EQUALS",
+                "GREATER_THAN",
+                "LESS_THAN",
+                "INCLUDES",
+                "CONTAINS"
+              ],
+              "type": "string",
+              "description": "Operator type: 'AND'/'OR' (logical, requires 1+ operands), 'EQUALS'/'NOT_EQUALS' (equality, requires 2 operands), 'GREATER_THAN'/'LESS_THAN' (comparison, requires 2 operands), 'INCLUDES' (checks if first operand is included in second operand array, requires 2 operands), 'CONTAINS' (checks if first operand string contains second operand string, case-insensitive, requires 2 operands)"
+            }
+          }
+        },
+        {
+          "required": [
+            "operator",
+            "phase",
+            "operands"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "operator"
+              ],
+              "type": "string"
+            },
+            "phase": {
+              "type": "string",
+              "description": "ID of the phase to apply the condition to. Must reference an existing phase in the flow."
+            },
+            "operands": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/operatorCondition"
+              },
+              "description": "Array containing the condition to apply to each task in the phase. Use '*' as the task ID in task conditions."
+            },
+            "operator": {
+              "enum": [
+                "ALL_TASKS_IN_PHASE",
+                "ANY_TASKS_IN_PHASE"
+              ],
+              "type": "string",
+              "description": "Phase operator type: 'ALL_TASKS_IN_PHASE' (condition must be true for all tasks in phase, requires 1 operand), 'ANY_TASKS_IN_PHASE' (condition must be true for at least one task in phase, requires 1 operand)"
+            }
+          },
+          "description": "Phase-level operators that apply conditions to all or any tasks within a specific phase"
+        }
+      ],
+      "required": [
+        "type",
+        "operator"
+      ],
+      "description": "A condition that applies logical or relational operators to other conditions and returns boolean result (true/false)."
+    },
+    "variableCondition": {
+      "type": "object",
+      "required": [
+        "type",
+        "value"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "variable"
+          ],
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "description": "The name of the variable to evaluate. Must reference a variable defined earlier in the flow."
+        }
+      }
+    },
+    "retryConfiguration": {
+      "type": "object",
+      "properties": {
+        "retryOn": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "type",
+              "value"
+            ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "errorMessageContains",
+                  "errorMessageExact"
+                ],
+                "type": "string",
+                "description": "Retry condition type: 'errorMessageContains' (retry if error message contains the value, case-insensitive), 'errorMessageExact' (retry if error message exactly matches the value)"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Array of conditions that trigger a retry. Multiple conditions work as OR logic - at least one condition must be met to trigger a retry. If empty or missing, jobs will retry by default for any error."
+        },
+        "strategy": {
+          "enum": [
+            "linear"
+          ],
+          "type": "string",
+          "default": "linear"
+        },
+        "strategyParams": {
+          "type": "object",
+          "properties": {
+            "delay": {
+              "type": "integer",
+              "default": 10,
+              "description": "Delay in seconds between retry attempts"
+            },
+            "maxRetries": {
+              "type": "integer",
+              "default": 3,
+              "description": "Maximum number of retry attempts (default: 3). This is the number of retries after the initial attempt. Set to 0 to disable retry while preserving retry configuration."
+            }
+          }
+        }
+      },
+      "description": "Configuration for automatic retry of failed job tasks. Can be set at phase level (applies to all job tasks in phase) or task level (overrides phase configuration)."
+    },
+    "variableSourceObject": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/constantCondition"
+        },
+        {
+          "$ref": "#/definitions/phaseCondition"
+        },
+        {
+          "$ref": "#/definitions/taskCondition"
+        },
+        {
+          "$ref": "#/definitions/variableCondition"
+        },
+        {
+          "$ref": "#/definitions/functionCondition"
+        },
+        {
+          "$ref": "#/definitions/arrayCondition"
+        }
+      ],
+      "description": "Source definition for computing variable values dynamically. Limited subset of condition types that can be used as variable sources (excludes logical operators)."
+    }
+  },
+  "description": "A Keboola Flow configuration that orchestrates the execution of components. Flows define how tasks are grouped into phases and executed sequentially or in parallel, with conditional transitions between phases."
+}

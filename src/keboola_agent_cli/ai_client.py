@@ -65,6 +65,24 @@ class AiServiceClient(BaseHttpClient):
         response = self._do_request("GET", f"/docs/components/{encoded_id}")
         return response.json()
 
+    def docs_question(self, query: str) -> dict[str, Any]:
+        """Ask the Keboola documentation a natural language question.
+
+        Args:
+            query: Natural language question about the Keboola platform
+                (e.g. 'How do I set up incremental loading?').
+
+        Returns:
+            Dict with 'text' (Markdown answer) and 'sourceUrls' (list of
+            documentation URLs the answer is grounded in).
+
+        Raises:
+            KeboolaApiError: On API errors.
+        """
+        payload = {"query": query}
+        response = self._do_request("POST", "/docs/question", json=payload)
+        return response.json()
+
     def suggest_components(self, query: str) -> list[dict[str, Any]]:
         """Suggest components matching a natural language query.
 

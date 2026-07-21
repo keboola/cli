@@ -139,6 +139,16 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent component detail --component-id ID [--project NAME]
     Show component docs, config schema, and examples count.
 
+  kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--config-id ID [--row-id ID] | --config-data JSON|@file|-) [--branch ID] [--timeout N]
+    (since 0.73.0) Run a synchronous component action (testConnection, getTables,
+    ...) on the dedicated sync-actions service. ACTION_NAME is freeform --
+    valid names are component-defined (see component detail synchronous_actions).
+    --row-id shallow-merges the row over the root config at TOP level only
+    (row parameters/storage keys replace root wholesale -- NOT a deep merge;
+    MCP run_sync_action parity). --config-data sends explicit configData
+    verbatim and skips the config fetch. Response shape is action-specific
+    (opaque pass-through).
+
 ### Configuration Browsing
 
   kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID] [--include-rows]
@@ -207,6 +217,12 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [-i] [-r] [--branch ID]
     Search config bodies for string/regex. Reports match location in JSON tree. Branch-aware.
+
+  kbagent config examples --component-id ID [--project NAME] [--row]
+    (since 0.73.0) Sample root/row configurations for a component, straight from
+    the AI-service component detail (same data the UI shows). --row limits to
+    row examples. --json emits {{component_id, root_examples, row_examples}} --
+    structured dicts, ideal as a starting point before config new / row-create.
 
   kbagent config variables-set --project NAME --component-id ID --config-id ID --var KEY=VALUE [--var ...] [--replace] [--variables-id ID] [--values-id ID] [--branch ID] [--dry-run]
     Assign variables to any config. Auto-creates the backing keboola.variables + default row
@@ -615,10 +631,18 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent flow detail --project NAME --flow-id ID [--branch ID]
     Show phases, transitions (next[].goto + conditions), typed tasks, and full configuration.
 
-  kbagent flow schema [--full --project NAME]
-    Plain: print the offline conditional-flow YAML template. --full fetches and dumps the
-    live JSON Schema from the stack (AI Service configurationSchema for keboola.flow) and
-    REQUIRES --project (the schema is no longer bundled).
+  kbagent flow schema [--full [--project NAME]]
+    Plain: print the offline conditional-flow YAML template. --full with --project
+    fetches the live JSON Schema from the stack (source=live); --full WITHOUT
+    --project serves the bundled authoritative snapshot (source=bundled,
+    since 0.73.0 -- previously an error).
+
+  kbagent flow examples [--component-id keboola.flow|keboola.orchestrator]
+    (since 0.73.0) Bundled example flow configurations (vendored from
+    keboola-mcp-server), fully offline. Default keboola.flow (conditional);
+    keboola.orchestrator serves legacy examples with an informational-only
+    warning (kbagent cannot create or edit orchestrator flows). --json emits
+    the bare list of example configs.
 
   kbagent flow validate --file YAML|@file|- [--project NAME]
     With --project: fetch the live schema from the stack -> full structural + semantic
@@ -1022,6 +1046,11 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Show a model's entities. --type filter: dataset|metric|relationship|constraint|glossary.
     Without --type prints a per-type count summary.
 
+  kbagent semantic-layer schema --project P (--type model|dataset|metric|relationship|constraint|glossary[,TYPE...] | --all)
+    (since 0.73.0) Live JSON Schema per semantic object type, fetched from the
+    deployed metastore (never bundled -- cannot drift). Exactly one of
+    --type/--all. --json emits {{project, schemas: [{{type, schema}}]}}.
+
   kbagent semantic-layer search-context --project P [--pattern G ...] [--type model|dataset|metric|relationship|constraint|glossary|all] [--limit N]
     (since 0.47.0) Project-wide glob search across semantic-layer entity names.
     Mirrors the upstream keboola-mcp-server search_semantic_context tool so a
@@ -1266,6 +1295,40 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   kbagent kai history [--project NAME] [--limit N]
     List recent Kai chat sessions. Default limit: 10.
+
+### SQL Transformations (since v0.73.0)
+
+  kbagent transformation create --project NAME --name NAME (--sql 'SELECT ...' | --sql-file PATH) [--created-table NAME ...] [--component-id ID] [--description D] [--branch ID] [--dry-run]
+    Create a SQL transformation. Component id derived from the project
+    default_backend (snowflake -> keboola.snowflake-transformation,
+    bigquery -> keboola.google-bigquery-transformation; other backends
+    require --component-id). SQL is split one statement per script element;
+    a single block "Blocks" with one code "Code" is created (UI/MCP parity).
+    Each --created-table T adds output mapping T -> out.c-<cleaned-name>.<T>.
+
+  kbagent transformation show --project NAME --config-id ID [--component-id ID] [--branch ID]
+    Print the block/code tree with synthetic positional ids b{{i}} / b{{i}}.c{{j}}
+    plus storage mappings. Without --component-id every known SQL
+    transformation component is probed (404s skipped). ALWAYS run show
+    before edit -- ids renumber after every structural change.
+
+  kbagent transformation edit --project NAME --config-id ID --change-description TEXT (--op JSON ... | --op-file ops.json) [--storage JSON|@file|-] [--component-id ID] [--branch ID] [--dry-run]
+    Apply structured ops to blocks/codes: add_block, remove_block,
+    rename_block, add_code, remove_code, rename_code, set_code, add_script,
+    str_replace. Ops in one batch apply sequentially against BATCH-START ids
+    (mid-batch structural changes do not renumber within the batch).
+    --storage REPLACES configuration.storage wholesale -- include every
+    mapping you want to keep. --dry-run previews the resulting tree + op
+    summary without writing.
+
+### Documentation Q&A (since v0.73.0)
+
+  kbagent docs query "QUESTION" [--project NAME]
+    Answer a natural-language question from the Keboola documentation via the
+    AI Service (server-side RAG; no local corpus). Returns the answer text
+    plus source URLs. --json emits {{query, text, source_urls}}. Unlike
+    `kai ask` this does NOT see project data -- it is documentation-only,
+    works with any token, and is the right tool for "how do I ..." questions.
 
 ### Developer Portal (since v0.49.0)
 

@@ -20,6 +20,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from importlib import resources as importlib_resources
 from typing import Any
 
 from ..ai_client import AiServiceClient
@@ -35,6 +36,83 @@ logger = logging.getLogger(__name__)
 FLOW_COMPONENT_ID = "keboola.flow"
 LEGACY_FLOW_COMPONENT_ID = "keboola.orchestrator"
 SCHEDULER_COMPONENT_ID = "keboola.scheduler"
+
+# ---------------------------------------------------------------------------
+# Bundled resources: flow examples + JSON Schemas (issue #397)
+# ---------------------------------------------------------------------------
+
+_FLOW_RESOURCES_PACKAGE = "keboola_agent_cli.resources.flow"
+
+_FLOW_EXAMPLE_FILES: dict[str, str] = {
+    FLOW_COMPONENT_ID: "conditional_flow_examples.jsonl",
+    LEGACY_FLOW_COMPONENT_ID: "legacy_flow_examples.jsonl",
+}
+
+_BUNDLED_FLOW_SCHEMA_FILES: dict[str, str] = {
+    FLOW_COMPONENT_ID: "conditional-flow-schema.json",
+    LEGACY_FLOW_COMPONENT_ID: "flow-schema.json",
+}
+
+
+def _read_flow_resource(filename: str) -> str:
+    """Read a bundled flow resource file (works from wheel, sdist, or checkout)."""
+    return (
+        importlib_resources.files(_FLOW_RESOURCES_PACKAGE)
+        .joinpath(filename)
+        .read_text(encoding="utf-8")
+    )
+
+
+def _known_flow_component_ids() -> str:
+    """Human-readable list of component ids with bundled resources."""
+    return ", ".join(sorted(_FLOW_EXAMPLE_FILES))
+
+
+def get_flow_examples(component_id: str = FLOW_COMPONENT_ID) -> list[dict[str, Any]]:
+    """Return the bundled example flow configurations for ``component_id``.
+
+    Examples are vendored verbatim from keboola-mcp-server (JSONL, one flow
+    configuration object per line). Supported ids: ``keboola.flow``
+    (conditional) and ``keboola.orchestrator`` (legacy, informational only --
+    kbagent cannot create or edit orchestrator flows since 0.57.0).
+
+    Purely offline -- no project, token, or network access involved.
+
+    :raises ValueError: if ``component_id`` has no bundled examples.
+    """
+    filename = _FLOW_EXAMPLE_FILES.get(component_id)
+    if filename is None:
+        raise ValueError(
+            f"No bundled flow examples for component '{component_id}' "
+            f"(expected one of: {_known_flow_component_ids()})"
+        )
+    examples: list[dict[str, Any]] = []
+    for line in _read_flow_resource(filename).splitlines():
+        stripped = line.strip()
+        if stripped:
+            examples.append(json.loads(stripped))
+    return examples
+
+
+def get_bundled_flow_schema(component_id: str = FLOW_COMPONENT_ID) -> dict[str, Any]:
+    """Return the bundled JSON Schema for ``component_id`` flow configurations.
+
+    ``keboola.flow`` -> snapshot of the live conditional-flow schema (the same
+    document ``fetch_flow_schema`` retrieves from the stack; the bundled copy
+    is the offline fallback). ``keboola.orchestrator`` -> the frozen legacy
+    schema vendored from keboola-mcp-server.
+
+    :raises ValueError: if ``component_id`` has no bundled schema.
+    """
+    filename = _BUNDLED_FLOW_SCHEMA_FILES.get(component_id)
+    if filename is None:
+        raise ValueError(
+            f"No bundled flow schema for component '{component_id}' "
+            f"(expected one of: {_known_flow_component_ids()})"
+        )
+    schema: dict[str, Any] = json.loads(_read_flow_resource(filename))
+    return schema
+
 
 AiClientFactory = Callable[[str, str], AiServiceClient]
 SchedulerClientFactory = Callable[[str, str], SchedulerClient]

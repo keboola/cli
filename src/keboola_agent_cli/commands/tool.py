@@ -11,9 +11,10 @@ from pathlib import Path
 import typer
 
 from ..config_store import ConfigStore
-from ..errors import ConfigError, ErrorCode
+from ..errors import ConfigError, ErrorCode, PermissionDeniedError
 from ..output import OutputFormatter, format_tool_result, format_tools_table
 from ._helpers import (
+    EXIT_PERMISSION_DENIED,
     check_cli_permission,
     emit_project_warnings,
     get_formatter,
@@ -145,6 +146,20 @@ def tool_call(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "mcp_service")
     config_store: ConfigStore = ctx.obj["config_store"]
+
+    # Per-tool session firewall check (issue #478): the group callback only
+    # checks the coarse 'tool.call' operation, and the service-level check
+    # sees just the PERSISTED policy -- so without this, a session-only
+    # --deny-destructive would still let 'tool call delete_bucket' through.
+    # classify_mcp_tool is fail-closed: unknown tool names count as
+    # destructive and are blocked by --deny-writes / --deny-destructive.
+    engine = ctx.obj.get("permission_engine")
+    if engine is not None and engine.active:
+        try:
+            engine.check_or_raise(f"tool:{tool_name}")
+        except PermissionDeniedError as exc:
+            formatter.error(message=exc.message, error_code=ErrorCode.PERMISSION_DENIED)
+            raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
 
     validate_branch_requires_project(formatter, branch, project)
 

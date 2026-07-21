@@ -4,11 +4,15 @@ Thin CLI layer: parses arguments, calls ComponentService, formats output.
 No business logic belongs here.
 """
 
+import json
+
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.syntax import Syntax
 from rich.table import Table
 
+from ..config_store import ConfigStore
 from ..constants import VALID_COMPONENT_TYPES
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
@@ -17,7 +21,9 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    resolve_branch,
 )
+from .config import _parse_json_input
 
 component_app = typer.Typer(help="Discover and inspect Keboola components")
 
@@ -211,6 +217,148 @@ def component_detail(
             message=exc.message,
             error_code=exc.error_code,
             project=project or "",
+            retryable=exc.retryable,
+        )
+        raise typer.Exit(code=exit_code) from None
+
+
+def _format_sync_action_result(console: Console, data: dict) -> None:
+    """Render the sync action result as a JSON syntax panel.
+
+    The result shape is action-specific (opaque dict or list), so a
+    pretty-printed JSON block is the most honest human rendering.
+    """
+    action = data.get("action", "")
+    component_id = data.get("component_id", "")
+    syntax = Syntax(
+        json.dumps(data.get("result"), indent=2, ensure_ascii=False),
+        "json",
+        theme="monokai",
+    )
+    panel = Panel(syntax, title=f"Sync action '{action}' - {component_id}", expand=False)
+    console.print(panel)
+
+
+@component_app.command("sync-action")
+def component_sync_action(
+    ctx: typer.Context,
+    action_name: str = typer.Argument(
+        ...,
+        help="Sync action name (component-defined, e.g. testConnection, getTables)",
+    ),
+    component_id: str = typer.Option(
+        ...,
+        "--component-id",
+        help="Component ID (e.g. keboola.ex-db-mysql)",
+    ),
+    config_id: str | None = typer.Option(
+        None,
+        "--config-id",
+        help="Configuration ID whose stored configData to send (required unless --config-data)",
+    ),
+    row_id: str | None = typer.Option(
+        None,
+        "--row-id",
+        help="Configuration row ID to shallow-merge over the root configuration",
+    ),
+    project: str = typer.Option(
+        ...,
+        "--project",
+        help="Project alias",
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Run in a specific dev branch ID (defaults to active branch)",
+    ),
+    config_data: str | None = typer.Option(
+        None,
+        "--config-data",
+        help="Explicit configData JSON: inline, @file.json, or - for stdin (skips config fetch)",
+    ),
+    timeout: int | None = typer.Option(
+        None,
+        "--timeout",
+        help="Request timeout in seconds for the action call (long actions e.g. getTables)",
+    ),
+) -> None:
+    """Run a synchronous component action such as testConnection.
+
+    \b
+    Valid action names are component-defined -- the API validates them
+    server-side. By default the stored configuration (--config-id) is sent
+    as configData; with --row-id the row configuration is shallow-merged
+    over the root at the top level (row keys replace root keys wholesale,
+    matching the MCP run_sync_action tool). Use --config-data to send an
+    explicit payload instead.
+
+    \b
+    Examples:
+      # Test a database extractor's stored credentials
+      kbagent component sync-action testConnection \\
+        --component-id keboola.ex-db-mysql --config-id 123456 --project prod
+
+      # Run against a specific row's configuration
+      kbagent component sync-action getTables \\
+        --component-id keboola.ex-db-mysql --config-id 123456 --row-id 654321 --project prod
+
+      # Send an explicit configData payload
+      kbagent component sync-action testConnection \\
+        --component-id keboola.ex-db-mysql --project prod \\
+        --config-data '{"parameters": {"db": {"host": "example.com"}}}'
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "component_service")
+    config_store: ConfigStore = ctx.obj["config_store"]
+
+    if config_id is None and config_data is None:
+        formatter.error(
+            message="Either --config-id or --config-data is required.",
+            error_code=ErrorCode.MISSING_PARAMETER,
+        )
+        raise typer.Exit(code=2)
+
+    if row_id is not None and config_id is None:
+        formatter.error(
+            message="--row-id requires --config-id (rows belong to a configuration).",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+
+    override: dict | None = None
+    if config_data is not None:
+        try:
+            override = _parse_json_input(config_data)
+        except (json.JSONDecodeError, FileNotFoundError) as exc:
+            formatter.error(
+                message=f"Invalid --config-data input: {exc}",
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
+            raise typer.Exit(code=2) from None
+
+    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+
+    try:
+        result = service.run_sync_action(
+            alias=project,
+            component_id=component_id,
+            action=action_name,
+            config_id=config_id,
+            row_id=row_id,
+            branch_id=effective_branch,
+            config_data_override=override,
+            timeout=timeout,
+        )
+        formatter.output(result, _format_sync_action_result)
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            project=project,
             retryable=exc.retryable,
         )
         raise typer.Exit(code=exit_code) from None

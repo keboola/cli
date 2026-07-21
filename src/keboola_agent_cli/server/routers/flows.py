@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from ...services.flow_service import FLOW_COMPONENT_ID, get_flow_examples
 from ...services.flow_validation import find_unreachable_phases, validate_conditional_flow
 from ..dependencies import ServiceRegistry, get_registry
 
@@ -43,9 +44,10 @@ class FlowValidate(BaseModel):
     project: str | None = None
 
 
-# NOTE: /validate and /{project}/schema are declared BEFORE the /{project}
-# and /{project}/{config_id} routes -- FastAPI matches in declaration order,
-# so the literal segments must win over the path parameters.
+# NOTE: /validate, /examples, and /{project}/schema are declared BEFORE the
+# /{project} and /{project}/{config_id} routes -- FastAPI matches in
+# declaration order, so the literal segments must win over the path
+# parameters.
 
 
 @router.post("/validate", summary="Validate a conditional-flow definition")
@@ -76,6 +78,25 @@ def validate(
         for pid in find_unreachable_phases(body.phases)
     ]
     return {"valid": not errors, "errors": errors, "warnings": warnings, "notes": notes}
+
+
+@router.get("/examples", summary="Show bundled example flow configurations")
+def examples(component_id: str = FLOW_COMPONENT_ID) -> dict[str, Any]:
+    """Bundled example flow configurations (offline, no project needed).
+
+    Mirrors `kbagent flow examples`. Supported component ids: ``keboola.flow``
+    (conditional, default) and ``keboola.orchestrator`` (legacy, informational
+    only). An unknown component id is a 400.
+    """
+    try:
+        flow_examples = get_flow_examples(component_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "component_id": component_id,
+        "count": len(flow_examples),
+        "examples": flow_examples,
+    }
 
 
 @router.get("/{project}/schema", summary="Fetch the live conditional-flow JSON Schema")

@@ -11,6 +11,38 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## MCP tool classification is FAIL-CLOSED; parity commands replace `tool call` (since v0.73.0)
+
+- **Unknown MCP tool names classify as `destructive`** -- blocked by BOTH
+  `--deny-writes` and `--deny-destructive`, and never fanned out multi-project.
+  Before 0.73.0 anything not matching a write prefix classified as `read`:
+  `run_job`, `run_sync_action`, `deploy_data_app`, `modify_*` passed
+  `--deny-writes` AND ran on every configured project in parallel. They are
+  writes now (single-project dispatch).
+- **`tool call` enforces the session firewall per tool name** -- a session-only
+  `--deny-destructive` now blocks `tool call delete_bucket` (previously only a
+  PERSISTED `permissions set` policy was checked at tool granularity; session
+  flags stopped at the coarse `tool.call` operation).
+- **Prefer the native parity commands over `tool call`** -- the MCP passthrough
+  is on a deprecation track (epic #390 / issue #478): `docs query`,
+  `config examples`, `semantic-layer schema`, `component sync-action`,
+  `transformation create|show|edit`, `flow examples`. `query_data`'s CLI
+  answer is `workspace query`.
+- **`component sync-action --row-id` merge is SHALLOW** (MCP parity): row
+  `parameters`/`storage` top-level keys replace the root's wholesale -- a row
+  that sets `parameters.db` replaces the ENTIRE root `db` object, it does not
+  deep-merge into it.
+- **`transformation edit` ids are positional and renumber** after every
+  structural op -- always `transformation show` immediately before `edit`
+  (fresh-fetch rule). `--storage` REPLACES `configuration.storage` wholesale.
+- **`semantic-layer schema` resolves the default schema VERSION** -- the bare
+  metastore endpoint returns only a `{versions: [...]}` listing (the upstream
+  MCP tool ships that listing as-is; the CLI fetches the real document and
+  reports `schema_version`).
+- **`docs query` vs `kai ask`**: `docs query` is documentation-only RAG (any
+  token, no feature flag, no project data); `kai ask` sees project data but
+  needs the master token + `agent-chat` feature.
+
 ## `token` group mints/rotates/revokes SCOPED Storage tokens; secret shown ONCE (since v0.66.0)
 
 - **`kbagent token create --project P --description D [--bucket-write B ...]

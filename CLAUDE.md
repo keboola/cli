@@ -468,6 +468,12 @@ kbagent data-app git-credentials-create --project NAME --app-id ID --type ssh_ke
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
+kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--config-id ID [--row-id ID] | --config-data JSON|@file|-) [--branch ID] [--timeout N]
+# sync-action (0.73.0+): POST sync-actions.{stack}/actions; ACTION_NAME freeform (component-defined,
+#   e.g. testConnection/getTables); --row-id shallow-merges row over root at TOP level only (row
+#   parameters/storage keys replace root wholesale, MCP parity -- NOT deep merge); --config-data
+#   sends explicit configData verbatim (skips fetch); branchId omitted from body for production.
+kbagent config examples --component-id ID [--project NAME] [--row]
 kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR] [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run --allow-plaintext-on-encrypt-failure]
 
 # sync: GitOps -- configs as local files. init/pull/push/diff are filesystem-local (no serve REST surface).
@@ -515,6 +521,7 @@ kbagent semantic-layer model create --project P --name N [--description D] [--sq
 kbagent semantic-layer model delete --project P --model M [--yes]
 kbagent semantic-layer show --project P [--model M] [--type dataset|metric|relationship|constraint|glossary]
 kbagent semantic-layer search-context --project P [--pattern G ...] [--type model|dataset|metric|relationship|constraint|glossary|all] [--limit N]
+kbagent semantic-layer schema --project P (--type model|dataset|metric|relationship|constraint|glossary[,TYPE...] | --all)
 kbagent semantic-layer get-context --project P --context-id ID
 kbagent semantic-layer validate --project P [--model M] [--deep]
 kbagent semantic-layer export --project P [--model M] [--output PATH]
@@ -580,9 +587,26 @@ kbagent kai chat --message "msg" [--chat-id ID] [--project NAME]
 kbagent kai chat-detail --chat-id ID [--project NAME]
 kbagent kai history [--project NAME] [--limit N]
 
+kbagent transformation create --project NAME --name NAME (--sql 'SELECT ...' | --sql-file PATH) [--created-table NAME ...] [--component-id ID] [--description D] [--branch ID] [--dry-run]
+kbagent transformation show --project NAME --config-id ID [--component-id ID] [--branch ID]
+kbagent transformation edit --project NAME --config-id ID --change-description TEXT (--op JSON ... | --op-file ops.json) [--storage JSON|@file|-] [--component-id ID] [--branch ID] [--dry-run]
+# transformation (0.73.0+): native SQL-transformation editing (port of MCP create/update_sql_transformation, #396).
+#   create: component derived from the project default_backend (snowflake|bigquery; other backends need
+#   --component-id); SQL split one-statement-per-script[] element; single block "Blocks"/code "Code";
+#   each --created-table T maps to out.c-<cleaned-name>.<T>. show: synthetic positional ids b{i}/b{i}.c{j};
+#   when --component-id omitted, all known SQL transformation components are tried. edit: 9 ops
+#   (add/remove/rename block+code, set_code, add_script, str_replace) applied sequentially against
+#   batch-start ids -- ALWAYS `transformation show` first, ids renumber after structural ops;
+#   --storage REPLACES configuration.storage wholesale; --dry-run previews without PUT.
+
+kbagent docs query "QUESTION" [--project NAME]
+# (0.73.0+) Documentation Q&A via the AI Service (server-side RAG). Unlike kai ask it does NOT
+#   see project data; works with any token. --json emits {query, text, source_urls}.
+
 kbagent flow list [--project NAME] [--branch ID] [--with-schedules]
 kbagent flow detail --project NAME --flow-id ID [--branch ID]
-kbagent flow schema [--full --project NAME]
+kbagent flow schema [--full [--project NAME]]
+kbagent flow examples [--component-id keboola.flow|keboola.orchestrator]
 kbagent flow validate --file @flow.yaml|- [--project NAME]
 kbagent flow new --project NAME --name NAME [--description D] [--file @path.yaml|-|JSON] [--branch ID]
 kbagent flow update --project NAME --flow-id ID [--name N] [--description D] [--file @path.yaml|-|JSON] [--branch ID]
@@ -596,8 +620,12 @@ kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
 #   Schema-fetch failure (network/empty) does NOT block the write: structural check skipped,
 #   semantic checks still run, a "structural schema validation skipped" warning is surfaced.
 # flow validate: with --project fetches the live schema (full validation; fetch failure ->
-#   semantic-only + note); without --project runs semantic-only + a note. flow schema --full
-#   requires --project (fetches live schema); plain flow schema is the offline YAML template.
+#   semantic-only + note); without --project runs semantic-only + a note. flow schema --full:
+#   with --project fetches the live schema (source=live); without --project serves the bundled
+#   authoritative snapshot (source=bundled, 0.73.0+). Plain flow schema is the offline YAML template.
+# flow examples (0.73.0+): bundled example flow configs (vendored from keboola-mcp-server), offline.
+#   Default keboola.flow; keboola.orchestrator serves legacy examples informational-only (kbagent
+#   cannot create/edit orchestrator flows). --json emits the bare list of configs.
 # flow schedule (0.66.1+) also activates the config on the Scheduler Service so the cron fires;
 #   activation failure keeps the config written, sets activated=false + warning, exit stays 0.
 #   flow schedule-remove deregisters from the service before deleting each config.

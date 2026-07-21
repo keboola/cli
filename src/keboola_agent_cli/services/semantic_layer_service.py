@@ -171,6 +171,17 @@ TYPE_ALIAS: dict[str, SemanticType] = {
     "glossary": "semantic-glossary",
 }
 
+# Accepted ``--type`` values for ``semantic-layer schema``: every child type
+# from TYPE_ALIAS plus the model envelope itself. Kept as a separate dict
+# (rather than adding ``model`` to TYPE_ALIAS in place) because ``show
+# --type model`` has no plural payload key in ``_PLURAL_BY_TYPE`` — widening
+# TYPE_ALIAS would let ``show`` accept ``model`` and then KeyError while
+# rendering. Insertion order is the canonical ``--all`` fetch order.
+SCHEMA_TYPE_ALIAS: dict[str, SemanticType] = {
+    "model": "semantic-model",
+    **TYPE_ALIAS,
+}
+
 # Child-types order used everywhere we fan out per-type fetches.
 CHILD_TYPES: tuple[SemanticType, ...] = (
     "semantic-dataset",
@@ -316,6 +327,92 @@ class SemanticLayerService(BaseService):
             child_types=CHILD_TYPES,
             context_id=context_id,
         )
+
+    def get_schema(self, alias: str, types: list[str]) -> dict[str, Any]:
+        """Fetch the server-side JSON Schema for one or more semantic types.
+
+        ``types`` holds CLI-singular names (``metric``, ``model``, ...) as
+        accepted by :data:`SCHEMA_TYPE_ALIAS`. Unknown names fail fast
+        before any network call. Duplicates are collapsed (first occurrence
+        wins the ordering). Multiple types fan out in parallel, mirroring
+        :meth:`_fetch_children_parallel`.
+
+        Returns:
+            ``{"project": alias, "schemas": [{"type": <requested singular>,
+            "schema": <raw server schema dict>}]}`` in requested order.
+        """
+        requested = list(dict.fromkeys(types))
+        unknown = [t for t in requested if t not in SCHEMA_TYPE_ALIAS]
+        if unknown:
+            raise ConfigError(
+                f"Unknown semantic type(s): {', '.join(unknown)}. "
+                f"Valid types: {', '.join(SCHEMA_TYPE_ALIAS)}."
+            )
+        if not requested:
+            raise ConfigError(
+                f"No semantic types requested. Valid types: {', '.join(SCHEMA_TYPE_ALIAS)}."
+            )
+
+        project = self._resolve_one_project(alias)
+        results: dict[str, dict[str, Any]] = {}
+        with self._new_metastore_client(project) as client:
+            if len(requested) == 1:
+                results[requested[0]] = self._fetch_resolved_schema(
+                    client, SCHEMA_TYPE_ALIAS[requested[0]]
+                )
+            else:
+                with ThreadPoolExecutor(max_workers=len(requested)) as pool:
+                    future_to_type = {
+                        pool.submit(self._fetch_resolved_schema, client, SCHEMA_TYPE_ALIAS[t]): t
+                        for t in requested
+                    }
+                    errors: list[Exception] = []
+                    for future in future_to_type:
+                        try:
+                            results[future_to_type[future]] = future.result()
+                        # Future.result() re-raises arbitrary worker exceptions
+                        # (KeboolaApiError, httpx errors, ...); collect and
+                        # surface the first rather than masking the others.
+                        except Exception as exc:
+                            errors.append(exc)
+                    if errors:
+                        raise errors[0]
+        return {
+            "project": alias,
+            "schemas": [
+                {
+                    "type": t,
+                    "schema": results[t]["schema"],
+                    "schema_version": results[t]["schema_version"],
+                }
+                for t in requested
+            ],
+        }
+
+    @staticmethod
+    def _fetch_resolved_schema(client: MetastoreClient, wire_type: SemanticType) -> dict[str, Any]:
+        """Fetch the actual JSON Schema for a type, resolving the default version.
+
+        Live metastore behavior (2026-07): the bare ``/api/v1/schema/{type}``
+        endpoint returns only a ``{"versions": [...]}`` listing (metadata, no
+        schema body); the real JSON Schema lives at ``/{version}``. The
+        upstream MCP tool passes the bare listing through -- an upstream gap
+        we deliberately do NOT mirror: this resolves ``isDefault`` (falling
+        back to the first entry) and fetches the versioned document. If the
+        server someday returns the schema directly (no ``versions`` key),
+        it is passed through unchanged.
+        """
+        body = client.get_schema(wire_type)
+        versions = body.get("versions")
+        if not isinstance(versions, list) or not versions:
+            return {"schema": body, "schema_version": None}
+        default = next(
+            (v for v in versions if v.get("isDefault")),
+            versions[0],
+        )
+        version_id = str(default.get("version", ""))
+        resolved = client.get_schema(wire_type, version=version_id) if version_id else body
+        return {"schema": resolved, "schema_version": version_id or None}
 
     # Internal helpers (model-scoped fetches).
 

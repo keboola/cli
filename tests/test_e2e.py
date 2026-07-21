@@ -621,6 +621,17 @@ class TestFullE2E:
         self._test_kai_commands()
 
         # ==============================================================
+        # PHASE 12.6: MCP parity commands (epic #390, 0.73.0)
+        # ==============================================================
+
+        _step(
+            38.5,
+            "docs/examples/schema/sync-action/transformation/flow examples",
+            "native ports of the keboola-mcp-server tools",
+        )
+        self._test_mcp_parity_commands()
+
+        # ==============================================================
         # PHASE 13: Job commands (expanded)
         # ==============================================================
 
@@ -2938,6 +2949,129 @@ class TestFullE2E:
         assert "chats" in data["data"]
         # We just chatted, so there should be at least 1
         assert len(data["data"]["chats"]) >= 1
+
+    def _test_mcp_parity_commands(self) -> None:
+        """MCP parity commands from epic #390 (0.73.0): docs query, config
+        examples, semantic-layer schema, component sync-action, transformation
+        lifecycle, flow examples."""
+        # docs query — server-side documentation RAG (AI Service)
+        result = self._run(
+            "docs", "query", "What is a Keboola Storage bucket?", "--project", self.alias
+        )
+        if result.exit_code != 0:
+            print(f"  {_YELLOW}SKIP: docs query failed (AI Service unavailable?){_RESET}")
+        else:
+            data = _json_ok(result)
+            assert isinstance(data["data"]["text"], str) and data["data"]["text"].strip()
+            assert isinstance(data["data"]["source_urls"], list)
+
+        # config examples — reformat of AI-service component detail
+        data = self._run_ok(
+            "config",
+            "examples",
+            "--component-id",
+            "keboola.ex-google-drive",
+            "--project",
+            self.alias,
+        )
+        assert data["data"]["component_id"] == "keboola.ex-google-drive"
+        assert isinstance(data["data"]["root_examples"], list)
+
+        # semantic-layer schema — live metastore JSON Schema (version-resolved)
+        result = self._run("semantic-layer", "schema", "--project", self.alias, "--type", "metric")
+        if result.exit_code != 0:
+            print(f"  {_YELLOW}SKIP: semantic-layer schema (metastore unavailable?){_RESET}")
+        else:
+            data = _json_ok(result)
+            schemas = data["data"]["schemas"]
+            assert [s["type"] for s in schemas] == ["metric"]
+            assert isinstance(schemas[0]["schema"], dict) and schemas[0]["schema"]
+
+        # component sync-action — full round-trip to sync-actions.{stack};
+        # deliberately bad config: a structured API error PROVES the wiring
+        # (URL derivation, auth, camelCase body); a 2xx needs live DB creds.
+        result = self._run(
+            "component",
+            "sync-action",
+            "testConnection",
+            "--component-id",
+            "keboola.ex-db-snowflake",
+            "--project",
+            self.alias,
+            "--config-data",
+            '{"parameters": {"db": {"host": "invalid.example.com"}}}',
+        )
+        assert result.exit_code != 0
+        err = _json(result)
+        assert err["error"]["code"] in ("API_ERROR", "VALIDATION_ERROR")
+
+        # flow examples — bundled, offline
+        data = self._run_ok("flow", "examples")
+        assert isinstance(data["data"], list) and data["data"]
+        assert {"phases", "tasks"} <= set(data["data"][0])
+
+        # flow schema --full without --project — bundled snapshot fallback
+        data = self._run_ok("flow", "schema", "--full")
+        assert data["data"]["source"] == "bundled"
+
+        # transformation lifecycle: create -> show (ids) -> edit -> verify.
+        # Cleanup: sync-based delete is heavyweight here; the config is
+        # removed via the recycle-bin-safe Storage API through self.api.
+        created = self._run_ok(
+            "transformation",
+            "create",
+            "--project",
+            self.alias,
+            "--name",
+            "E2E Parity Transformation",
+            "--sql",
+            'CREATE TABLE "e2e_tf_out" AS SELECT 1 AS "id"; SELECT 2;',
+            "--created-table",
+            "e2e_tf_out",
+        )
+        tf_config_id = created["data"]["config_id"]
+        tf_component_id = created["data"]["component_id"]
+        try:
+            shown = self._run_ok(
+                "transformation",
+                "show",
+                "--project",
+                self.alias,
+                "--config-id",
+                tf_config_id,
+            )
+            block = shown["data"]["blocks"][0]
+            assert block["id"] == "b0"
+            assert block["codes"][0]["id"] == "b0.c0"
+            assert len(block["codes"][0]["script"]) == 2
+
+            self._run_ok(
+                "transformation",
+                "edit",
+                "--project",
+                self.alias,
+                "--config-id",
+                tf_config_id,
+                "--change-description",
+                "e2e parity check",
+                "--op",
+                '{"op": "str_replace", "search_for": "SELECT 2", "replace_with": "SELECT 3"}',
+            )
+            reshown = self._run_ok(
+                "transformation",
+                "show",
+                "--project",
+                self.alias,
+                "--config-id",
+                tf_config_id,
+            )
+            assert reshown["data"]["blocks"][0]["codes"][0]["script"][1] == "SELECT 3;"
+        finally:
+            try:
+                self.api.delete_config(tf_component_id, tf_config_id)
+                print(f"  Deleted transformation config {tf_config_id}")
+            except Exception as exc:
+                print(f"  WARN: failed to delete transformation {tf_config_id}: {exc}")
 
     def _test_job_commands(self) -> None:
         """Verify job listing structure and detail (if jobs exist)."""

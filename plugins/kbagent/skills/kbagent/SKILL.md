@@ -14,7 +14,7 @@ description: >
   keboola lineage, keboola sync, gitops, dev branch, workspace SQL, data app,
   streamlit deploy, semantic layer, sl, dev-portal, data stream, OTLP,
   scoped token, bucket sharing, encrypt secrets, feature flag, flow schedule,
-  invite member.
+  invite member, SQL transformation edit, sync action, keboola docs.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -97,8 +97,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Rotate a token: generate a new value and invalidate the old one (secret shown once) | `kbagent token refresh --project PROJECT --token-id TOKEN-ID` |
 | List available components from connected projects | `kbagent component list` |
 | Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
+| Run a synchronous component action such as testConnection | `kbagent component sync-action <ACTION-NAME> --component-id COMPONENT-ID --project PROJECT` |
 | List configurations from connected projects | `kbagent config list` |
 | Show detailed information about one or many configurations | `kbagent config detail --component-id COMPONENT-ID` |
+| Show sample configuration JSON examples for a component | `kbagent config examples --component-id COMPONENT-ID` |
 | Search through configuration bodies for a string or pattern | `kbagent config search --query QUERY` |
 | Update a configuration's metadata and/or content | `kbagent config update --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Set or clear ``storage.output.default_bucket`` on a configuration | `kbagent config set-default-bucket --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -186,9 +188,14 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Check whether the configured token can use Kai (master token + AI Agent Chat) | `kbagent kai preflight` |
 | Fetch the full message history of a single Kai chat | `kbagent kai chat-detail --chat-id CHAT-ID` |
 | List recent Kai chat sessions | `kbagent kai history` |
+| Ask the Keboola documentation a natural language question | `kbagent docs query <QUESTION>` |
+| Create a SQL transformation from a SQL script | `kbagent transformation create --name NAME` |
+| Show a SQL transformation's block/code tree with positional IDs | `kbagent transformation show --config-id CONFIG-ID` |
+| Edit a SQL transformation's blocks/codes with positional operations | `kbagent transformation edit --config-id CONFIG-ID --change-description CHANGE-DESCRIPTION` |
 | List conditional flows (keboola.flow) across projects | `kbagent flow list` |
 | Show detailed conditional-flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |
-| Print the conditional-flow YAML template, or --full for the live JSON Schema | `kbagent flow schema` |
+| Print the conditional-flow YAML template, or --full for the JSON Schema | `kbagent flow schema` |
+| Show bundled example flow configurations (offline, no project needed) | `kbagent flow examples` |
 | Validate a conditional-flow definition (schema + semantic checks) | `kbagent flow validate --file FILE` |
 | Create a new conditional-flow (keboola.flow) configuration | `kbagent flow new --project PROJECT --name NAME` |
 | Update a flow's name, description, or phases/tasks | `kbagent flow update --project PROJECT --flow-id FLOW-ID` |
@@ -234,6 +241,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent semantic-layer promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
 | Replay a snapshot into a project. | `kbagent semantic-layer import --project PROJECT --file FILE` |
 | Show the entities in a semantic-layer model | `kbagent semantic-layer show --project PROJECT` |
+| Fetch the server-side JSON Schema of semantic object types | `kbagent semantic-layer schema --project PROJECT` |
 | Snapshot a semantic-layer model to a self-describing JSON file | `kbagent semantic-layer export --project PROJECT` |
 | Diff two semantic-layer snapshots (project↔project, project↔file, file↔file) | `kbagent semantic-layer diff` |
 | Validate a semantic-layer model | `kbagent semantic-layer validate --project PROJECT` |
@@ -266,6 +274,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent sl promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
 | Replay a snapshot into a project. | `kbagent sl import --project PROJECT --file FILE` |
 | Show the entities in a semantic-layer model | `kbagent sl show --project PROJECT` |
+| Fetch the server-side JSON Schema of semantic object types | `kbagent sl schema --project PROJECT` |
 | Snapshot a semantic-layer model to a self-describing JSON file | `kbagent sl export --project PROJECT` |
 | Diff two semantic-layer snapshots (project↔project, project↔file, file↔file) | `kbagent sl diff` |
 | Validate a semantic-layer model | `kbagent sl validate --project PROJECT` |
@@ -361,6 +370,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | All commands cheat sheet | [commands-reference](references/commands-reference.md) |
 | **Safe config write workflow** (fetch → dry-run → confirm → push) | [safe-write-workflow](references/safe-write-workflow.md) |
 | Creating new configurations | [scaffold-workflow](references/scaffold-workflow.md) |
+| **SQL transformations** (create / show / edit; the show-before-edit rule for positional block/code ids) | [transformation-workflow](references/transformation-workflow.md) |
 | MCP tools (multi-project read/write) | [mcp-workflow](references/mcp-workflow.md) |
 | Workspace SQL debugging | [workspace-workflow](references/workspace-workflow.md) |
 | **Agent Tasks via CLI** (`kbagent agent` CRUD + run + cron-preview + prompt-improve; cron / manual / chained; mcp_tool / cli_command / ai_agent action flavours) | [agent-tasks-cli-workflow](references/agent-tasks-cli-workflow.md) |
