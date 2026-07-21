@@ -14,7 +14,7 @@ the other table commands.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NoReturn
 
 import typer
 from rich.markup import escape
@@ -31,7 +31,7 @@ from ._helpers import (
 _SNAPSHOTS = "Snapshots"
 
 
-def _handle_errors(formatter: Any, exc: Exception) -> None:
+def _handle_errors(formatter: Any, exc: Exception) -> NoReturn:
     """Map ConfigError / KeboolaApiError to a structured error + Exit."""
     if isinstance(exc, ConfigError):
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
