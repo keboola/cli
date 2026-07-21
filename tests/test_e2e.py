@@ -3296,6 +3296,32 @@ class TestFullE2E:
         # Remove from cleanup since we deleted via CLI
         self._created_config_ids.remove((TEST_COMPONENT_ID, config_id))
 
+    def _poll_columns(
+        self, table_id: str, *, present: str | None = None, absent: str | None = None
+    ) -> list[str]:
+        """Poll table-detail until a column appears/disappears (max ~30s).
+
+        The Storage API's column listing is read-after-write eventually
+        consistent on some stacks: an add-column/delete-column receipt is
+        authoritative (the API confirmed the DDL), but an immediately-following
+        table-detail can serve stale metadata for a few seconds -- measured
+        live on connection.us-east4.gcp.keboola.com 2026-07-22 (~5-10s lag,
+        wider when the table recently had snapshot activity). Poll instead of
+        asserting the first read.
+        """
+        columns: list[str] = []
+        for _ in range(15):
+            data = self._run_ok(
+                "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+            )
+            columns = data["data"]["columns"]
+            if (present is None or present in columns) and (
+                absent is None or absent not in columns
+            ):
+                return columns
+            time.sleep(2)
+        return columns
+
     def _test_delete_column(self, table_id: str) -> None:
         """Delete a column from a table: dry-run, actual delete, verify."""
         # Verify the table has 'value' column before we delete it
@@ -3324,12 +3350,8 @@ class TestFullE2E:
         assert data["data"]["column"] == "status"
         assert data["data"]["definition"]["type"] == "VARCHAR"
         assert data["data"]["table_id"] == table_id
-        data = self._run_ok(
-            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
-        )
-        assert "status" in data["data"]["columns"], (
-            f"Expected 'status' column after add-column, got {data['data']['columns']}"
-        )
+        columns = self._poll_columns(table_id, present="status")
+        assert "status" in columns, f"Expected 'status' column after add-column, got {columns}"
 
         # delete-column dry-run
         data = self._run_ok(
@@ -3363,16 +3385,8 @@ class TestFullE2E:
         assert data["data"]["failed"] == []
         assert data["data"]["table_id"] == table_id
 
-        # Verify the column is gone
-        data = self._run_ok(
-            "storage",
-            "table-detail",
-            "--project",
-            self.alias,
-            "--table-id",
-            table_id,
-        )
-        columns_after = data["data"]["columns"]
+        # Verify the column is gone (poll: same read-after-DDL staleness as add)
+        columns_after = self._poll_columns(table_id, absent="value")
         assert "value" not in columns_after, (
             f"'value' column should be deleted, got {columns_after}"
         )
