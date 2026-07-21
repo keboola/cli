@@ -47,6 +47,12 @@ kbagent --json semantic-layer show --project prod --model core_model
 kbagent --json semantic-layer show --project prod --model core_model --type metric
 kbagent --json semantic-layer show --project prod --model core_model --type constraint
 
+# 3b. Fetch the JSON Schema of a type before building/validating one (0.73.0+).
+#     Server-fetched, so it always matches the deployed metastore version.
+kbagent --json semantic-layer schema --project prod --type metric,dataset
+kbagent --json semantic-layer schema --project prod --all
+# -> {"project": "prod", "schemas": [{"type": "metric", "schema": {...}}, ...]}
+
 # 4. Validate (no Snowflake probe -- fast)
 kbagent --json semantic-layer validate --project prod --model core_model
 
