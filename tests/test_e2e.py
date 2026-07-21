@@ -3165,7 +3165,9 @@ class TestFullE2E:
             '{"parameters": {"db": {"host": "invalid.example.com"}}}',
         )
         assert result.exit_code != 0
-        err = _json(result)
+        # NOT _json(): that helper asserts exit_code == 0, but this command is
+        # EXPECTED to fail -- parse the error envelope directly (#508 regression).
+        err = json.loads(result.output)
         assert err["error"]["code"] in ("API_ERROR", "VALIDATION_ERROR")
 
         # flow examples — bundled, offline
