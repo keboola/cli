@@ -254,6 +254,10 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
   "bucket not found" until you clone the prod table branch-local first.
 - **`truncate-table` is row-only** (0.32.0+): schema / PK / dependents survive;
   uniformly async-via-job on every branch; do NOT pass `async=true`.
+- **Snapshot restore never overwrites** (0.75.0+, #512): `table-from-snapshot`
+  needs a REQUIRED `--name` (API rejects empty) and fails on an existing table
+  name -- restore under a new name, verify, then `swap-tables`. `snapshot-delete`
+  only forecloses restores; the source table is untouched.
 - **`bucket-detail` is dialect-aware** (0.25.3+): read `sql_dialect` + per-table
   `sql_path` (already correctly quoted) -- don't branch on the backend yourself.
 - **`set-default-bucket`** (0.26.0+) writes `storage.output.default_bucket`

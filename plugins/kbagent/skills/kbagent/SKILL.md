@@ -6,7 +6,8 @@ description: >
   job runs, cross-project data lineage, Keboola MCP tools, development
   branches, SQL debugging in temporary workspaces, GitOps sync of configs as
   local files (pull/push/diff/clone), bucket sharing and linking, encrypting
-  secrets, Storage tables and files, data apps (create/deploy/logs/secrets),
+  secrets, Storage tables and files, table snapshots (backup + restore as a
+  new table), data apps (create/deploy/logs/secrets),
   conditional flows and schedules, project members and invitations, feature
   flags, OTLP data streams, scoped Storage tokens, the semantic layer
   (models, datasets, metrics, constraints, reference data), and the Keboola
@@ -14,7 +15,8 @@ description: >
   keboola lineage, keboola sync, gitops, dev branch, workspace SQL, data app,
   streamlit deploy, semantic layer, sl, dev-portal, data stream, OTLP,
   scoped token, bucket sharing, encrypt secrets, feature flag, flow schedule,
-  invite member, SQL transformation edit, sync action, keboola docs.
+  invite member, SQL transformation edit, sync action, keboola docs,
+  table snapshot, snapshot restore, create table from snapshot, table backup.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -382,6 +384,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Agent Tasks via REST** (`kbagent http <verb> /agents...` from inside scheduled subprocesses; SSE streaming) | [agent-tasks-rest-workflow](references/agent-tasks-rest-workflow.md) |
 | **Data apps** (create / deploy / start / stop / password / delete; the §9 redeploy contract) | [data-app-workflow](references/data-app-workflow.md) |
 | Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
+| **Table snapshots** (point-in-time backup; restore as a NEW table; `--name` required, no overwrite) | [snapshot-workflow](references/snapshot-workflow.md) |
 | **Python library** (`from keboola_agent_cli import Client` -- in-process query + Storage Files, no CLI/daemon/config-dir) | [library-workflow](references/library-workflow.md) |
 | **Data Streams (OTLP / OpenTelemetry)** (create/inspect OTLP source, masked secret-in-URL, OTEL_EXPORTER_OTLP_ENDPOINT) | [stream-workflow](references/stream-workflow.md) |
 | **Storage column types** (native types, NOT NULL, DEFAULT, branch materialize) | [storage-types-workflow](references/storage-types-workflow.md) |

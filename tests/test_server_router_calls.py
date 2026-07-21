@@ -1564,3 +1564,117 @@ def test_flow_examples_unknown_component_is_400(tmp_path: Path) -> None:
 
     assert res.status_code == 400, res.text
     assert "No bundled flow examples" in res.json()["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# storage.py  snapshot routes (issue #512)
+# Service: registry.snapshot (SnapshotService) -- create_snapshot,
+# list_snapshots, get_snapshot, delete_snapshots, create_table_from_snapshot.
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_create_passes_kwargs(tmp_path: Path) -> None:
+    """POST /storage/tables/{p}/{table}/snapshots -> snapshot.create_snapshot."""
+    snapshot_svc = MagicMock()
+    snapshot_svc.create_snapshot.return_value = {"snapshot_id": "954"}
+    registry = _mock_registry(snapshot=snapshot_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/tables/{PROJECT}/{TABLE_ID}/snapshots",
+            headers=AUTH,
+            json={"description": "before migration", "branch_id": 42},
+        )
+
+    assert res.status_code == 200, res.text
+    snapshot_svc.create_snapshot.assert_called_once_with(
+        alias=PROJECT,
+        table_id=TABLE_ID,
+        description="before migration",
+        branch_id=42,
+    )
+
+
+def test_snapshot_list_passes_kwargs(tmp_path: Path) -> None:
+    """GET /storage/snapshots/{p}/{table} -> snapshot.list_snapshots."""
+    snapshot_svc = MagicMock()
+    snapshot_svc.list_snapshots.return_value = {"count": 0, "snapshots": []}
+    registry = _mock_registry(snapshot=snapshot_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(
+            f"/storage/snapshots/{PROJECT}/{TABLE_ID}",
+            headers=AUTH,
+            params={"limit": 5},
+        )
+
+    assert res.status_code == 200, res.text
+    snapshot_svc.list_snapshots.assert_called_once_with(
+        alias=PROJECT,
+        table_id=TABLE_ID,
+        limit=5,
+        branch_id=None,
+    )
+
+
+def test_snapshot_detail_passes_kwargs(tmp_path: Path) -> None:
+    """GET /storage/snapshot-detail/{p}/{id} -> snapshot.get_snapshot."""
+    snapshot_svc = MagicMock()
+    snapshot_svc.get_snapshot.return_value = {"snapshot": {"id": "954"}}
+    registry = _mock_registry(snapshot=snapshot_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(f"/storage/snapshot-detail/{PROJECT}/954", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    snapshot_svc.get_snapshot.assert_called_once_with(alias=PROJECT, snapshot_id="954")
+
+
+def test_snapshot_delete_passes_kwargs(tmp_path: Path) -> None:
+    """DELETE /storage/snapshots/{p}?snapshot_id=... -> snapshot.delete_snapshots."""
+    snapshot_svc = MagicMock()
+    snapshot_svc.delete_snapshots.return_value = {"deleted": ["954"], "failed": []}
+    registry = _mock_registry(snapshot=snapshot_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.delete(
+            f"/storage/snapshots/{PROJECT}",
+            headers=AUTH,
+            params={"snapshot_id": ["954", "955"], "dry_run": True},
+        )
+
+    assert res.status_code == 200, res.text
+    snapshot_svc.delete_snapshots.assert_called_once_with(
+        alias=PROJECT,
+        snapshot_ids=["954", "955"],
+        dry_run=True,
+    )
+
+
+def test_table_from_snapshot_passes_kwargs(tmp_path: Path) -> None:
+    """POST /storage/table-from-snapshot/{p} -> snapshot.create_table_from_snapshot."""
+    snapshot_svc = MagicMock()
+    snapshot_svc.create_table_from_snapshot.return_value = {"table_id": "in.c-dest.restored"}
+    registry = _mock_registry(snapshot=snapshot_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/table-from-snapshot/{PROJECT}",
+            headers=AUTH,
+            json={"snapshot_id": "954", "bucket_id": "in.c-dest", "name": "restored"},
+        )
+
+    assert res.status_code == 200, res.text
+    snapshot_svc.create_table_from_snapshot.assert_called_once_with(
+        alias=PROJECT,
+        bucket_id="in.c-dest",
+        snapshot_id="954",
+        name="restored",
+        branch_id=None,
+        dry_run=False,
+    )
