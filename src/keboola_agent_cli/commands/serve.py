@@ -86,6 +86,53 @@ def _autodetect_ui_dist() -> Path | None:
     return None
 
 
+# Box-drawing glyphs used by the startup banner, mapped to ASCII so the banner
+# degrades to `|-` / `` `- `` on a console that can't render Unicode -- the same
+# fallback install.sh uses (Unicode only under a UTF-8 locale, ASCII otherwise).
+_BANNER_ASCII_FALLBACK = str.maketrans({"├": "|", "└": "`", "─": "-"})
+
+
+def _encode_safe(text: str, encoding: str | None) -> str:
+    """Return ``text`` with box-drawing glyphs stripped to ASCII if unencodable.
+
+    On Windows with a non-UTF-8 console codepage (cp1250 on Czech/Polish/
+    Hungarian locales, and any other legacy single-byte encoding) the ``├─`` /
+    ``└─`` glyphs in the startup banner cannot be encoded, so ``sys.stdout.write``
+    raises ``UnicodeEncodeError`` -- which crashed ``kbagent serve`` before
+    uvicorn ever bound the port (issue #522). When ``encoding`` can represent the
+    banner we keep the Unicode glyphs; otherwise we transliterate to ASCII.
+
+    ``encoding`` is ``sys.stdout.encoding`` at the call site (``None`` on an
+    exotic stream); an unknown codec name (``LookupError``) also degrades to
+    ASCII rather than propagating.
+    """
+    enc = encoding or "utf-8"
+    try:
+        text.encode(enc)
+    except (UnicodeEncodeError, LookupError):
+        return text.translate(_BANNER_ASCII_FALLBACK)
+    return text
+
+
+def _write_banner(text: str) -> None:
+    """Write the startup banner without ever letting a glyph crash startup.
+
+    Two layers of defense (issue #522): first transliterate to ASCII when
+    stdout's encoding can't represent the banner, then wrap the write in a
+    belt-and-braces ``try/except`` so even an unforeseen un-encodable character
+    re-emits with lossy replacement instead of aborting the server. A degraded
+    banner is always better than a server that won't start.
+    """
+    encoding = getattr(sys.stdout, "encoding", None)
+    safe = _encode_safe(text, encoding)
+    try:
+        sys.stdout.write(safe)
+    except UnicodeEncodeError:
+        enc = encoding or "ascii"
+        sys.stdout.write(safe.encode(enc, "replace").decode(enc, "replace"))
+    sys.stdout.flush()
+
+
 def serve_command(
     host: str = typer.Option(
         "127.0.0.1",
@@ -232,7 +279,7 @@ def serve_command(
         # UI mode: the user opens the browser directly; there is no BFF to
         # paste the token into. The token is still printed so scripted
         # callers / curl one-liners keep working.
-        sys.stdout.write(
+        banner = (
             "\n"
             "  kbagent serve  (single-process UI mode)\n"
             f"  ├─ open:      http://{host}:{port}/\n"
@@ -252,7 +299,7 @@ def serve_command(
             "\n"
         )
     else:
-        sys.stdout.write(
+        banner = (
             "\n"
             "  kbagent serve\n"
             f"  ├─ host:      http://{host}:{port}\n"
@@ -270,7 +317,7 @@ def serve_command(
             f"    export KBAGENT_CONVERSATION_ID={conversation_id}\n"
             "\n"
         )
-    sys.stdout.flush()
+    _write_banner(banner)
 
     uvicorn.run(
         app,
