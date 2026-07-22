@@ -7811,14 +7811,27 @@ class TestE2EStorageSwapTables:
             "id",
         )
 
-        def _value_len(table_detail: dict[str, Any]) -> str:
-            cols = {c["name"]: c for c in table_detail["definition"]["columns"]}
-            return cols["value"]["definition"]["length"]
+        # Read the 'value' length via the CLI's normalized `column_details`
+        # (what a user/agent sees). The raw `/tables/{id}` `definition.columns`
+        # block is read-after-DDL eventually consistent on this stack -- after a
+        # swap it can keep reporting the pre-swap length for >30s -- whereas
+        # `column_details` reflects the swap at once (verified 2026-07-22).
+        def _value_len(table_id: str) -> str:
+            detail = self._run_ok(
+                "storage",
+                "table-detail",
+                "--project",
+                self.alias,
+                "--table-id",
+                table_id,
+                "--branch",
+                str(branch_id),
+            )["data"]
+            cols = {c["name"]: c for c in detail["column_details"]}
+            return str(cols["value"]["length"])
 
-        before_original = self.client.get_table_detail(original_id, branch_id=branch_id)
-        before_typed = self.client.get_table_detail(typed_id, branch_id=branch_id)
-        assert _value_len(before_original) == "20"
-        assert _value_len(before_typed) == "80"
+        assert _value_len(original_id) == "20"
+        assert _value_len(typed_id) == "80"
 
         _step(3, "storage swap-tables", "POST /tables/.../swap with targetTableId")
         result = self._run_ok(
@@ -7840,15 +7853,30 @@ class TestE2EStorageSwapTables:
         assert result["dry_run"] is False
 
         _step(4, "table-detail", "verify VARCHAR lengths exchanged")
-        after_original = self.client.get_table_detail(original_id, branch_id=branch_id)
-        after_typed = self.client.get_table_detail(typed_id, branch_id=branch_id)
-        assert _value_len(after_original) == "80", (
+
+        def _poll_value_len(table_id: str, expected: str) -> str:
+            """Poll column_details until 'value' has the expected length (max ~30s).
+
+            Small safety margin for any residual read lag after the swap job
+            completes; column_details is normally consistent immediately.
+            """
+            length = ""
+            for _ in range(15):
+                length = _value_len(table_id)
+                if length == expected:
+                    return length
+                time.sleep(2)
+            return length
+
+        after_original_len = _poll_value_len(original_id, "80")
+        after_typed_len = _poll_value_len(typed_id, "20")
+        assert after_original_len == "80", (
             f"After swap, '{original_id}' should adopt the schema of '{typed_id}' "
-            f"(VARCHAR(80)); got VARCHAR({_value_len(after_original)})."
+            f"(VARCHAR(80)); got VARCHAR({after_original_len})."
         )
-        assert _value_len(after_typed) == "20", (
+        assert after_typed_len == "20", (
             f"After swap, '{typed_id}' should adopt the schema of '{original_id}' "
-            f"(VARCHAR(20)); got VARCHAR({_value_len(after_typed)})."
+            f"(VARCHAR(20)); got VARCHAR({after_typed_len})."
         )
 
     def test_swap_dry_run_does_not_call_api(self) -> None:
@@ -8012,10 +8040,28 @@ class TestE2EStorageCloneTable:
 
     def test_clone_prod_table_into_dev_branch(self) -> None:
         """Live pull: a production table becomes available in the dev branch."""
-        bucket_id = f"in.c-{RUN_ID.replace('-', '_')}_clone"
+        bucket_stage = "in"
+        bucket_name = f"{RUN_ID.replace('-', '_')}_clone"
+        bucket_id = f"in.c-{bucket_name}"
         table_id = f"{bucket_id}.source"
 
-        _step(1, "create a production table (default branch)")
+        # create-table on the DEFAULT branch does NOT auto-create the bucket
+        # (that convenience is dev-branch-only, to materialize the branch's
+        # isolated storage). The production path needs the bucket first.
+        _step(1, "create the destination bucket (default branch)")
+        self._run_ok(
+            "storage",
+            "create-bucket",
+            "--project",
+            self.alias,
+            "--stage",
+            bucket_stage,
+            "--name",
+            bucket_name,
+        )
+        self._created_buckets.append(bucket_id)
+
+        _step(2, "create a production table (default branch)")
         self._run_ok(
             "storage",
             "create-table",
@@ -8032,16 +8078,15 @@ class TestE2EStorageCloneTable:
             "--primary-key",
             "id",
         )
-        self._created_buckets.append(bucket_id)
 
-        _step(2, "branch create", "target dev branch for the pull")
+        _step(3, "branch create", "target dev branch for the pull")
         branch = self._run_ok(
             "branch", "create", "--project", self.alias, "--name", f"{RUN_ID}-clone-branch"
         )["data"]
         branch_id = int(branch["branch_id"])
         self._created_branch_ids.append(branch_id)
 
-        _step(3, "storage clone-table", "POST /tables/.../pull (default -> branch)")
+        _step(4, "storage clone-table", "POST /tables/.../pull (default -> branch)")
         result = self._run_ok(
             "storage",
             "clone-table",
@@ -8057,7 +8102,7 @@ class TestE2EStorageCloneTable:
         assert result["dry_run"] is False
         assert result["response"]["status"] == "success"
 
-        _step(4, "table-detail in branch", "table is materialized/visible after pull")
+        _step(5, "table-detail in branch", "table is materialized/visible after pull")
         detail = self.client.get_table_detail(table_id, branch_id=branch_id)
         col_names = {c["name"] for c in detail["definition"]["columns"]}
         assert col_names == {"id", "value"}
@@ -9375,7 +9420,12 @@ def test_stream_otlp_e2e(tmp_path: Path) -> None:
     config_dir = tmp_path / "kbagent-config"
     config_dir.mkdir()
     alias = "e2e-stream-target"
-    source_name = "kbagent-e2e-stream"
+    # Unique per run: a fixed name reuses whatever source is already there, and
+    # a source whose async delete once got wedged server-side (unremovable via
+    # the API) would then red every subsequent run. A fresh per-run source
+    # creates and deletes cleanly (~3s) and is isolated from any orphan.
+    source_name = f"kbagent-{RUN_ID}"
+    sink_bucket = f"in.c-otlp-{source_name}"
 
     def _run(*args: str) -> Any:
         return runner.invoke(
@@ -9432,13 +9482,42 @@ def test_stream_otlp_e2e(tmp_path: Path) -> None:
         assert "/***" not in rdata["endpoint"]
     finally:
         # 5. Clean up -- delete the source and confirm it is gone.
+        #
+        # Deleting an OTLP source tears down its auto-provisioned sinks, which
+        # runs as an async Stream task. It is usually fast (~3s) but under CI
+        # load has exceeded the client's task timeout, surfacing as a retryable
+        # TIMEOUT (exit 4) even though the delete keeps running server-side.
+        # Treat that as "delete in progress" and confirm eventual removal via
+        # the list below, so a slow-but-successful teardown does not red the run.
         deleted = _run("stream", "delete", source_name, "--project", alias, "--yes")
-        assert deleted.exit_code == 0, deleted.output
-        assert json.loads(deleted.output)["data"]["status"] == "deleted"
+        if deleted.exit_code == 0:
+            assert json.loads(deleted.output)["data"]["status"] == "deleted"
+        else:
+            payload = json.loads(deleted.output)
+            assert payload["error"]["code"] == "TIMEOUT", deleted.output
 
-    final = _run("stream", "list", "--project", alias)
-    remaining = {s["source_id"] for s in json.loads(final.output)["data"]["sources"]}
+    # Poll the source list until the (possibly still-processing) delete lands.
+    remaining: set[str] = set()
+    for _ in range(30):
+        final = _run("stream", "list", "--project", alias)
+        remaining = {s["source_id"] for s in json.loads(final.output)["data"]["sources"]}
+        if source_name not in remaining:
+            break
+        time.sleep(2)
     assert source_name not in remaining
+
+    # Best-effort: drop the auto-provisioned sink bucket, which lingers after
+    # the source is gone. Failure here is not a test failure (throwaway project).
+    _run(
+        "storage",
+        "delete-bucket",
+        "--project",
+        alias,
+        "--bucket-id",
+        sink_bucket,
+        "--force",
+        "--yes",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -11930,7 +12009,7 @@ class TestE2EConfigSecretEncryption:
         return _json_ok(_invoke(self.config_dir, ["--json", *args]))
 
     def _read_password(self, config_id: str) -> str:
-        data = self._run_ok(
+        envelope = self._run_ok(
             "config",
             "detail",
             "--project",
@@ -11940,7 +12019,9 @@ class TestE2EConfigSecretEncryption:
             "--config-id",
             config_id,
         )
-        return data["configuration"]["parameters"]["#password"]
+        # _run_ok returns the full {status, data} envelope; the config body
+        # lives under .data.configuration (config detail is single-project here).
+        return envelope["data"]["configuration"]["parameters"]["#password"]
 
     def test_config_create_and_update_encrypt_secret(self) -> None:
         _step(1, "config new --push with a #password", "must encrypt before write")
