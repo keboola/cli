@@ -2251,8 +2251,17 @@ class TestFullE2E:
 
             assert kbc.files.read_bytes(meta.id) == payload, "read_bytes round-trip mismatch"
 
-            listed = kbc.files.list(tags=[facade_tag])
-            assert any(f.id == meta.id for f in listed), "uploaded file must appear in list"
+            # The tag-filtered Files list is read-after-write eventually
+            # consistent: the upload is durable (read_bytes round-tripped it
+            # just above), but the tag index can lag a few seconds. Poll instead
+            # of asserting the first list (intermittently missed in CI 2026-07-22).
+            found = False
+            for _ in range(15):
+                if any(f.id == meta.id for f in kbc.files.list(tags=[facade_tag])):
+                    found = True
+                    break
+                time.sleep(2)
+            assert found, "uploaded file must appear in list"
 
             kbc.files.delete(meta.id)
             self._created_file_ids.remove(meta.id)
@@ -2672,16 +2681,23 @@ class TestFullE2E:
         self._created_file_ids.append(file_id)
         assert file_id > 0
 
-        # files (list)
-        data = self._run_ok(
-            "storage",
-            "files",
-            "--project",
-            self.alias,
-            "--tag",
-            f"e2e-{RUN_ID}",
-        )
-        file_ids = [f["id"] for f in data["data"]["files"]]
+        # files (list) -- the tag index is read-after-write eventually
+        # consistent; poll until the just-uploaded file appears rather than
+        # asserting the first list.
+        file_ids: list[int] = []
+        for _ in range(15):
+            data = self._run_ok(
+                "storage",
+                "files",
+                "--project",
+                self.alias,
+                "--tag",
+                f"e2e-{RUN_ID}",
+            )
+            file_ids = [f["id"] for f in data["data"]["files"]]
+            if file_id in file_ids:
+                break
+            time.sleep(2)
         assert file_id in file_ids
 
         # file-detail
