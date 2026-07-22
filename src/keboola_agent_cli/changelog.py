@@ -24,6 +24,23 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.76.0": [
+        "Change (#520): the ~3,960-LOC `client.py` is split into a `client/` package by "
+        "endpoint family (storage tables/files, configs, queue, tokens, branches, stream, "
+        "query, workspaces, misc, plus `_core`/`_transfer`). `KeboolaClient` stays a single "
+        "class composed from per-family mixins, so the public import surface and the SDK "
+        "`Client.raw` contract are byte-identical -- verified as a pure move (every method "
+        "body unchanged) plus a full live E2E pass.",
+        "Note: this is an internal-only release -- no user-facing behavior changes. It bundles "
+        "the client refactor above with E2E test-suite hardening; every `client/*.py` module is "
+        "under the CONTRIBUTING.md file-size ceiling, and new HTTP methods now go into the "
+        "relevant `client/*.py` mixin instead of the old monolith.",
+        "Fix (tests, #521 #523): repaired the long-standing nightly E2E flakes -- clone "
+        "(missing bucket create on the default branch), config-secret (response-envelope path), "
+        "swap + file-list (read-after-write / read-after-DDL eventual consistency, now polled), "
+        "and stream (unique per-run source name to dodge a wedged orphan). The nightly E2E is "
+        "green again after ~7 weeks.",
+    ],
     "0.75.0": [
         "New (#512): table snapshots -- `kbagent storage table-from-snapshot` creates a NEW "
         "table from an existing snapshot (restore), plus the full lifecycle: "
