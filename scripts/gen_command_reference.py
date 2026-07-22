@@ -13,6 +13,18 @@ Hidden commands and groups (e.g. the ``sl`` alias) are skipped together with
 their subtree, matching scripts/check_command_sync.py -- they are not part of
 the public documented surface.
 
+Metavar column contract (STABLE -- do not let it drift under a dependency bump):
+    Value-taking options render as ``| `--flag` `<type>` | required | help |``.
+    The metavar span is ALWAYS wrapped in angle brackets (``<str>``, ``<int>``,
+    ``<path>``, ``<a|b|c>`` for choices); flags carry no metavar span at all.
+    This is derived from Click's version-stable ``ParamType.name`` (see
+    ``_stable_option_metavar``), NOT from ``make_metavar()``, whose default
+    drifted between releases (bare ``TEXT`` at Click 8.x vs ``<str>`` later).
+    A downstream consumer -- the connection-docs freshness gate
+    (keboola/connection-docs#1037) -- detects value-taking options by matching
+    ``/^<.*>$/`` on this span, so the shape is a published contract. See issue
+    #513; ``tests/test_gen_command_reference.py`` fails CI if it drifts.
+
 Usage (run from repo root):
     python scripts/gen_command_reference.py                    # print to stdout
     python scripts/gen_command_reference.py --output PATH      # write to file
@@ -54,6 +66,44 @@ def _metavar(param: click.Parameter, ctx: click.Context) -> str:
         return param.make_metavar()  # ty: ignore[missing-argument]
 
 
+# Click's ``ParamType.name`` is a version-stable token; ``make_metavar()`` output
+# is not (see module docstring). Map the stable name to the documented metavar so
+# the reference-asset contract can't drift under a Typer/Click bump.
+_METAVAR_BY_TYPE_NAME: dict[str, str] = {
+    "text": "str",
+    "integer": "int",
+    "integer range": "int",
+    "float": "float",
+    "float range": "float",
+    "path": "path",
+    "filename": "path",
+    "file": "file",
+    "boolean": "bool",
+    "uuid": "uuid",
+    "datetime": "datetime",
+}
+
+
+def _stable_option_metavar(param: click.Parameter) -> str:
+    """Angle-bracket-wrapped, Click-version-independent metavar for a value option.
+
+    Choices keep their literal case (``<admin|guest|readOnly|share>``) -- they are
+    real CLI tokens. Scalars map through ``ParamType.name``; an author-set metavar
+    wins and is lowercased. Always returns a ``<...>`` span (never empty, never a
+    bare uppercase ``TEXT``), which is the shape the downstream docs gate matches.
+    """
+    explicit = getattr(param, "metavar", None)
+    if explicit:
+        return f"<{explicit.strip('<>[] ').lower()}>"
+    ptype = param.type
+    choices = getattr(ptype, "choices", None)
+    if choices:
+        return f"<{'|'.join(str(choice) for choice in choices)}>"
+    type_name = getattr(ptype, "name", None) or "text"
+    inner = _METAVAR_BY_TYPE_NAME.get(type_name, type_name.replace(" ", "-"))
+    return f"<{inner}>"
+
+
 def _format_param(param: click.Parameter, ctx: click.Context) -> str | None:
     """Render one parameter as a markdown table row, or None if hidden/help."""
     kind = getattr(param, "param_type_name", "")
@@ -61,7 +111,7 @@ def _format_param(param: click.Parameter, ctx: click.Context) -> str | None:
         if getattr(param, "hidden", False) or "--help" in param.opts:
             return None
         names = " / ".join(f"`{opt}`" for opt in [*param.opts, *param.secondary_opts])
-        metavar = "" if getattr(param, "is_flag", False) else f" `{_metavar(param, ctx)}`"
+        metavar = "" if getattr(param, "is_flag", False) else f" `{_stable_option_metavar(param)}`"
         required = "yes" if param.required else ""
         help_text = (getattr(param, "help", "") or "").replace("\n", " ").strip()
         return f"| {names}{metavar} | {required} | {help_text} |"
