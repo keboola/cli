@@ -1044,7 +1044,7 @@ class TestExecuteQuery:
     ) -> None:
         """A --limit larger than one page walks offset until the limit is reached."""
         # Shrink the page size so a 4-row limit needs two /results calls.
-        monkeypatch.setattr(client_module, "QUERY_RESULTS_PAGE_SIZE", 2)
+        monkeypatch.setattr("keboola_agent_cli.client._transfer.QUERY_RESULTS_PAGE_SIZE", 2)
         mock_client = MagicMock()
         mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
         mock_client.submit_query.return_value = {"id": "qj-page"}
@@ -1279,7 +1279,7 @@ class TestExecuteQuery:
         Stopping at the --limit cap with a full last page (not exhausted) means
         there may be more rows, so `truncated` must be True even without a count.
         """
-        monkeypatch.setattr(client_module, "QUERY_RESULTS_PAGE_SIZE", 2)
+        monkeypatch.setattr("keboola_agent_cli.client._transfer.QUERY_RESULTS_PAGE_SIZE", 2)
         mock_client = MagicMock()
         mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
         mock_client.submit_query.return_value = {"id": "qj-nocount"}
@@ -1311,7 +1311,7 @@ class TestExecuteQuery:
     ) -> None:
         """When total_rows lands on a page boundary, do not spend a round-trip on
         the empty next page (NIT-1)."""
-        monkeypatch.setattr(client_module, "QUERY_RESULTS_PAGE_SIZE", 2)
+        monkeypatch.setattr("keboola_agent_cli.client._transfer.QUERY_RESULTS_PAGE_SIZE", 2)
         mock_client = MagicMock()
         mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
         mock_client.submit_query.return_value = {"id": "qj-boundary"}
