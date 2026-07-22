@@ -455,6 +455,13 @@ class TestFullE2E:
         )
         self._test_truncate_table_roundtrip(table_id)
 
+        _step(
+            11.2,
+            "storage snapshot-* + table-from-snapshot",
+            "snapshot lifecycle + restore as new table (issue #512)",
+        )
+        self._test_snapshot_roundtrip(bucket_id, table_id)
+
         _step(12, "storage tables + table-detail")
         self._test_table_listing(bucket_id, table_id)
 
@@ -1095,6 +1102,162 @@ class TestFullE2E:
         assert restored["rows_count"] == before["rows_count"], (
             f"restore failed: expected {before['rows_count']} rows, got {restored['rows_count']}"
         )
+
+    def _test_snapshot_roundtrip(self, bucket_id: str, table_id: str) -> None:
+        """Snapshot lifecycle + restore-as-new-table (issue #512).
+
+        create -> list -> detail -> table-from-snapshot (dry-run, then apply)
+        -> verify the restored table matches the source (rows, columns,
+        primary key) -> delete the restored table and the snapshot -> verify
+        the snapshot is gone. Leaves the source table untouched for the
+        downstream hops.
+        """
+        before = self._run_ok(
+            "storage",
+            "table-detail",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )["data"]
+        assert before["rows_count"] > 0, "snapshot roundtrip needs a non-empty table"
+        before_columns = sorted(c["name"] for c in before["column_details"])
+        before_pk = list(before.get("primary_key") or [])
+
+        # Create a snapshot; the receipt carries the new snapshot ID.
+        created = self._run_ok(
+            "storage",
+            "snapshot-create",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--description",
+            "kbagent E2E snapshot roundtrip",
+        )["data"]
+        snapshot_id = str(created["snapshot_id"])
+        assert snapshot_id, f"snapshot-create returned no snapshot_id: {created}"
+
+        # List: the new snapshot must appear for the source table.
+        listed = self._run_ok(
+            "storage",
+            "snapshots",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )["data"]
+        assert listed["count"] >= 1
+        assert snapshot_id in [str(s["id"]) for s in listed["snapshots"]]
+
+        # Detail: the snapshot must point back at the source table.
+        detail = self._run_ok(
+            "storage",
+            "snapshot-detail",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+        )["data"]
+        assert str(detail["snapshot"]["id"]) == snapshot_id
+        assert detail["snapshot"]["table"]["id"] == table_id
+
+        # Restore dry-run: receipt only, no table created.
+        restored_name = "e2e_snapshot_restore"
+        restored_table_id = f"{bucket_id}.{restored_name}"
+        dry = self._run_ok(
+            "storage",
+            "table-from-snapshot",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            restored_name,
+            "--dry-run",
+        )["data"]
+        assert dry["dry_run"] is True
+        tables = self._run_ok(
+            "storage", "tables", "--project", self.alias, "--bucket-id", bucket_id
+        )["data"]["tables"]
+        assert restored_table_id not in [t["id"] for t in tables], (
+            "dry-run must not create the table"
+        )
+
+        # Restore for real: a NEW table with the snapshot's data appears.
+        applied = self._run_ok(
+            "storage",
+            "table-from-snapshot",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            restored_name,
+        )["data"]
+        assert applied["dry_run"] is False
+        assert applied["table_id"] == restored_table_id
+
+        # The restored table must match the source: rows, columns, primary key.
+        restored = self._run_ok(
+            "storage",
+            "table-detail",
+            "--project",
+            self.alias,
+            "--table-id",
+            restored_table_id,
+        )["data"]
+        assert restored["rows_count"] == before["rows_count"], (
+            f"restored rows {restored['rows_count']} != source rows {before['rows_count']}"
+        )
+        assert sorted(c["name"] for c in restored["column_details"]) == before_columns
+        assert list(restored.get("primary_key") or []) == before_pk
+
+        # Drop the restored table so downstream bucket listings are unchanged.
+        self._run_ok(
+            "storage",
+            "delete-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            restored_table_id,
+            "--yes",
+        )
+
+        # Delete the snapshot (dry-run first) and verify it is gone.
+        del_dry = self._run_ok(
+            "storage",
+            "snapshot-delete",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+            "--dry-run",
+        )["data"]
+        assert del_dry["would_delete"] == [snapshot_id]
+        deleted = self._run_ok(
+            "storage",
+            "snapshot-delete",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+        )["data"]
+        assert deleted["deleted"] == [snapshot_id]
+        assert deleted["failed"] == []
+        after_delete = self._run_ok(
+            "storage",
+            "snapshots",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )["data"]
+        assert snapshot_id not in [str(s["id"]) for s in after_delete["snapshots"]]
 
     def _test_table_listing(self, bucket_id: str, table_id: str) -> None:
         """Verify table appears in listings and detail is correct."""
@@ -3002,7 +3165,9 @@ class TestFullE2E:
             '{"parameters": {"db": {"host": "invalid.example.com"}}}',
         )
         assert result.exit_code != 0
-        err = _json(result)
+        # NOT _json(): that helper asserts exit_code == 0, but this command is
+        # EXPECTED to fail -- parse the error envelope directly (#508 regression).
+        err = json.loads(result.output)
         assert err["error"]["code"] in ("API_ERROR", "VALIDATION_ERROR")
 
         # flow examples — bundled, offline
@@ -3131,6 +3296,32 @@ class TestFullE2E:
         # Remove from cleanup since we deleted via CLI
         self._created_config_ids.remove((TEST_COMPONENT_ID, config_id))
 
+    def _poll_columns(
+        self, table_id: str, *, present: str | None = None, absent: str | None = None
+    ) -> list[str]:
+        """Poll table-detail until a column appears/disappears (max ~30s).
+
+        The Storage API's column listing is read-after-write eventually
+        consistent on some stacks: an add-column/delete-column receipt is
+        authoritative (the API confirmed the DDL), but an immediately-following
+        table-detail can serve stale metadata for a few seconds -- measured
+        live on connection.us-east4.gcp.keboola.com 2026-07-22 (~5-10s lag,
+        wider when the table recently had snapshot activity). Poll instead of
+        asserting the first read.
+        """
+        columns: list[str] = []
+        for _ in range(15):
+            data = self._run_ok(
+                "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+            )
+            columns = data["data"]["columns"]
+            if (present is None or present in columns) and (
+                absent is None or absent not in columns
+            ):
+                return columns
+            time.sleep(2)
+        return columns
+
     def _test_delete_column(self, table_id: str) -> None:
         """Delete a column from a table: dry-run, actual delete, verify."""
         # Verify the table has 'value' column before we delete it
@@ -3159,12 +3350,8 @@ class TestFullE2E:
         assert data["data"]["column"] == "status"
         assert data["data"]["definition"]["type"] == "VARCHAR"
         assert data["data"]["table_id"] == table_id
-        data = self._run_ok(
-            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
-        )
-        assert "status" in data["data"]["columns"], (
-            f"Expected 'status' column after add-column, got {data['data']['columns']}"
-        )
+        columns = self._poll_columns(table_id, present="status")
+        assert "status" in columns, f"Expected 'status' column after add-column, got {columns}"
 
         # delete-column dry-run
         data = self._run_ok(
@@ -3198,16 +3385,8 @@ class TestFullE2E:
         assert data["data"]["failed"] == []
         assert data["data"]["table_id"] == table_id
 
-        # Verify the column is gone
-        data = self._run_ok(
-            "storage",
-            "table-detail",
-            "--project",
-            self.alias,
-            "--table-id",
-            table_id,
-        )
-        columns_after = data["data"]["columns"]
+        # Verify the column is gone (poll: same read-after-DDL staleness as add)
+        columns_after = self._poll_columns(table_id, absent="value")
         assert "value" not in columns_after, (
             f"'value' column should be deleted, got {columns_after}"
         )

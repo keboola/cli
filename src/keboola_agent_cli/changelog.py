@@ -24,6 +24,22 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.75.0": [
+        "New (#512): table snapshots -- `kbagent storage table-from-snapshot` creates a NEW "
+        "table from an existing snapshot (restore), plus the full lifecycle: "
+        "`snapshot-create`, `snapshots` (list), `snapshot-detail`, `snapshot-delete`. "
+        "A snapshot captures a table's data, columns, and primary key at a point in time; "
+        "restore rebuilds them into a fresh table in any existing bucket.",
+        "Note (#512): `table-from-snapshot --name` is REQUIRED -- the live API rejects an "
+        "omitted/empty name (the reference PHP client's 'defaults to snapshot name' docblock "
+        "is stale). Restore goes through the classic `tables-async` endpoint, not "
+        "`tables-definition`, which is why it is a dedicated command instead of a "
+        "`create-table` flag. No overwrite semantics: restore under a new name, verify, then "
+        "swap or delete the old table yourself.",
+        "Permissions: `storage.snapshots`/`snapshot-detail` classify as read, "
+        "`snapshot-create`/`table-from-snapshot` as write, `snapshot-delete` as destructive "
+        "(it forecloses restores; source tables are untouched).",
+    ],
     "0.74.0": [
         "MCP passthrough deprecation (#478 phase 2, epic #390): `tool call` / `tool list` "
         "/ `agent --type mcp_tool` are now formally deprecated in favor of native commands. "

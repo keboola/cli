@@ -2726,3 +2726,11 @@ def storage_unload_table(
             slice_count = result.get("slice_count")
             suffix = f", {slice_count} slices" if slice_count else ""
             formatter.console.print(f"  Downloaded to: {result['output_path']} ({dl_size}{suffix})")
+
+
+# Snapshot commands (issue #512) live in a private module -- storage.py is
+# past the commands-file size ceiling. Mounted here so they share the
+# `storage.*` permission namespace and appear in `kbagent storage --help`.
+from ._storage_snapshots import register as _register_snapshot_commands  # noqa: E402
+
+_register_snapshot_commands(storage_app)

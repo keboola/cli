@@ -3026,3 +3026,26 @@ Four related sync-engine behaviors landed together (issues #466 / #467 / #472 / 
   detected ... Local check only -- run 'kbagent sync diff'": `status` never
   contacts the API, so it cannot see remote drift; treating it as a
   local-vs-production audit was the #466 trap.
+
+## Table snapshots: restore is `tables-async`, `--name` is required, no overwrite (since v0.75.0)
+
+`kbagent storage table-from-snapshot` (issue #512) creates a NEW table from an
+existing snapshot. Three traps, all verified live (us-east4.gcp, 2026-07-22):
+
+- **`--name` is REQUIRED.** The API rejects an omitted or empty name with
+  `Table create option "name" is required and cannot be empty` -- the reference
+  PHP client's "defaults to the snapshotted table's name" docblock is stale.
+- **No overwrite semantics.** Restoring onto an existing table name fails with
+  a duplicate-name error. The safe pattern: restore under a new name, verify
+  the data, then `storage swap-tables` (or `delete-table` + re-restore) to
+  promote it. The destination bucket must already exist.
+- **It is not a `create-table` flag.** Restore goes through the classic
+  `tables-async` import endpoint; `create-table` uses `tables-definition`,
+  which does not accept `snapshotId` -- hence the dedicated command.
+
+Lifecycle: `snapshot-create` (write; receipt carries `snapshot_id`),
+`snapshots` (read, per table), `snapshot-detail` (read; global snapshot ID ->
+embeds the source `table` object), `snapshot-delete` (destructive: forecloses
+restores, source tables untouched; batch-tolerant, exit 1 on any failure).
+Snapshot create and restore are async storage jobs -- the CLI polls to
+completion, so the receipt's `table.rowsCount` is authoritative.

@@ -39,6 +39,7 @@ from ..services.schedule_service import ScheduleService
 from ..services.search_service import SearchService
 from ..services.semantic_layer_service import SemanticLayerService
 from ..services.sharing_service import SharingService
+from ..services.snapshot_service import SnapshotService
 from ..services.storage_service import StorageService
 from ..services.stream_service import StreamService
 from ..services.sync_service import SyncService
@@ -67,6 +68,7 @@ class ServiceRegistry:
     project: ProjectService = field(init=False)
     config: ConfigService = field(init=False)
     component: ComponentService = field(init=False)
+    snapshot: SnapshotService = field(init=False)
     storage: StorageService = field(init=False)
     stream: StreamService = field(init=False)
     job: JobService = field(init=False)
@@ -102,6 +104,7 @@ class ServiceRegistry:
         self.project = ProjectService(config_store=cs)
         self.config = ConfigService(config_store=cs)
         self.component = ComponentService(config_store=cs)
+        self.snapshot = SnapshotService(config_store=cs)
         self.storage = StorageService(config_store=cs)
         self.stream = StreamService(config_store=cs)
         self.job = JobService(config_store=cs)

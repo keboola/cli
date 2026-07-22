@@ -344,6 +344,14 @@ kbagent storage delete-column --project NAME --table-id ID --column COL [--colum
 kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes]
 kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
+kbagent storage snapshot-create --project NAME --table-id ID [--description D] [--branch ID]
+kbagent storage snapshots --project NAME --table-id ID [--limit N] [--branch ID]
+kbagent storage snapshot-detail --project NAME --snapshot-id ID
+kbagent storage snapshot-delete --project NAME --snapshot-id ID [--snapshot-id ...] [--dry-run] [--yes]
+kbagent storage table-from-snapshot --project NAME --snapshot-id ID --bucket-id ID --name NAME [--branch ID] [--dry-run]
+# Snapshots (0.75.0+, #512): point-in-time table backup (data+columns+PK) and restore as a NEW table.
+#   table-from-snapshot goes through the classic tables-async endpoint (NOT tables-definition), --name is
+#   REQUIRED (API rejects empty), no overwrite -- restore under a new name, then swap/delete yourself.
 kbagent storage describe-bucket --project NAME --bucket-id ID [--text STR | --file PATH | --stdin] [--branch ID]
 kbagent storage describe-table --project NAME --table-id ID [--text STR | --file PATH | --stdin] [--branch ID]
 kbagent storage describe-column --project NAME --table-id ID --column NAME=DESC [--column ...] [--branch ID]

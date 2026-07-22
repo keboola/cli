@@ -2,19 +2,20 @@
 name: kbagent
 description: >
   Use when working with Keboola Connection projects via the kbagent CLI.
-  Covers: exploring and searching component configurations, job history and
-  job runs, cross-project data lineage, Keboola MCP tools, development
-  branches, SQL debugging in temporary workspaces, GitOps sync of configs as
-  local files (pull/push/diff/clone), bucket sharing and linking, encrypting
-  secrets, Storage tables and files, data apps (create/deploy/logs/secrets),
-  conditional flows and schedules, project members and invitations, feature
+  Covers: exploring and searching configurations, job history and runs,
+  cross-project data lineage, Keboola MCP tools, dev branches, SQL debugging in workspaces, GitOps sync of configs
+  (pull/push/diff/clone), bucket sharing and linking, encrypting
+  secrets, Storage tables, files, and snapshots (backup + restore as a new
+  table), data apps (create/deploy/logs/secrets),
+  flows and schedules, members and invitations, feature
   flags, OTLP data streams, scoped Storage tokens, the semantic layer
-  (models, datasets, metrics, constraints, reference data), and the Keboola
-  Developer Portal. Triggers: kbagent, Keboola, keboola config, keboola job,
+  (models, metrics, constraints, reference data), and the Developer
+  Portal. Triggers: kbagent, Keboola, keboola config, keboola job,
   keboola lineage, keboola sync, gitops, dev branch, workspace SQL, data app,
   streamlit deploy, semantic layer, sl, dev-portal, data stream, OTLP,
   scoped token, bucket sharing, encrypt secrets, feature flag, flow schedule,
-  invite member, SQL transformation edit, sync action, keboola docs.
+  invite member, SQL transformation edit, sync action, keboola docs,
+  table snapshot, snapshot restore.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -168,6 +169,11 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Delete one or more Storage Files | `kbagent storage file-delete --project PROJECT --file-id FILE-ID` |
 | Load a Storage File into a table | `kbagent storage load-file --project PROJECT --file-id FILE-ID --table-id TABLE-ID` |
 | Export a table to a Storage File | `kbagent storage unload-table --project PROJECT --table-id TABLE-ID` |
+| List snapshots of a table | `kbagent storage snapshots --project PROJECT --table-id TABLE-ID` |
+| Create a snapshot of a table (data + columns + primary key) | `kbagent storage snapshot-create --project PROJECT --table-id TABLE-ID` |
+| Show one snapshot's detail (source table, creation time, description) | `kbagent storage snapshot-detail --project PROJECT --snapshot-id SNAPSHOT-ID` |
+| Delete one or more table snapshots (the source tables are untouched) | `kbagent storage snapshot-delete --project PROJECT --snapshot-id SNAPSHOT-ID` |
+| Create a NEW table from an existing snapshot (snapshot restore) | `kbagent storage table-from-snapshot --project PROJECT --snapshot-id SNAPSHOT-ID --bucket-id BUCKET-ID --name NAME` |
 | List Data Streams sources in a project | `kbagent stream list --project PROJECT` |
 | Create an OTLP (or HTTP) source and return its endpoint | `kbagent stream create-source --project PROJECT --name NAME` |
 | Show a source's endpoints, protocol, and destination tables | `kbagent stream detail [SOURCE-ID] --project PROJECT` |
@@ -377,6 +383,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Agent Tasks via REST** (`kbagent http <verb> /agents...` from inside scheduled subprocesses; SSE streaming) | [agent-tasks-rest-workflow](references/agent-tasks-rest-workflow.md) |
 | **Data apps** (create / deploy / start / stop / password / delete; the §9 redeploy contract) | [data-app-workflow](references/data-app-workflow.md) |
 | Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
+| **Table snapshots** (point-in-time backup; restore as a NEW table; `--name` required, no overwrite) | [snapshot-workflow](references/snapshot-workflow.md) |
 | **Python library** (`from keboola_agent_cli import Client` -- in-process query + Storage Files, no CLI/daemon/config-dir) | [library-workflow](references/library-workflow.md) |
 | **Data Streams (OTLP / OpenTelemetry)** (create/inspect OTLP source, masked secret-in-URL, OTEL_EXPORTER_OTLP_ENDPOINT) | [stream-workflow](references/stream-workflow.md) |
 | **Storage column types** (native types, NOT NULL, DEFAULT, branch materialize) | [storage-types-workflow](references/storage-types-workflow.md) |

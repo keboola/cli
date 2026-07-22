@@ -2246,6 +2246,126 @@ class KeboolaClient(BaseHttpClient):
         response = self._request("POST", f"{prefix}/tables/{safe_id}/pull")
         return self._wait_for_storage_job(response.json())
 
+    def create_table_snapshot(
+        self,
+        table_id: str,
+        description: str | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Create a snapshot of a table (async, waits for completion).
+
+        Snapshots capture the table's data, columns, primary key, and
+        attributes at a point in time. A new table can later be created from
+        the snapshot with :meth:`create_table_from_snapshot`.
+
+        Args:
+            table_id: Full ID of the table to snapshot (e.g. "in.c-bucket.table").
+            description: Optional human-readable snapshot description.
+            branch_id: If set, snapshot the table in a specific dev branch.
+
+        Returns:
+            Completed storage job results dict; contains the new snapshot "id".
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_id = quote(table_id, safe="")
+        body: dict[str, Any] = {}
+        if description is not None:
+            body["description"] = description
+        response = self._request("POST", f"{prefix}/tables/{safe_id}/snapshots", json=body)
+        job = self._wait_for_storage_job(response.json())
+        return job.get("results", {})
+
+    def list_table_snapshots(
+        self,
+        table_id: str,
+        limit: int | None = None,
+        branch_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List snapshots of a table (sync).
+
+        Args:
+            table_id: Full ID of the table (e.g. "in.c-bucket.table").
+            limit: Optional maximum number of snapshots to return.
+            branch_id: If set, list snapshots in a specific dev branch.
+
+        Returns:
+            List of snapshot dicts (id, createdTime, description, creatorToken, ...).
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_id = quote(table_id, safe="")
+        params: dict[str, str] = {}
+        if limit is not None:
+            params["limit"] = str(limit)
+        response = self._request(
+            "GET", f"{prefix}/tables/{safe_id}/snapshots", params=params or None
+        )
+        return response.json()
+
+    def get_snapshot(self, snapshot_id: str) -> dict[str, Any]:
+        """Get a single snapshot's detail by its ID (sync).
+
+        Snapshot IDs are global (not table-scoped): the detail includes the
+        source ``table`` object, so this is also how a bare snapshot ID is
+        traced back to its origin table.
+
+        Args:
+            snapshot_id: Numeric snapshot ID.
+
+        Returns:
+            Snapshot dict (id, table, createdTime, description, ...).
+        """
+        safe_id = quote(str(snapshot_id), safe="")
+        response = self._request("GET", f"/v2/storage/snapshots/{safe_id}")
+        return response.json()
+
+    def delete_snapshot(self, snapshot_id: str) -> None:
+        """Delete a snapshot by its ID.
+
+        The endpoint normally responds synchronously (204); a 202 job
+        response is polled to completion for forward compatibility.
+
+        Args:
+            snapshot_id: Numeric snapshot ID.
+        """
+        safe_id = quote(str(snapshot_id), safe="")
+        response = self._request("DELETE", f"/v2/storage/snapshots/{safe_id}")
+        if response.status_code == 202:
+            self._wait_for_storage_job(response.json())
+
+    def create_table_from_snapshot(
+        self,
+        bucket_id: str,
+        snapshot_id: str,
+        name: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Create a NEW table from an existing snapshot (async, waits).
+
+        Hits the classic ``tables-async`` import endpoint with a
+        ``snapshotId`` source (the ``tables-definition`` endpoint used by
+        :meth:`create_table` does not accept snapshots). The new table
+        restores the snapshot's data, columns, and primary key. ``name`` is
+        required: the API rejects an omitted/empty name ("Table create option
+        \"name\" is required and cannot be empty", verified live 2026-07-22 --
+        the reference PHP client's "fetched from snapshot" docblock is stale).
+
+        Args:
+            bucket_id: Destination bucket ID (e.g. "in.c-my-bucket").
+            snapshot_id: Numeric ID of the source snapshot.
+            name: Name for the new table (required by the API).
+            branch_id: If set, create the table in a specific dev branch.
+
+        Returns:
+            Completed storage job results dict -- the created table (its "id"
+            is the new full table ID).
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_id = quote(bucket_id, safe="")
+        body: dict[str, Any] = {"snapshotId": snapshot_id, "name": name}
+        response = self._request("POST", f"{prefix}/buckets/{safe_id}/tables-async", json=body)
+        job = self._wait_for_storage_job(response.json())
+        return job.get("results", {})
+
     def list_tables_with_metadata(self) -> list[dict[str, Any]]:
         """List all storage tables with columns and metadata.
 

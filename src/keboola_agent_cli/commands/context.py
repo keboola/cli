@@ -453,6 +453,31 @@ remain branch-aware because modifying a dev branch is the expected intent.
     (swap-tables, dropping columns) first needs a branch-local copy. This materializes that copy (one-way:
     default -> branch). Branch is mandatory; service guards before any HTTP call when no branch is set.
 
+### Table Snapshots (point-in-time backup + restore-as-new-table)
+
+  kbagent storage snapshot-create --project NAME --table-id ID [--description D] [--branch ID]
+    Create a snapshot of a table: data + columns + primary key at a point in time (async job; polls to
+    completion). The receipt carries the new snapshot_id -- keep it, restores are addressed by it.
+
+  kbagent storage snapshots --project NAME --table-id ID [--limit N] [--branch ID]
+    List snapshots of a table (id, createdTime, description, creator). Production endpoint by default.
+
+  kbagent storage snapshot-detail --project NAME --snapshot-id ID
+    One snapshot's detail. Snapshot IDs are global (not table-scoped); the detail includes the source
+    table object (id, columns, primaryKey), so this is how a bare snapshot ID is traced back to its table.
+
+  kbagent storage table-from-snapshot --project NAME --snapshot-id ID --bucket-id ID --name NAME [--branch ID] [--dry-run]
+    Create a NEW table from an existing snapshot (snapshot restore; async job). Restores the snapshot's
+    data, columns, and primary key into --bucket-id under --name. --name is REQUIRED (the API rejects an
+    omitted/empty name). The destination bucket must exist; a table with the same name must not (no
+    overwrite semantics -- restore under a new name, verify, then swap or delete the old table yourself).
+    Goes through the classic tables-async endpoint, NOT tables-definition -- so it is a separate command,
+    not a flag on create-table.
+
+  kbagent storage snapshot-delete --project NAME --snapshot-id ID [--snapshot-id ...] [--dry-run] [--yes]
+    Delete one or more snapshots (destructive: forecloses restores; source tables untouched).
+    Batch-tolerant: one failure does not abort the rest; exit 1 if any ID failed.
+
 ### Storage Descriptions
 
   kbagent storage describe-bucket --project NAME --bucket-id ID [--text STR | --file PATH | --stdin] [--branch ID]

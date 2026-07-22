@@ -72,6 +72,7 @@ from .services.schedule_service import ScheduleService
 from .services.search_service import SearchService
 from .services.semantic_layer_service import SemanticLayerService
 from .services.sharing_service import SharingService
+from .services.snapshot_service import SnapshotService
 from .services.storage_service import StorageService
 from .services.stream_service import StreamService
 from .services.sync_service import SyncService
@@ -326,6 +327,7 @@ def main(
     branch_service = BranchService(config_store=config_store)
     sharing_service = SharingService(config_store=config_store)
     search_service = SearchService(config_store=config_store)
+    snapshot_service = SnapshotService(config_store=config_store)
     storage_service = StorageService(config_store=config_store)
     stream_service = StreamService(config_store=config_store)
     token_service = TokenService(config_store=config_store)
@@ -383,6 +385,7 @@ def main(
     ctx.obj["branch_service"] = branch_service
     ctx.obj["sharing_service"] = sharing_service
     ctx.obj["search_service"] = search_service
+    ctx.obj["snapshot_service"] = snapshot_service
     ctx.obj["storage_service"] = storage_service
     ctx.obj["stream_service"] = stream_service
     ctx.obj["token_service"] = token_service
