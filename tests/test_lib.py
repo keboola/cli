@@ -387,12 +387,12 @@ class TestUploadTable:
 
 class TestModuleLayout:
     def test_pagination_helper_relocated_to_client(self) -> None:
-        """_collect_inline_results lives in client.py; workspace_service re-exports it."""
+        """_collect_inline_results lives in the client package; workspace_service re-exports it."""
         import keboola_agent_cli.services.workspace_service as ws
         from keboola_agent_cli.client import InlineQueryResult, _collect_inline_results
 
         assert ws._collect_inline_results is _collect_inline_results
-        assert InlineQueryResult.__module__ == "keboola_agent_cli.client"
+        assert InlineQueryResult.__module__.startswith("keboola_agent_cli.client")
 
     def test_public_surface(self) -> None:
         import keboola_agent_cli as pkg

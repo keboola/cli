@@ -247,7 +247,7 @@ be flagged. Of the newly-added ones:
 - Any tracked file (not in `.gitignore`) containing a real-looking token
   (`9d{3,5}-\d{6,8}-[A-Za-z0-9]{32,}`)? BLOCKING + warn the author to
   rotate the credential.
-- Any new `httpx` call to `*.keboola.com` URL outside `client.py` /
+- Any new `httpx` call to `*.keboola.com` URL outside the `client/` package /
   `manage_client.py` / `ai_client.py`? BLOCKING (3-layer + bypasses retry).
 
 ---
