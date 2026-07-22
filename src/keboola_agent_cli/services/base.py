@@ -8,16 +8,48 @@ import logging
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Any
 
 from ..client import KeboolaClient
-from ..config_store import ConfigStore, project_not_found_error
+from ..config_store import ConfigError, ConfigStore, project_not_found_error
 from ..constants import ENV_MAX_PARALLEL_WORKERS, UNEXPECTED_ERROR_MAX_MESSAGE_LEN
 from ..models import ProjectConfig
 
 logger = logging.getLogger(__name__)
 
 ClientFactory = Callable[[str, str], KeboolaClient]
+
+
+@dataclass(frozen=True)
+class ResolvedProjectCredentials:
+    """A project alias resolved to the ``(stack_url, token)`` a client needs.
+
+    Returned by :func:`resolve_project_credentials` and the single-project
+    services' ``_resolve_project`` helpers instead of a bare 2-tuple, so call
+    sites read ``creds.stack_url`` / ``creds.token`` rather than relying on
+    positional order (CONTRIBUTING.md "name them with dataclasses, not tuples").
+    """
+
+    stack_url: str
+    token: str
+
+
+def resolve_project_credentials(
+    config_store: ConfigStore, alias: str
+) -> ResolvedProjectCredentials:
+    """Resolve ``alias`` to its stack URL + token, or raise :class:`ConfigError`.
+
+    Shared by the single-project services (``token`` / ``stream`` / ``snapshot``)
+    whose ``_resolve_project`` helpers were previously byte-identical. Uses the
+    same short, actionable "not registered" message they already emitted (kept
+    verbatim rather than switching to the richer
+    :meth:`ConfigStore.project_not_found_error`, to preserve behavior).
+    """
+    project = config_store.get_project(alias)
+    if project is None:
+        raise ConfigError(f"Project alias '{alias}' is not registered. Run `kbagent project list`.")
+    return ResolvedProjectCredentials(stack_url=project.stack_url, token=project.token)
 
 
 def sanitize_unexpected_error(exc: BaseException) -> str:
