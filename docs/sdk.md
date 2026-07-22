@@ -48,7 +48,7 @@ kbagent is a strict 3-layer codebase (see [CONTRIBUTING.md](../CONTRIBUTING.md#3
 
 ```
  CLI command  ─┐
- REST route   ─┼─►  Service (services/*.py)  ─►  KeboolaClient (client.py)  ─►  HTTP
+ REST route   ─┼─►  Service (services/*.py)  ─►  KeboolaClient (client/ pkg)  ─►  HTTP
  SDK facade   ─┘         business logic              endpoints, retry
    (lib.py)
 ```

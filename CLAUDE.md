@@ -78,7 +78,10 @@ src/keboola_agent_cli/
   # LAYER 3 -- HTTP clients (all inherit BaseHttpClient in http_base.py:
   #            shared 429/5xx retry + exponential backoff)
   http_base.py          # BaseHttpClient - shared retry/backoff + common HTTP infra
-  client.py             # Storage API + Queue API      (X-StorageApi-Token)
+  client/               # Storage API + Queue API package (X-StorageApi-Token);
+                        #   split by endpoint family (storage_tables/storage_files/configs/
+                        #   queue/tokens/branches/stream/query/workspaces/misc + _core/_transfer),
+                        #   composed into one KeboolaClient via mixins (#520)
   manage_client.py      # Manage API                   (X-KBC-ManageApiToken)
   ai_client.py          # AI Service API               (component schemas, Kai)
   data_science_client.py # Data Science API            (data apps)
@@ -112,11 +115,11 @@ tests/                  # ~137 files; mirror the layers (one test_<module>.py pe
 ## Architecture: 3-Layer Design
 
 ```
-CLI Commands (commands/)  -->  Services (services/)  -->  API Client (client.py, manage_client.py)
+CLI Commands (commands/)  -->  Services (services/)  -->  API Client (client/, manage_client.py)
   Typer, output                 Business logic             HTTP, endpoints
 ```
 
-- API changes: modify only the relevant LAYER 3 client (`client.py`, `manage_client.py`, ...)
+- API changes: modify only the relevant LAYER 3 client (`client/` package, `manage_client.py`, ...)
 - Business logic changes: modify only `services/`
 - UI changes: modify only `commands/`
 
@@ -124,7 +127,7 @@ CLI Commands (commands/)  -->  Services (services/)  -->  API Client (client.py,
 
 Seven clients, all inheriting `BaseHttpClient` (`http_base.py`) which provides shared retry/backoff logic (429/5xx, exponential backoff, 3 retries) and common HTTP infrastructure:
 
-- **KeboolaClient** (`client.py`): Storage API + Queue API, auth via `X-StorageApi-Token`
+- **KeboolaClient** (`client/` package): Storage API + Queue API, auth via `X-StorageApi-Token`
 - **ManageClient** (`manage_client.py`): Manage API, auth via `X-KBC-ManageApiToken`
 - **AiServiceClient** (`ai_client.py`): AI Service API (component schemas, Kai), URL derived as `ai.{stack_suffix}`
 - **DataScienceClient** (`data_science_client.py`): Data Science API (data apps)
