@@ -22,7 +22,6 @@ from ..constants import (
     DEFAULT_JOB_LIMIT,
     DEFAULT_JOBS_PER_CONFIG,
     DEFAULT_POLL_STRATEGY,
-    DEFAULT_TIMEOUT,
     EXPORT_JOB_MAX_WAIT,
     FILE_DOWNLOAD_CHUNK_SIZE,
     FILE_DOWNLOAD_TIMEOUT,
@@ -36,14 +35,13 @@ from ..constants import (
     QUERY_JOB_POLL_INTERVAL,
     QUERY_RESULTS_PAGE_SIZE,
     STORAGE_JOB_MAX_WAIT,
-    STORAGE_JOB_POLL_INTERVAL,
     STREAM_DEFAULT_BRANCH,
     VALID_POLL_STRATEGIES,
 )
 from ..errors import ErrorCode, KeboolaApiError
-from ..http_base import BaseHttpClient
 from ..models import TokenVerifyResponse
 from ..stream_client import StreamClient, provision_otlp_sinks, stream_task_source_id
+from ._core import _CoreClient
 from ._transfer import (
     _assert_safe_download_url,
     _build_abs_upload_url,
@@ -58,7 +56,7 @@ from ._transfer import (
 logger = logging.getLogger(__name__)
 
 
-class KeboolaClient(BaseHttpClient):
+class KeboolaClient(_CoreClient):
     """HTTP client for the Keboola Storage API and Queue API.
 
     Provides methods to interact with Keboola endpoints with built-in
@@ -67,117 +65,6 @@ class KeboolaClient(BaseHttpClient):
 
     Inherits _do_request() and _raise_api_error() from BaseHttpClient.
     """
-
-    def __init__(self, stack_url: str, token: str) -> None:
-        self._stack_url = stack_url.rstrip("/")
-        headers = {
-            "X-StorageApi-Token": token,
-        }
-        super().__init__(
-            base_url=self._stack_url,
-            token=token,
-            headers=headers,
-            timeout=DEFAULT_TIMEOUT,
-        )
-        self._queue_client: httpx.Client | None = None
-        self._query_client: httpx.Client | None = None
-        self._encrypt_client: httpx.Client | None = None
-        self._sync_actions_client: httpx.Client | None = None
-        # Lazily built on first Data Streams call (per-device OTLP sources); the
-        # Stream control plane is a sibling host reachable from this stack+token.
-        self._stream_client: StreamClient | None = None
-        # Cache of project feature flags. Populated lazily on first
-        # has_feature() / get_project_features() call so we don't pay an
-        # extra verify_token round-trip on every kbagent invocation, and
-        # only when business logic actually needs to branch on a feature
-        # (e.g. legacy fake-branch storage detection).
-        self._features_cache: frozenset[str] | None = None
-
-    @property
-    def _queue_base_url(self) -> str:
-        return self._derive_service_url(self._stack_url, "queue")
-
-    @property
-    def _query_base_url(self) -> str:
-        return self._derive_service_url(self._stack_url, "query")
-
-    @property
-    def _encrypt_base_url(self) -> str:
-        return self._derive_service_url(self._stack_url, "encryption")
-
-    @property
-    def _sync_actions_base_url(self) -> str:
-        return self._derive_service_url(self._stack_url, "sync-actions")
-
-    def close(self) -> None:
-        """Close the underlying HTTP clients."""
-        super().close()
-        if self._queue_client is not None:
-            self._queue_client.close()
-        if self._query_client is not None:
-            self._query_client.close()
-        if self._encrypt_client is not None:
-            self._encrypt_client.close()
-        if self._sync_actions_client is not None:
-            self._sync_actions_client.close()
-        if self._stream_client is not None:
-            self._stream_client.close()
-
-    def __enter__(self) -> "KeboolaClient":
-        return self
-
-    def __exit__(self, *args: Any) -> None:
-        self.close()
-
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Execute a Storage API request with retry."""
-        return self._do_request(method, path, **kwargs)
-
-    def _get_or_create_sub_client(
-        self,
-        attr: str,
-        base_url: str,
-        headers: dict[str, str] | None = None,
-    ) -> httpx.Client:
-        """Return an existing sub-client or lazily create one.
-
-        Args:
-            attr: Instance attribute name (e.g. "_queue_client").
-            base_url: Base URL for the sub-client.
-            headers: Custom headers; defaults to the main client's headers.
-        """
-        client = getattr(self, attr)
-        if client is None:
-            client = httpx.Client(
-                base_url=base_url,
-                timeout=DEFAULT_TIMEOUT,
-                headers=self._client._headers.copy() if headers is None else headers,
-            )
-            setattr(self, attr, client)
-        return client
-
-    def _queue_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Execute a Queue API request with retry."""
-        client = self._get_or_create_sub_client("_queue_client", self._queue_base_url)
-        return self._do_request(
-            method, path, client=client, base_url=self._queue_base_url, **kwargs
-        )
-
-    def _query_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Execute a Query Service request with retry."""
-        client = self._get_or_create_sub_client("_query_client", self._query_base_url)
-        return self._do_request(
-            method, path, client=client, base_url=self._query_base_url, **kwargs
-        )
-
-    def _encrypt_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Execute an Encryption API request with retry."""
-        client = self._get_or_create_sub_client(
-            "_encrypt_client", self._encrypt_base_url, headers={"Content-Type": "application/json"}
-        )
-        return self._do_request(
-            method, path, client=client, base_url=self._encrypt_base_url, **kwargs
-        )
 
     def encrypt_values(
         self,
@@ -205,18 +92,6 @@ class KeboolaClient(BaseHttpClient):
             json=data,
         )
         return response.json()
-
-    def _sync_actions_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Execute a Sync Actions API request with retry.
-
-        The Sync Actions service is a sibling host derived from the stack URL
-        (``sync-actions.{stack-suffix}``); the sub-client inherits the main
-        client's headers, so the ``X-StorageApi-Token`` auth carries over.
-        """
-        client = self._get_or_create_sub_client("_sync_actions_client", self._sync_actions_base_url)
-        return self._do_request(
-            method, path, client=client, base_url=self._sync_actions_base_url, **kwargs
-        )
 
     def run_sync_action(
         self,
@@ -1148,50 +1023,6 @@ class KeboolaClient(BaseHttpClient):
         self._request(
             "DELETE",
             f"{prefix}/components/{quote(component_id)}/configs/{quote(config_id)}/rows/{quote(row_id)}",
-        )
-
-    def _wait_for_storage_job(
-        self,
-        job: dict[str, Any],
-        max_wait: float = STORAGE_JOB_MAX_WAIT,
-    ) -> dict[str, Any]:
-        """Poll a Storage API job until it reaches a terminal state.
-
-        Args:
-            job: Initial job response from POST/DELETE.
-            max_wait: Maximum seconds to wait (default: STORAGE_JOB_MAX_WAIT).
-
-        Returns:
-            Completed job dict (with results on success).
-
-        Raises:
-            KeboolaApiError: If the job fails or times out.
-        """
-        job_id = job.get("id")
-        if job.get("status") in ("success", "error"):
-            return job
-
-        deadline = time.monotonic() + max_wait
-        while time.monotonic() < deadline:
-            time.sleep(STORAGE_JOB_POLL_INTERVAL)
-            response = self._request("GET", f"/v2/storage/jobs/{job_id}")
-            job = response.json()
-            status = job.get("status")
-            if status == "success":
-                return job
-            if status == "error":
-                error_msg = job.get("error", {}).get("message", "Storage job failed")
-                raise KeboolaApiError(
-                    message=error_msg,
-                    status_code=500,
-                    error_code=ErrorCode.STORAGE_JOB_FAILED,
-                    retryable=False,
-                )
-        raise KeboolaApiError(
-            message=f"Storage job {job_id} did not complete within {max_wait}s",
-            status_code=504,
-            error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
-            retryable=True,
         )
 
     def create_dev_branch(self, name: str, description: str = "") -> dict[str, Any]:
