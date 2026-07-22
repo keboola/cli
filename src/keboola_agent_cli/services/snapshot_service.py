@@ -31,6 +31,7 @@ from typing import Any
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
 from ..errors import ConfigError, KeboolaApiError
+from .base import ResolvedProjectCredentials, resolve_project_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +67,8 @@ class SnapshotService:
         Returns:
             Dict with 'project_alias', 'table_id', 'branch_id', 'snapshot_id'.
         """
-        stack_url, token = self._resolve_project(alias)
-        client = self._client_factory(stack_url, token)
+        creds = self._resolve_project(alias)
+        client = self._client_factory(creds.stack_url, creds.token)
         try:
             results = client.create_table_snapshot(
                 table_id=table_id,
@@ -98,8 +99,8 @@ class SnapshotService:
             Dict with 'project_alias', 'table_id', 'branch_id', 'count',
             'snapshots' (raw API snapshot dicts).
         """
-        stack_url, token = self._resolve_project(alias)
-        client = self._client_factory(stack_url, token)
+        creds = self._resolve_project(alias)
+        client = self._client_factory(creds.stack_url, creds.token)
         try:
             snapshots = client.list_table_snapshots(
                 table_id=table_id,
@@ -122,8 +123,8 @@ class SnapshotService:
         Returns:
             Dict with 'project_alias', 'snapshot' (raw API snapshot dict).
         """
-        stack_url, token = self._resolve_project(alias)
-        client = self._client_factory(stack_url, token)
+        creds = self._resolve_project(alias)
+        client = self._client_factory(creds.stack_url, creds.token)
         try:
             snapshot = client.get_snapshot(snapshot_id)
         finally:
@@ -143,13 +144,13 @@ class SnapshotService:
             Dict with 'project_alias', 'deleted', 'failed', 'dry_run' (and
             'would_delete' when dry_run).
         """
-        stack_url, token = self._resolve_project(alias)
+        creds = self._resolve_project(alias)
 
         deleted: list[str] = []
         failed: list[dict[str, Any]] = []
         would_delete: list[str] = []
 
-        client = self._client_factory(stack_url, token)
+        client = self._client_factory(creds.stack_url, creds.token)
         try:
             for sid in snapshot_ids:
                 if dry_run:
@@ -203,7 +204,7 @@ class SnapshotService:
         if not name.strip():
             raise ConfigError("table-from-snapshot requires a non-empty --name.")
 
-        stack_url, token = self._resolve_project(alias)
+        creds = self._resolve_project(alias)
 
         if dry_run:
             return {
@@ -215,7 +216,7 @@ class SnapshotService:
                 "dry_run": True,
             }
 
-        client = self._client_factory(stack_url, token)
+        client = self._client_factory(creds.stack_url, creds.token)
         try:
             table = client.create_table_from_snapshot(
                 bucket_id=bucket_id,
@@ -237,11 +238,6 @@ class SnapshotService:
             "table_id": table.get("id"),
         }
 
-    def _resolve_project(self, alias: str) -> tuple[str, str]:
-        """Resolve ``alias`` to its ``(stack_url, token)``."""
-        project = self._config_store.get_project(alias)
-        if project is None:
-            raise ConfigError(
-                f"Project alias '{alias}' is not registered. Run `kbagent project list`."
-            )
-        return project.stack_url, project.token
+    def _resolve_project(self, alias: str) -> ResolvedProjectCredentials:
+        """Resolve ``alias`` to its stack URL + token (or raise ConfigError)."""
+        return resolve_project_credentials(self._config_store, alias)

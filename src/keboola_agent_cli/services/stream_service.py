@@ -3,7 +3,8 @@
 Business logic for the ``kbagent stream`` command group. Wraps the Stream
 control-plane API behind a layer that:
 
-- resolves a kbagent project alias to its ``(stack_url, token)`` via
+- resolves a kbagent project alias to a
+  :class:`~keboola_agent_cli.services.base.ResolvedProjectCredentials` via
   :class:`ConfigStore` (the alias is the only handle a caller needs);
 - builds a :class:`StreamClient` through an injectable factory (testability);
 - assembles a source's full picture for ``stream detail`` -- base + per-signal
@@ -32,6 +33,7 @@ from ..constants import (
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..stream_client import StreamClient, provision_otlp_sinks, stream_task_source_id
+from .base import ResolvedProjectCredentials, resolve_project_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +68,9 @@ class StreamService:
 
     def list_sources(self, *, alias: str, branch_id: str | None = None) -> dict[str, Any]:
         """List sources in the alias's project (default branch unless overridden)."""
-        stack_url, token = self._resolve_project(alias)
+        creds = self._resolve_project(alias)
         branch = branch_id or STREAM_DEFAULT_BRANCH
-        client = self._stream_client_factory(stack_url, token)
+        client = self._stream_client_factory(creds.stack_url, creds.token)
         try:
             raw = client.list_sources(branch)
             return {
@@ -101,9 +103,9 @@ class StreamService:
         sourceId) is returned untouched with ``status="skipped"`` (its sinks are
         also reconciled when ``provision_sinks`` so a half-set-up source heals).
         """
-        stack_url, token = self._resolve_project(alias)
+        creds = self._resolve_project(alias)
         branch = branch_id or STREAM_DEFAULT_BRANCH
-        client = self._stream_client_factory(stack_url, token)
+        client = self._stream_client_factory(creds.stack_url, creds.token)
         try:
             if if_not_exists:
                 existing = self._find_source(client, branch, name)
@@ -147,9 +149,9 @@ class StreamService:
         """Assemble the full picture for one source (endpoints + destination)."""
         if not source_id and not name:
             raise ConfigError("Provide a source id (positional) or --name.")
-        stack_url, token = self._resolve_project(alias)
+        creds = self._resolve_project(alias)
         branch = branch_id or STREAM_DEFAULT_BRANCH
-        client = self._stream_client_factory(stack_url, token)
+        client = self._stream_client_factory(creds.stack_url, creds.token)
         try:
             if source_id:
                 source = client.get_source(branch, source_id)
@@ -176,7 +178,7 @@ class StreamService:
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Delete a source (async task polled to completion)."""
-        stack_url, token = self._resolve_project(alias)
+        creds = self._resolve_project(alias)
         branch = branch_id or STREAM_DEFAULT_BRANCH
         if dry_run:
             return {
@@ -185,7 +187,7 @@ class StreamService:
                 "branch_id": branch,
                 "source_id": source_id,
             }
-        client = self._stream_client_factory(stack_url, token)
+        client = self._stream_client_factory(creds.stack_url, creds.token)
         try:
             task = client.delete_source(branch, source_id)
             client.wait_for_task(task)
@@ -202,14 +204,9 @@ class StreamService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _resolve_project(self, alias: str) -> tuple[str, str]:
-        """Resolve ``alias`` to its ``(stack_url, token)``."""
-        project = self._config_store.get_project(alias)
-        if project is None:
-            raise ConfigError(
-                f"Project alias '{alias}' is not registered. Run `kbagent project list`."
-            )
-        return project.stack_url, project.token
+    def _resolve_project(self, alias: str) -> ResolvedProjectCredentials:
+        """Resolve ``alias`` to its stack URL + token (or raise ConfigError)."""
+        return resolve_project_credentials(self._config_store, alias)
 
     @staticmethod
     def _find_source(client: StreamClient, branch: str, needle: str) -> dict[str, Any] | None:
