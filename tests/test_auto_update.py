@@ -23,6 +23,7 @@ from keboola_agent_cli.auto_update import (
     maybe_auto_update,
 )
 from keboola_agent_cli.constants import ENV_AUTO_UPDATE, ENV_SKIP_UPDATE, MCP_UPGRADE_TIMEOUT
+from keboola_agent_cli.services.version_service import KbagentUpdatePlan, McpUpdatePlan
 
 
 # ---------------------------------------------------------------------------
@@ -303,11 +304,11 @@ class TestPerformUpdate:
         mock_run.return_value = MagicMock(returncode=0)
         assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
         argv = mock_run.call_args[0][0]
-        # uv tool install --force --with 'keboola-cli[server]' git+...
+        # The extras live in the primary PEP 508 requirement so the complete
+        # environment is resolved in one forced reinstall.
         assert "--force" in argv
-        assert "--with" in argv
-        assert "keboola-cli[server]" in argv
-        # Must NOT pass --upgrade in this branch (uv rejects --upgrade + --with).
+        assert "--reinstall" in argv
+        assert any("keboola-cli[server]" in arg for arg in argv)
         assert "--upgrade" not in argv
 
     @patch(
@@ -317,12 +318,12 @@ class TestPerformUpdate:
     @patch("shutil.which", return_value="/usr/local/bin/uv")
     @patch("subprocess.run")
     def test_update_without_server_extras_uses_upgrade(self, mock_run, mock_which, mock_has_server):
-        """No-extras install keeps the simpler ``--upgrade`` form."""
+        """No-extras installs are also a full forced reinstall."""
         mock_run.return_value = MagicMock(returncode=0)
         assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
         argv = mock_run.call_args[0][0]
-        assert "--upgrade" in argv
-        assert "--with" not in argv
+        assert "--force" in argv
+        assert "--reinstall" in argv
         assert "keboola-cli[server]" not in argv
 
 
@@ -511,7 +512,9 @@ class TestMaybeAutoUpdate:
         mock_cache,
     ):
         maybe_auto_update()
-        mock_update.assert_called_once_with("2.0.0")
+        mock_update.assert_called_once()
+        assert mock_update.call_args.args == ("2.0.0",)
+        assert "command" in mock_update.call_args.kwargs
         mock_reexec.assert_called_once()
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
@@ -543,7 +546,7 @@ class TestMaybeAutoUpdate:
         return_value=UpdateOutcome.TIMEOUT,
     )
     @patch("keboola_agent_cli.auto_update._re_exec")
-    @patch("keboola_agent_cli.auto_update._maybe_update_mcp")
+    @patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update")
     @patch("keboola_agent_cli.auto_update._detect_mcp_install_method", return_value="none")
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update.__version__", "1.0.0")
@@ -568,8 +571,8 @@ class TestMaybeAutoUpdate:
         maybe_auto_update()
         mock_reexec.assert_not_called()
         err = capsys.readouterr().err
-        assert "still building" in err
-        assert "failed" not in err.lower()
+        assert "timed out" in err
+        assert "Recover with:" in err
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value=None)
@@ -801,7 +804,7 @@ class TestMaybeAutoUpdateMcpIntegration:
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="1.0.0")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=True)
-    @patch("keboola_agent_cli.auto_update._maybe_update_mcp")
+    @patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update")
     @patch("keboola_agent_cli.auto_update._detect_mcp_install_method", return_value="uv_tool")
     @patch("keboola_agent_cli.auto_update._write_cache")
     def test_kbagent_uptodate_still_runs_mcp_stage(
@@ -821,7 +824,7 @@ class TestMaybeAutoUpdateMcpIntegration:
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
     @patch("keboola_agent_cli.auto_update._perform_update", return_value=UpdateOutcome.FAILED)
-    @patch("keboola_agent_cli.auto_update._maybe_update_mcp")
+    @patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update")
     @patch("keboola_agent_cli.auto_update._detect_mcp_install_method", return_value="uv_tool")
     @patch("keboola_agent_cli.auto_update._write_cache")
     def test_failed_kbagent_upgrade_still_runs_mcp_stage(
@@ -893,7 +896,7 @@ class TestReExecPathStillRunsMcp:
             patch(
                 "keboola_agent_cli.auto_update._fetch_kbagent_latest_version"
             ) as mock_fetch_kbagent,
-            patch("keboola_agent_cli.auto_update._maybe_update_mcp") as mock_mcp,
+            patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update") as mock_mcp,
             patch(
                 "keboola_agent_cli.auto_update._detect_mcp_install_method",
                 return_value="uv_tool",
@@ -918,7 +921,7 @@ class TestReExecPathStillRunsMcp:
             patch(
                 "keboola_agent_cli.auto_update._fetch_kbagent_latest_version"
             ) as mock_fetch_kbagent,
-            patch("keboola_agent_cli.auto_update._maybe_update_mcp") as mock_mcp,
+            patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update") as mock_mcp,
         ):
             maybe_auto_update()
 
@@ -936,7 +939,7 @@ class TestReExecPathStillRunsMcp:
             patch(
                 "keboola_agent_cli.auto_update._fetch_kbagent_latest_version"
             ) as mock_fetch_kbagent,
-            patch("keboola_agent_cli.auto_update._maybe_update_mcp") as mock_mcp,
+            patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update") as mock_mcp,
         ):
             maybe_auto_update()
 
@@ -1011,7 +1014,7 @@ class TestProcessLevelSentinel:
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="1.0.0")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=True)
-    @patch("keboola_agent_cli.auto_update._maybe_update_mcp")
+    @patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update")
     @patch("keboola_agent_cli.auto_update._detect_mcp_install_method", return_value="uv_tool")
     @patch("keboola_agent_cli.auto_update._write_cache")
     def test_second_call_short_circuits(
@@ -1048,5 +1051,88 @@ class TestProcessLevelSentinel:
             side_effect=RuntimeError("kaboom"),
         ):
             maybe_auto_update()  # blanket try/except swallows the RuntimeError
+
+
+class TestSafeStartupUpdateOrder:
+    """Regression coverage for issue #528's terminal-mutation contract."""
+
+    def test_mcp_and_cache_precede_kbagent_and_reexec_is_immediate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        auto_update_module._AUTO_UPDATE_RAN = False
+        events: list[str] = []
+        mutated = False
+
+        def fetch_kbagent(*args: object, **kwargs: object) -> str:
+            assert not mutated
+            events.append("fetch_kbagent")
+            return "2.0.0"
+
+        def fetch_mcp(*args: object, **kwargs: object) -> str:
+            assert not mutated
+            events.append("fetch_mcp")
+            return "2.0.0"
+
+        def prepare_mcp(latest: str | None) -> McpUpdatePlan:
+            assert not mutated
+            events.append("prepare_mcp")
+            return McpUpdatePlan("1.0.0", latest, "uv_tool", False, ("uv", "mcp"))
+
+        def prepare_kbagent(latest: str | None) -> KbagentUpdatePlan:
+            assert not mutated
+            events.append("prepare_kbagent")
+            return KbagentUpdatePlan(
+                "1.0.0",
+                latest,
+                False,
+                ("uv", "kbagent"),
+                "uv tool install --force --reinstall exact",
+            )
+
+        def apply_mcp(plan: McpUpdatePlan) -> None:
+            assert not mutated
+            events.append("apply_mcp")
+
+        def write_cache(**kwargs: object) -> None:
+            assert not mutated
+            events.append("cache")
+
+        def perform(version: str, *, command: tuple[str, ...]) -> UpdateOutcome:
+            nonlocal mutated
+            assert events[-1] == "cache"
+            mutated = True
+            events.append("kbagent")
+            return UpdateOutcome.SUCCESS
+
+        def reexec() -> None:
+            assert mutated
+            events.append("reexec")
+
+        monkeypatch.setattr(auto_update_module, "_AUTO_UPDATE_RAN", False)
+        monkeypatch.setattr(auto_update_module, "_should_skip_all", lambda: False)
+        monkeypatch.setattr(auto_update_module, "_should_skip_kbagent_stage", lambda: False)
+        monkeypatch.setattr(auto_update_module, "_read_cache", lambda: None)
+        monkeypatch.setattr(auto_update_module, "_fetch_kbagent_latest_version", fetch_kbagent)
+        monkeypatch.setattr(auto_update_module, "_fetch_mcp_latest_version", fetch_mcp)
+        monkeypatch.setattr(auto_update_module, "prepare_mcp_update_plan", prepare_mcp)
+        monkeypatch.setattr(auto_update_module, "prepare_kbagent_update_plan", prepare_kbagent)
+        monkeypatch.setattr(auto_update_module, "_apply_prepared_mcp_update", apply_mcp)
+        monkeypatch.setattr(auto_update_module, "_write_cache", write_cache)
+        monkeypatch.setattr(auto_update_module, "_perform_update", perform)
+        monkeypatch.setattr(auto_update_module, "_re_exec", reexec)
+        monkeypatch.setattr(auto_update_module, "_is_up_to_date", lambda *_: False)
+
+        maybe_auto_update()
+
+        assert events == [
+            "fetch_kbagent",
+            "fetch_mcp",
+            "prepare_mcp",
+            "prepare_kbagent",
+            "apply_mcp",
+            "cache",
+            "kbagent",
+            "reexec",
+        ]
         # Sentinel was flipped before the crash.
         assert auto_update_module._AUTO_UPDATE_RAN is True

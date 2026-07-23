@@ -1,7 +1,7 @@
 # Design: Make kbagent self-update safe on Windows
 
-**Issue:** [#528](https://github.com/keboola/cli/issues/528)  
-**Status:** Proposed  
+**Issue:** [#528](https://github.com/keboola/cli/issues/528)
+**Status:** Proposed
 **Target:** `kbagent update` and startup auto-update
 
 ## Problem
