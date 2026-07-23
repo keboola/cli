@@ -24,6 +24,17 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.76.1": [
+        "Fix (#522, #526): `kbagent serve --ui` no longer crashes on startup on Windows "
+        "consoles with a non-UTF-8 codepage (cp1250 on Czech/Polish/Hungarian Windows). The "
+        "startup banner's box-drawing glyphs (`├─` / `└─`) raised `UnicodeEncodeError` from "
+        "`sys.stdout.write` before uvicorn bound the port, so the server never started. They "
+        "now degrade to ASCII (`|-` / `` `- ``) when the console can't encode them -- the same "
+        "UTF-8/ASCII fallback `install.sh` already uses -- with a belt-and-braces `try/except` "
+        "so a cosmetic banner can never abort startup. Modern UTF-8 terminals are unchanged. "
+        "The `set PYTHONUTF8=1` workaround is no longer needed. Thanks to @papousek-radan for "
+        "the detailed report.",
+    ],
     "0.76.0": [
         "Change (#520): the ~3,960-LOC `client.py` is split into a `client/` package by "
         "endpoint family (storage tables/files, configs, queue, tokens, branches, stream, "
