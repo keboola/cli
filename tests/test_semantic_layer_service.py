@@ -12,6 +12,7 @@ without touching HTTP. The pattern mirrors ``test_data_app_service.py``.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -796,7 +797,9 @@ class TestValidateDeep:
 
 
 class TestExportModel:
-    def _setup(self, tmp_path: Path) -> tuple[SemanticLayerService, MagicMock]:
+    def _setup(
+        self, tmp_path: Path, *, glossary_term: str = "GMV"
+    ) -> tuple[SemanticLayerService, MagicMock]:
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
 
@@ -814,7 +817,7 @@ class TestExportModel:
             if item_type == "semantic-constraint":
                 return [_child_item("semantic-constraint", "c1", {"name": "c_warning"})]
             if item_type == "semantic-glossary":
-                return [_child_item("semantic-glossary", "g1", {"term": "GMV"})]
+                return [_child_item("semantic-glossary", "g1", {"term": glossary_term})]
             return []
 
         mock.list_items.side_effect = _list
@@ -843,6 +846,34 @@ class TestExportModel:
         payload = json.loads(out_path.read_text())
         assert payload["datasets"][0]["id"] == "d1"
         assert payload["model"]["id"] == "U"
+
+    def test_export_writes_utf8_json_without_o_nofollow(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Windows lacks O_NOFOLLOW but must still write the export snapshot."""
+        service, _ = self._setup(tmp_path, glossary_term="Žluťoučký")
+        out_path = tmp_path / "windows-export.json"
+        monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+
+        service.export_model("prod", output_path=out_path)
+
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+        assert payload["glossary"][0]["attributes"]["term"] == "Žluťoučký"
+
+    @pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="requires POSIX O_NOFOLLOW")
+    def test_export_rejects_existing_symlink_output_path(self, tmp_path: Path) -> None:
+        """POSIX exports must not follow a symlink planted at the output path."""
+        service, _ = self._setup(tmp_path)
+        target = tmp_path / "target.json"
+        target.write_text("unchanged", encoding="utf-8")
+        output_path = tmp_path / "symlink.json"
+        output_path.symlink_to(target)
+
+        with pytest.raises(OSError):
+            service.export_model("prod", output_path=output_path)
+
+        assert output_path.is_symlink()
+        assert target.read_text(encoding="utf-8") == "unchanged"
 
     def test_export_default_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         service, _ = self._setup(tmp_path)

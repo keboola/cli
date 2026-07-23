@@ -1059,16 +1059,21 @@ def build_export_snapshot(
 
 
 def write_snapshot_to_file(snapshot: dict[str, Any], output_path: Path) -> None:
-    """Atomic-write a JSON snapshot with 0o644 perms and O_NOFOLLOW.
+    """Write a JSON snapshot with 0o644 permissions where supported.
 
-    O_NOFOLLOW refuses to follow a pre-existing symlink at the chosen
-    path so a malicious --output (or a planted symlink in CWD) cannot
-    redirect the write to a sensitive file.
+    On platforms that expose ``O_NOFOLLOW``, reject a pre-existing symlink at
+    the output path so a malicious ``--output`` (or a planted symlink in the
+    current directory) cannot redirect the write to a sensitive file. Windows
+    does not provide that flag through :mod:`os`; its portable flags still
+    write the encoded JSON bytes without text-mode newline translation.
     """
     payload = json.dumps(snapshot, indent=2).encode("utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_BINARY", 0)
     fd = os.open(
         str(output_path),
-        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+        flags,
         0o644,
     )
     try:

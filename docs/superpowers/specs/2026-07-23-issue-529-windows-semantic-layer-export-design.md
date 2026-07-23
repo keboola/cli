@@ -1,7 +1,7 @@
 # Design: Make semantic-layer snapshot export portable to Windows
 
-**Issue:** [#529](https://github.com/keboola/cli/issues/529)  
-**Status:** Proposed  
+**Issue:** [#529](https://github.com/keboola/cli/issues/529)
+**Status:** Proposed
 **Target:** `kbagent semantic-layer export` and every shared snapshot writer
 
 ## Problem

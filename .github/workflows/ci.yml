@@ -129,13 +129,14 @@ jobs:
       - name: Tests (with coverage report)
         run: uv run pytest tests/ -v -m "not integration" --cov --cov-report=term-missing
 
-  # Real wheel build on Windows -- the only place the issue #320 fixes can be
-  # verified end-to-end without a Windows developer machine. GitHub provides
+  # Real wheel build and focused export regression on Windows -- the only
+  # place the issue #320 and #529 fixes can be verified against real Windows
+  # behavior without a Windows developer machine. GitHub provides
   # windows-latest runners (with Node/npm preinstalled) for free, so the
   # `npm.cmd` invocation (Bug 1) and the force-include path resolution (Bug 2)
   # are exercised against a real `uv build` rather than mocks.
   build-windows:
-    name: Windows wheel build (issue #320)
+    name: Windows wheel build and export regression (issues #320, #529)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -165,6 +166,11 @@ jobs:
       # `FileNotFoundError [WinError 2]`, and the SPA must land in the wheel.
       - name: Build wheel WITH bundled UI
         run: uv build --wheel
+
+      # Windows does not expose os.O_NOFOLLOW. Exercise the focused export
+      # regression here, where the portable flags run on the real platform.
+      - name: Test semantic-layer export on Windows (issue #529)
+        run: uv run pytest tests/test_semantic_layer_service.py -k "export" -v
 
       - name: Assert the SPA is bundled (Bug 1 fixed)
         run: python scripts/check_wheel_ui.py --expect-ui
