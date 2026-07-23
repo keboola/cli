@@ -70,8 +70,10 @@ than implying that every platform provides it.
 - `.github/workflows/ci.yml`
   - run the focused semantic-layer export regression on the existing
     `windows-latest` job so the real Windows `os` flags are exercised.
-- `src/keboola_agent_cli/changelog.py`
-  - record the Windows export fix in the next release entry.
+
+No changelog entry is made in this PR: the repository has no unreleased
+section, so the Windows export fix is recorded when the next release version is
+prepared rather than being added to an already released entry.
 
 ## Acceptance criteria
 
