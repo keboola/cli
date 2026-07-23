@@ -664,6 +664,9 @@ kbagent update [--beta]
 # source build; falls back to git+ when absent). Env `KBAGENT_UPDATE_TIMEOUT` (integer
 # seconds, default 300) raises the self-update subprocess timeout for the slow git+
 # fallback on WSL. Bootstrap install: `curl -LsSf .../main/install.sh | sh`.
+# Since 0.76.2 self-update completes discovery first, updates MCP before the terminal
+# exact-version full kbagent reinstall, then immediately re-executes; failures print a
+# copy-paste recovery command.
 kbagent changelog [--limit N] [--full]
 # Default shows a one-line summary (first sentence) per version; --full / -v expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]

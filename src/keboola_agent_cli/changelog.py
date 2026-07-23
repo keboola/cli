@@ -24,6 +24,20 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.76.2": [
+        "Fix (#528, #530): self-update no longer risks leaving the running Windows uv tool "
+        "environment partially upgraded. kbagent now completes all network checks and command "
+        "planning before mutation, upgrades the independent keboola-mcp-server environment "
+        "first, caches the result, then performs an exact-version full reinstall as the terminal "
+        "step and immediately re-executes. Failed or timed-out updates print a copy-paste recovery "
+        "command instead of continuing without repair guidance. Thanks to @papousek-radan for "
+        "the detailed corruption reports.",
+        "Fix (#529, #531): `kbagent semantic-layer export` now writes snapshots on Windows. "
+        "The writer conditionally enables platform-specific `O_NOFOLLOW` and `O_BINARY` flags, "
+        "so Windows no longer raises `AttributeError` while POSIX keeps its existing final-path "
+        "symlink protection; the real Windows export path is covered by CI. Thanks to "
+        "@papousek-radan for the report.",
+    ],
     "0.76.1": [
         "Fix (#522, #526): `kbagent serve --ui` no longer crashes on startup on Windows "
         "consoles with a non-UTF-8 codepage (cp1250 on Czech/Polish/Hungarian Windows). The "
