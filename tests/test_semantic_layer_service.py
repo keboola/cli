@@ -839,9 +839,11 @@ class TestExportModel:
         out_path = tmp_path / "snap.json"
         service.export_model("prod", output_path=out_path)
         assert out_path.is_file()
-        # Permissions: world-readable per spec
-        mode = out_path.stat().st_mode & 0o777
-        assert mode == 0o644
+        # Windows ignores os.open's numeric mode; POSIX keeps the documented
+        # world-readable permission contract.
+        if os.name != "nt":
+            mode = out_path.stat().st_mode & 0o777
+            assert mode == 0o644
         # Content is valid JSON with expected keys
         payload = json.loads(out_path.read_text())
         assert payload["datasets"][0]["id"] == "d1"
