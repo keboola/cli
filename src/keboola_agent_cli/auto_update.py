@@ -549,9 +549,11 @@ def maybe_auto_update() -> None:
         cached_kbagent = cache.get("latest_version") if cache else None
         cached_mcp = cache.get("mcp_latest_version") if cache else None
         skip_kbagent_stage = _should_skip_kbagent_stage()
+        use_cached_kbagent = cache_is_fresh and isinstance(cached_kbagent, str)
+        use_cached_mcp = cache_is_fresh and isinstance(cached_mcp, str)
         latest_version = (
             cached_kbagent
-            if cache_is_fresh and isinstance(cached_kbagent, str)
+            if use_cached_kbagent
             else (
                 None
                 if skip_kbagent_stage
@@ -560,7 +562,7 @@ def maybe_auto_update() -> None:
         )
         mcp_latest = (
             cached_mcp
-            if cache_is_fresh and isinstance(cached_mcp, str)
+            if use_cached_mcp
             else _fetch_mcp_latest_version(timeout=VERSION_CHECK_TIMEOUT)
         )
 
@@ -577,11 +579,24 @@ def maybe_auto_update() -> None:
         # MCP is an independent environment. Finish it before the terminal
         # self-reinstall and persist the prepared cache before self-mutation.
         _apply_prepared_mcp_update(mcp_plan)
-        _write_cache(
-            latest_version=latest_version,
-            mcp_latest_version=mcp_latest,
-            mcp_install_method=mcp_plan.install_method,
-        )
+        if not (use_cached_kbagent and use_cached_mcp):
+            _write_cache(
+                latest_version=(
+                    latest_version
+                    if latest_version is not None
+                    else cached_kbagent
+                    if isinstance(cached_kbagent, str)
+                    else None
+                ),
+                mcp_latest_version=(
+                    mcp_latest
+                    if mcp_latest is not None
+                    else cached_mcp
+                    if isinstance(cached_mcp, str)
+                    else None
+                ),
+                mcp_install_method=mcp_plan.install_method,
+            )
 
         if kbagent_plan.up_to_date is not False:
             return

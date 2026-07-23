@@ -20,6 +20,7 @@ from keboola_agent_cli.services.version_service import (
     _is_up_to_date,
     _is_uvx_available,
     _perform_mcp_update,
+    _recovery_command,
     _uv_tool_list_get_mcp_version,
     _uv_tool_list_has_mcp,
     build_kbagent_upgrade_command,
@@ -1251,6 +1252,31 @@ class TestBuildKbagentUpgradeCommand:
         assert cmd[-1].endswith("@v0.43.3")
         assert "--force" in cmd
         assert "--reinstall" in cmd
+
+    def test_windows_uv_executable_keeps_exact_beta_recovery_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """uv.exe is uv, not a pip fallback; retain its prerelease flag."""
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service._render_command",
+            subprocess.list2cmdline,
+        )
+        command = (
+            r"C:\Users\test\.local\bin\uv.exe",
+            "tool",
+            "install",
+            "--force",
+            "--reinstall",
+            "--prerelease=allow",
+            "keboola-cli[server] @ https://example.test/keboola.whl",
+        )
+
+        recovery = _recovery_command(command, "1.0.0b1")
+
+        assert recovery is not None
+        assert recovery.startswith("uv tool install")
+        assert "--prerelease=allow" in recovery
+        assert "'keboola-cli" not in recovery
 
 
 # ---------------------------------------------------------------------------

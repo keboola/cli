@@ -248,19 +248,28 @@ def build_kbagent_upgrade_command(
     return cmd
 
 
+def _render_command(command: tuple[str, ...]) -> str:
+    """Render argv for the current platform's interactive shell."""
+    if os.name == "nt":
+        return subprocess.list2cmdline(command)
+    return shlex.join(command)
+
+
 def _recovery_command(command: tuple[str, ...] | None, target_version: str | None) -> str | None:
     """Render an exact forced-reinstall command safe to copy after failure."""
     if command is not None:
-        if command[0].endswith("uv"):
+        executable = command[0].replace("\\", "/").rsplit("/", maxsplit=1)[-1].casefold()
+        if executable in {"uv", "uv.exe"}:
             recovery = ("uv", *command[1:])
         else:
             prerelease = ("--prerelease=allow",) if "--pre" in command else ()
             recovery = ("uv", "tool", "install", "--force", "--reinstall", *prerelease, command[-1])
-        return shlex.join(recovery)
+        return _render_command(recovery)
     if target_version is None:
         return None
-    source = f"keboola-cli @ {KBAGENT_INSTALL_SOURCE}@v{target_version}"
-    return shlex.join(("uv", "tool", "install", "--force", "--reinstall", source))
+    extras = "[server]" if has_server_extras() else ""
+    source = f"keboola-cli{extras} @ {KBAGENT_INSTALL_SOURCE}@v{target_version}"
+    return _render_command(("uv", "tool", "install", "--force", "--reinstall", source))
 
 
 def _get_local_mcp_version(timeout: float = MCP_PROBE_TIMEOUT) -> str | None:
@@ -726,7 +735,9 @@ def prepare_kbagent_update_plan(
         latest_version=latest_version,
         up_to_date=up_to_date,
         command=command,
-        recovery_command=_recovery_command(command, latest_version),
+        recovery_command=(
+            _recovery_command(command, latest_version) if up_to_date is False else None
+        ),
     )
 
 

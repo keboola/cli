@@ -25,7 +25,6 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.76.1": [
-        "Fix (#528): self-update now completes all version lookups and MCP work before its final, exact `uv tool install --force --reinstall` of kbagent. This avoids Windows file-lock and partially-swapped-environment failures; failed kbagent reinstalls report a copy/paste recovery command, while successful MCP updates remain visible as an independent stage.",
         "Fix (#522, #526): `kbagent serve --ui` no longer crashes on startup on Windows "
         "consoles with a non-UTF-8 codepage (cp1250 on Czech/Polish/Hungarian Windows). The "
         "startup banner's box-drawing glyphs (`├─` / `└─`) raised `UnicodeEncodeError` from "

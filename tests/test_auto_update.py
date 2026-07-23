@@ -425,9 +425,14 @@ class TestMaybeAutoUpdate:
         auto_update_module._AUTO_UPDATE_RAN = False
         with (
             patch(
-                "keboola_agent_cli.auto_update._maybe_update_mcp",
+                "keboola_agent_cli.auto_update._fetch_mcp_latest_version",
                 return_value=None,
             ),
+            patch(
+                "keboola_agent_cli.auto_update._get_local_mcp_version",
+                return_value=None,
+            ),
+            patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update"),
             patch(
                 "keboola_agent_cli.auto_update._detect_mcp_install_method",
                 return_value="none",
@@ -461,11 +466,19 @@ class TestMaybeAutoUpdate:
     @patch("keboola_agent_cli.auto_update._read_cache")
     @patch("keboola_agent_cli.auto_update._is_cache_fresh", return_value=True)
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=True)
-    def test_cache_fresh_no_fetch(self, mock_up_to_date, mock_fresh, mock_cache):
-        mock_cache.return_value = {"last_check": time.time(), "latest_version": "1.0.0"}
-        with patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version") as mock_fetch:
+    def test_cache_fresh_no_fetch_or_ttl_refresh(self, mock_up_to_date, mock_fresh, mock_cache):
+        mock_cache.return_value = {
+            "last_check": time.time(),
+            "latest_version": "1.0.0",
+            "mcp_latest_version": "1.0.0",
+        }
+        with (
+            patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version") as mock_fetch,
+            patch("keboola_agent_cli.auto_update._write_cache") as mock_write,
+        ):
             maybe_auto_update()
             mock_fetch.assert_not_called()
+            mock_write.assert_not_called()
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
@@ -849,7 +862,7 @@ class TestMaybeAutoUpdateMcpIntegration:
             patch("keboola_agent_cli.auto_update._is_cache_fresh", return_value=True),
             patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=True),
             patch(
-                "keboola_agent_cli.auto_update._maybe_update_mcp",
+                "keboola_agent_cli.auto_update._apply_prepared_mcp_update",
                 side_effect=RuntimeError("kaboom"),
             ),
         ):
