@@ -34,6 +34,8 @@ from .constants import (
 from .services.version_service import (
     MCP_PACKAGE_NAME,
     MCP_UV_PRERELEASE_FLAG,
+    KbagentUpdatePlan,
+    McpUpdatePlan,
     _detect_mcp_install_method,
     _fetch_kbagent_latest_version,
     _fetch_mcp_latest_version,
@@ -42,6 +44,8 @@ from .services.version_service import (
     _perform_mcp_update,
     build_kbagent_upgrade_command,
     get_update_timeout,
+    prepare_kbagent_update_plan,
+    prepare_mcp_update_plan,
     resolve_kbagent_wheel_url,
 )
 
@@ -264,7 +268,9 @@ def _should_skip() -> bool:
     return _should_skip_kbagent_stage() or _should_skip_all()
 
 
-def _perform_update(latest_version: str) -> UpdateOutcome:
+def _perform_update(
+    latest_version: str, *, command: tuple[str, ...] | None = None
+) -> UpdateOutcome:
     """Download and install the latest version.
 
     Delegates to :func:`build_kbagent_upgrade_command` so this path stays
@@ -283,10 +289,14 @@ def _perform_update(latest_version: str) -> UpdateOutcome:
         the install subprocess outran :func:`get_update_timeout` (a slow git+
         build -- retried next run, not a real failure), ``FAILED`` otherwise.
     """
-    # Prefer the prebuilt-wheel Release asset (issue #353) when present; falls
-    # back to the git+ source build for releases without an asset.
-    wheel_url = resolve_kbagent_wheel_url(latest_version)
-    cmd = build_kbagent_upgrade_command(wheel_url=wheel_url)
+    # ``command`` is supplied by the startup planner. Keep the fallback only
+    # for direct legacy callers; it must never be used after another stage has
+    # mutated the kbagent environment.
+    if command is None:
+        wheel_url = resolve_kbagent_wheel_url(latest_version)
+        cmd = build_kbagent_upgrade_command(target_version=latest_version, wheel_url=wheel_url)
+    else:
+        cmd = list(command)
     if cmd is None:
         return UpdateOutcome.FAILED
 
@@ -435,6 +445,58 @@ def _maybe_update_mcp(cache: dict | None, fetched_now: bool) -> str | None:
     return mcp_latest
 
 
+def _apply_prepared_mcp_update(plan: McpUpdatePlan) -> None:
+    """Apply a previously prepared MCP update while kbagent is still intact."""
+    if plan.latest_version is None or plan.up_to_date is True or plan.install_method == "none":
+        return
+    if plan.current_version is None or plan.command is None:
+        return
+
+    sys.stderr.write(
+        f"Updating keboola-mcp-server v{plan.current_version} -> v{plan.latest_version}"
+        f" (via {plan.install_method})...\n"
+    )
+    success, info = _perform_mcp_update(
+        method=plan.install_method,
+        timeout=MCP_UPGRADE_TIMEOUT,
+        command=plan.command,
+    )
+    if not success:
+        sys.stderr.write(
+            f"keboola-mcp-server upgrade skipped: {info}; continuing with current version.\n"
+        )
+        return
+
+    # A post-MCP probe is permitted: the kbagent environment has not yet
+    # changed. It is deliberately the last discovery operation in this flow.
+    post_version = _get_local_mcp_version()
+    if post_version and post_version != plan.current_version:
+        sys.stderr.write(f"Updated keboola-mcp-server to v{post_version}.\n")
+    elif post_version is None:
+        sys.stderr.write(
+            f"Updated keboola-mcp-server (probe failed; latest on PyPI: v{plan.latest_version}).\n"
+        )
+    else:
+        sys.stderr.write(
+            f"keboola-mcp-server upgrade exit 0 but local version still v{plan.current_version} "
+            f"(latest: v{plan.latest_version}). Run `uv tool install --reinstall "
+            f"{MCP_UV_PRERELEASE_FLAG} {MCP_PACKAGE_NAME}` to force the latest.\n"
+        )
+
+
+def _prepare_auto_kbagent_plan(latest_version: str | None) -> KbagentUpdatePlan:
+    """Adapt the shared plan to the startup comparison seam used by tests."""
+    prepared = prepare_kbagent_update_plan(latest_version)
+    up_to_date = _is_up_to_date(__version__, latest_version)
+    return KbagentUpdatePlan(
+        current_version=prepared.current_version,
+        latest_version=prepared.latest_version,
+        up_to_date=up_to_date,
+        command=prepared.command if up_to_date is False else None,
+        recovery_command=prepared.recovery_command,
+    )
+
+
 def maybe_auto_update() -> None:
     """Main entry point for the auto-update flow.
 
@@ -484,66 +546,85 @@ def maybe_auto_update() -> None:
 
         cache = _read_cache()
         cache_is_fresh = bool(cache and _is_cache_fresh(cache, AUTO_UPDATE_CHECK_INTERVAL))
-        latest_version: str | None = None
+        cached_kbagent = cache.get("latest_version") if cache else None
+        cached_mcp = cache.get("mcp_latest_version") if cache else None
+        skip_kbagent_stage = _should_skip_kbagent_stage()
+        use_cached_kbagent = cache_is_fresh and isinstance(cached_kbagent, str)
+        use_cached_mcp = cache_is_fresh and isinstance(cached_mcp, str)
+        latest_version = (
+            cached_kbagent
+            if use_cached_kbagent
+            else (
+                None
+                if skip_kbagent_stage
+                else _fetch_kbagent_latest_version(timeout=VERSION_CHECK_TIMEOUT)
+            )
+        )
+        mcp_latest = (
+            cached_mcp
+            if use_cached_mcp
+            else _fetch_mcp_latest_version(timeout=VERSION_CHECK_TIMEOUT)
+        )
 
-        # ----- Stage 1: kbagent self-update --------------------------------
-        # The re-exec guard skips ONLY this stage (so a freshly upgraded
-        # kbagent in the re-exec'd process does NOT double-upgrade itself
-        # but still proceeds to Stage 2 below).
-        if not _should_skip_kbagent_stage():
-            if cache_is_fresh:
-                latest_version = cache.get("latest_version")  # type: ignore[union-attr]
-            else:
-                latest_version = _fetch_kbagent_latest_version(timeout=VERSION_CHECK_TIMEOUT)
+        # Planning is complete before any subprocess can mutate either tool.
+        # In particular, all HTTP requests, import probes, PATH inspection,
+        # and command construction are above this line.
+        mcp_plan = prepare_mcp_update_plan(mcp_latest)
+        kbagent_plan = (
+            _prepare_auto_kbagent_plan(latest_version)
+            if not skip_kbagent_stage
+            else KbagentUpdatePlan(__version__, latest_version, True, None, None)
+        )
 
-            if latest_version is not None:
-                up_to_date = _is_up_to_date(__version__, latest_version)
-                if up_to_date is False:
-                    sys.stderr.write(f"Updating kbagent v{__version__} -> v{latest_version}...\n")
-                    outcome = _perform_update(latest_version)
-                    if outcome is UpdateOutcome.SUCCESS:
-                        sys.stderr.write(f"Updated to v{latest_version}. Re-launching...\n")
-                        # Persist cache before re-exec so the new process does
-                        # not refetch immediately. The re-exec'd process will
-                        # skip Stage 1 (KBAGENT_SKIP_UPDATE=1) and run Stage 2
-                        # against the just-refreshed cache.
-                        _write_cache(
-                            latest_version,
-                            mcp_latest_version=cache.get("mcp_latest_version") if cache else None,
-                            mcp_install_method=cache.get("mcp_install_method") if cache else None,
-                        )
-                        os.environ[ENV_UPDATED_FROM] = __version__
-                        _re_exec()
-                        return  # Defensive: _re_exec replaces the process.
-                    if outcome is UpdateOutcome.TIMEOUT:
-                        # Not a failure: the git+ source build outran the timeout.
-                        # The wheel fast path makes this rare; when it happens, say
-                        # so plainly instead of "failed" and let a later run finish
-                        # what uv already started (issue #353).
-                        sys.stderr.write(
-                            f"Update still building after {int(get_update_timeout())}s; "
-                            "it will finish on a later run. Continuing with current version.\n"
-                        )
-                    else:
-                        sys.stderr.write("Auto-update failed; continuing with current version.\n")
-
-        # ----- Stage 2: keboola-mcp-server update --------------------------
-        # Always runs (subject only to _should_skip_all above). After a
-        # kbagent self-upgrade, this is the re-exec'd process executing
-        # Stage 2 for the first time -- exactly the path B-1 broke before.
-        mcp_latest = _maybe_update_mcp(cache, fetched_now=not cache_is_fresh)
-        mcp_install_method = _detect_mcp_install_method()
-
-        # Persist combined cache (kbagent + MCP) when we did any fresh fetch.
-        # Note: in the re-exec'd path, latest_version stays None (Stage 1
-        # was skipped); _write_cache handles that by falling back to the
-        # running __version__, so we still persist the MCP-side fields and
-        # don't break the next run's cache TTL check.
-        if not cache_is_fresh:
+        # MCP is an independent environment. Finish it before the terminal
+        # self-reinstall and persist the prepared cache before self-mutation.
+        _apply_prepared_mcp_update(mcp_plan)
+        if not (use_cached_kbagent and use_cached_mcp):
             _write_cache(
-                latest_version=latest_version or (cache.get("latest_version") if cache else None),
-                mcp_latest_version=mcp_latest,
-                mcp_install_method=mcp_install_method,
+                latest_version=(
+                    latest_version
+                    if latest_version is not None
+                    else cached_kbagent
+                    if isinstance(cached_kbagent, str)
+                    else None
+                ),
+                mcp_latest_version=(
+                    mcp_latest
+                    if mcp_latest is not None
+                    else cached_mcp
+                    if isinstance(cached_mcp, str)
+                    else None
+                ),
+                mcp_install_method=mcp_plan.install_method,
+            )
+
+        if kbagent_plan.up_to_date is not False:
+            return
+        if kbagent_plan.command is None:
+            sys.stderr.write(
+                "Auto-update could not prepare a reinstall command. "
+                f"Recover with: {kbagent_plan.recovery_command}\n"
+            )
+            return
+
+        sys.stderr.write(f"Updating kbagent v{__version__} -> v{kbagent_plan.latest_version}...\n")
+        outcome = _perform_update(
+            kbagent_plan.latest_version or __version__, command=kbagent_plan.command
+        )
+        if outcome is UpdateOutcome.SUCCESS:
+            sys.stderr.write(f"Updated to v{kbagent_plan.latest_version}. Re-launching...\n")
+            os.environ[ENV_UPDATED_FROM] = __version__
+            _re_exec()
+            return
+        if outcome is UpdateOutcome.TIMEOUT:
+            sys.stderr.write(
+                f"Update timed out after {int(get_update_timeout())}s. Recover with: "
+                f"{kbagent_plan.recovery_command}\n"
+            )
+        else:
+            sys.stderr.write(
+                "Auto-update failed; continuing with current version. Recover with: "
+                f"{kbagent_plan.recovery_command}\n"
             )
     except Exception:
         # Blanket catch: auto-update must NEVER crash the CLI.
