@@ -960,11 +960,17 @@ events and emits a final `done` SSE frame mirroring the same record.
   schema is missing fields (e.g. `configuration_row_ids` added in MCP v1.55.0)
   and `kbagent --json tool list` reports the stale schema with no warning.
   Reported in #243 -- a real user hit this with MCP v1.49.0 (six minors behind).
-- Since v0.30.1: `kbagent` startup runs a two-stage auto-update -- (1) kbagent
-  itself, (2) `keboola-mcp-server`. The MCP stage detects the install method
+- Since v0.30.1: `kbagent` startup runs a two-stage auto-update for kbagent
+  itself and `keboola-mcp-server`. The MCP stage detects the install method
   (`uv_tool` / `pip_env` / `uvx`) and runs the matching upgrade command
   (`uv tool upgrade` / `pip install -U` / `uvx --refresh`). No re-exec needed
   for the MCP path -- the next `tool call` spawn picks up the new version.
+- Since v0.76.2 (#528/#530), both updates are fully planned before anything is
+  mutated. MCP is upgraded first; a pending kbagent self-update is the terminal
+  mutation and uses an exact-version full reinstall (`uv tool install --force
+  --reinstall` for uv tools), then immediately re-executes the original command.
+  A failed or timed-out reinstall prints a copy-paste recovery command. Do not
+  run discovery or another update stage after the kbagent reinstall starts.
 - Since v0.43.8: every MCP install/upgrade command carries `--prerelease=allow`
   (uv) / `--pre` (pip). `keboola-mcp-server >= 1.55.0` pins a pre-release-only
   transitive dep (`toon-format~=0.9.0b1`); without the opt-in uv backtracks to
@@ -2099,14 +2105,16 @@ Update all references in the code that creates and uses the renamed table.
 
 ## Auto-update
 
-kbagent automatically checks for updates on every invocation. When a newer version
-is available on PyPI, it installs the update and re-executes the same command
-seamlessly. This is transparent -- no user action required.
+kbagent automatically checks for updates on every invocation. When a newer stable
+GitHub Release is available, it prefers the release wheel, performs a full
+exact-version reinstall, and re-executes the same command seamlessly. This is
+transparent -- no user action is normally required.
 
 - Opt-out: `KBAGENT_AUTO_UPDATE=false`
-- Version cache: checks PyPI at most once per hour
+- Version cache: checks the release endpoints at most once per hour
 - Skipped for: dev/editable installs, `update`/`version` commands
-- Never crashes the CLI -- update failures are silently ignored
+- Never crashes the CLI -- update failures leave the current invocation running
+  and print a recovery command (since v0.76.2)
 
 ## `lineage build` and sync layouts
 
