@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..auth.sentinel import require_static_token
 from ..data_science_client import DataScienceClient
 from ..errors import ErrorCode, KeboolaApiError
 from .base import BaseService, ClientFactory
@@ -30,6 +31,9 @@ DataScienceClientFactory = Any  # Callable[[str, str], DataScienceClient]
 
 
 def _default_ds_client_factory(stack_url: str, token: str) -> DataScienceClient:
+    """Static-token-only (v1 scope is Storage + Manage): fails fast on a
+    session sentinel rather than sending it as a literal credential."""
+    require_static_token(token, feature="The Data Science Service (data apps)")
     return DataScienceClient(stack_url=stack_url, token=token)
 
 

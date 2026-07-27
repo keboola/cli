@@ -11,6 +11,58 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## Programmatic auth (browser login) is human-only; sentinel tokens; v1 scope (since v0.77.0)
+
+- **`kbagent auth login` requires a human at a browser (or a device to type a
+  code into) -- there is no headless/unattended path.** Never invoke it from
+  an unattended AI agent task; if a user asks an agent to "log in", the agent
+  must tell the user to run `auth login` themselves in their own terminal.
+  Session tokens are deliberately not readable through the CLI once issued.
+- **PKCE is the default; the device flow is a fallback, not a mode switch.**
+  The CLI tries the browser (PKCE authorization-code) flow first and falls
+  back to the RFC 8628 device flow ONLY on a *pre-exchange* failure: no
+  usable loopback browser, a callback timeout, or an SSH/container/WSL
+  heuristic. `--device-code` forces the device flow unconditionally. Once the
+  browser callback succeeds (the authorization code was received), there is
+  **no** fallback -- an exchange failure past that point is terminal.
+- **A session is USER-scoped, not project-scoped.** One `auth login` covers
+  every project the signed-in user can access; which project a given command
+  talks to is still chosen the normal way (`--project` / `KBAGENT_PROJECT` /
+  pin) and is bound to the request via `X-KBC-ProjectId`, not by re-logging-in.
+- **`--register-projects` writes a SENTINEL, not a real token.**
+  `config.json`'s `token` field becomes the literal string
+  `kbc-session://{project_id}` for a session-registered project alias --
+  `config.json`'s schema and `CURRENT_CONFIG_VERSION` are UNCHANGED (still 1).
+  Seeing that string in `project list --json` or a raw `config.json` read is
+  expected, not a corrupted token. An existing alias already pointing at the
+  same project+stack is left untouched (`status: "exists"`); one pointing
+  elsewhere is skipped with a warning (`status: "skipped"`), never overwritten.
+- **v1 wires bearer sessions through Storage + Manage command paths ONLY.**
+  `kbagent serve`, the importable SDK (`lib.Client`), the MCP subprocess, and
+  the AI / data-science / metastore / dev-portal / stream clients all
+  recognise the `kbc-session://` sentinel and fail FAST with
+  `AUTH_NOT_SUPPORTED_ON_STACK`, naming the static-token fallback, rather than
+  silently sending the sentinel string as if it were a real credential. If a
+  task needs one of those surfaces, register the same project again with a
+  static Storage token (`project add --project <alias2> --token ...`) instead
+  of fighting the guard.
+- **An older (pre-0.77.0) kbagent build has no sentinel awareness at all.** A
+  session-registered project opened on an old CLI gets an opaque 401 on a
+  plain `X-StorageApi-Token` call; a few consumers that treat the token as
+  *data* rather than a header (`semantic-layer token --encrypt`, `kai`,
+  `sharing`'s master-token fallback) fail differently still. Upgrade first --
+  do not try to work around it.
+- **Tokens are plaintext in `auth.json` (0600), a sibling of `config.json`.**
+  Deliberate RFC 8628 deviation, same posture as the static tokens already in
+  `config.json` (see `docs/programmatic-auth-login-plan.md` section 4.2). CI
+  and any headless/unattended runner should keep using a static Storage token
+  -- browser login has no non-interactive path by design.
+- **Feature-flagged per stack.** A 404 from any `auth` endpoint means browser
+  login is not enabled on that stack (not a wrong URL or a bug) -- the CLI
+  reports it as `AUTH_NOT_SUPPORTED_ON_STACK` and suggests a static token.
+- See `auth-workflow.md` for the end-to-end login -> register -> status ->
+  logout walkthrough and PKCE-vs-device troubleshooting.
+
 ## MCP passthrough is DEPRECATED; REMOVED in v0.85.0 (since v0.74.0)
 
 - **`tool call` / `tool list` / `agent --type mcp_tool` are on a removal

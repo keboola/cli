@@ -22,6 +22,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 
+from ..auth.sentinel import require_static_token
 from ..config_store import project_not_found_error
 from ..constants import (
     DEFAULT_MCP_INIT_TIMEOUT,
@@ -233,6 +234,8 @@ def _build_server_params(
             "Cannot find keboola-mcp-server. "
             "Install it with: pip install keboola-mcp-server (or: uvx keboola_mcp_server)"
         )
+
+    require_static_token(project.token, feature="The MCP server subprocess")
 
     env: dict[str, str] = {
         "KBC_STORAGE_TOKEN": project.token,
@@ -448,6 +451,7 @@ def _build_http_headers(
     branch_id: str | None = None,
 ) -> dict[str, str]:
     """Build HTTP headers for per-request project credentials."""
+    require_static_token(project.token, feature="The MCP HTTP transport")
     headers = {
         "X-Storage-Token": project.token,
         "X-Storage-API-URL": project.stack_url,

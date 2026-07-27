@@ -22,7 +22,7 @@ from ..config_store import ConfigStore
 from ..constants import ENV_CONVERSATION_ID
 from ..errors import KeboolaApiError
 from ..models import AppConfig
-from .base import ClientFactory, default_client_factory
+from .base import ClientFactory, make_client_factory
 from .mcp_service import McpService, ensure_mcp_installed
 
 
@@ -40,7 +40,7 @@ class DoctorService:
         mcp_service: McpService | None = None,
     ) -> None:
         self._config_store = config_store
-        self._client_factory = client_factory or default_client_factory
+        self._client_factory = client_factory or make_client_factory(config_store)
         self._mcp_service = mcp_service or McpService(config_store)
 
     def run_checks(self) -> dict[str, Any]:

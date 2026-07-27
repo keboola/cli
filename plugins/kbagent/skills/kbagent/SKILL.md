@@ -9,8 +9,8 @@ description: >
   table), data apps (create/deploy/logs/secrets),
   flows and schedules, members and invitations, feature
   flags, OTLP data streams, scoped Storage tokens, the semantic layer
-  (models, metrics, constraints, reference data), and the Developer
-  Portal. Triggers: kbagent, Keboola, keboola config, keboola job,
+  (models, metrics, constraints, reference data), the Developer
+  Portal, browser login. Triggers: kbagent, Keboola, keboola config, keboola job,
   keboola lineage, keboola sync, gitops, dev branch, workspace SQL, data app,
   streamlit deploy, semantic layer, sl, dev-portal, data stream, OTLP,
   scoped token, bucket sharing, encrypt secrets, feature flag, flow schedule,
@@ -68,6 +68,9 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Set the permission policy (firewall rules) | `kbagent permissions set --mode MODE` |
 | Remove all permission restrictions | `kbagent permissions reset` |
 | Check if a specific operation is allowed | `kbagent permissions check <OPERATION>` |
+| Sign in to a Keboola stack via browser login (PKCE) or device code | `kbagent auth login` |
+| Show the programmatic-auth session health for a stack | `kbagent auth status` |
+| Revoke and clear the local programmatic-auth session for a stack | `kbagent auth logout` |
 | Add a new Keboola project connection | `kbagent project add --project ALIAS` |
 | List all connected Keboola projects | `kbagent project list` |
 | Remove a Keboola project connection | `kbagent project remove --project ALIAS` |
@@ -404,6 +407,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Deep column-level lineage** (`lineage build --ai`, column graph, ER + HTML output) | [lineage-deep-workflow](references/lineage-deep-workflow.md) |
 | **Session permissions firewall** (`--deny-writes` / `--deny-destructive`, persisted policies, `permissions check`) | [permissions-workflow](references/permissions-workflow.md) |
 | **Kai** (project-aware AI Q&A: ping / preflight / ask / chat / history) | [kai-workflow](references/kai-workflow.md) |
+| **Programmatic auth** (browser login: PKCE/device flow, `auth login`/`status`/`logout`; HUMAN-ONLY, never run headlessly) | [auth-workflow](references/auth-workflow.md) |
 | Response parsing gotchas | [gotchas](references/gotchas.md) |
 
 ## First-time setup

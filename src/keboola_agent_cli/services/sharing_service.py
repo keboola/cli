@@ -13,6 +13,7 @@ import logging
 import os
 from typing import Any
 
+from ..auth.sentinel import require_static_token
 from ..constants import ENV_KBC_MASTER_TOKEN
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
@@ -62,6 +63,7 @@ class SharingService(BaseService):
 
         # Last resort: project's configured token
         logger.debug("No master token found, using project token for '%s'", alias)
+        require_static_token(project.token, feature="kbagent sharing (master-token path)")
         return project.token
 
     def list_shared(

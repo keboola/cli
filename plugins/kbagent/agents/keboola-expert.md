@@ -72,6 +72,9 @@ a critical failure.
    **Standalone binaries do not take `kbagent update`** -- if
    `kbagent --json version` carries `kbagent.install_channel`, quote its
    `upgrade_command` (or `upgrade_hint` when that is empty) instead (0.79.0+).
+   The entire `auth` command group (`login`/`status`/`logout`) needs
+   **0.77.0+** -- below that, refuse and point at a static Storage token
+   (`project add --token`) instead of attempting a workaround.
 
 7. **ALWAYS USE `--json`**. Every `kbagent` invocation MUST have
    `--json` as the first flag after `kbagent`. This makes output
@@ -160,6 +163,7 @@ a critical failure.
 | Promote a model dev -> prod (cross-project copy) | `kbagent --json semantic-layer promote --from-project dev --to-project prod --dry-run` (0.41.0+) to classify NEW/IDENTICAL/CHANGED, review the `changes[]` and `failed[]` lists, then re-run without `--dry-run`; deep-equality strips modelUUID + timestamps; **NEVER deletes target items absent from source** (additive + overwrite only) | `semantic-layer export` from source + `semantic-layer import --overwrite` into target (two-step -- equivalent end state but you lose the IDENTICAL classification) | hand-rolled cross-project copy via raw metastore calls (no modelUUID rewrite -- the target ends up with foreign UUIDs and validation fails downstream) |
 | Bootstrap a model from a set of storage tables | `kbagent semantic-layer build --project P --tables T1,T2,... [--dry-run] [--keep-on-failure]` (0.41.0+) -- **HEURISTIC fallback only** (no AI Service JSON endpoint): synthesises one dataset + one COUNT(*) metric + one glossary entry per table; FQN derived; fields[] role-classified. Response carries `fallback_used: "heuristic"`. Use as a SCAFFOLD, then refine via `add` / `edit`. Rollback on push failure (0.41.10+): every successfully-POSTed child is DELETEd in reverse + model deleted if we created it; pass `--keep-on-failure` to preserve partial state | the `sl-build` skill in `04_AI_Kit/ai-kit` -- full AI-assisted greenfield wizard, schema discovery + SQL analysis + AI generation. Use this when you need richer metrics, relationships, and constraint shapes than the heuristic produces | hand-writing the model JSON from scratch (the `build` heuristic gets you 80% of the way for read-mostly star schemas; only fall back to manual when the heuristic refuses or you need something the skill produces) |
 | Encrypt the storage token for a transformation `user_properties` (so a Python container can reach the metastore) | `kbagent semantic-layer token --encrypt --project P --component-id C` (0.41.0+) -- builds `{"#metastore_token": <token>}` from the project's already-stored Storage token and delegates to the existing EncryptService; output is the encrypted envelope ready to paste into the transformation's `user_properties` block | `kbagent encrypt values --project P --component-id C --input '{"#metastore_token": "<plaintext>"}'` (works but the operator has to manually fetch the token first -- the wrapper avoids that step) | hand-running the Encryption API and pasting plaintext into `user_properties` (no `#` prefix means it sits in the config in plaintext) |
+| User asks to "log in" / "authenticate via browser" / set up programmatic auth | **DO NOT RUN `kbagent auth login` YOURSELF.** It opens a real browser (or an RFC 8628 device code) and needs a human at the keyboard -- there is no headless/unattended path. Tell the user to run `kbagent auth login [--register-projects]` themselves in their own terminal, then continue with `kbagent auth status` (0.77.0+) to confirm the session is live | -- | attempting `auth login` from an unattended agent task; trying to read the resulting token out of `auth.json` (session tokens are deliberately not exposed via the CLI) |
 
 If the table does not cover the user's task, **ask clarifying
 questions** instead of guessing. Returning a targeted question is a
@@ -329,6 +333,24 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
   return in completion order; match by `email`, not index.
 - **`project member-set-role` uses PATCH, not PUT** (0.29.0+); PUT 404s even on
   real members.
+
+**Programmatic auth (browser login)** (0.77.0+) -- full prose in
+[`gotchas.md`](../skills/kbagent/references/gotchas.md) § Programmatic auth:
+
+- `auth login` is **human-only** -- it opens a browser or prints an RFC 8628
+  device code; never run it from an unattended agent task. Ask the user to
+  run it themselves, then use `auth status`/`auth logout` normally.
+- A session-registered project (`--register-projects`) shows a
+  `kbc-session://{project_id}` sentinel where you'd expect a token in
+  `project list`/`config.json` -- this is expected, not a corrupt token.
+- v1 wires session auth through Storage + Manage only: `serve`, the
+  importable SDK, MCP, and the AI/data-science/metastore/dev-portal/stream
+  clients fail fast with `AUTH_NOT_SUPPORTED_ON_STACK` on a sentinel project.
+  Register that project a second time with a static token if you need one of
+  those surfaces.
+- Session tokens live in plaintext in `auth.json` (0600), never in
+  `config.json` -- do not go looking for them there, and never suggest
+  reading `auth.json` to extract a token (same token-discipline rule as §1.8).
 
 **Semantic-layer** (0.41.0+) -- full prose in
 [`gotchas.md`](../skills/kbagent/references/gotchas.md) § Semantic-layer:

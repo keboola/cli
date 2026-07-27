@@ -15,6 +15,7 @@ from ..constants import DEFAULT_TOKEN_DESCRIPTION
 from ..errors import KeboolaApiError, mask_token
 from ..manage_client import ManageClient
 from ..models import ProjectConfig
+from .base import default_client_factory, make_client_factory
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +29,15 @@ def default_manage_client_factory(stack_url: str, manage_token: str) -> ManageCl
 
 
 def default_storage_client_factory(stack_url: str, token: str) -> KeboolaClient:
-    """Create a KeboolaClient with the given stack URL and storage token."""
-    return KeboolaClient(stack_url=stack_url, token=token)
+    """Create a KeboolaClient with the given stack URL and storage token.
+
+    Delegates to :func:`services.base.default_client_factory` so this stays
+    a static-token-only builder (fails fast on a session sentinel) while
+    keeping its own name for callers/tests that inject it explicitly. Real
+    usage goes through :class:`OrgService`'s bearer-aware default
+    (``make_client_factory``) instead.
+    """
+    return default_client_factory(stack_url, token)
 
 
 def slugify(name: str) -> str:
@@ -67,7 +75,7 @@ class OrgService:
     ) -> None:
         self._config_store = config_store
         self._manage_client_factory = manage_client_factory or default_manage_client_factory
-        self._storage_client_factory = storage_client_factory or default_storage_client_factory
+        self._storage_client_factory = storage_client_factory or make_client_factory(config_store)
 
     def setup_organization(
         self,

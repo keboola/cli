@@ -280,6 +280,22 @@ plugins/kbagent/
 # Global options: --json, --verbose, --no-color, --config-dir, --deny-writes, --deny-destructive, --allow-env-manage-token
 # Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
 
+kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
+kbagent auth status [--stack URL|alias]
+kbagent auth logout [--stack URL|alias] [--remove-projects] [--yes]
+# auth (since 0.77.0): browser-based login -- PKCE authorization-code by default (falls back to the
+#   RFC 8628 device flow ONLY on a pre-exchange failure: no loopback browser, callback timeout, or an
+#   SSH/container/WSL heuristic; --device-code forces it). REQUIRES A HUMAN AT A BROWSER -- never attempt
+#   from an unattended AI agent task; use a static Storage token for CI/headless instead. Issues a
+#   USER-scoped "programmatic session" (kbc_at_* access token + kbc_rt_* refresh token) stored in
+#   auth.json (0600), a sibling of config.json -- config.json's schema and CURRENT_CONFIG_VERSION are
+#   unchanged. --register-projects writes each accessible project into config.json with the sentinel
+#   token `kbc-session://{project_id}`. v1 scope is Storage + Manage command paths only: `serve`, the
+#   importable SDK, the MCP subprocess, and the AI/data-science/metastore/dev-portal/stream clients all
+#   fail fast on a sentinel-token project (AUTH_NOT_SUPPORTED_ON_STACK) naming the static-token fallback.
+#   New error codes: AUTH_NOT_SUPPORTED_ON_STACK, AUTH_FLOW_TIMEOUT, AUTH_FLOW_DENIED, AUTH_FLOW_EXPIRED,
+#   AUTH_BROWSER_UNAVAILABLE, AUTH_STATE_MISMATCH, SESSION_EXPIRED, SESSION_NOT_FOUND.
+
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list
 kbagent project remove --project NAME

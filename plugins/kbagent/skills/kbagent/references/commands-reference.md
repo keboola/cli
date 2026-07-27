@@ -10,6 +10,26 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `changelog [--limit N] [--full]` -- show recent changelog (default: last 5 versions, one-line summary per version; `--full` / `-v` expands every note). After auto-update, "What's new" is printed automatically (summarised). Manual trigger: `KBAGENT_UPDATED_FROM=0.17.0 kbagent version`
 - `context` -- print full CLI reference for AI agents
 
+## Programmatic Auth (Browser Login) (since v0.77.0)
+
+Alternative to a static Storage API token: sign in via a real browser (PKCE
+authorization-code) or, when no browser is usable, an RFC 8628 device code.
+**Requires a human at a browser/device -- never run `auth login` from an
+unattended agent task.** Issues a USER-scoped "programmatic session"
+(`kbc_at_*` access token + `kbc_rt_*` refresh token) stored in `auth.json`
+(0600), a sibling of `config.json`; `config.json`'s own schema and
+`CURRENT_CONFIG_VERSION` are unchanged.
+
+- `auth login [--stack URL|alias] [--device-code] [--register-projects]` -- sign in. `--stack` accepts a bare stack URL or an existing project alias (its stack is used); omitted, resolves from the default project's stack. `--device-code` forces the RFC 8628 flow even with a browser available. Without it, PKCE is tried first and falls back to the device flow ONLY on a pre-exchange failure (no loopback browser, callback timeout, or an SSH/container/WSL heuristic) -- once the browser callback succeeds there is no fallback. `--register-projects` writes every project the session can access into `config.json` under the sentinel token `kbc-session://{project_id}` (existing alias for the same project+stack: left alone; pointing elsewhere: skipped with a warning).
+- `auth status [--stack URL|alias]` -- show session state (`live`/`refreshed`/`degraded`/`expired`/`missing`), signed-in user, accessible projects, and token expiry. Proactively refreshes the access token if stale before reporting (a healthy session routinely shows an expired 1h access token next to a valid 30-day refresh token) -- `refreshed` means a rotation just happened, `live` means the cached token was still fresh.
+- `auth logout [--stack URL|alias] [--remove-projects] [--yes]` -- revoke the refresh token server-side and delete the local session from `auth.json`. `--remove-projects` also removes `config.json` aliases pointing at this session (sentinel-token projects only; a static-token project on the same stack is never touched).
+
+v1 scope: Storage + Manage command paths only. `serve`, the importable SDK
+(`lib.Client`), the MCP subprocess, and the AI/data-science/metastore/dev-portal/
+stream clients all fail fast on a sentinel-token project with
+`AUTH_NOT_SUPPORTED_ON_STACK`, naming the static-token fallback. See
+`auth-workflow.md` for the end-to-end walkthrough and troubleshooting.
+
 ## Project Management
 - `project add --project NAME --url URL --token TOKEN` -- connect a project (token verified via API)
 - `project list` -- list all connected projects (tokens masked)

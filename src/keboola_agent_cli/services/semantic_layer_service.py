@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, ClassVar
 
+from ..auth.sentinel import require_static_token
 from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..metastore_client import MetastoreClient, SemanticType
@@ -229,7 +230,13 @@ MetastoreClientFactory = Callable[[str, str], MetastoreClient]
 
 
 def default_metastore_client_factory(stack_url: str, token: str) -> MetastoreClient:
-    """Build a :class:`MetastoreClient` for the given project."""
+    """Build a :class:`MetastoreClient` for the given project.
+
+    Static-token-only: the Metastore Service is not yet wired for bearer
+    sessions (v1 scope is Storage + Manage), so a session sentinel fails
+    fast here instead of being sent as a literal credential.
+    """
+    require_static_token(token, feature="The Metastore Service (semantic layer)")
     return MetastoreClient(stack_url=stack_url, token=token)
 
 
@@ -1651,6 +1658,7 @@ class SemanticLayerService(BaseService):
             "component_id": C, "project": alias}``.
         """
         project = self._resolve_one_project(alias)
+        require_static_token(project.token, feature="semantic-layer token --encrypt")
         # Reuse the production EncryptService factory so the token never
         # leaves the in-process Storage API path.
         encrypt = EncryptService(

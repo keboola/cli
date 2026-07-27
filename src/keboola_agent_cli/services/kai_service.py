@@ -10,6 +10,7 @@ from typing import Any
 
 from kai_client import KaiClient, KaiError
 
+from ..auth.sentinel import require_static_token
 from ..constants import KAI_FEATURE_FLAG, KAI_REQUEST_TIMEOUT, KAI_STREAM_TIMEOUT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from .base import BaseService
@@ -87,6 +88,7 @@ class KaiService(BaseService):
         """Create a KaiClient with auto-discovered URL for the given project."""
         projects = self.resolve_projects([alias])
         project = projects[alias]
+        require_static_token(project.token, feature="kbagent kai")
         return await KaiClient.from_storage_api(
             storage_api_token=project.token,
             storage_api_url=project.stack_url,

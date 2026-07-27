@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
+from ..auth.sentinel import is_session_token, parse_session_project_id, require_static_token
 from ..client import KeboolaClient
 from ..config_store import ConfigError, ConfigStore, project_not_found_error
 from ..constants import ENV_MAX_PARALLEL_WORKERS, UNEXPECTED_ERROR_MAX_MESSAGE_LEN
@@ -73,8 +74,60 @@ def sanitize_unexpected_error(exc: BaseException) -> str:
 
 
 def default_client_factory(stack_url: str, token: str) -> KeboolaClient:
-    """Create a KeboolaClient with the given stack URL and token."""
+    """Create a KeboolaClient with the given stack URL and token.
+
+    Static-token-only: fails fast with `SessionAuthUnsupportedError` on a
+    `kbc-session://` sentinel rather than sending the literal sentinel string
+    as a credential. Kept (name and signature unchanged) so existing
+    importers and tests that inject this factory directly keep working --
+    real runtime usage goes through `make_client_factory`'s bearer-aware
+    factory instead (the new `BaseService` default).
+    """
+    require_static_token(token, feature="The static-token Storage API client")
     return KeboolaClient(stack_url=stack_url, token=token)
+
+
+def make_client_factory(config_store: ConfigStore) -> ClientFactory:
+    """Return a ``(stack_url, token) -> KeboolaClient`` factory, sentinel-aware.
+
+    The factory signature stays 2-arg, so none of the ~150 existing call
+    sites change shape: a `kbc-session://{project_id}` sentinel token is
+    detected here, the project id is parsed out of the sentinel itself (the
+    one datum the 2-arg signature otherwise lacks), and the client is built
+    with `http_auth=BearerAuth(...)` instead of a static `X-StorageApi-Token`.
+    A plain static token takes the unchanged, byte-identical path.
+
+    `auth.state_store` / `auth.token_provider` are imported lazily inside the
+    returned closure (not at module level) so the static-token startup path
+    never pays for constructing the auth package's heavier dependencies
+    (filelock, httpx client machinery) -- only a session-registered project
+    ever reaches that branch.
+    """
+
+    def _factory(stack_url: str, token: str) -> KeboolaClient:
+        if not is_session_token(token):
+            return KeboolaClient(stack_url=stack_url, token=token)
+
+        project_id = parse_session_project_id(token)
+        if project_id is None:
+            raise ConfigError(
+                f"Malformed session sentinel token for stack {stack_url!r}: "
+                "the project id could not be parsed. Re-run `kbagent auth login "
+                "--register-projects` to repair the project's config entry."
+            )
+
+        from ..auth.state_store import AuthStateStore
+        from ..auth.token_provider import BearerAuth, get_session_token_provider
+
+        state_store = AuthStateStore.from_config_store(config_store)
+        provider = get_session_token_provider(stack_url, state_store)
+        return KeboolaClient(
+            stack_url=stack_url,
+            token="",
+            http_auth=BearerAuth(provider, project_id),
+        )
+
+    return _factory
 
 
 class BaseService:
@@ -94,7 +147,7 @@ class BaseService:
         client_factory: ClientFactory | None = None,
     ) -> None:
         self._config_store = config_store
-        self._client_factory = client_factory or default_client_factory
+        self._client_factory = client_factory or make_client_factory(config_store)
 
     def resolve_projects(self, aliases: list[str] | None = None) -> dict[str, ProjectConfig]:
         """Resolve project aliases to ProjectConfig instances.

@@ -54,6 +54,73 @@ observability -- all API requests will include the X-Conversation-ID header.
 
 Use `kbagent <command> --help` for full flag details and examples.
 
+### Programmatic Auth (Browser Login) (since v0.77.0)
+
+  Browser-based login (PKCE authorization-code by default; RFC 8628 device
+  authorization on SSH/containers/WSL, or with --device-code) as an
+  alternative to a long-lived static Storage API token.
+
+  IMPORTANT FOR AI AGENTS: `auth login` REQUIRES A HUMAN AT A BROWSER.
+  There is no unattended/headless path, and session tokens are deliberately
+  not readable through the CLI -- do NOT attempt this command from an
+  unattended agent task. For headless / CI / automation use, keep using a
+  static Storage token (`project add --token` or `KBAGENT_PROJECT_FROM_ENV`).
+
+  kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
+    Opens the Keboola login page in a browser (or falls back to the RFC 8628
+    device flow: prints a short user_code + verification URL) and stores the
+    resulting "programmatic session" (kbc_at_* access token + kbc_rt_*
+    refresh token) in auth.json (0600), a sibling of config.json. A session
+    is USER-scoped: one login covers every project the signed-in user can
+    access; the target project for a given command is still selected the
+    usual way (--project / KBAGENT_PROJECT / pin) and bound to the request
+    via X-KBC-ProjectId. --stack accepts a stack URL or an existing project
+    alias (its stack is used). --device-code forces the device flow even on
+    a desktop with a browser. --register-projects additionally writes every
+    accessible project into config.json with the sentinel token
+    `kbc-session://{{project_id}}` (config.json schema and
+    CURRENT_CONFIG_VERSION are unchanged; an existing alias for the same
+    project+stack is left alone, one pointing elsewhere is skipped with a
+    warning). PKCE auto-falls-back to the device flow ONLY on a pre-exchange
+    failure (no loopback browser, callback timeout, SSH/container/WSL
+    detected) -- once the browser callback succeeds there is no fallback.
+    A 404 from any auth endpoint means browser login is not enabled on that
+    stack yet (per-stack feature flag); use a static token instead.
+
+  kbagent auth status [--stack URL|alias]
+    Show the current session's state (live/refreshed/degraded/expired/missing),
+    signed-in user, accessible projects, and token expiry. Proactively
+    refreshes the access token if it is stale -- a healthy session routinely
+    has an expired 1h access token alongside a valid 30-day refresh token.
+
+  kbagent auth logout [--stack URL|alias] [--remove-projects] [--yes]
+    Revoke the refresh token server-side and delete the local session from
+    auth.json. --remove-projects also removes config.json project aliases
+    pointing at this session (sentinel-token projects only -- a static-token
+    project sharing the same stack is never touched).
+
+  Storage posture: session tokens live in PLAINTEXT in auth.json (0600), a
+  sibling of config.json -- the same posture as the static Storage tokens
+  already kept there (deliberate RFC 8628 deviation; see
+  docs/programmatic-auth-login-plan.md section 4.2).
+
+  v1 scope: Storage + Manage command paths only. `kbagent serve`, the
+  importable SDK (`lib.Client`), the MCP subprocess, and the AI /
+  data-science / metastore / dev-portal / stream clients all fail fast on a
+  sentinel-token (`kbc-session://...`) project with
+  AUTH_NOT_SUPPORTED_ON_STACK, naming the static-token fallback -- they do
+  not (yet) understand bearer sessions. An older kbagent build has no
+  sentinel-token support at all: it gets an opaque 401 on a plain
+  `X-StorageApi-Token` call, or a different failure on a token-as-data path
+  (e.g. semantic-layer `token --encrypt`, kai, sharing's master-token
+  fallback) -- upgrade first.
+
+  New error codes: AUTH_NOT_SUPPORTED_ON_STACK, AUTH_FLOW_TIMEOUT,
+  AUTH_FLOW_DENIED, AUTH_FLOW_EXPIRED, AUTH_BROWSER_UNAVAILABLE,
+  AUTH_STATE_MISMATCH, SESSION_EXPIRED, SESSION_NOT_FOUND. Exit codes:
+  SESSION_EXPIRED / SESSION_NOT_FOUND / AUTH_FLOW_DENIED -> 3 (auth error);
+  AUTH_FLOW_TIMEOUT -> 4 (network error); others -> 1.
+
 ### Project Management
 
   kbagent project add --project NAME --url URL --token TOKEN

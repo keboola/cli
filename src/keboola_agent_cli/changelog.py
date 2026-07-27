@@ -24,6 +24,35 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.81.0": [
+        "New: `kbagent auth login|status|logout` -- browser-based programmatic authentication as "
+        "an alternative to a long-lived static Storage API token. `login` signs in via PKCE "
+        "authorization-code (opens a browser) by default, falling back to the RFC 8628 device "
+        "flow ONLY on a pre-exchange failure (no usable browser, callback timeout, SSH/container/"
+        "WSL detected); `--device-code` forces the device flow. `status` reports session health "
+        "(live/refreshed/degraded/expired/missing) and proactively refreshes a stale access token. "
+        "`logout` revokes the refresh token server-side and clears the local session.",
+        'New: `auth login` issues a USER-scoped "programmatic session" (a short-lived `kbc_at_*` '
+        "access token plus a rotating `kbc_rt_*` refresh token) stored in a new `auth.json` file "
+        "(0600), a sibling of `config.json` -- config.json's own schema and `CURRENT_CONFIG_VERSION` "
+        "are unchanged. `--register-projects` writes each accessible project into `config.json` "
+        "under the sentinel token `kbc-session://{project_id}` instead of a real token.",
+        "Note: v1 wires session auth through Storage and Manage command paths only. `kbagent "
+        "serve`, the importable SDK (`lib.Client`), the MCP subprocess, and the AI / data-science / "
+        "metastore / dev-portal / stream clients all fail fast on a sentinel-token project with the "
+        "new `AUTH_NOT_SUPPORTED_ON_STACK` error code, naming the static-token fallback, instead of "
+        "silently sending the sentinel string as if it were a real credential.",
+        "Security: `auth login` REQUIRES A HUMAN AT A BROWSER (or a device to type a short code "
+        "into) -- there is no unattended/headless path, and session tokens are never exposed "
+        "through any CLI command or `--json` output. Programmatic auth is behind a per-stack "
+        'feature flag; a 404 from any auth endpoint is reported as "browser login is not enabled '
+        'on this stack yet" rather than a generic error. Static Storage tokens remain fully '
+        "supported and unchanged -- keep using them for CI/CD and any other headless use.",
+        "New error codes: AUTH_NOT_SUPPORTED_ON_STACK, AUTH_FLOW_TIMEOUT, AUTH_FLOW_DENIED, "
+        "AUTH_FLOW_EXPIRED, AUTH_BROWSER_UNAVAILABLE, AUTH_STATE_MISMATCH, SESSION_EXPIRED, "
+        "SESSION_NOT_FOUND. See docs/error-codes.md and docs/programmatic-auth-login-plan.md for "
+        "the full design.",
+    ],
     "0.80.0": [
         "Note (#390): the MCP passthrough now has a named removal date -- `kbagent tool "
         "list` / `tool call` and `agent --type mcp_tool` are REMOVED in **v0.85.0**, "

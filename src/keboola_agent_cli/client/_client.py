@@ -10,6 +10,8 @@ split of the former single-file ``client.py`` into a package (issue #520).
 Inherits shared retry/error logic from BaseHttpClient (via _CoreClient).
 """
 
+import httpx
+
 from ._core import _CoreClient
 from .branches import _BranchesMixin
 from .configs import _ConfigsMixin
@@ -44,3 +46,14 @@ class KeboolaClient(
 
     Inherits _do_request() and _raise_api_error() from BaseHttpClient.
     """
+
+    def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
+        """Construct the client.
+
+        ``http_auth`` is additive and keyword-only: omitting it (the
+        default) is byte-identical to the client's behaviour before session
+        (bearer) auth existed. When set, it is forwarded to ``_CoreClient``,
+        which then omits ``X-StorageApi-Token`` so the sentinel session
+        token never goes on the wire as a header value.
+        """
+        super().__init__(stack_url, token, http_auth=http_auth)

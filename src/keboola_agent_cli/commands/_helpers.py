@@ -10,10 +10,13 @@ Provides common patterns used by all CLI commands:
 import os
 import secrets
 import sys
-from typing import Any
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import typer
 
+from ..auth.sentinel import is_session_token, parse_session_project_id
 from ..config_store import ConfigStore
 from ..constants import (
     ENV_KBC_MANAGE_API_TOKEN,
@@ -21,7 +24,21 @@ from ..constants import (
     EXIT_PERMISSION_DENIED,
 )
 from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError
+from ..manage_client import ManageClient
+from ..models import normalize_stack_url
 from ..output import OutputFormatter
+
+if TYPE_CHECKING:
+    # Only needed for the type hint on `make_manage_client_factory`; the real
+    # import happens lazily inside that function so importing this module
+    # never drags in the auth package's heavier deps on the static-token path.
+    from ..auth.state_store import AuthStateStore
+
+if TYPE_CHECKING:
+    # Only needed for the type hint on `make_manage_client_factory`; the real
+    # import happens lazily inside that function so importing this module
+    # never drags in the auth package's heavier deps on the static-token path.
+    pass
 
 
 def resolve_manage_token(*, allow_env: bool = False) -> str:
@@ -72,6 +89,92 @@ def resolve_manage_token(*, allow_env: bool = False) -> str:
     raise typer.Exit(code=2)
 
 
+@dataclass(frozen=True)
+class ManageCredential:
+    """How a Manage API call authenticates for this invocation.
+
+    A programmatic session is USER-scoped and does NOT carry admin/super
+    Manage privileges, so the two are not interchangeable: privileged groups
+    (``feature``, ``org setup``, member administration) must keep demanding
+    the stronger static manage token instead of silently trying a session
+    and failing with a confusing 403. Those commands always resolve a
+    `static_token` credential (see `resolve_manage_credential`'s
+    `require_admin=True` path, which is every current caller);
+    `session_stack_url` / `project_id` are populated only on the not-yet-used
+    bearer path, kept real and testable for a future non-admin command.
+    """
+
+    static_token: str = ""
+    session_stack_url: str = ""  # set only for the bearer path
+    project_id: int | None = None
+
+    @property
+    def is_session(self) -> bool:
+        """True when this credential authenticates via a bearer session."""
+        return bool(self.session_stack_url)
+
+
+def resolve_manage_credential(
+    *,
+    require_admin: bool,
+    allow_env: bool = False,
+    project_token: str = "",
+    stack_url: str = "",
+) -> ManageCredential:
+    """Resolve how a Manage API call should authenticate for this invocation.
+
+    ``require_admin=True`` (every current caller: `feature`, `org setup`,
+    member administration) always takes the existing `resolve_manage_token`
+    behaviour, unchanged, wrapped in a `ManageCredential`. Only
+    ``require_admin=False`` together with a session-sentinel
+    ``project_token`` takes the bearer path -- a session is user-scoped and
+    must never be silently substituted for a privileged static manage token.
+
+    A malformed sentinel (unparseable project id) or a missing ``stack_url``
+    falls back to the static-token prompt rather than guessing: failing
+    closed to the stronger credential is always safe, silently downgrading
+    to a bearer credential that turns out wrong is not.
+    """
+    if not require_admin and project_token and is_session_token(project_token):
+        project_id = parse_session_project_id(project_token)
+        if project_id is not None and stack_url:
+            return ManageCredential(
+                session_stack_url=normalize_stack_url(stack_url),
+                project_id=project_id,
+            )
+
+    return ManageCredential(static_token=resolve_manage_token(allow_env=allow_env))
+
+
+def make_manage_client_factory(
+    credential: ManageCredential, state_store: "AuthStateStore"
+) -> Callable[[str, str], ManageClient]:
+    """Build a ``(stack_url, manage_token) -> ManageClient`` factory for `credential`.
+
+    No v1 command selects the bearer path yet (every current caller resolves
+    `require_admin=True`, i.e. a `static_token` credential), but the seam is
+    real and unit-testable so a future non-admin Manage command can opt in
+    without redesigning this function. `auth.token_provider` is imported
+    lazily inside the session branch so the static-token path (used by every
+    existing command today) never pays for it.
+    """
+    if credential.is_session:
+        from ..auth.token_provider import BearerAuth, get_session_token_provider
+
+        provider = get_session_token_provider(credential.session_stack_url, state_store)
+        bearer_auth = BearerAuth(provider, credential.project_id)
+
+        def _session_factory(stack_url: str, _manage_token: str) -> ManageClient:
+            return ManageClient(stack_url=stack_url, manage_token="", http_auth=bearer_auth)
+
+        return _session_factory
+
+    def _static_factory(stack_url: str, manage_token: str) -> ManageClient:
+        return ManageClient(stack_url=stack_url, manage_token=manage_token)
+
+    return _static_factory
+
+
 def get_formatter(ctx: typer.Context) -> OutputFormatter:
     """Retrieve the OutputFormatter from the Typer context."""
     return ctx.obj["formatter"]
@@ -92,9 +195,19 @@ def map_error_to_exit_code(exc: KeboolaApiError) -> int:
     - JOB_TIMEOUT_TERMINATED -> EXIT_JOB_TIMEOUT_TERMINATED (7)
       (local --timeout elapsed and we successfully cancelled the remote
       job; scripts can distinguish "we killed it" from "it failed on its own")
+    - SESSION_EXPIRED / SESSION_NOT_FOUND / AUTH_FLOW_DENIED -> 3
+      (programmatic-auth session problems are authentication errors too --
+      `kbagent auth login` is the remedy in every case)
+    - AUTH_FLOW_TIMEOUT -> 4 (the login flow itself timed out; retryable)
     - Everything else -> 1 (general error)
     """
     if exc.error_code in ("INVALID_TOKEN", "MISSING_MASTER_TOKEN"):
+        return 3
+    if exc.error_code in (
+        ErrorCode.SESSION_EXPIRED,
+        ErrorCode.SESSION_NOT_FOUND,
+        ErrorCode.AUTH_FLOW_DENIED,
+    ):
         return 3
     if exc.error_code in (
         "TIMEOUT",
@@ -102,6 +215,8 @@ def map_error_to_exit_code(exc: KeboolaApiError) -> int:
         "RETRY_EXHAUSTED",
         "QUEUE_JOB_TIMEOUT",
     ):
+        return 4
+    if exc.error_code == ErrorCode.AUTH_FLOW_TIMEOUT:
         return 4
     if exc.error_code == "JOB_TIMEOUT_TERMINATED":
         return EXIT_JOB_TIMEOUT_TERMINATED

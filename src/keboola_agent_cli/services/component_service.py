@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from ..ai_client import AiServiceClient
+from ..auth.sentinel import require_static_token
 from ..config_store import ConfigStore
 from ..constants import SECRET_PLACEHOLDER
 from ..errors import ConfigError, KeboolaApiError
@@ -25,7 +26,12 @@ AiClientFactory = Callable[[str, str], AiServiceClient]
 
 
 def default_ai_client_factory(stack_url: str, token: str) -> AiServiceClient:
-    """Create an AiServiceClient with the given stack URL and token."""
+    """Create an AiServiceClient with the given stack URL and token.
+
+    Static-token-only (v1 scope is Storage + Manage) -- fails fast on a
+    session sentinel rather than sending it as a literal credential.
+    """
+    require_static_token(token, feature="The Keboola AI Service")
     return AiServiceClient(stack_url=stack_url, token=token)
 
 

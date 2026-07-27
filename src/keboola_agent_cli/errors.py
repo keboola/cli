@@ -118,6 +118,16 @@ class ErrorCode(StrEnum):
     DP_PUBLISH_REQUIREMENTS_MISSING = "DP_PUBLISH_REQUIREMENTS_MISSING"
     DP_ICON_UPLOAD_FAILED = "DP_ICON_UPLOAD_FAILED"
 
+    # Programmatic auth / browser login (since 0.77.0)
+    AUTH_NOT_SUPPORTED_ON_STACK = "AUTH_NOT_SUPPORTED_ON_STACK"
+    AUTH_FLOW_TIMEOUT = "AUTH_FLOW_TIMEOUT"
+    AUTH_FLOW_DENIED = "AUTH_FLOW_DENIED"
+    AUTH_FLOW_EXPIRED = "AUTH_FLOW_EXPIRED"
+    AUTH_BROWSER_UNAVAILABLE = "AUTH_BROWSER_UNAVAILABLE"
+    AUTH_STATE_MISMATCH = "AUTH_STATE_MISMATCH"
+    SESSION_EXPIRED = "SESSION_EXPIRED"
+    SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
+
 
 def mask_token(token: str) -> str:
     """Mask a Keboola Storage API token for safe display.
@@ -226,6 +236,30 @@ class PermissionDeniedError(Exception):
         self.message = message
 
 
+class SessionAuthUnsupportedError(ConfigError):
+    """Raised when a session-registered project (``kbc-session://`` sentinel token)
+    reaches a code path that only understands static Storage tokens.
+
+    v1 wires bearer sessions through the Storage and Manage clients only. Every
+    other consumer (MCP subprocess, AI/data-science/metastore/dev-portal/stream
+    clients, the importable SDK, ``kbagent serve``) must fail fast here rather
+    than send the literal sentinel string as a credential -- an opaque 401, or
+    worse, the sentinel being encrypted/persisted as if it were a real token.
+    """
+
+    def __init__(self, feature: str, *, remedy: str = "") -> None:
+        message = (
+            f"{feature} does not support browser-login (session) projects yet. "
+            "Register the project with a static Storage token instead: "
+            "kbagent project add --project <alias> --url <stack> --token <token>."
+        )
+        if remedy:
+            message = f"{message} {remedy}"
+        super().__init__(message)
+        self.feature = feature
+        self.error_code = ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+
+
 _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.INVALID_TOKEN: "authentication",
     ErrorCode.MISSING_MASTER_TOKEN: "authentication",
@@ -242,6 +276,14 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.DP_APP_NOT_FOUND: "not_found",
     ErrorCode.DP_PUBLISH_REQUIREMENTS_MISSING: "validation",
     ErrorCode.DP_ICON_UPLOAD_FAILED: "api",
+    ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK: "configuration",
+    ErrorCode.AUTH_FLOW_TIMEOUT: "authentication",
+    ErrorCode.AUTH_FLOW_DENIED: "authentication",
+    ErrorCode.AUTH_FLOW_EXPIRED: "authentication",
+    ErrorCode.AUTH_BROWSER_UNAVAILABLE: "authentication",
+    ErrorCode.AUTH_STATE_MISMATCH: "authentication",
+    ErrorCode.SESSION_EXPIRED: "authentication",
+    ErrorCode.SESSION_NOT_FOUND: "authentication",
 }
 
 

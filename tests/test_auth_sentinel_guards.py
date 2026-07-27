@@ -1,0 +1,351 @@
+"""Tests for the sentinel-aware client factories and fail-fast guards (contract
+section 12, programmatic auth).
+
+Covers three things:
+
+1. Every direct ``project.token`` consumer enumerated in the contract's
+   guard table raises `SessionAuthUnsupportedError` (via `require_static_token`)
+   when handed a `kbc-session://` sentinel, before the token is ever used as
+   a real credential.
+2. `services.base.make_client_factory` builds a bearer-session client (no
+   `X-StorageApi-Token` header) for a sentinel token and an ordinary static
+   client otherwise.
+3. Compat regression: a sentinel-token project round-trips through
+   `ConfigStore` load/save unchanged, and `CURRENT_CONFIG_VERSION` is still 1
+   (no config.json schema change shipped with this feature).
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from keboola_agent_cli.auth.sentinel import make_session_token
+from keboola_agent_cli.config_store import CURRENT_CONFIG_VERSION, ConfigStore
+from keboola_agent_cli.errors import ErrorCode, SessionAuthUnsupportedError
+from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.services.base import default_client_factory, make_client_factory
+
+STACK_URL = "https://connection.keboola.com"
+SENTINEL_PROJECT_ID = 10105
+STATIC_TOKEN = "12345-67890-abcdefghijklmnop"
+
+
+def _sentinel_token() -> str:
+    return make_session_token(SENTINEL_PROJECT_ID)
+
+
+def _sentinel_project() -> ProjectConfig:
+    return ProjectConfig(
+        stack_url=STACK_URL,
+        token=_sentinel_token(),
+        project_name="Sentinel Project",
+        project_id=SENTINEL_PROJECT_ID,
+    )
+
+
+def _config_store_with_sentinel_project(tmp_path: Path, alias: str = "sentinel") -> ConfigStore:
+    store = ConfigStore(config_dir=tmp_path)
+    store.add_project(alias, _sentinel_project())
+    return store
+
+
+# ----------------------------------------------------------------------------
+# services.base: default_client_factory / make_client_factory
+# ----------------------------------------------------------------------------
+
+
+class TestDefaultClientFactory:
+    def test_fails_fast_on_sentinel(self) -> None:
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            default_client_factory(STACK_URL, _sentinel_token())
+        assert exc_info.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+
+    def test_static_token_unaffected(self) -> None:
+        client = default_client_factory(STACK_URL, STATIC_TOKEN)
+        try:
+            assert client._client.headers.get("x-storageapi-token") == STATIC_TOKEN
+        finally:
+            client.close()
+
+
+class TestMakeClientFactory:
+    def test_static_token_gets_ordinary_header_client(self, tmp_path: Path) -> None:
+        config_store = ConfigStore(config_dir=tmp_path)
+        factory = make_client_factory(config_store)
+        client = factory(STACK_URL, STATIC_TOKEN)
+        try:
+            assert client._client.headers.get("x-storageapi-token") == STATIC_TOKEN
+            assert client._http_auth is None
+        finally:
+            client.close()
+
+    def test_sentinel_token_gets_bearer_client_no_storage_header(self, tmp_path: Path) -> None:
+        config_store = ConfigStore(config_dir=tmp_path)
+        factory = make_client_factory(config_store)
+        client = factory(STACK_URL, _sentinel_token())
+        try:
+            assert "x-storageapi-token" not in client._client.headers
+            assert client._http_auth is not None
+        finally:
+            client.close()
+
+    def test_malformed_sentinel_raises_config_error(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.errors import ConfigError
+
+        config_store = ConfigStore(config_dir=tmp_path)
+        factory = make_client_factory(config_store)
+        with pytest.raises(ConfigError):
+            factory(STACK_URL, "kbc-session://not-a-number")
+
+
+# ----------------------------------------------------------------------------
+# Guarded consumers -- each raises SessionAuthUnsupportedError on a sentinel
+# ----------------------------------------------------------------------------
+
+
+class TestMcpServiceGuards:
+    @patch("keboola_agent_cli.services.mcp_service.shutil.which")
+    def test_build_server_params_raises(self, mock_which: MagicMock) -> None:
+        from keboola_agent_cli.services.mcp_service import _build_server_params
+
+        mock_which.side_effect = lambda cmd: "/usr/local/bin/uvx" if cmd == "uvx" else None
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            _build_server_params(_sentinel_project())
+        assert exc_info.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+        assert exc_info.value.feature == "The MCP server subprocess"
+
+    def test_build_http_headers_raises(self) -> None:
+        from keboola_agent_cli.services.mcp_service import _build_http_headers
+
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            _build_http_headers(_sentinel_project())
+        assert exc_info.value.feature == "The MCP HTTP transport"
+
+
+class TestSemanticLayerGuards:
+    def test_default_metastore_client_factory_raises(self) -> None:
+        from keboola_agent_cli.services.semantic_layer_service import (
+            default_metastore_client_factory,
+        )
+
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            default_metastore_client_factory(STACK_URL, _sentinel_token())
+        assert exc_info.value.feature == "The Metastore Service (semantic layer)"
+
+    def test_encrypt_token_raises(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.services.semantic_layer_service import SemanticLayerService
+
+        config_store = _config_store_with_sentinel_project(tmp_path)
+        service = SemanticLayerService(config_store=config_store)
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            service.encrypt_token("sentinel", "keboola.some-component")
+        assert exc_info.value.feature == "semantic-layer token --encrypt"
+
+
+class TestKaiServiceGuard:
+    def test_create_kai_client_raises(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.services.kai_service import KaiService
+
+        config_store = _config_store_with_sentinel_project(tmp_path)
+        service = KaiService(config_store=config_store)
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            asyncio.run(service._create_kai_client("sentinel"))
+        assert exc_info.value.feature == "kbagent kai"
+
+
+class TestSharingServiceGuard:
+    def test_resolve_master_token_fallback_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from keboola_agent_cli.services.sharing_service import SharingService
+
+        monkeypatch.delenv("KBC_MASTER_TOKEN", raising=False)
+        monkeypatch.delenv("KBC_MASTER_TOKEN_SENTINEL", raising=False)
+
+        config_store = ConfigStore(config_dir=tmp_path)
+        service = SharingService(config_store=config_store)
+        project = _sentinel_project()
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            service.resolve_master_token("sentinel", project)
+        assert exc_info.value.feature == "kbagent sharing (master-token path)"
+
+    def test_explicit_master_token_env_wins_no_guard(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When a real master token env var is set, the sentinel is never
+        touched -- the guard must not fire on the happy path."""
+        from keboola_agent_cli.services.sharing_service import SharingService
+
+        monkeypatch.setenv("KBC_MASTER_TOKEN", "901-master-token-value")
+        config_store = ConfigStore(config_dir=tmp_path)
+        service = SharingService(config_store=config_store)
+        project = _sentinel_project()
+        assert service.resolve_master_token("sentinel", project) == "901-master-token-value"
+
+
+class TestLibClientGuard:
+    def test_client_init_raises(self) -> None:
+        from keboola_agent_cli.lib import Client
+
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            Client(url=STACK_URL, token=_sentinel_token())
+        assert exc_info.value.feature == "The importable SDK Client"
+
+
+class TestAiServiceFactoryGuards:
+    """default AI-service factories in component_service / config_service / flow_service."""
+
+    def test_component_service_default_factory_raises(self) -> None:
+        from keboola_agent_cli.services.component_service import default_ai_client_factory
+
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            default_ai_client_factory(STACK_URL, _sentinel_token())
+        assert exc_info.value.feature == "The Keboola AI Service"
+
+    def test_config_service_default_factory_raises(self) -> None:
+        from keboola_agent_cli.services.config_service import _default_ai_client_factory
+
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            _default_ai_client_factory(STACK_URL, _sentinel_token())
+        assert exc_info.value.feature == "The Keboola AI Service"
+
+    def test_flow_service_ai_factory_raises(self) -> None:
+        from keboola_agent_cli.services.flow_service import default_ai_client_factory
+
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            default_ai_client_factory(STACK_URL, _sentinel_token())
+        assert exc_info.value.feature == "The Keboola AI Service"
+
+    def test_flow_service_scheduler_factory_raises(self) -> None:
+        from keboola_agent_cli.services.flow_service import default_scheduler_client_factory
+
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            default_scheduler_client_factory(STACK_URL, _sentinel_token())
+        assert exc_info.value.feature == "The Scheduler Service"
+
+
+class TestDataScienceFactoryGuards:
+    def test_data_app_service_default_factory_raises(self) -> None:
+        from keboola_agent_cli.services.data_app_service import _default_ds_client_factory
+
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            _default_ds_client_factory(STACK_URL, _sentinel_token())
+        assert exc_info.value.feature == "The Data Science Service (data apps)"
+
+    def test_data_app_git_service_default_factory_raises(self) -> None:
+        from keboola_agent_cli.services.data_app_git_service import _default_ds_client_factory
+
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            _default_ds_client_factory(STACK_URL, _sentinel_token())
+        assert exc_info.value.feature == "The Data Science Service (data apps)"
+
+
+class TestStreamServiceGuard:
+    def test_default_stream_client_factory_raises(self) -> None:
+        from keboola_agent_cli.services.stream_service import default_stream_client_factory
+
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            default_stream_client_factory(STACK_URL, _sentinel_token())
+        assert exc_info.value.feature == "The Data Streams Service"
+
+
+# ----------------------------------------------------------------------------
+# Constructor-level wiring: Doctor / Snapshot / Token / Org get the
+# bearer-aware default (make_client_factory), same treatment as BaseService.
+# ----------------------------------------------------------------------------
+
+
+class TestConstructorLevelWiring:
+    def test_doctor_service_default_is_bearer_aware(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.services.doctor_service import DoctorService
+
+        config_store = ConfigStore(config_dir=tmp_path)
+        service = DoctorService(config_store=config_store)
+        client = service._client_factory(STACK_URL, _sentinel_token())
+        try:
+            assert "x-storageapi-token" not in client._client.headers
+        finally:
+            client.close()
+
+    def test_snapshot_service_default_is_bearer_aware(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.services.snapshot_service import SnapshotService
+
+        config_store = ConfigStore(config_dir=tmp_path)
+        service = SnapshotService(config_store=config_store)
+        client = service._client_factory(STACK_URL, _sentinel_token())
+        try:
+            assert "x-storageapi-token" not in client._client.headers
+        finally:
+            client.close()
+
+    def test_token_service_default_is_bearer_aware(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.services.token_service import TokenService
+
+        config_store = ConfigStore(config_dir=tmp_path)
+        service = TokenService(config_store=config_store)
+        client = service._client_factory(STACK_URL, _sentinel_token())
+        try:
+            assert "x-storageapi-token" not in client._client.headers
+        finally:
+            client.close()
+
+    def test_org_service_storage_factory_is_bearer_aware(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.services.org_service import OrgService
+
+        config_store = ConfigStore(config_dir=tmp_path)
+        service = OrgService(config_store=config_store)
+        client = service._storage_client_factory(STACK_URL, _sentinel_token())
+        try:
+            assert "x-storageapi-token" not in client._client.headers
+        finally:
+            client.close()
+
+    def test_named_default_factories_still_fail_fast_when_injected_explicitly(self) -> None:
+        """The module-level default_*_client_factory functions (kept for
+        explicit injection / back-compat) still delegate to the static-token
+        guard even though the constructor default now uses the bearer-aware
+        factory instead."""
+        from keboola_agent_cli.services.org_service import default_storage_client_factory
+        from keboola_agent_cli.services.snapshot_service import default_snapshot_client_factory
+        from keboola_agent_cli.services.token_service import default_token_client_factory
+
+        for fn in (
+            default_snapshot_client_factory,
+            default_token_client_factory,
+            default_storage_client_factory,
+        ):
+            with pytest.raises(SessionAuthUnsupportedError):
+                fn(STACK_URL, _sentinel_token())
+
+
+# ----------------------------------------------------------------------------
+# Compat regression: a sentinel project round-trips through ConfigStore,
+# and CURRENT_CONFIG_VERSION is unchanged.
+# ----------------------------------------------------------------------------
+
+
+class TestConfigStoreCompatRegression:
+    def test_current_config_version_unchanged(self) -> None:
+        assert CURRENT_CONFIG_VERSION == 1
+
+    def test_sentinel_project_round_trips_unchanged(self, tmp_path: Path) -> None:
+        store = ConfigStore(config_dir=tmp_path)
+        project = _sentinel_project()
+        store.add_project("sentinel", project)
+
+        # Fresh ConfigStore instance -> forces a real load from disk.
+        reloaded_store = ConfigStore(config_dir=tmp_path)
+        reloaded = reloaded_store.get_project("sentinel")
+
+        assert reloaded is not None
+        assert reloaded.token == project.token
+        assert reloaded.token.startswith("kbc-session://")
+        assert reloaded.stack_url == STACK_URL
+        assert reloaded.project_id == SENTINEL_PROJECT_ID
+
+        raw_config = reloaded_store.load()
+        assert raw_config.version == CURRENT_CONFIG_VERSION

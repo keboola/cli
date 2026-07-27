@@ -1,6 +1,11 @@
 # Implementation Plan: PKCE + Device Authorization Login (`kbagent auth`)
 
-Status: **draft / proposed**
+Status: **implemented in 0.77.0**
+This plan has been implemented in full (see `kbagent auth login|status|logout`,
+`src/keboola_agent_cli/auth/`, and the "0.77.0" entry in
+`src/keboola_agent_cli/changelog.py`). The document below is kept as the design
+record; where behavior evolved during implementation, the code and the
+changelog are authoritative over this text.
 Related: keboola/connection `docs/rfc/programmatic-auth/device-authorization-flow.md` (v8),
 keboola/platform-architecture-and-concepts#12 (`auth/programmatic-auth.md`)
 

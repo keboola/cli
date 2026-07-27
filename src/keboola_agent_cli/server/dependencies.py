@@ -55,7 +55,18 @@ if TYPE_CHECKING:
 
 @dataclass
 class ServiceRegistry:
-    """Container of long-lived services for the FastAPI app."""
+    """Container of long-lived services for the FastAPI app.
+
+    Sentinel-token guard note (programmatic-auth, contract section 12): this
+    module never turns a `ProjectConfig` into credentials itself -- every
+    service below is constructed with only `config_store` and resolves its
+    own client factory (`make_client_factory` / a guarded `default_*_client_
+    factory`, see `services/base.py` and each service's own factory). There
+    is no separate chokepoint to guard here; `kbagent serve` inherits both
+    the bearer-session support (Storage/Manage) and the `AUTH_NOT_SUPPORTED_
+    ON_STACK` fail-fast guards (MCP, AI/data-science/metastore/dev-portal/
+    stream) purely by delegating to those already-guarded services.
+    """
 
     config_store: ConfigStore
     # Self-contact info -- the URL + bearer token of the running serve.

@@ -13,6 +13,12 @@ from .models import PermissionPolicy
 # Risk categories for all CLI operations.
 # read = no side effects, write = creates/modifies, destructive = deletes, admin = org-level
 OPERATION_REGISTRY: dict[str, str] = {
+    # Programmatic auth (browser login). login/logout mutate local credential
+    # state in auth.json -- same risk class as `project add` -- while status
+    # is a read-only local + introspect check.
+    "auth.login": "write",
+    "auth.logout": "write",
+    "auth.status": "read",
     # Project management
     "project.add": "admin",
     "project.list": "read",

@@ -616,3 +616,61 @@ ALWAYS_IGNORED_COMPONENTS: frozenset[str] = frozenset(
 DIFF_MAX_DEPTH: int = 3  # max nesting depth for deep_diff detail output
 DIFF_MAX_LINES: int = 20  # max number of diff detail lines per config change
 ENCRYPTED_PLACEHOLDER: str = "<ENCRYPTED>"  # placeholder for encrypted values during comparison
+
+# --- Programmatic Auth (browser login: PKCE + device authorization) ---
+# Keboola Connection issues a "programmatic session": a short-lived access token
+# (kbc_at_*) plus a rotating refresh token (kbc_rt_*), used as
+# `Authorization: Bearer` + `X-KBC-ProjectId` against Storage and Manage.
+# See docs/programmatic-auth-login-plan.md.
+
+AUTH_CLIENT_ID: str = "keboola-cli"
+
+# Sibling state file next to config.json. Session metadata AND the tokens live
+# here in cleartext at 0600 -- the same posture as the static Storage tokens
+# already in config.json (deliberate RFC deviation, plan section 4.2).
+AUTH_STATE_FILENAME: str = "auth.json"
+AUTH_STATE_LOCK_FILENAME: str = "auth.json.lock"
+AUTH_STATE_VERSION: int = 1
+
+# Sentinel written into ProjectConfig.token for a session-registered project.
+# Keeps config.json's schema (and CURRENT_CONFIG_VERSION) unchanged so older
+# kbagent builds still load the file.
+SESSION_TOKEN_PREFIX: str = "kbc-session://"
+
+# Server endpoints, relative to the stack base URL.
+AUTH_PKCE_AUTHORIZE_PATH: str = "/admin/auth/pkce/authorize"
+AUTH_PKCE_TOKEN_PATH: str = "/v1/auth/pkce/token"
+AUTH_DEVICE_PATH: str = "/v1/auth/device"
+AUTH_DEVICE_TOKEN_PATH: str = "/v1/auth/device/token"
+AUTH_TOKEN_REFRESH_PATH: str = "/v1/auth/token/refresh"
+AUTH_TOKEN_INTROSPECT_PATH: str = "/v1/auth/token/introspect"
+AUTH_TOKEN_REVOKE_PATH: str = "/v1/auth/token/revoke"
+# Session management by id -- DELETE {AUTH_SESSIONS_PATH}/{session_id} kills a
+# specific server session (used to retry a recorded orphan during logout,
+# which only ever has a session id on hand, never that session's refresh
+# token -- see plan review B-1/B-2).
+AUTH_SESSIONS_PATH: str = "/v1/auth/sessions"
+
+AUTH_DEVICE_DEFAULT_INTERVAL: int = 5  # RFC 8628 default poll interval (s)
+AUTH_DEVICE_MAX_INTERVAL: int = 60  # cap after repeated slow_down
+AUTH_DEVICE_SLOW_DOWN_INCREMENT: int = 5  # bump when the server sends no interval
+
+# Refresh the access token this many seconds BEFORE it expires, so a request
+# never starts with a token that dies mid-flight.
+AUTH_REFRESH_MARGIN: int = 120
+# Cross-process advisory lock (filelock) acquisition timeout for auth.json.
+AUTH_LOCK_TIMEOUT: float = 30.0
+
+# The backend closes the PKCE callback window at
+# AUTH_PKCE_CALLBACK_TIMEOUT_SECONDS = 120; wait slightly less so we never sit
+# waiting for a callback the server can no longer deliver. Tracks the backend value.
+AUTH_CALLBACK_TIMEOUT: float = 115.0
+
+# CSPRNG sizes: token_urlsafe(48) -> 64 chars (384 bit), inside RFC 7636's
+# 43..128 range; state gets 256 bit.
+AUTH_PKCE_VERIFIER_BYTES: int = 48
+AUTH_PKCE_STATE_BYTES: int = 32
+
+# Token value prefixes, used only for masking/validation -- never for auth logic.
+AUTH_ACCESS_TOKEN_PREFIX: str = "kbc_at_"
+AUTH_REFRESH_TOKEN_PREFIX: str = "kbc_rt_"

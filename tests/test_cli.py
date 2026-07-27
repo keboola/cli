@@ -4798,14 +4798,15 @@ class TestDoctor:
 
         mock_client = make_mock_client(project_name="Prod", project_id=1234)
 
+        # DoctorService now builds its factory via make_client_factory(config_store)
+        # so a kbc-session:// project gets a bearer client (0.77.0). The patched
+        # name therefore returns the *factory*, not the client.
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
-            patch(
-                "keboola_agent_cli.services.doctor_service.default_client_factory"
-            ) as MockFactory,
+            patch("keboola_agent_cli.services.doctor_service.make_client_factory") as MockFactory,
         ):
             MockStore.return_value = store
-            MockFactory.return_value = mock_client
+            MockFactory.return_value = lambda _stack_url, _token: mock_client
 
             result = runner.invoke(app, ["--json", "doctor"])
 
@@ -4844,12 +4845,10 @@ class TestDoctor:
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
-            patch(
-                "keboola_agent_cli.services.doctor_service.default_client_factory"
-            ) as MockFactory,
+            patch("keboola_agent_cli.services.doctor_service.make_client_factory") as MockFactory,
         ):
             MockStore.return_value = store
-            MockFactory.return_value = fail_client
+            MockFactory.return_value = lambda _stack_url, _token: fail_client
 
             result = runner.invoke(app, ["--json", "doctor"])
 

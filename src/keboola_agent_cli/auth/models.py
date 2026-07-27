@@ -1,0 +1,234 @@
+"""Wire models and persisted state for programmatic auth (browser login).
+
+Two families of model live here:
+
+- Wire models (`AuthUser`, `CliTokenResponse`, `DeviceAuthorization`,
+  `AuthProject`, `IntrospectResponse`, `DevicePollResult`, `RevokeResult`):
+  shaped after the Keboola auth-service JSON responses, never persisted.
+- Persisted state (`StackSession`, `AuthState`): the exact shape written to
+  and read from ``auth.json`` by `AuthStateStore`.
+
+All wire models use ``populate_by_name`` (so both the camelCase alias and the
+Pythonic name work as constructor kwargs in tests) and ``extra="allow"`` (so
+an unrecognised field from a newer backend passes through instead of raising).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+
+from pydantic import BaseModel, Field, field_validator
+
+from ..constants import AUTH_DEVICE_DEFAULT_INTERVAL, AUTH_REFRESH_MARGIN, AUTH_STATE_VERSION
+
+_WIRE_MODEL_CONFIG = {"populate_by_name": True, "extra": "allow"}
+
+
+def _coerce_id_to_str(value: object) -> object:
+    """Coerce a numeric user id to str before validation.
+
+    Some Keboola endpoints return the user id as a JSON number rather than a
+    string; normalising here keeps `AuthUser.id` a stable `str` regardless of
+    which shape the backend sent.
+    """
+    if isinstance(value, int):
+        return str(value)
+    return value
+
+
+def _ensure_utc(value: object) -> object:
+    """Coerce a naive datetime (e.g. read back from an older auth.json) to UTC.
+
+    All persisted/parsed datetimes in this module are timezone-aware UTC.
+    A naive value is assumed to already be in UTC (that is how this module
+    always writes them) rather than the local timezone.
+    """
+    if isinstance(value, datetime) and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+class AuthUser(BaseModel):
+    """The signed-in Keboola user, as embedded in token/introspect responses."""
+
+    id: str = ""
+    email: str = ""
+    name: str = ""
+
+    model_config = _WIRE_MODEL_CONFIG
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _coerce_id(cls, value: object) -> object:
+        return _coerce_id_to_str(value)
+
+
+class CliTokenResponse(BaseModel):
+    """Token pair returned by the PKCE exchange, device-token, and refresh endpoints."""
+
+    access_token: str = Field(alias="accessToken")
+    refresh_token: str = Field(alias="refreshToken")
+    token_type: str = Field(default="Bearer", alias="tokenType")
+    expires_in: int = Field(default=3600, alias="expiresIn")
+    session_id: str = Field(default="", alias="sessionId")
+    user: AuthUser | None = None
+
+    model_config = _WIRE_MODEL_CONFIG
+
+
+class DeviceAuthorization(BaseModel):
+    """Response to ``POST /v1/auth/device`` (RFC 8628 device_authorization_response)."""
+
+    device_code: str = Field(alias="deviceCode")
+    user_code: str = Field(alias="userCode")
+    verification_uri: str = Field(alias="verificationUri")
+    verification_uri_complete: str = Field(default="", alias="verificationUriComplete")
+    expires_in: int = Field(default=900, alias="expiresIn")
+    interval: int = Field(default=AUTH_DEVICE_DEFAULT_INTERVAL)
+
+    model_config = _WIRE_MODEL_CONFIG
+
+
+class AuthProject(BaseModel):
+    """One project accessible to the signed-in session, from introspect."""
+
+    id: int
+    name: str = ""
+    role: str = ""
+
+    model_config = _WIRE_MODEL_CONFIG
+
+
+class IntrospectResponse(BaseModel):
+    """Response to ``GET /v1/auth/token/introspect``."""
+
+    active: bool = True
+    session_id: str = Field(default="", alias="sessionId")
+    user: AuthUser | None = None
+    projects: list[AuthProject] = Field(default_factory=list)
+    expires_at: datetime | None = Field(default=None, alias="expiresAt")
+
+    model_config = _WIRE_MODEL_CONFIG
+
+    @field_validator("expires_at", mode="before")
+    @classmethod
+    def _expires_at_utc(cls, value: object) -> object:
+        return _ensure_utc(value)
+
+
+class DevicePollStatus(StrEnum):
+    """Outcome of a single RFC 8628 device-token poll."""
+
+    OK = "ok"
+    PENDING = "pending"
+    SLOW_DOWN = "slow_down"
+    DENIED = "denied"
+    EXPIRED = "expired"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class DevicePollResult:
+    """Result of one `AuthClient.poll_device_token` call.
+
+    A dataclass (not a bare tuple) so callers pattern-match on `.status`
+    instead of positional indices, per the project's multi-value-return rule.
+    """
+
+    status: DevicePollStatus
+    tokens: CliTokenResponse | None = None
+    interval: int | None = None  # params.interval echoed on slow_down
+    message: str = ""  # server-supplied detail for ERROR/DENIED
+
+
+@dataclass(frozen=True)
+class RevokeResult:
+    """Outcome of POST /v1/auth/token/revoke.
+
+    ``confirmed`` False means the server session may STILL BE LIVE -- callers
+    must report that distinctly from a confirmed revoke instead of pretending
+    logout fully succeeded.
+    """
+
+    confirmed: bool
+    message: str = ""
+
+
+class StackSession(BaseModel):
+    """One persisted programmatic-auth session, keyed by normalized stack URL.
+
+    This is the exact shape written to and read from ``auth.json``. Both
+    token fields are plaintext -- the file is protected by 0600 permissions
+    only, the same posture as the static Storage tokens already kept in
+    ``config.json`` (deliberate RFC deviation, see
+    docs/programmatic-auth-login-plan.md section 4.2).
+    """
+
+    stack_url: str
+    session_id: str
+    user_email: str = ""
+    user_name: str = ""
+    access_token: str
+    refresh_token: str
+    access_expires_at: datetime | None = None
+    refresh_expires_at: datetime | None = None
+    created_at: datetime
+    orphaned_session_ids: list[str] = Field(default_factory=list)
+
+    # Forward compat: a newer kbagent writing an extra field must not break
+    # an older kbagent reading the same auth.json.
+    model_config = {"extra": "allow"}
+
+    @field_validator("access_expires_at", "refresh_expires_at", "created_at", mode="before")
+    @classmethod
+    def _timestamps_utc(cls, value: object) -> object:
+        return _ensure_utc(value)
+
+    def access_token_fresh(
+        self, *, margin: int = AUTH_REFRESH_MARGIN, now: datetime | None = None
+    ) -> bool:
+        """True when the access token is not within ``margin`` seconds of expiry.
+
+        A missing ``access_expires_at`` (should not happen for a session
+        written by this codebase, but defends against a hand-edited file) is
+        treated as stale so callers refresh rather than trust an unknown TTL.
+        """
+        if self.access_expires_at is None:
+            return False
+        moment = now if now is not None else datetime.now(UTC)
+        return (self.access_expires_at - moment).total_seconds() > margin
+
+    def refresh_token_expired(self, *, now: datetime | None = None) -> bool:
+        """True when the refresh token is known to be expired.
+
+        Returns False when ``refresh_expires_at`` is None (unknown expiry --
+        let the server be the authority and reject the refresh call itself
+        rather than guessing).
+        """
+        if self.refresh_expires_at is None:
+            return False
+        moment = now if now is not None else datetime.now(UTC)
+        return moment >= self.refresh_expires_at
+
+
+class AuthState(BaseModel):
+    """Top-level shape of ``auth.json``: a version tag plus sessions by stack."""
+
+    version: int = AUTH_STATE_VERSION
+    sessions: dict[str, StackSession] = Field(default_factory=dict)
+
+
+__all__ = [
+    "AuthProject",
+    "AuthState",
+    "AuthUser",
+    "CliTokenResponse",
+    "DeviceAuthorization",
+    "DevicePollResult",
+    "DevicePollStatus",
+    "IntrospectResponse",
+    "RevokeResult",
+    "StackSession",
+]
