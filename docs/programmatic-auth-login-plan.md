@@ -21,8 +21,10 @@ kbagent today supports only static Storage API tokens (`X-StorageApi-Token`, pla
 - `kbagent auth login` implementing **PKCE authorization-code** (default, same-machine
   desktop) and **device authorization** (fallback and `--device-code`, RFC 8628 polling
   semantics);
-- session credentials stored in an **OS keychain (`keyring`) or a passphrase-encrypted
-  file** — never plaintext (hard RFC requirement, no escape hatch);
+- session credentials stored as **plaintext in a `0600` file** (`auth.json`), consistent
+  with how kbagent already stores static Storage tokens in `config.json` and with how tools
+  like Claude Code and Codex store their tokens — see the deliberate deviation from the RFC
+  note in §4.2;
 - transparent use of the session against Storage and Manage APIs
   (`Authorization: Bearer kbc_at_*` + `X-KBC-ProjectId`), including automatic refresh;
 - **full backward compatibility**: static-token auth keeps working byte-identically
@@ -33,7 +35,7 @@ Confirmed scope decisions:
 
 | Decision | Choice |
 |---|---|
-| Secret storage | `keyring` primary, passphrase-encrypted file (AES-256-GCM + scrypt) fallback |
+| Secret storage | plaintext in `auth.json` at `0600` — no keyring, no encryption (matches existing static-token storage; deliberate deviation from the RFC, see §4.2) |
 | Command surface | new `kbagent auth` group: `login`, `logout`, `status` |
 | Release scope | PKCE + device flow together |
 | v1 integration | CLI command paths only; `kbagent serve`, SDK (`lib.py`), MCP subprocess stay static-token and fail fast with a clear error on session projects (follow-up issue) |
@@ -71,8 +73,10 @@ Mandatory CLI behavior (RFC "CLI Behavior" section):
 - Device flow: always print `verificationUri` + `userCode`; best-effort open
   `verificationUriComplete`; poll per `interval`; `slow_down` uses the returned interval.
 - `clientId` is `keboola-cli` (must not contain `:`).
-- Secure credential storage only; if no backend is available, login fails with an
-  actionable message (CI/automation should keep using static tokens / PATs).
+- The RFC recommends OS-keychain / encrypted credential storage. We deliberately store
+  tokens as plaintext in a `0600` file instead (§4.2) — the security posture is identical
+  to the static Storage tokens kbagent already persists that way. This means no keyring
+  dependency and no per-invocation passphrase prompt.
 
 ## 3. Verified codebase facts that shape the design
 
@@ -98,7 +102,9 @@ Mandatory CLI behavior (RFC "CLI Behavior" section):
   (network I/O under the config lock would block every concurrent kbagent process).
 - Parallel multi-project commands use `ThreadPoolExecutor`
   (`services/base.py:148-208`) — refresh must be thread-safe *and* cross-process-safe.
-- `cryptography` is already a dependency; only `keyring` is new.
+- `config.json` is already written `0600` with static Storage tokens in cleartext
+  (`config_store.py`), so storing session tokens plaintext in a `0600` sibling file adds no
+  new exposure class. **No new runtime dependency** is required.
 - Loopback + browser precedent: `commands/lineage.py:1402-1460` (stdlib `http.server`
   on `127.0.0.1`, `webbrowser.open` on a thread).
 - Precedent for "persist long-lived credential, keep short-lived bearer out of config":
@@ -108,18 +114,20 @@ Mandatory CLI behavior (RFC "CLI Behavior" section):
 
 ### 4.1 Data model — sibling `auth.json` + sentinel token (no config.json schema change)
 
-**`auth.json`** (new file next to `config.json`; 0600, atomic tmp+rename, its own
-`auth.json.lock` sidecar flock; mirrors `ConfigStore` patterns) holds **metadata only,
-zero secrets**, keyed by normalized stack URL (one PA login per stack per OS user):
+**`auth.json`** (new file next to `config.json`; `0600`, atomic tmp+rename, its own
+`auth.json.lock` sidecar flock; mirrors `ConfigStore` patterns) holds session metadata
+**and the tokens themselves** (plaintext), keyed by normalized stack URL (one PA login per
+stack per OS user):
 
 ```python
-class StackSession(BaseModel):              # persisted in auth.json
+class StackSession(BaseModel):              # persisted in auth.json (0600)
     stack_url: str                          # normalized https://host
     session_id: str
     user_email: str = ""
     user_name: str = ""
-    credential_backend: Literal["keyring", "encrypted-file"]
-    access_expires_at: datetime | None = None    # advisory; source of truth = credential store
+    access_token: str                       # kbc_at_* — plaintext, 0600 file
+    refresh_token: str                      # kbc_rt_* — plaintext, 0600 file
+    access_expires_at: datetime | None = None
     refresh_expires_at: datetime | None = None
     created_at: datetime
     model_config = {"extra": "allow"}       # forward compat
@@ -146,46 +154,45 @@ Why this works:
 - **No `CURRENT_CONFIG_VERSION` bump** (regression-tested), no new `ProjectConfig` field
   (which old CLIs would silently drop — a second source of truth that rots).
 
-Secrets (access + refresh tokens) live **only** in the credential store. The access token
-is cached there alongside the refresh token: CLI processes are short-lived, and a
-memory-only access token would force a rotation-consuming refresh on every invocation,
-multiplying race exposure and server load. (The RFC mandates protection for refresh
-tokens; we apply the same bar to access tokens.)
-
 New `AuthStateStore` (`auth/state_store.py`) mirrors `ConfigStore` (flock sidecar, atomic
 write, `transaction()`), constructed from `config_store.config_dir` so `--config-dir` and
-local `.kbagent/` resolution carry over.
+local `.kbagent/` resolution carry over. It is the single read/write path for both the
+metadata and the tokens.
 
-### 4.2 Credential store (`auth/credential_store.py`)
+### 4.2 Token storage: plaintext `auth.json` (deliberate RFC deviation)
 
-```python
-class CredentialBackend(Protocol):
-    name: str                               # "keyring" | "encrypted-file"
-    def available(self) -> bool: ...
-    def get(self, key: str) -> str | None: ...
-    def set(self, key: str, value: str) -> None: ...
-    def delete(self, key: str) -> None: ...
+The RFC recommends an OS keychain or a passphrase-encrypted file and explicitly forbids a
+plaintext escape hatch. **This plan deliberately does not follow that recommendation.**
+Instead the access and refresh tokens are stored in cleartext inside `auth.json`, written
+`0600` (owner read/write only), exactly like `ConfigStore` already persists static Storage
+tokens in `config.json`.
 
-class CredentialStore:                      # facade, detection order: keyring -> encrypted file
-    def store_tokens(self, stack_url, access, refresh) -> str   # returns backend name
-    def load_tokens(self, stack_url) -> StoredTokens | None     # dataclass(access, refresh)
-    def delete_tokens(self, stack_url) -> None
-```
+Rationale for the deviation (project decision):
 
-- **KeyringBackend** (primary): service name `keboola-cli`; **two entries per stack**
-  (`{host}#access`, `{host}#refresh`) to stay under the Windows Credential Manager
-  ~2.5 KB blob limit. `available()` = real set/get/delete canary probe (headless Secret
-  Service typically fails only on use, not on import).
-- **EncryptedFileBackend** (fallback): `credentials.enc` in the config dir, 0600, JSON
-  envelope `{version, kdf: {name: "scrypt", n, r, p, salt}, entries: {key: {nonce,
-  ciphertext}}}`, AES-256-GCM via `cryptography`. Passphrase via hidden TTY prompt only —
-  no env-var escape hatch (matches the RFC and the repo's manage-token default-deny
-  precedent). Documented consequence: file-backend users get a passphrase prompt per
-  invocation; keyring is the recommended path.
-- Neither available → `ErrorCode.AUTH_NO_SECURE_STORAGE`, actionable message
-  ("install/enable an OS keychain, or use a static token; CI should use static tokens").
-- Token values never appear in logs or output; diagnostics log backend name + masked forms.
-- New dependency: `keyring>=25` in `[project.dependencies]`.
+- **Identical posture to today.** A static Storage token in `config.json` is a
+  long-lived, full-power, plaintext credential at `0600`. A `kbc_rt_*` refresh token at
+  `0600` is *no worse* — and it is short-lived and server-revocable (`auth logout`,
+  password change, admin cascade), which a static token is not. Adding a keychain would
+  protect the new credential while leaving the strictly more dangerous existing one in
+  cleartext — inconsistent for little real gain.
+- **Precedent.** Claude Code, Codex, `gh`, and similar developer CLIs persist their tokens
+  as plaintext files under the user's home; this is the accepted norm for developer tooling
+  running under a single OS account.
+- **Simplicity / no new dependency.** No `keyring`, no encryption code, no per-invocation
+  passphrase prompt, no cross-platform keychain-availability matrix — all of which were the
+  largest source of environment-specific failure modes in the original design.
+
+Guardrails kept:
+
+- `auth.json` is created and rewritten `0600` via the same atomic tmp+rename the config
+  store uses; a permission-tightening check runs on load.
+- Tokens never appear in logs, `--verbose` output, or `--json` command output; only
+  `mask_token()` forms are ever printed.
+- Tokens are never passed on the command line or exported into subprocess environments.
+
+This decision is reversible later: because all token access goes through `AuthStateStore`,
+a future encrypted/keychain backend can be slotted behind the same interface without
+touching the token provider or the flows.
 
 ### 4.3 Auth HTTP client (Layer 3, `auth/auth_client.py`)
 
@@ -226,7 +233,7 @@ class TokenProvider(Protocol):
 
 class SessionTokenProvider:
     """One instance per stack per process (module-level registry + lock);
-    thread-safe; persists rotations via CredentialStore + AuthStateStore."""
+    thread-safe; reads and persists rotations via AuthStateStore (auth.json)."""
 
 class BearerAuth(httpx.Auth):
     def auth_flow(self, request):
@@ -276,13 +283,13 @@ get_access_token():
   2. acquire threading.Lock (per-stack provider is a process singleton)
   3. re-check memory cache -> return if another thread refreshed
   4. acquire flock on auth.json.lock        # never config.json.lock across network I/O
-  5. re-read credential store; if the stored access token is fresh
+  5. re-read auth.json; if the stored access token is fresh
      (another PROCESS rotated) -> adopt it, release, return
   6. POST /v1/auth/token/refresh
-     - success: persist new pair to credential store FIRST, then update
-       auth.json expiries, then update memory cache
-     - invalid_grant / family revoked: purge stack credentials, raise
-       SESSION_EXPIRED ("Your login expired or was revoked. Run `kbagent auth login`.")
+     - success: write the new pair + expiries to auth.json FIRST,
+       then update the in-memory cache
+     - invalid_grant / family revoked: delete the StackSession from auth.json,
+       raise SESSION_EXPIRED ("Your login expired or was revoked. Run `kbagent auth login`.")
   7. release flock, release thread lock
 ```
 
@@ -300,14 +307,12 @@ Helpers: `auth/pkce.py`, `auth/device.py`, `auth/environment.py`. Commands regis
 
 1. Resolve stack: explicit URL (normalized) → existing alias → default project's stack →
    error (login is not stack discovery).
-2. **Probe credential backend availability before starting any flow** (fail early with
-   `AUTH_NO_SECURE_STORAGE`).
-3. Method selection: `--device-code` forces device; otherwise PKCE unless
+2. Method selection: `--device-code` forces device; otherwise PKCE unless
    `auth/environment.py` heuristics indicate remote/containerized: `SSH_CONNECTION` or
    `SSH_TTY` set, `/.dockerenv` exists, `$container` set, `WSL_INTEROP` set without a
    working `wslview` (`wslview --version` exit 0 + on PATH), or no browser handler among
    `xdg-open`/`wslview`/`open`/`start`.
-4. **PKCE runner** (`auth/pkce.py`): `code_verifier = secrets.token_urlsafe(48)` (64
+3. **PKCE runner** (`auth/pkce.py`): `code_verifier = secrets.token_urlsafe(48)` (64
    chars, 384-bit), `state = secrets.token_urlsafe(32)`; challenge =
    base64url-nopad(SHA-256(verifier)); stdlib `http.server` on `("127.0.0.1", 0)`
    (fallback `[::1]`) on a thread + `threading.Event` (lineage.py precedent); open the
@@ -316,39 +321,39 @@ Helpers: `auth/pkce.py`, `auth/device.py`, `auth/environment.py`. Commands regis
    "you can close this tab" page (error page on mismatch). Setup/callback failures →
    automatic device fallback; post-callback exchange failures → error, **no fallback**.
    Listener always shut down (success, timeout, terminal error).
-5. **Device runner** (`auth/device.py`): create device authorization; always print
+4. **Device runner** (`auth/device.py`): create device authorization; always print
    `verificationUri` + `userCode` (Rich panel; stderr in `--json` mode); best-effort open
    `verificationUriComplete`; poll per `interval`, honor `slow_down` returned interval
    (cap `AUTH_DEVICE_MAX_INTERVAL` 60 s), 429 backoff, deadline = server `expiresIn`.
    Terminal errors → `AUTH_FLOW_DENIED` / `AUTH_FLOW_EXPIRED`.
-6. Success: persist pair via `CredentialStore` → upsert `StackSession` → `introspect` →
-   print user + accessible projects table. `--register-projects` (or interactive TTY
-   picker): for each selected project, `config_store.add_project(alias,
+5. Success: write the pair + `StackSession` to `auth.json` (via `AuthStateStore`) →
+   `introspect` → print user + accessible projects table. `--register-projects` (or
+   interactive TTY picker): for each selected project, `config_store.add_project(alias,
    ProjectConfig(stack_url, token=f"kbc-session://{id}", project_name, project_id))` —
    aliases slugified from project names, conflicts warned and skipped. Re-login to the
    same stack rotates credentials; sentinel projects untouched.
-7. 404 handling: one clear message ("browser login is not enabled on this stack yet");
+6. 404 handling: one clear message ("browser login is not enabled on this stack yet");
    if PKCE is 404 but device flow may be enabled, suggest `--device-code`. No retry loop.
-8. `--json` output: `{status, method: "pkce"|"device", stack_url, session_id, user_email,
-   expires_at, backend, registered_projects: [...]}` — output models structurally contain
+7. `--json` output: `{status, method: "pkce"|"device", stack_url, session_id, user_email,
+   expires_at, registered_projects: [...]}` — output models structurally contain
    **no token fields** (by construction, not post-hoc filtering).
 
-**`auth status [--stack] [--json]`** — per-stack session: backend, user, access/refresh
+**`auth status [--stack] [--json]`** — per-stack session: user, access/refresh
 expiry from `auth.json`; live `introspect` when reachable (projects + validity), degraded
 offline output otherwise. Exit 0 with a live session; exit 3 when the queried session is
 expired/missing.
 
 **`auth logout [--stack] [--remove-projects]`** — best-effort `revoke` (warn, do not fail,
-on network error), delete credential entries + `StackSession`. Sentinel projects are left
-by default (subsequent use → `SESSION_NOT_FOUND` with the remedy command);
-`--remove-projects` deletes the matching sentinel aliases too.
+on network error), delete the `StackSession` (and its tokens) from `auth.json`. Sentinel
+projects are left by default (subsequent use → `SESSION_NOT_FOUND` with the remedy
+command); `--remove-projects` deletes the matching sentinel aliases too.
 
 ### 4.6 Error codes and exit mapping
 
-`errors.py` additions: `AUTH_NO_SECURE_STORAGE`, `AUTH_NOT_SUPPORTED_ON_STACK`,
+`errors.py` additions: `AUTH_NOT_SUPPORTED_ON_STACK`,
 `AUTH_FLOW_TIMEOUT`, `AUTH_FLOW_DENIED`, `AUTH_FLOW_EXPIRED`, `AUTH_BROWSER_UNAVAILABLE`,
 `AUTH_STATE_MISMATCH`, `SESSION_EXPIRED`, `SESSION_NOT_FOUND`.
-`map_error_code_to_type`: all → `"authentication"` except `AUTH_NO_SECURE_STORAGE` and
+`map_error_code_to_type`: all → `"authentication"` except
 `AUTH_NOT_SUPPORTED_ON_STACK` → `"configuration"`.
 `map_error_to_exit_code` (`commands/_helpers.py:85-108`): `SESSION_EXPIRED`,
 `SESSION_NOT_FOUND`, `AUTH_FLOW_DENIED` → 3; `AUTH_FLOW_TIMEOUT` → 4; others → 1.
@@ -358,14 +363,12 @@ by default (subsequent use → `SESSION_NOT_FOUND` with the remedy command);
 `AUTH_CLIENT_ID = "keboola-cli"`, auth endpoint paths, `AUTH_CALLBACK_TIMEOUT = 300.0`,
 `AUTH_DEVICE_DEFAULT_INTERVAL = 5`, `AUTH_DEVICE_MAX_INTERVAL = 60`,
 `AUTH_REFRESH_MARGIN = 120`, `AUTH_LOCK_TIMEOUT = 30.0`,
-`KEYRING_SERVICE = "keboola-cli"`, `SESSION_TOKEN_PREFIX = "kbc-session://"`,
-`AUTH_STATE_FILENAME = "auth.json"`, `ENCRYPTED_CREDENTIALS_FILENAME = "credentials.enc"`,
-scrypt N/r/p, `AES_GCM_NONCE_BYTES = 12`.
+`SESSION_TOKEN_PREFIX = "kbc-session://"`, `AUTH_STATE_FILENAME = "auth.json"`.
 
 ### 4.8 Guardrails
 
 - Permission engine: `auth login`/`auth logout` classified `cli:write` (mutate local
-  config/credentials, same class as `project add`); `auth status` = `cli:read`.
+  config/token state, same class as `project add`); `auth status` = `cli:read`.
 - Tokens never printed: JSON output models contain no token fields; provider logs masked
   values only; `--verbose` must not dump auth headers.
 - `commands/context.py` AGENT_CONTEXT: note that `auth login` requires a human at a
@@ -375,14 +378,14 @@ scrypt N/r/p, `AES_GCM_NONCE_BYTES = 12`.
 ## 5. Files
 
 **New** (`src/keboola_agent_cli/auth/` package): `__init__.py`, `models.py`,
-`state_store.py`, `credential_store.py`, `auth_client.py`, `token_provider.py`, `pkce.py`,
+`state_store.py`, `auth_client.py`, `token_provider.py`, `pkce.py`,
 `device.py`, `environment.py`; plus `services/auth_service.py`, `commands/auth.py`.
 
 **Modified**: `http_base.py` (http_auth param), `client/_core.py` + `client/_client.py`
 (pass-through + sub-client auth propagation), `manage_client.py`, `services/base.py`
 (sentinel-aware default factory), `commands/_helpers.py` (exit codes, manage session
 path), `errors.py`, `constants.py`, `cli.py` (register `auth` group), `models.py`
-(docstring note on the token sentinel only), `pyproject.toml` (`keyring`), fail-fast
+(docstring note on the token sentinel only), fail-fast
 guards in `server/` dependencies, `lib.py`, `services/mcp_service.py`, and the
 non-Storage client factories.
 
@@ -390,7 +393,7 @@ non-Storage client factories.
 
 | PR | Content | Risk to existing users |
 |----|---------|------------------------|
-| 1 | `auth/models.py`, `credential_store.py`, `state_store.py`, constants, ErrorCodes, `keyring` dep, unit tests. Nothing imported by `cli.py`. | none |
+| 1 | `auth/models.py`, `state_store.py`, constants, ErrorCodes, unit tests. Nothing imported by `cli.py`. | none |
 | 2 | `auth/auth_client.py` + wire models + endpoint/polling tests. | none |
 | 3 | `services/auth_service.py` + `commands/auth.py` with **device flow** login/status/logout, permissions, exit mapping, docs-sync, CLI tests. Sessions storable, not yet consumable. | none |
 | 4 | `auth/pkce.py`, `auth/environment.py`, fallback logic; PKCE becomes the default. | none |
@@ -399,9 +402,8 @@ non-Storage client factories.
 
 ## 7. Test plan
 
-- `test_credential_store.py` — backend detection/fallback order; encrypted-file roundtrip
-  (wrong passphrase = GCM auth failure, tampered ciphertext, 0600 perms); keyring canary
-  probe (fake backend); no-backend error message.
+- `test_auth_state_store.py` (below) also covers that tokens are written to `auth.json` at
+  `0600` and never leak into `config.json`.
 - `test_auth_client.py` — device poll matrix (`pending` → `slow_down` with new interval →
   success; `denied`; `expired`; 429; malformed envelope), PKCE exchange, refresh
   `invalid_grant` → `SESSION_EXPIRED`, 404 → `AUTH_NOT_SUPPORTED_ON_STACK`,
@@ -416,7 +418,8 @@ non-Storage client factories.
   second provider instance sharing the config dir adopts the persisted pair without
   refreshing; family-revoked → purge + `SESSION_EXPIRED`.
 - `test_auth_state_store.py` — flock/transaction semantics (mirror
-  `test_file_locking.py`), atomic write, unknown-field passthrough.
+  `test_file_locking.py`), atomic write, unknown-field passthrough, `0600` perms on the
+  written file, tokens absent from `config.json`.
 - Compat regression — sentinel project round-trips through load/save;
   `CURRENT_CONFIG_VERSION` unchanged; `__env__` injection and `project add --token`
   byte-identical (existing `TestAddProject`/`TestVersionCheck` untouched and green).
@@ -448,15 +451,15 @@ non-Storage client factories.
 - `plugins/kbagent/agents/keboola-expert.md` (tool matrix + version gate)
 - `plugins/kbagent/skills/kbagent/SKILL.md` + `references/commands-reference.md`
 - `references/gotchas.md` — "(since vX.Y.Z) session-login projects show token
-  `kbc-session://…`; older CLI versions get 401 on them; keyring/secure storage required;
-  CI should keep static tokens"
+  `kbc-session://…`; older CLI versions get 401 on them; session tokens live plaintext in
+  `auth.json` (0600); CI should keep static tokens"
 - new `references/auth-workflow.md`
 - `src/keboola_agent_cli/changelog.py` entry; version bump + `make version-sync`
 
 ## 10. Top risks and mitigations
 
-1. **Old-CLI writes erase session metadata** — all session state lives in `auth.json` +
-   credential store (files old CLIs never touch); the only `config.json` footprint is the
+1. **Old-CLI writes erase session state** — all session state (metadata + tokens) lives in
+   `auth.json`, a file old CLIs never touch; the only `config.json` footprint is the
    sentinel in a known field that round-trips. Residual: old-CLI `project edit --token` on
    a sentinel project overwrites it — acceptable (explicit user action).
 2. **Non-Storage/Manage services rejecting the bearer** (queue/query/encrypt/sync-actions
@@ -466,10 +469,12 @@ non-Storage client factories.
    `auth.json.lock` flock + re-read-before-refresh + persist-before-use ordering + 30 s
    server grace; family-revoked → deterministic purge + re-login message. Never hold
    `config.json.lock` across network I/O.
-4. **Keyring environment variance** (headless Linux without Secret Service, Windows blob
-   cap, macOS codesign prompts) — canary probe at login before any flow starts, two-entry
-   storage, encrypted-file fallback, actionable failure message, backend shown in
-   `auth status`.
+4. **Plaintext tokens on disk** (accepted risk, deliberate §4.2 decision) — refresh tokens
+   sit in `auth.json` at `0600`, the same posture as the static Storage tokens already in
+   `config.json`. Mitigations: `0600` enforced on write and re-checked on load; tokens
+   never logged, printed, put on the command line, or exported to subprocess environments;
+   short TTL + server-side revocation (`auth logout`, password/MFA change cascade) mean a
+   leaked refresh token is bounded and killable in a way a leaked static token is not.
 5. **PKCE loopback/browser edge cases** (broken `wslview`, firewalled loopback,
    IPv6-only) — fallback strictly limited to pre-exchange failures, `--device-code` always
    available, both bind families attempted, bounded callback timeout, heuristics
