@@ -478,17 +478,21 @@ class TestCrossProcessLock:
         assert STACK_URL in payload["sessions"]
 
 
-class _PidTaggedAuthClient:
+class _PidTaggedAuthClient(AuthClient):
     """Fake `AuthClient` for the cross-process race worker below.
 
     Returns a token pair derived from this process's own pid and reports
     every `refresh()` call on ``call_queue`` -- that is what lets the test
     tell, after the fact, which of the two racing processes actually
     performed the one real refresh. A dedicated class rather than
-    `_FakeAuthClient` (used elsewhere in this file) because it must be
-    picklable for `multiprocessing`'s ``spawn`` start method: it is
-    constructed fresh inside each worker process and carries no
-    `threading.Lock` or other unpicklable state across the process boundary.
+    `_FakeAuthClient` (used elsewhere in this file) because it must survive
+    `multiprocessing`'s ``spawn`` start method: it is constructed fresh
+    inside each worker process and carries no `threading.Lock` or other
+    unpicklable state across the process boundary.
+
+    Subclasses `AuthClient` (skipping `super().__init__()`, so no real
+    `httpx.Client` is built) purely so it satisfies `SessionTokenProvider`'s
+    `client_factory: Callable[[str], AuthClient]` signature under `ty`.
     """
 
     def __init__(self, call_queue: multiprocessing.Queue[int], delay: float) -> None:
