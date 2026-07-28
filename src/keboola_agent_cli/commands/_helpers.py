@@ -34,12 +34,6 @@ if TYPE_CHECKING:
     # never drags in the auth package's heavier deps on the static-token path.
     from ..auth.state_store import AuthStateStore
 
-if TYPE_CHECKING:
-    # Only needed for the type hint on `make_manage_client_factory`; the real
-    # import happens lazily inside that function so importing this module
-    # never drags in the auth package's heavier deps on the static-token path.
-    pass
-
 
 def resolve_manage_token(*, allow_env: bool = False) -> str:
     """Resolve the manage token from a permitted source.
