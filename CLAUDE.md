@@ -301,9 +301,13 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   NAME (never the numeric id, so `--project 9840` never resolves). Lists every project the session
 #   can access with a collision-free suggested alias, then lets the caller pick which to register.
 #   --all selects every candidate; --project-id ID (repeatable) selects specific ones (unknown id ->
-#   ConfigError); omitting both runs an interactive TTY picker (numbers/ranges/'all'/'none', per-project
-#   alias prompt, final confirm) -- in a non-TTY or --json context with neither flag, it fails fast
-#   telling the caller to pass --all or --project-id. --alias ID=ALIAS (repeatable) overrides the
+#   ConfigError); omitting both runs an interactive arrow-key + spacebar checkbox picker (every
+#   not-yet-registered project preselected, [a] toggles all, [enter] accepts) followed by a single
+#   "Edit aliases?" confirm (default No) that opens the old per-project alias prompt only if opted
+#   into -- each row already shows its suggested alias. On a piped stdin or a terminal without real
+#   interactive capabilities, it falls back to the original numbers/ranges/'all'/'none' typed prompt.
+#   In a non-TTY or --json context with neither --all nor --project-id, it fails fast telling the
+#   caller to pass --all or --project-id. --alias ID=ALIAS (repeatable) overrides the
 #   suggested alias in every mode. --yes skips only the picker's final confirmation. Never overwrites
 #   an existing alias: same project+stack already registered -> status "exists" (no-op); alias taken by
 #   something else -> status "skipped" with a rename hint. `auth login` (no --register-projects) also

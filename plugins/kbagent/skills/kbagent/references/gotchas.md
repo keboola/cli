@@ -49,10 +49,15 @@ Versioning convention:
   ...] [--alias ID=ALIAS ...] [--yes]` (0.77.0+) registers an EXISTING
   session's projects without re-logging-in -- `--all`/`--project-id` are
   non-interactive and safe for an agent to run once a human has confirmed
-  the session is live; omitting both starts an interactive TTY picker
-  (numbers/ranges/`all`/`none` + per-project alias prompt + confirm), which
-  needs a real terminal and is NOT for unattended/agent use -- it fails fast
-  in a non-TTY or `--json` context instead of hanging on a prompt. Two
+  the session is live; omitting both starts an interactive arrow-key +
+  spacebar checkbox picker (every not-yet-registered project preselected,
+  `a` toggles all, `enter` accepts) followed by a single `Edit aliases?`
+  confirm (default no) that only opens a per-project alias prompt if opted
+  into -- falls back to the original typed `numbers`/`ranges`/`all`/`none`
+  prompt on a piped stdin or a terminal without real interactive
+  capabilities. Either form needs a real terminal and is NOT for
+  unattended/agent use -- it fails fast in a non-TTY or `--json` context
+  instead of hanging on a prompt. Two
   accessible projects sharing the same name each get a distinct suggested
   alias (via the `-{project_id}` suffix) instead of the second one being
   silently skipped, unlike the original 0.77.0 `--register-projects` batch

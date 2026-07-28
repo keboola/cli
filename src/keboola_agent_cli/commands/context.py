@@ -114,9 +114,14 @@ Use `kbagent <command> --help` for full flag details and examples.
     project id (e.g. 9840) is never a valid alias on its own.
     --all registers every accessible project. --project-id ID (repeatable)
     registers specific ones (an id the session cannot access raises a
-    ConfigError naming it). Omitting both starts an interactive picker
-    (numbers / ranges like 1-3 / 'all' / 'none', then a per-project alias
-    prompt defaulting to the suggested slug, then a final confirm) -- this
+    ConfigError naming it). Omitting both starts an interactive arrow-key +
+    spacebar checkbox picker (every not-yet-registered project preselected;
+    up/down or j/k move, space toggles, 'a' selects/deselects all, enter
+    accepts, q/esc/ctrl-c cancels), then a single "Edit aliases?" confirm
+    (default no) that only opens the old per-project alias prompt if you opt
+    in -- each row already shows its suggested alias. On a piped stdin or a
+    terminal without real interactive capabilities, this falls back to the
+    original typed prompt (numbers / ranges like 1-3 / 'all' / 'none'). This
     needs a real TTY and non-JSON output; in a non-interactive or --json
     context with neither --all nor --project-id, the command fails fast and
     tells you to pass one of them instead of hanging on a prompt. --alias

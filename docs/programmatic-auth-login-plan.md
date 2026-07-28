@@ -422,6 +422,29 @@ gaps are now closed in the same unreleased version:
 - Both paths share one `_apply_selections` code path in `AuthService`, so `login
   --register-projects` and `auth register-projects --all` apply identical collision rules.
 
+**Addendum 2: the picker's typed prompt was replaced with a checkbox (still 0.77.0,
+unreleased).** Commit 8a531c0 replaced the numbers/ranges/`all`/`none` typed prompt
+described in the addendum above with an inline arrow-key + spacebar checkbox
+(`commands/_checkbox_select.py`) as the primary selection UI:
+
+- Every candidate NOT already registered is preselected, so a bare `enter` registers all
+  of them; already-registered rows start unchecked and show an "already registered" tag.
+  Up/down or `j`/`k` moves the cursor, `space` toggles the row under it, `a` toggles
+  select-all/none, `i` inverts (bound but left off the footer to keep it under 80
+  columns), `enter` accepts, and `q`/`esc`/`ctrl-c` cancels (registers nothing).
+- The mandatory per-project alias prompt is gone. After selection there is one `Edit
+  aliases?` confirm (default **no**) — accepting it opens the old `_prompt_alias` loop for
+  each selected candidate; declining keeps every row's already-displayed suggested alias
+  (still overridable via `--alias ID=ALIAS`, pre-filled into the checkbox row's hint).
+- The original typed numbers/ranges/`all`/`none` prompt (`parse_selection` /
+  `_prompt_selection`) was **not removed** — it is now purely the fallback
+  (`CheckboxUnavailable`) for a piped stdin or a terminal without real interactive
+  capabilities (no TTY, or `input`/`output` not real terminals), so a non-interactive-but-
+  not-`--json` invocation still has a way to select something instead of hard-failing.
+- `--all` / `--project-id` / `--yes`, the non-TTY-and-no-selector-flags fail-fast, and both
+  collision rules (`status: "exists"` / `status: "skipped"`, never overwriting an existing
+  alias) are unchanged by this UX swap.
+
 **`auth status [--stack] [--json]`** — per-stack session: user, access/refresh
 expiry from `auth.json`. For the live check (review NB-2) it must **not** call
 `introspect` on the stored access token directly — a normal session routinely has an
