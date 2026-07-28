@@ -3,13 +3,23 @@
 Pure terminal I/O over the `ProjectCandidate` list the service layer builds --
 alias computation, collision resolution against the persisted config, and the
 actual write all live in `AuthService` (services/auth_service.py). This module
-must never reimplement any of that; it only parses what the user typed and
-drives the prompts.
+must never reimplement any of that; it only renders what the user is choosing
+from and drives the prompts.
 
 `parse_selection` and `parse_alias_overrides` are pure functions (no I/O) so
 they are directly unit-testable without a terminal. `run_project_picker` is
 the interactive half and is exercised through `CliRunner(input=...)` in
-tests/test_cli_auth.py instead.
+tests/test_cli_auth.py (numeric-fallback path) and directly with monkeypatched
+`checkbox_select` / `typer` prompts in tests/test_auth_picker.py (checkbox
+path) instead.
+
+The primary selection UI is the arrow-key + spacebar checkbox in
+`_checkbox_select.py` -- users move with up/down (or j/k), toggle with space,
+and accept with enter, so the common case never requires typing a project id.
+`parse_selection` and its numeric prompt (`_prompt_selection`) are kept as the
+fallback for a non-interactive terminal (`CheckboxUnavailable`), not removed:
+a piped stdin or a bare TTY without real terminal capabilities must still be
+able to select something rather than hard-fail.
 """
 
 from __future__ import annotations
@@ -23,6 +33,7 @@ from rich.table import Table
 from ..config_store import validate_alias_format
 from ..errors import ConfigError
 from ..services.auth_service import ProjectCandidate, ProjectSelection
+from ._checkbox_select import CheckboxItem, CheckboxUnavailable, checkbox_select
 
 # Bounds every re-prompt loop below so a piped/garbage stdin (or a script that
 # forgot --yes) cannot spin forever -- after this many bad attempts we give up
@@ -157,6 +168,41 @@ def _prompt_selection(console: Console, count: int) -> list[int]:
     raise typer.Abort()
 
 
+def _select_indices(
+    console: Console,
+    candidates: Sequence[ProjectCandidate],
+    alias_overrides: Mapping[int, str],
+) -> list[int]:
+    """Select candidate indices via the arrow-key checkbox.
+
+    Falls back to the numeric prompt (`_prompt_selection`, plus the numbered
+    table it refers to) when `checkbox_select` raises `CheckboxUnavailable`
+    -- a piped stdin or a terminal without real interactive capabilities.
+
+    Preselects every candidate that is NOT already registered. Registering
+    one that already is is a harmless no-op (`AuthService` reports it as
+    `status="exists"`), so leaving already-registered rows unchecked is
+    about signal -- "here's what's new" -- not safety.
+    """
+    items = [
+        CheckboxItem(
+            label=f"{candidate.project_id}  {candidate.project_name} ({candidate.role})",
+            hint=f"-> {alias_overrides.get(candidate.project_id, candidate.default_alias)}",
+            tag="already registered" if candidate.registered else "",
+        )
+        for candidate in candidates
+    ]
+    preselected = [index for index, candidate in enumerate(candidates) if not candidate.registered]
+    try:
+        indices = checkbox_select(
+            items, title="Select projects to register", preselected=preselected
+        )
+    except CheckboxUnavailable:
+        _render_candidates_table(console, candidates, alias_overrides)
+        return _prompt_selection(console, len(candidates))
+    return indices or []
+
+
 def _prompt_alias(
     console: Console,
     candidate: ProjectCandidate,
@@ -234,32 +280,50 @@ def run_project_picker(
     alias_overrides: Mapping[int, str] | None = None,
     assume_yes: bool = False,
 ) -> list[ProjectSelection]:
-    """Interactive TTY picker. Returns [] when the user selects nothing or
+    """Interactive picker. Returns [] when the user selects nothing or
     declines the final confirmation.
 
     Callers own printing any header (e.g. "Accessible projects on <stack>")
     before invoking this -- the picker itself only knows about `candidates`,
     not the stack they came from.
+
+    Selection is the arrow-key + spacebar checkbox (`_select_indices`),
+    falling back to the numeric prompt on a non-interactive terminal. Every
+    row already shows its suggested alias, so the common path takes those
+    as-is: a single "Edit aliases?" confirm (default no) is the only way to
+    open the per-project alias re-prompt (`_prompt_alias`) -- this replaces
+    what used to be a mandatory alias question after every single selection,
+    which was half the friction of the old numbers-only picker.
     """
     if not candidates:
         console.print("No accessible projects to register.")
         return []
 
     overrides = alias_overrides or {}
-    _render_candidates_table(console, candidates, overrides)
-
-    indices = _prompt_selection(console, len(candidates))
+    indices = _select_indices(console, candidates, overrides)
     if not indices:
         return []
 
-    selections: list[ProjectSelection] = []
-    chosen_aliases: dict[str, int] = {}
-    for index in indices:
-        candidate = candidates[index]
-        default_alias = overrides.get(candidate.project_id, candidate.default_alias)
-        chosen_alias = _prompt_alias(console, candidate, default_alias, candidates, chosen_aliases)
-        chosen_aliases[chosen_alias] = candidate.project_id
-        selections.append(ProjectSelection(project_id=candidate.project_id, alias=chosen_alias))
+    aliases = {
+        candidate.project_id: overrides.get(candidate.project_id, candidate.default_alias)
+        for candidate in candidates
+    }
+    if typer.confirm("Edit aliases?", default=False):
+        chosen_aliases: dict[str, int] = {}
+        for index in indices:
+            candidate = candidates[index]
+            chosen_alias = _prompt_alias(
+                console, candidate, aliases[candidate.project_id], candidates, chosen_aliases
+            )
+            chosen_aliases[chosen_alias] = candidate.project_id
+            aliases[candidate.project_id] = chosen_alias
+
+    selections = [
+        ProjectSelection(
+            project_id=candidates[index].project_id, alias=aliases[candidates[index].project_id]
+        )
+        for index in indices
+    ]
 
     _print_selection_summary(console, candidates, selections)
     if not assume_yes and not typer.confirm(
