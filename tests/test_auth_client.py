@@ -422,6 +422,72 @@ class TestRefresh:
 
         assert excinfo.value.error_code == ErrorCode.SESSION_EXPIRED
 
+    def test_production_401_prose_maps_to_session_expired(self, httpx_mock) -> None:
+        """The shape production actually returns -- 401 with NO `invalid_grant`.
+
+        Regression test for a real failure on `connection.keboola.com`: a
+        revoked/replayed refresh token comes back as 401 with the body
+        message "Invalid refresh token." and no OAuth error token anywhere.
+        The original substring-only check missed it, so the error fell
+        through to the generic `INVALID_TOKEN` mapping. The consequences
+        were severe and compounding: the user got an opaque "Invalid or
+        expired token" with no remedy, `_perform_refresh` did not purge the
+        dead session (it purges only on `SESSION_EXPIRED`), so every later
+        command failed identically forever, and `auth status` -- which
+        re-raises anything that is neither `SESSION_EXPIRED` nor a network
+        code -- crashed instead of reporting "expired".
+        """
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            json={"error": "Unauthorized", "message": "Invalid refresh token."},
+            status_code=401,
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.refresh("kbc_rt_revoked")
+        finally:
+            client.close()
+
+        assert excinfo.value.error_code == ErrorCode.SESSION_EXPIRED
+        assert "kbagent auth login" in excinfo.value.message
+        assert "kbc_rt_revoked" not in excinfo.value.message
+
+    def test_bare_401_with_no_message_maps_to_session_expired(self, httpx_mock) -> None:
+        """A 401 needs no marker at all -- the body is the only credential."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            text="",
+            status_code=401,
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.refresh("kbc_rt_dead")
+        finally:
+            client.close()
+
+        assert excinfo.value.error_code == ErrorCode.SESSION_EXPIRED
+
+    def test_400_prose_without_oauth_token_maps_to_session_expired(self, httpx_mock) -> None:
+        """A 400 carrying grant prose (but no `invalid_grant`) still counts."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            json={"message": "Expired refresh token"},
+            status_code=400,
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert excinfo.value.error_code == ErrorCode.SESSION_EXPIRED
+
     def test_other_400_is_not_remapped(self, httpx_mock) -> None:
         """A 400 unrelated to invalid_grant keeps the generic error mapping."""
         httpx_mock.add_response(

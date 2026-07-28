@@ -59,6 +59,7 @@ class _FakeAuthClient:
         self.introspect_response: IntrospectResponse | None = None
         self.introspect_side_effect: Exception | None = None
         self.refresh_response: CliTokenResponse | None = None
+        self.refresh_side_effect: Exception | None = None
         self.revoke_result = RevokeResult(confirmed=True)
         self.delete_session_result = RevokeResult(confirmed=True)
 
@@ -91,6 +92,8 @@ class _FakeAuthClient:
 
     def refresh(self, refresh_token: str) -> CliTokenResponse:
         self.calls.append(("refresh", refresh_token))
+        if self.refresh_side_effect is not None:
+            raise self.refresh_side_effect
         assert self.refresh_response is not None
         return self.refresh_response
 
@@ -686,6 +689,50 @@ class TestStatus:
         result = service.status(stack=STACK_URL)
 
         assert result.status == "expired"
+        assert state_store.get_session(STACK_URL) is None
+
+    def test_server_rejected_refresh_reports_expired_and_purges(self, store, state_store) -> None:
+        """A live-looking session whose refresh the SERVER rejects must self-heal.
+
+        Regression test for the real production failure: the refresh token
+        had not reached any locally known expiry (`refresh_expires_at` is
+        None, as it is for every session today since the token response
+        carries no refresh-expiry field), so the local pre-check in
+        `_refresh_locked` step 6 could not catch it -- only the server's
+        answer could. When that answer was misclassified as `INVALID_TOKEN`
+        rather than `SESSION_EXPIRED`, `status()` re-raised instead of
+        reporting, and the dead session was never purged, so every
+        subsequent command failed the same opaque way indefinitely.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from keboola_agent_cli.auth.models import StackSession
+
+        now = datetime.now(UTC)
+        state_store.put_session(
+            StackSession(
+                stack_url=STACK_URL,
+                session_id="sess-1",
+                access_token="stale-at",
+                refresh_token="rt-revoked",
+                access_expires_at=now - timedelta(minutes=30),
+                refresh_expires_at=None,
+                created_at=now - timedelta(hours=12),
+            )
+        )
+        client = _FakeAuthClient()
+        client.refresh_side_effect = KeboolaApiError(
+            "Your Keboola login expired or was revoked. Run `kbagent auth login` to sign in again.",
+            status_code=401,
+            error_code=ErrorCode.SESSION_EXPIRED,
+            retryable=False,
+        )
+        service = _make_service(store, state_store, client)
+
+        result = service.status(stack=STACK_URL)
+
+        assert result.status == "expired"
+        assert "kbagent auth login" in result.detail
         assert state_store.get_session(STACK_URL) is None
 
     def test_network_failure_reports_degraded_not_expired(self, store, state_store) -> None:

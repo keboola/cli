@@ -52,6 +52,44 @@ _DEVICE_ERROR_SLOW_DOWN = "slow_down"
 _DEVICE_ERROR_DENIED = "access_denied"
 _DEVICE_ERROR_EXPIRED = "expired_token"
 
+# Substrings that identify a rejected grant in a 400 response body. Only
+# consulted for 400 -- see `_is_rejected_grant` for why 401 needs no marker.
+# Matched case-insensitively against the mapped error message.
+_GRANT_REJECTION_MARKERS = (
+    "invalid_grant",
+    "invalid refresh token",
+    "expired refresh token",
+    "refresh token",
+)
+
+
+def _is_rejected_grant(exc: KeboolaApiError) -> bool:
+    """True when a refresh failure means "this refresh token is unusable".
+
+    Deliberately does NOT require the OAuth `invalid_grant` token to appear
+    in the response. Production `connection.keboola.com` answers a replayed
+    or revoked refresh token with **401 and the prose "Invalid refresh
+    token."** -- no `invalid_grant` anywhere -- so the original
+    substring-only check silently missed the single most common real-world
+    case and let it fall through to the generic `INVALID_TOKEN` mapping.
+
+    A 401 is treated as a rejected grant unconditionally: the refresh
+    endpoint's *only* credential is the refresh token in the body, so there
+    is nothing else a 401 could be about, and re-presenting the same token
+    can never start succeeding.
+
+    A 400 is ambiguous -- it can also mean we sent a malformed body, i.e.
+    our own bug -- and purging on that would destroy a still-valid refresh
+    token and force an avoidable re-login. So 400 requires a marker in the
+    message before it is classified as a rejected grant.
+    """
+    if exc.status_code == 401:
+        return True
+    if exc.status_code == 400:
+        message = (exc.message or "").lower()
+        return any(marker in message for marker in _GRANT_REJECTION_MARKERS)
+    return False
+
 
 class AuthClient(BaseHttpClient):
     """Layer-3 client for the Keboola programmatic-auth endpoints (no auth header).
@@ -247,11 +285,18 @@ class AuthClient(BaseHttpClient):
 
         Uses `_do_request` -- network/5xx retry is safe here because the
         server grants a 30 second idempotent grace window on the old
-        refresh token. An `invalid_grant` response (the refresh token was
-        replayed after the grace window, or its whole family was revoked)
-        is mapped to `ErrorCode.SESSION_EXPIRED` before the generic error
-        path, so callers can distinguish "log in again" from a transient
-        API failure.
+        refresh token. A rejected grant (the refresh token was replayed
+        after the grace window, or its whole family was revoked) is mapped
+        to `ErrorCode.SESSION_EXPIRED` before the generic error path, so
+        callers can distinguish "log in again" from a transient API failure.
+        That distinction is load-bearing in two places, which is why it must
+        not depend on the server's prose: `SessionTokenProvider._perform_refresh`
+        purges the dead session from `auth.json` only for `SESSION_EXPIRED`,
+        and `AuthService.status` reports "expired" only for `SESSION_EXPIRED`
+        (re-raising anything else). Get the classification wrong and a dead
+        session lingers forever, every command fails with an opaque 401, and
+        even `auth status` -- the one command meant to diagnose it -- crashes
+        instead of answering.
         """
         try:
             response = self._do_request(
@@ -260,7 +305,7 @@ class AuthClient(BaseHttpClient):
                 json={"refreshToken": refresh_token},
             )
         except KeboolaApiError as exc:
-            if exc.status_code in (400, 401) and "invalid_grant" in exc.message:
+            if _is_rejected_grant(exc):
                 raise KeboolaApiError(
                     message=(
                         "Your Keboola login expired or was revoked. Run "
