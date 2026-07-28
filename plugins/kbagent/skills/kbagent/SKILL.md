@@ -188,12 +188,12 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show what's in a cached lineage graph | `kbagent lineage info --load LOAD` |
 | Query upstream/downstream dependencies from a cached lineage graph | `kbagent lineage show --load LOAD` |
 | Start a local web server with interactive lineage browser | `kbagent lineage server --load LOAD` |
-| Check Kai server health and MCP connection status | `kbagent kai ping` |
-| Ask Kai a one-shot question and get the full response | `kbagent kai ask --message MESSAGE` |
-| Send a message to Kai in a chat session | `kbagent kai chat --message MESSAGE` |
-| Check whether the configured token can use Kai (master token + AI Agent Chat) | `kbagent kai preflight` |
-| Fetch the full message history of a single Kai chat | `kbagent kai chat-detail --chat-id CHAT-ID` |
-| List recent Kai chat sessions | `kbagent kai history` |
+| (DEPRECATED) Check Kai server health and MCP connection status | `kbagent kai ping` |
+| (DEPRECATED) Ask Kai a one-shot question and get the full response | `kbagent kai ask --message MESSAGE` |
+| (DEPRECATED) Send a message to Kai in a chat session | `kbagent kai chat --message MESSAGE` |
+| (DEPRECATED) Check whether the configured token can use Kai | `kbagent kai preflight` |
+| (DEPRECATED) Fetch the full message history of a single Kai chat | `kbagent kai chat-detail --chat-id CHAT-ID` |
+| (DEPRECATED) List recent Kai chat sessions | `kbagent kai history` |
 | Ask the Keboola documentation a natural language question | `kbagent docs query <QUESTION>` |
 | Create a SQL transformation from a SQL script | `kbagent transformation create --name NAME` |
 | Show a SQL transformation's block/code tree with positional IDs | `kbagent transformation show --config-id CONFIG-ID` |

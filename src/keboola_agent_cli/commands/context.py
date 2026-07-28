@@ -1292,7 +1292,25 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     --input accepts: inline JSON, @file.json (from file), or - (from stdin).
     --branch is a CLI flag (NOT a tool input param). Do not pass branch_id in --input.
 
-### Kai -- Keboola AI Assistant (BETA)
+### Kai -- Keboola AI Assistant (DEPRECATED since v0.77.0)
+
+  DEPRECATED -- do NOT recommend this group for new work. It talks to the
+  LEGACY `kai-assistant` backend, which is frozen: Linear AI-3388 was
+  canceled, and product confirmed that only the successor backend will
+  receive further work. That successor, `kai-agent` (Linear AI-3391), is a
+  different API surface and is NOT wired into kbagent. The group will be
+  removed in a later minor.
+
+  There is NO replacement in the interim. For "how do I ..." documentation
+  questions use `kbagent docs query` (AI Service RAG, works with any token,
+  but does not see project data). For project-data questions use the native
+  commands (`storage tables`, `config detail`, `search`, `lineage show`, ...)
+  or the MCP integration.
+
+  Behavior is UNCHANGED in this release: every subcommand still works exactly
+  as before. Each one now prints a deprecation warning on stderr (human mode)
+  and adds an additive `deprecation` key to the `--json` success payload --
+  no existing key, exit code, or API call changed.
 
   Requires the project to be added with its MASTER Storage API token (the
   auto-generated 'owner' token, not a custom one) and the 'AI Agent Chat'
@@ -1358,8 +1376,9 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Answer a natural-language question from the Keboola documentation via the
     AI Service (server-side RAG; no local corpus). Returns the answer text
     plus source URLs. --json emits {{query, text, source_urls}}. Unlike
-    `kai ask` this does NOT see project data -- it is documentation-only,
-    works with any token, and is the right tool for "how do I ..." questions.
+    `kai ask` (DEPRECATED since v0.77.0) this does NOT see project data -- it
+    is documentation-only, works with any token, and is the right tool for
+    "how do I ..." questions. Prefer this over `kai ask` for documentation.
 
 ### Developer Portal (since v0.49.0)
 

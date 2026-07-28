@@ -2,11 +2,33 @@
 
 Bridges Claude Code (local) to Kai (cloud) via kbagent CLI.
 Kai has MCP access to project data and can answer Keboola-specific questions.
+
+The whole ``kai`` group is DEPRECATED as of 0.77.0. It targets the *legacy*
+``kai-assistant`` backend (the service registered under that id in
+``GET /v2/storage``), which is frozen: Linear AI-3388 was canceled, and
+product confirmed that only the successor backend will receive further work.
+That successor, ``kai-agent`` (Linear AI-3391), is a different API surface
+that is not wired into kbagent -- retargeting is a separate, future task.
+
+Nothing changes behaviorally in this release: every subcommand keeps working
+exactly as before on a master Storage token. Removal is planned for a later
+minor and there is **no replacement in the interim** -- for documentation
+questions use ``kbagent docs query`` (AI Service RAG, no project data).
+
+All six subcommands surface the deprecation the same way the ``tool`` group
+does (see ``commands/tool.py``): human mode warns on stderr, JSON mode adds
+an additive ``deprecation`` key to the success payload. No existing key, exit
+code, or API call changes.
 """
 
+from collections.abc import Callable
+from typing import Any
+
 import typer
+from rich.console import Console
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..output import OutputFormatter
 from ._helpers import (
     check_cli_permission,
     get_formatter,
@@ -14,14 +36,45 @@ from ._helpers import (
     map_error_to_exit_code,
 )
 
+# Group-wide deprecation banner (0.77.0). Surfaced by every subcommand.
+KAI_DEPRECATION = (
+    "The `kai` group is deprecated: it targets the legacy kai-assistant "
+    "backend, which is frozen (Linear AI-3388 canceled), and its successor "
+    "kai-agent (AI-3391) is not wired into kbagent. The group still works "
+    "against a master Storage token but will be removed in a later minor -- "
+    "there is no replacement in the interim."
+)
+
 kai_app = typer.Typer(
     help=(
-        "(BETA) Keboola AI Assistant (Kai) — ask questions about your project.\n\n"
+        "(DEPRECATED) Keboola AI Assistant (Kai) — ask questions about your project.\n\n"
+        "DEPRECATED (0.77.0): this group talks to the legacy 'kai-assistant' "
+        "backend, which is frozen; its successor 'kai-agent' is not wired into "
+        "kbagent yet. Still fully functional, but slated for removal in a later "
+        "minor with no replacement in the interim.\n\n"
         "Requires a master Storage API token (the auto-generated 'owner' token, "
         "not a custom one) with the 'AI Agent Chat' feature flag enabled on the "
         "project. Custom Storage API tokens cannot be used with Kai."
     )
 )
+
+
+def _output_deprecated(
+    formatter: OutputFormatter,
+    result: dict[str, Any],
+    human_formatter: Callable[[Console, Any], object],
+) -> None:
+    """Emit a Kai success payload carrying the group deprecation notice.
+
+    Mirrors ``commands/tool.py``: in JSON mode the banner is an *additive*
+    ``deprecation`` key on the success payload -- error envelopes never carry
+    it, because a failing command exits before reaching this function. The
+    human-mode counterpart is the ``formatter.warning`` call each subcommand
+    makes up front (stderr only, so stdout stays byte-clean for piping).
+    """
+    if formatter.json_mode:
+        result["deprecation"] = KAI_DEPRECATION
+    formatter.output(result, human_formatter)
 
 
 @kai_app.callback(invoke_without_command=True)
@@ -38,9 +91,20 @@ def kai_ping(
         help="Project alias (uses default if omitted).",
     ),
 ) -> None:
-    """Check Kai server health and MCP connection status."""
+    """(DEPRECATED) Check Kai server health and MCP connection status.
+
+    DEPRECATED (0.77.0): the legacy kai-assistant backend this targets is
+    frozen (Linear AI-3388 canceled; successor kai-agent per AI-3391 is not
+    wired into kbagent). Behavior is unchanged, but the group will be removed
+    in a later minor and there is no replacement in the interim.
+    """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "kai_service")
+
+    # Deprecation surface (0.77.0): stderr warning in human mode (never
+    # pollutes stdout); a no-op in JSON mode, where _output_deprecated
+    # injects the banner into the success envelope instead.
+    formatter.warning(KAI_DEPRECATION)
 
     try:
         alias = service.resolve_alias(project)
@@ -59,7 +123,7 @@ def kai_ping(
         console.print(f"  Server:         {data['server_version']}")
         console.print(f"  MCP connection: {data['mcp_status']}")
 
-    formatter.output(result, _human)
+    _output_deprecated(formatter, result, _human)
 
 
 @kai_app.command("ask")
@@ -77,7 +141,12 @@ def kai_ask(
         help="Project alias (uses default if omitted).",
     ),
 ) -> None:
-    """Ask Kai a one-shot question and get the full response.
+    """(DEPRECATED) Ask Kai a one-shot question and get the full response.
+
+    DEPRECATED (0.77.0): the legacy kai-assistant backend this targets is
+    frozen (Linear AI-3388 canceled; successor kai-agent per AI-3391 is not
+    wired into kbagent). Behavior is unchanged, but the group will be removed
+    in a later minor and there is no replacement in the interim.
 
     Kai has access to your project's data, configurations, and lineage
     via MCP tools. Use this for Keboola-specific questions that require
@@ -85,6 +154,11 @@ def kai_ask(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "kai_service")
+
+    # Deprecation surface (0.77.0): stderr warning in human mode (never
+    # pollutes stdout); a no-op in JSON mode, where _output_deprecated
+    # injects the banner into the success envelope instead.
+    formatter.warning(KAI_DEPRECATION)
 
     try:
         alias = service.resolve_alias(project)
@@ -99,7 +173,7 @@ def kai_ask(
     def _human(console, data):
         console.print(data["response"])
 
-    formatter.output(result, _human)
+    _output_deprecated(formatter, result, _human)
 
 
 @kai_app.command("chat")
@@ -122,13 +196,23 @@ def kai_chat(
         help="Project alias (uses default if omitted).",
     ),
 ) -> None:
-    """Send a message to Kai in a chat session.
+    """(DEPRECATED) Send a message to Kai in a chat session.
+
+    DEPRECATED (0.77.0): the legacy kai-assistant backend this targets is
+    frozen (Linear AI-3388 canceled; successor kai-agent per AI-3391 is not
+    wired into kbagent). Behavior is unchanged, but the group will be removed
+    in a later minor and there is no replacement in the interim.
 
     Use --chat-id to continue a previous conversation.
     Without --chat-id, starts a new chat.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "kai_service")
+
+    # Deprecation surface (0.77.0): stderr warning in human mode (never
+    # pollutes stdout); a no-op in JSON mode, where _output_deprecated
+    # injects the banner into the success envelope instead.
+    formatter.warning(KAI_DEPRECATION)
 
     try:
         alias = service.resolve_alias(project)
@@ -144,7 +228,7 @@ def kai_chat(
         console.print(data["response"])
         console.print(f"\n[dim]Chat ID: {data['chat_id']}[/dim]")
 
-    formatter.output(result, _human)
+    _output_deprecated(formatter, result, _human)
 
 
 @kai_app.command("preflight")
@@ -156,7 +240,14 @@ def kai_preflight(
         help="Project alias (uses default if omitted).",
     ),
 ) -> None:
-    """Check whether the configured token can use Kai (master token + AI Agent Chat).
+    """(DEPRECATED) Check whether the configured token can use Kai.
+
+    DEPRECATED (0.77.0): the legacy kai-assistant backend this targets is
+    frozen (Linear AI-3388 canceled; successor kai-agent per AI-3391 is not
+    wired into kbagent). Behavior is unchanged, but the group will be removed
+    in a later minor and there is no replacement in the interim.
+
+    Checks for a master token with the AI Agent Chat feature flag.
 
     Inspects /v2/storage/tokens/verify and returns a structured readiness
     payload WITHOUT raising on failure — unlike ``ping``/``ask``/``chat``
@@ -166,6 +257,11 @@ def kai_preflight(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "kai_service")
+
+    # Deprecation surface (0.77.0): stderr warning in human mode (never
+    # pollutes stdout); a no-op in JSON mode, where _output_deprecated
+    # injects the banner into the success envelope instead.
+    formatter.warning(KAI_DEPRECATION)
 
     try:
         alias = service.resolve_alias(project)
@@ -192,7 +288,7 @@ def kai_preflight(
         if data["error"]:
             console.print(f"  [red]Reason:[/red] {data['error']}")
 
-    formatter.output(result, _human)
+    _output_deprecated(formatter, result, _human)
 
 
 @kai_app.command("chat-detail")
@@ -209,7 +305,12 @@ def kai_chat_detail(
         help="Project alias (uses default if omitted).",
     ),
 ) -> None:
-    """Fetch the full message history of a single Kai chat.
+    """(DEPRECATED) Fetch the full message history of a single Kai chat.
+
+    DEPRECATED (0.77.0): the legacy kai-assistant backend this targets is
+    frozen (Linear AI-3388 canceled; successor kai-agent per AI-3391 is not
+    wired into kbagent). Behavior is unchanged, but the group will be removed
+    in a later minor and there is no replacement in the interim.
 
     Use this to restore a previous conversation when continuing it with
     `kai chat --chat-id ID`, or to export a transcript for offline review.
@@ -219,6 +320,11 @@ def kai_chat_detail(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "kai_service")
+
+    # Deprecation surface (0.77.0): stderr warning in human mode (never
+    # pollutes stdout); a no-op in JSON mode, where _output_deprecated
+    # injects the banner into the success envelope instead.
+    formatter.warning(KAI_DEPRECATION)
 
     try:
         alias = service.resolve_alias(project)
@@ -245,7 +351,7 @@ def kai_chat_detail(
             console.print(f"\n[bold {style}]{role}:[/bold {style}]")
             console.print(msg["content"])
 
-    formatter.output(result, _human)
+    _output_deprecated(formatter, result, _human)
 
 
 @kai_app.command("history")
@@ -263,9 +369,20 @@ def kai_history(
         help="Maximum number of chats to return.",
     ),
 ) -> None:
-    """List recent Kai chat sessions."""
+    """(DEPRECATED) List recent Kai chat sessions.
+
+    DEPRECATED (0.77.0): the legacy kai-assistant backend this targets is
+    frozen (Linear AI-3388 canceled; successor kai-agent per AI-3391 is not
+    wired into kbagent). Behavior is unchanged, but the group will be removed
+    in a later minor and there is no replacement in the interim.
+    """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "kai_service")
+
+    # Deprecation surface (0.77.0): stderr warning in human mode (never
+    # pollutes stdout); a no-op in JSON mode, where _output_deprecated
+    # injects the banner into the success envelope instead.
+    formatter.warning(KAI_DEPRECATION)
 
     try:
         alias = service.resolve_alias(project)
@@ -298,4 +415,4 @@ def kai_history(
         if data["has_more"]:
             console.print("[dim]More chats available. Use --limit to see more.[/dim]")
 
-    formatter.output(result, _human)
+    _output_deprecated(formatter, result, _human)

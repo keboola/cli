@@ -602,6 +602,15 @@ kbagent kai ask --message "question" [--project NAME]
 kbagent kai chat --message "msg" [--chat-id ID] [--project NAME]
 kbagent kai chat-detail --chat-id ID [--project NAME]
 kbagent kai history [--project NAME] [--limit N]
+# kai group DEPRECATED (0.77.0+): targets the LEGACY `kai-assistant` backend, which is frozen --
+#   Linear AI-3388 was canceled, and product confirmed only the successor backend gets further work.
+#   That successor, `kai-agent` (Linear AI-3391), is a different API surface and is NOT wired into
+#   kbagent; retargeting is a separate future task. Behavior is UNCHANGED -- every subcommand still
+#   works against a master Storage token + `agent-chat` feature; each now warns on stderr in human
+#   mode and adds an additive "deprecation" key to the --json success payload (error envelopes carry
+#   none). The group and the serve `/kai/*` routes will be removed in a later minor. NO replacement
+#   in the interim: use `docs query` for documentation questions and the native commands
+#   (`storage tables`, `config detail`, `search`, `lineage show`, ...) for project data.
 
 kbagent transformation create --project NAME --name NAME (--sql 'SELECT ...' | --sql-file PATH) [--created-table NAME ...] [--component-id ID] [--description D] [--branch ID] [--dry-run]
 kbagent transformation show --project NAME --config-id ID [--component-id ID] [--branch ID]

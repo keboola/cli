@@ -1,21 +1,49 @@
-# Kai (Keboola AI Assistant) Workflow
+# Kai (Keboola AI Assistant) Workflow -- DEPRECATED
+
+> **DEPRECATED (since v0.77.0). Do not recommend the `kai` group for new work.**
+>
+> `kbagent kai *` talks to the **legacy `kai-assistant` backend**, which is
+> frozen: Linear AI-3388 was **canceled**, and product confirmed that only the
+> successor backend will receive further work. That successor is **`kai-agent`**
+> (Linear AI-3391) — a different API surface that is **not wired into kbagent**.
+> Retargeting is a separate, future task.
+>
+> **The group will be removed in a later minor, and there is no replacement in
+> the interim.** Behavior is unchanged in 0.77.0 — every subcommand still works
+> exactly as before against a master Storage token; each one now emits a
+> deprecation warning on stderr (human mode) and an additive `deprecation` key
+> in the `--json` success payload.
+>
+> **What to use instead today:**
+> - `kbagent docs query "QUESTION"` for "how do I ..." documentation questions
+>   (AI Service RAG, works with any token, does **not** see project data).
+> - Native commands for project data: `storage tables`, `storage table-detail`,
+>   `config list`, `config detail`, `search`, `job detail`, `lineage show`.
+> - The MCP integration for agentic exploration.
+>
+> This file is kept only so that existing `kai` users can still read the
+> mechanics. Everything below describes behavior that is deprecated.
 
 Kai is Keboola's cloud AI assistant with MCP access to project data.
 kbagent bridges Claude Code (local) to Kai (cloud) for Keboola-specific questions.
 
-> **BETA**: Kai commands require a project with the `agent-chat` feature enabled.
-> Token authentication requirements are being finalized.
+> **Token requirement**: Kai commands require a project added with its MASTER
+> Storage API token and the `agent-chat` feature enabled. Custom Storage API
+> tokens cannot access Kai.
 
 ## When to use Kai vs local tools
 
+`kai` is deprecated, so the honest answer is "prefer the right-hand column".
+The historical guidance was:
+
 | Situation | Use |
 |-----------|-----|
-| Need project-specific context (tables, configs, lineage) | `kbagent kai ask` |
+| Need project-specific context (tables, configs, lineage) | ~~`kbagent kai ask`~~ (DEPRECATED) -> `storage tables`, `config detail`, `lineage show` |
 | Simple data listing (buckets, tables, configs) | `kbagent config list`, `kbagent storage tables` |
-| Need Keboola domain knowledge (component behavior, best practices) | `kbagent kai ask` |
+| Need Keboola domain knowledge (component behavior, best practices) | ~~`kbagent kai ask`~~ (DEPRECATED) -> `kbagent docs query` |
 | Need to modify data (upload, create, delete) | Direct CLI commands |
 
-## Quick start
+## Quick start (deprecated -- still functional)
 
 ```bash
 # Check if Kai is available
@@ -42,7 +70,10 @@ Check via: `kbagent --json kai ping --project ALIAS` — exit code 0 means Kai i
 
 ## JSON output
 
-All kai commands support `--json` for structured output:
+All kai commands support `--json` for structured output. Since v0.77.0 every
+success payload also carries an additive `deprecation` string key (existing
+keys are untouched; error envelopes carry no such key), so a script can detect
+the deprecation programmatically:
 
 ```bash
 # Ping
@@ -58,7 +89,10 @@ kbagent --json kai history --project my-project
 # {"status": "ok", "data": {"chats": [...], "has_more": false}}
 ```
 
-## Common patterns for Claude Code
+## Common patterns for Claude Code (DEPRECATED -- do not suggest these)
+
+These are kept for reference only. Use `kbagent docs query` for documentation
+questions and native commands for project data.
 
 ```bash
 # Use kai ask as a Keboola knowledge oracle
