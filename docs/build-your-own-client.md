@@ -101,7 +101,7 @@ without first knowing the token. Everything else needs auth.
 /sharing         kbagent sharing (list, share, link, unshare, unlink, edges)
 /data-apps       kbagent data-app (CRUD, deploy, start/stop, secrets-*, validate-repo)
 /mcp             kbagent tool (list, call) -- multi-project MCP fan-out
-/kai             kbagent kai (ping, ask, chat, history, preflight, chat-detail)
+/kai             kbagent kai (ping, ask, chat, history, preflight, chat-detail) -- DEPRECATED 0.77.0
 /encrypt         kbagent encrypt values
 /search          kbagent search QUERY
 /org             kbagent org setup

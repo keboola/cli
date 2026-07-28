@@ -159,7 +159,7 @@ kbagent workspace query --project prod --workspace-id WS_ID \
 | **Project members & invitations** | `project invite` (single or `--from-csv` bulk with parallel workers), `project member-list / member-remove / member-set-role`, `project invitation-list / invitation-cancel`. Role whitelist enforced at the CLI layer; Manage API "already invited" treated as `noop` not error (since 0.29.0). |
 | **Lineage** | Column-level dependency analysis across projects. SQL/Python parsing, AI-enhanced detection, interactive web browser, Mermaid/HTML/ER export. |
 | **Semantic layer** | Define and manage a metastore semantic model per project — datasets, metrics, relationships, constraints, glossary. Validate (incl. `--deep`), export, diff two models/files, import/promote across projects, AI-assisted `build` from tables. `kbagent semantic-layer ...` (alias `sl`). |
-| **Kai (AI Assistant)** | Ask Keboola's built-in AI questions about your project. One-shot or chat sessions with full MCP context. |
+| **Kai (AI Assistant)** — **DEPRECATED (0.77.0)** | Ask Keboola's built-in AI questions about your project. One-shot or chat sessions with full MCP context. **Deprecated since 0.77.0**: targets the legacy `kai-assistant` backend, which is frozen; its successor `kai-agent` is not wired into kbagent. Still fully functional, but slated for removal in a later minor with no replacement — use `kbagent docs query` for documentation questions and the native commands for project data. |
 | **Encryption** | Encrypt secrets (`#password`, `#api_token`) via Keboola Encryption API. Works with sync push and MCP. |
 | **Permissions** | Firewall for AI agents: read-only, deny-writes, deny-destructive (session-only flags or persisted policy). Project pin + `KBAGENT_PROJECT` env override. Code-level enforcement, stable `ErrorCode` enum, not prompt tricks. |
 | **Auto-update** | Self-updates kbagent + `keboola-mcp-server` on every startup (since 0.30.1). "What's new" after each update. Full changelog via `kbagent changelog`. |
@@ -241,7 +241,7 @@ kbagent workspace   create | list | detail | delete | password | load | query | 
 kbagent tool        list | call
 kbagent sync        init | pull | status | diff | push | branch-link | branch-unlink | branch-status
 kbagent schedule    list | detail | find
-kbagent kai         ping | preflight | ask | chat | chat-detail | history
+kbagent kai         ping | preflight | ask | chat | chat-detail | history   # DEPRECATED (0.77.0)
 kbagent encrypt     values
 kbagent permissions list | show | set | reset | check
 kbagent agent       list | show | create | update | delete | run | runs | run-detail | run-events

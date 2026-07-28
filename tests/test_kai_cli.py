@@ -2,6 +2,10 @@
 
 Tests the `kbagent kai` subcommands: ping, ask, chat, history.
 Each command is tested in both JSON and human output modes, plus error cases.
+
+The group is DEPRECATED since 0.77.0 but deliberately UNCHANGED behaviorally --
+every test below the deprecation class pins the pre-0.77.0 contract and must
+keep passing. ``TestKaiDeprecation`` adds the new surfacing contract on top.
 """
 
 import json
@@ -899,3 +903,296 @@ class TestKaiConfigError:
         output = json.loads(result.output)
         assert output["status"] == "error"
         assert "CONFIG_ERROR" in output["error"]["code"]
+
+
+class TestKaiDeprecation:
+    """The whole `kai` group is deprecated (0.77.0) but fully functional.
+
+    Pins the surfacing contract, which mirrors the ``tool`` group (see
+    ``tests/test_mcp_deprecation_warnings.py``):
+
+    - human mode: a yellow ``Warning:`` on STDERR only -- stdout stays
+      byte-clean so ``kai ask | ...`` keeps working,
+    - JSON mode: an *additive* ``deprecation`` key inside the success
+      envelope's ``data`` payload; no existing key renamed or removed,
+    - error paths carry no ``deprecation`` key and keep their exit code.
+    """
+
+    @staticmethod
+    def _flat(text: str) -> str:
+        """Collapse whitespace so Rich line-wrapping cannot break asserts."""
+        return " ".join(_strip_ansi(text).split())
+
+    def test_ping_human_warns_on_stderr_stdout_clean(self, tmp_config_dir: Path) -> None:
+        """kai ping human mode: banner on stderr, result on a clean stdout."""
+        setup_single_project(tmp_config_dir)
+
+        mock_service = MagicMock(spec=KaiService)
+        mock_service.resolve_alias.return_value = "prod"
+        mock_service.ping.return_value = {
+            "project_alias": "prod",
+            "timestamp": "2025-01-15T10:30:00+00:00",
+            "app_name": "kai-api",
+            "app_version": "1.2.3",
+            "server_version": "2.0.0",
+            "mcp_status": "connected",
+        }
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.kai.get_service",
+                lambda ctx, name: mock_service,
+            )
+
+            result = runner.invoke(
+                app,
+                ["--config-dir", str(tmp_config_dir), "kai", "ping", "--project", "prod"],
+            )
+
+        assert result.exit_code == 0, result.output
+        stderr = self._flat(result.stderr)
+        assert "Warning:" in stderr
+        assert "`kai` group is deprecated" in stderr
+        assert "legacy kai-assistant" in stderr
+        assert "no replacement in the interim" in stderr
+        # stdout carries only the result -- no deprecation noise
+        stdout = self._flat(result.stdout)
+        assert "Kai is alive" in stdout
+        assert "deprecated" not in stdout
+
+    def test_ping_json_payload_gains_deprecation_key(self, tmp_config_dir: Path) -> None:
+        """kai ping --json: additive `deprecation` key, existing keys untouched."""
+        setup_single_project(tmp_config_dir)
+
+        mock_service = MagicMock(spec=KaiService)
+        mock_service.resolve_alias.return_value = "prod"
+        mock_service.ping.return_value = {
+            "project_alias": "prod",
+            "timestamp": "2025-01-15T10:30:00+00:00",
+            "app_name": "kai-api",
+            "app_version": "1.2.3",
+            "server_version": "2.0.0",
+            "mcp_status": "connected",
+        }
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.kai.get_service",
+                lambda ctx, name: mock_service,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "kai",
+                    "ping",
+                    "--project",
+                    "prod",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "ok"
+        data = payload["data"]
+        # pre-existing keys are byte-identical -- purely additive change
+        assert data["project_alias"] == "prod"
+        assert data["app_name"] == "kai-api"
+        assert data["mcp_status"] == "connected"
+        assert "deprecated" in data["deprecation"]
+        assert "kai-assistant" in data["deprecation"]
+        # JSON mode never duplicates the banner on stderr
+        assert "deprecated" not in result.stderr
+
+    def test_ask_human_warns_on_stderr_response_stays_pipeable(self, tmp_config_dir: Path) -> None:
+        """kai ask human mode: the answer alone reaches stdout."""
+        setup_single_project(tmp_config_dir)
+
+        mock_service = MagicMock(spec=KaiService)
+        mock_service.resolve_alias.return_value = "prod"
+        mock_service.ask.return_value = {
+            "project_alias": "prod",
+            "chat_id": "chat-uuid-1",
+            "response": "You have 19 tables.",
+        }
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.kai.get_service",
+                lambda ctx, name: mock_service,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "kai",
+                    "ask",
+                    "--project",
+                    "prod",
+                    "-m",
+                    "How many tables?",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "`kai` group is deprecated" in self._flat(result.stderr)
+        stdout = self._flat(result.stdout)
+        assert "You have 19 tables." in stdout
+        assert "deprecated" not in stdout
+
+    def test_ask_json_payload_gains_deprecation_key(self, tmp_config_dir: Path) -> None:
+        """kai ask --json: additive `deprecation` key alongside the answer."""
+        setup_single_project(tmp_config_dir)
+
+        mock_service = MagicMock(spec=KaiService)
+        mock_service.resolve_alias.return_value = "prod"
+        mock_service.ask.return_value = {
+            "project_alias": "prod",
+            "chat_id": "chat-uuid-1",
+            "response": "You have 19 tables.",
+        }
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.kai.get_service",
+                lambda ctx, name: mock_service,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "kai",
+                    "ask",
+                    "--project",
+                    "prod",
+                    "-m",
+                    "How many tables?",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)["data"]
+        assert data["response"] == "You have 19 tables."
+        assert data["chat_id"] == "chat-uuid-1"
+        assert "deprecated" in data["deprecation"]
+
+    def test_every_subcommand_surfaces_the_banner(self, tmp_config_dir: Path) -> None:
+        """All six subcommands carry the JSON `deprecation` key."""
+        setup_single_project(tmp_config_dir)
+
+        mock_service = MagicMock(spec=KaiService)
+        mock_service.resolve_alias.return_value = "prod"
+        mock_service.ping.return_value = {"project_alias": "prod"}
+        mock_service.ask.return_value = {"project_alias": "prod", "response": "x"}
+        mock_service.chat_message.return_value = {
+            "project_alias": "prod",
+            "response": "x",
+            "chat_id": "c1",
+        }
+        mock_service.preflight.return_value = {
+            "project_alias": "prod",
+            "ok": True,
+            "is_master_token": True,
+            "has_agent_chat_feature": True,
+            "token_description": "owner",
+            "project_name": "P",
+            "project_id": 1,
+            "error": None,
+        }
+        mock_service.get_chat_detail.return_value = {
+            "project_alias": "prod",
+            "chat_id": "c1",
+            "title": "T",
+            "created_at": None,
+            "messages": [],
+        }
+        mock_service.get_history.return_value = {
+            "project_alias": "prod",
+            "chats": [],
+            "has_more": False,
+        }
+
+        invocations = [
+            ["kai", "ping"],
+            ["kai", "ask", "-m", "q"],
+            ["kai", "chat", "-m", "q"],
+            ["kai", "preflight"],
+            ["kai", "chat-detail", "--chat-id", "c1"],
+            ["kai", "history"],
+        ]
+
+        for argv in invocations:
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(
+                    "keboola_agent_cli.commands.kai.get_service",
+                    lambda ctx, name: mock_service,
+                )
+
+                result = runner.invoke(
+                    app,
+                    ["--json", "--config-dir", str(tmp_config_dir), *argv, "--project", "prod"],
+                )
+
+            assert result.exit_code == 0, f"{argv}: {result.output}"
+            data = json.loads(result.stdout)["data"]
+            assert "deprecation" in data, f"{argv} has no deprecation key"
+            assert "deprecated" in data["deprecation"], argv
+
+    def test_error_envelope_carries_no_deprecation_key(self, tmp_config_dir: Path) -> None:
+        """A failing kai command keeps its exit code and gains no new key."""
+        setup_single_project(tmp_config_dir)
+
+        mock_service = MagicMock(spec=KaiService)
+        mock_service.resolve_alias.return_value = "prod"
+        mock_service.ping.side_effect = KeboolaApiError(
+            message="Kai is not enabled on this project.",
+            error_code="KAI_NOT_ENABLED",
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.kai.get_service",
+                lambda ctx, name: mock_service,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "kai",
+                    "ping",
+                    "--project",
+                    "prod",
+                ],
+            )
+
+        assert result.exit_code != 0
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "error"
+        assert "deprecation" not in payload
+        assert "deprecation" not in payload["error"]
+
+    def test_group_help_is_marked_deprecated(self, tmp_config_dir: Path) -> None:
+        """`kai --help` and each subcommand help announce the deprecation."""
+        result = runner.invoke(app, ["--config-dir", str(tmp_config_dir), "kai", "--help"])
+        assert result.exit_code == 0, result.output
+        group_help = self._flat(result.output)
+        assert "(DEPRECATED)" in group_help
+        assert "legacy 'kai-assistant' backend" in group_help
+
+        for sub in ("ping", "ask", "chat", "preflight", "chat-detail", "history"):
+            sub_help = runner.invoke(
+                app, ["--config-dir", str(tmp_config_dir), "kai", sub, "--help"]
+            )
+            assert sub_help.exit_code == 0, sub_help.output
+            assert "(DEPRECATED)" in self._flat(sub_help.output), sub

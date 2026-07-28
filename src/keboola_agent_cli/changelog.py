@@ -24,6 +24,27 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.77.0": [
+        "Change: the whole `kbagent kai` command group is now DEPRECATED -- it still works "
+        "exactly as before, but it is on a removal track. It talks to the legacy "
+        "`kai-assistant` backend, which is frozen: Linear AI-3388 was canceled, and "
+        "product confirmed that only the successor backend will receive further work. That "
+        "successor, `kai-agent` (Linear AI-3391), is a different API surface and is not "
+        "wired into kbagent; retargeting it is a separate, future task. All six "
+        "subcommands (`ping`, "
+        "`preflight`, `ask`, `chat`, `chat-detail`, `history`) and the `serve` `/kai/*` "
+        "routes keep working against a master Storage token with the `agent-chat` feature -- "
+        "nothing was removed and no behavior changed. There is no replacement in the "
+        "interim: use `kbagent docs query` for documentation questions and the native "
+        "commands (`storage tables`, `config detail`, `search`, `lineage show`, ...) for "
+        "project data.",
+        "UX: each `kai` subcommand now surfaces the deprecation the same way the `tool` "
+        "group does -- a yellow warning on stderr in human mode (stdout stays byte-clean "
+        "for piping) and an additive `deprecation` string key on the `--json` success "
+        "payload. Error envelopes carry no `deprecation` key, and no existing key, exit "
+        "code, or API call changed, so scripts that parse `kbagent --json kai ...` today "
+        "keep working unchanged.",
+    ],
     "0.76.2": [
         "Fix (#528, #530): self-update no longer risks leaving the running Windows uv tool "
         "environment partially upgraded. kbagent now completes all network checks and command "

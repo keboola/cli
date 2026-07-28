@@ -11,6 +11,44 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## The whole `kai` group is DEPRECATED -- legacy backend frozen, no replacement (since v0.77.0)
+
+- **All six `kbagent kai *` subcommands (`ping`, `preflight`, `ask`, `chat`,
+  `chat-detail`, `history`) are on a removal track.** They talk to the
+  **legacy `kai-assistant` backend** -- the service registered under that id
+  in `GET /v2/storage` -- which is frozen. Linear AI-3388 was **canceled**,
+  and product confirmed that only the successor backend will receive further
+  work.
+- **The successor is `kai-agent`** (`kai-agent.{stack_suffix}`, a Hono
+  server), tracked in Linear AI-3391. It is a **different API surface** and
+  is **NOT wired into kbagent** -- retargeting is a separate, future task.
+  Do not assume `kbagent kai` will migrate to it.
+- **There is NO replacement in the interim.** For "how do I ..."
+  documentation questions use `kbagent docs query` (AI Service RAG, works
+  with any token, does **not** see project data). For project data use the
+  native commands (`storage tables`, `storage table-detail`, `config list`,
+  `config detail`, `search`, `job detail`, `lineage show`) or the MCP
+  integration. Do not recommend `kai ask` as a project-data oracle.
+- **Behavior is UNCHANGED in 0.77.0 -- deprecated is not removed.** Every
+  subcommand still hits the same endpoints with the same exit codes. The only
+  additions are the deprecation surfaces, which follow the `tool`-group
+  pattern exactly: a yellow `Warning:` on **stderr** in human mode (stdout
+  stays byte-clean for piping) and an additive `deprecation` string key on
+  the `--json` **success** payload. **Error envelopes carry no `deprecation`
+  key** -- a failing command exits before the key is injected. No existing
+  key was renamed or removed, so a script that parses `--json` today keeps
+  working.
+- **The token requirements have not relaxed and never will**: a project must
+  still be registered with its **master ('owner') Storage API token** (the
+  auto-generated one, not a custom token) *and* carry the `agent-chat`
+  feature flag, or every call fails `KAI_NOT_ENABLED`. Use `kai preflight`
+  to check both without raising. Because the backend is frozen, this gate is
+  permanent.
+- **The `/kai/*` REST routes on `kbagent serve` are deprecated too**, for the
+  same reason. They still respond this release. See also the
+  "Web UI `Kai Chat` is gone" entry below -- its "what stays" list now means
+  "stays until removal".
+
 ## MCP passthrough is DEPRECATED; parity map + canary (since v0.74.0)
 
 - **`tool call` / `tool list` / `agent --type mcp_tool` are on a removal
@@ -59,7 +97,9 @@ Versioning convention:
   reports `schema_version`).
 - **`docs query` vs `kai ask`**: `docs query` is documentation-only RAG (any
   token, no feature flag, no project data); `kai ask` sees project data but
-  needs the master token + `agent-chat` feature.
+  needs the master token + `agent-chat` feature. **`kai ask` is DEPRECATED
+  since v0.77.0** -- use `docs query` for documentation and native commands
+  for project data.
 
 ## `token` group mints/rotates/revokes SCOPED Storage tokens; secret shown ONCE (since v0.66.0)
 
@@ -630,6 +670,10 @@ a kbagent co-pilot.
   per-project session-state API. Only the dashboard UI tile + left
   nav entry was swapped. `kbagent kai ping|preflight|ask|chat`
   CLI commands are unchanged.
+- **Caveat added in v0.77.0:** the whole `kai` CLI group *and* the
+  `/kai/*` REST routes are now **DEPRECATED** (see the next entry).
+  They still work, but "what stays" now means "stays until removal in a
+  later minor" -- do not build anything new on them.
 
 **Implication for AI agents:**
 

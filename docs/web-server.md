@@ -90,7 +90,7 @@ else lives here, with their own agents that know their projects.
 | `/sharing` | share/unshare/link/unlink | `kbagent sharing *` |
 | `/data-apps` | CRUD, deploy, start/stop, **secrets** | `kbagent data-app *` |
 | `/mcp/tools` | list, schema, **call** (multi-project) | `kbagent tool *` |
-| `/kai/*` | ping, ask, chat, history | `kbagent kai *` |
+| `/kai/*` **(DEPRECATED 0.77.0)** | ping, ask, chat, history | `kbagent kai *` (deprecated -- legacy `kai-assistant` backend frozen; removal planned, no replacement) |
 | `/encrypt` | encrypt secret values | `kbagent encrypt values` |
 | `/search` | textual + config-based cross-project search | `kbagent search` |
 | `/org` `/members` | bulk org setup, invite, remove, role (manage token) | `kbagent org|project member-* *` |

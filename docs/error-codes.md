@@ -109,6 +109,10 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 
 ### KAI (AI Service)
 
+Both codes remain valid and unchanged, but the `kbagent kai` command group that
+raises them is **deprecated since 0.77.0** (legacy `kai-assistant` backend
+frozen; removal planned, no replacement).
+
 | Code | Description |
 |---|---|
 | `KAI_ERROR` | AI Service request failed |
