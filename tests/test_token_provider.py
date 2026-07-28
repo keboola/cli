@@ -175,6 +175,83 @@ class TestProactiveRefresh:
 
 
 # ----------------------------------------------------------------------------
+# Refresh-token expiry propagation
+# ----------------------------------------------------------------------------
+
+
+class _RefreshExpiryAuthClient(AuthClient):
+    """Fake whose refresh response carries a server-sent `refreshExpiresIn`.
+
+    Built via `model_validate` (not kwargs) so the test exercises the real wire
+    shape an `extra="allow"` field arrives in.
+    """
+
+    def __init__(self, *, refresh_expires_in: int) -> None:
+        self._refresh_expires_in = refresh_expires_in
+        self.calls: list[str] = []
+
+    def __enter__(self) -> _RefreshExpiryAuthClient:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def refresh(self, refresh_token: str) -> CliTokenResponse:
+        self.calls.append(refresh_token)
+        return CliTokenResponse.model_validate(
+            {
+                "accessToken": "kbc_at_rotated_1",
+                "refreshToken": "kbc_rt_rotated_1",
+                "expiresIn": 3600,
+                "sessionId": "session-1",
+                "refreshExpiresIn": self._refresh_expires_in,
+            }
+        )
+
+
+class TestRefreshExpiryPropagation:
+    """A rotation must neither invent a refresh expiry nor drop the one on record.
+
+    No deployment sends `refreshExpiresIn` today, so the first test below covers
+    every real rotation happening in production: the expiry already stored stays
+    put. The second pins that the field IS honoured the moment a backend starts
+    sending it -- the same helper `AuthService.login` now uses, so the two cannot
+    disagree.
+    """
+
+    def test_absent_field_keeps_the_expiry_already_on_record(self, tmp_path: Path) -> None:
+        store = AuthStateStore(tmp_path)
+        seeded = _seed_session(store, access_expires_in=-10)
+        fake = _FakeAuthClient()
+
+        provider = SessionTokenProvider(STACK_URL, store, client_factory=lambda _url: fake)
+        provider.get_access_token()
+
+        persisted = store.get_session(STACK_URL)
+        assert persisted is not None
+        assert persisted.refresh_token == "kbc_rt_rotated_1"  # rotation did happen
+        assert persisted.refresh_expires_at == seeded.refresh_expires_at
+
+    def test_server_sent_seconds_replace_the_stored_expiry(self, tmp_path: Path) -> None:
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10, refresh_expires_in=60)
+        fake = _RefreshExpiryAuthClient(refresh_expires_in=7 * 24 * 3600)
+
+        before = datetime.now(UTC)
+        provider = SessionTokenProvider(STACK_URL, store, client_factory=lambda _url: fake)
+        provider.get_access_token()
+
+        persisted = store.get_session(STACK_URL)
+        assert persisted is not None
+        assert persisted.refresh_expires_at is not None
+        assert persisted.refresh_expires_at >= before + timedelta(days=7)
+        assert persisted.refresh_expires_at <= datetime.now(UTC) + timedelta(days=7)
+
+
+# ----------------------------------------------------------------------------
 # Terminal states
 # ----------------------------------------------------------------------------
 

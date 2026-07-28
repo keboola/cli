@@ -16,7 +16,7 @@ an unrecognised field from a newer backend passes through instead of raising).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
@@ -76,6 +76,33 @@ class CliTokenResponse(BaseModel):
     user: AuthUser | None = None
 
     model_config = _WIRE_MODEL_CONFIG
+
+    def refresh_expiry(self, *, now: datetime | None = None) -> datetime | None:
+        """Absolute refresh-token expiry from ``refreshExpiresIn``, or None if absent.
+
+        No Keboola deployment sends a refresh-token expiry today -- this frozen
+        contract has no dedicated field for it -- so the value is read
+        opportunistically out of ``model_extra`` (the model is
+        ``extra="allow"``) as seconds-from-now. Until some backend starts
+        sending it, every persisted `StackSession` carries
+        ``refresh_expires_at = None``, which makes
+        `StackSession.refresh_token_expired` inert **by design**: the only
+        signal that a refresh token is dead is the server rejecting it,
+        classified in `auth_client._is_rejected_grant`. Never substitute a
+        guessed TTL here -- guessing too short purges a live session, too long
+        keeps re-presenting a dead one.
+
+        Lives on the model (rather than in each caller) so `AuthService.login`
+        and `SessionTokenProvider._perform_refresh` cannot drift on which key
+        carries this or what it means: before this existed, refresh honoured
+        the field and login hardcoded None, so a backend that started sending
+        it would have been ignored until the first refresh.
+        """
+        seconds_in = (self.model_extra or {}).get("refreshExpiresIn")
+        if isinstance(seconds_in, bool) or not isinstance(seconds_in, int | float):
+            return None
+        moment = now if now is not None else datetime.now(UTC)
+        return moment + timedelta(seconds=seconds_in)
 
 
 class DeviceAuthorization(BaseModel):

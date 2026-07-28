@@ -32,7 +32,7 @@ import httpx
 from ..constants import AUTH_REFRESH_MARGIN
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import normalize_stack_url
-from .models import IntrospectResponse, StackSession
+from .models import CliTokenResponse, IntrospectResponse, StackSession
 from .state_store import AuthStateStore
 
 if TYPE_CHECKING:
@@ -236,19 +236,17 @@ class SessionTokenProvider:
         return self._cached_token
 
     @staticmethod
-    def _resolve_refresh_expiry(tokens: object, session: StackSession) -> datetime | None:
-        """Refresh-token expiry comes from the response when present.
+    def _resolve_refresh_expiry(tokens: CliTokenResponse, session: StackSession) -> datetime | None:
+        """Refresh-token expiry from the response when present, else the previous value.
 
-        The frozen `CliTokenResponse` contract carries no dedicated
-        refresh-expiry field today, but it is `extra="allow"`, so a future
-        backend may add one (`refreshExpiresIn`, seconds from now). Absent
-        that, the previous value is kept unchanged rather than guessed.
+        The wire-shape question (which key, what unit, is it even sent) belongs
+        to `CliTokenResponse.refresh_expiry`, shared with `AuthService.login`.
+        The only rule this method adds is rotation-specific: a response without
+        the field keeps the expiry already on record instead of clearing it,
+        since a rotation does not shorten a refresh-token family's lifetime.
         """
-        model_extra = getattr(tokens, "model_extra", None) or {}
-        seconds_in = model_extra.get("refreshExpiresIn")
-        if isinstance(seconds_in, int | float):
-            return datetime.now(UTC) + timedelta(seconds=seconds_in)
-        return session.refresh_expires_at
+        expiry = tokens.refresh_expiry()
+        return expiry if expiry is not None else session.refresh_expires_at
 
 
 class BearerAuth(httpx.Auth):

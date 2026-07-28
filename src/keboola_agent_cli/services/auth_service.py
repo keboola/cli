@@ -291,7 +291,13 @@ class AuthService:
                 access_token=tokens.access_token,
                 refresh_token=tokens.refresh_token,
                 access_expires_at=now + timedelta(seconds=tokens.expires_in),
-                refresh_expires_at=None,
+                # Read through the shared model helper, not hardcoded None: no
+                # backend sends a refresh expiry today, but if one starts,
+                # honouring it here (rather than only on the first refresh)
+                # keeps login and rotation consistent. See
+                # `CliTokenResponse.refresh_expiry` for why nothing is guessed
+                # when the field is absent.
+                refresh_expires_at=tokens.refresh_expiry(now=now),
                 created_at=now,
             )
 

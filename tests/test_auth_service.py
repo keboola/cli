@@ -9,6 +9,7 @@ browser, sleep for real, or hit a real stack.
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -511,6 +512,53 @@ class TestLoginSessionReplacement:
         service.login(stack=STACK_URL)
 
         assert seen_session_at_revoke_time == ["new-sess"]
+
+
+class TestLoginRefreshExpiry:
+    """Login must record a server-sent refresh expiry, not hardcode "unknown".
+
+    Before `CliTokenResponse.refresh_expiry` existed, rotation honoured
+    `refreshExpiresIn` while login wrote None, so a backend that started sending
+    it would have been ignored until the first refresh -- and `auth status`
+    would have reported no refresh expiry for a session that had one.
+    """
+
+    def test_absent_field_leaves_the_expiry_unknown(self, store, state_store) -> None:
+        """Today's real wire shape: nothing is guessed, so the server stays the authority."""
+        client = _FakeAuthClient()
+        client.exchange_response = _tokens()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        result = service.login(stack=STACK_URL)
+
+        assert result.refresh_expires_at == ""
+        session = state_store.get_session(STACK_URL)
+        assert session.refresh_expires_at is None
+
+    def test_server_sent_seconds_are_persisted_and_reported(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.exchange_response = CliTokenResponse.model_validate(
+            {
+                "accessToken": "at-1",
+                "refreshToken": "rt-1",
+                "expiresIn": 3600,
+                "sessionId": "sess-1",
+                "refreshExpiresIn": 30 * 24 * 3600,
+            }
+        )
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        before = datetime.now(UTC)
+        result = service.login(stack=STACK_URL)
+
+        session = state_store.get_session(STACK_URL)
+        assert session.refresh_expires_at is not None
+        assert session.refresh_expires_at >= before + timedelta(days=30)
+        assert session.refresh_expires_at <= datetime.now(UTC) + timedelta(days=30)
+        # Whatever was persisted is exactly what `auth status`/`--json` reports.
+        assert result.refresh_expires_at == session.refresh_expires_at.isoformat()
 
 
 def _existing_session(*, session_id: str, refresh_token: str):
