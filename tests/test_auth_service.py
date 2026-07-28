@@ -578,9 +578,13 @@ class TestRegisterProjects:
         assert result.registered_projects[0].status == "exists"
         assert result.warnings == []
 
-    def test_existing_alias_different_project_is_skipped_with_warning(
+    def test_existing_alias_collision_suffixes_instead_of_skipping(
         self, store, state_store
     ) -> None:
+        """Deliberate behaviour change: a name collision with an existing
+        static-token project used to skip-with-warning; it now gets a
+        `-{id}` suffixed alias instead, and the static project is left
+        completely untouched (never overwritten)."""
         store.add_project(
             "my-cool-project",
             ProjectConfig(
@@ -596,11 +600,15 @@ class TestRegisterProjects:
 
         result = service.login(stack=STACK_URL, register_projects=True)
 
-        assert result.registered_projects[0].status == "skipped"
-        assert len(result.warnings) == 1
+        assert result.registered_projects[0].status == "registered"
+        assert result.registered_projects[0].alias == "my-cool-project-555"
+        assert result.warnings == []
         # The static-token project must be left completely untouched.
         untouched = store.get_project("my-cool-project")
         assert untouched.token == STATIC_TOKEN
+        new_project = store.get_project("my-cool-project-555")
+        assert new_project is not None
+        assert new_project.token == "kbc-session://555"
 
 
 # ----------------------------------------------------------------------------

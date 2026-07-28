@@ -394,6 +394,34 @@ Helpers: `auth/pkce.py`, `auth/device.py`, `auth/environment.py`. Commands regis
    expires_at, registered_projects: [...]}` — output models structurally contain
    **no token fields** (by construction, not post-hoc filtering).
 
+**Addendum: the picker shipped (still 0.77.0, unreleased).** PR #535 landed with only
+`--register-projects` (a flat batch, no picker) — a real user hit exactly the gap point 5
+called out as optional: nothing gets registered unless that flag is passed, and the
+alias offered is a slug of the project *name*, so the numeric project id printed in the
+accessible-projects table (e.g. `9840`) is never itself a valid `--project` value. Both
+gaps are now closed in the same unreleased version:
+
+- **`kbagent auth register-projects [--stack] [--all] [--project-id ID ...]
+  [--alias ID=ALIAS ...] [--yes]`** — new command. Registers an EXISTING session's
+  accessible projects as `config.json` aliases without re-running `login`. `--all` /
+  `--project-id` are non-interactive (agent-safe); omitting both runs the interactive TTY
+  picker point 5 originally proposed (numbers / ranges / `all` / `none`, per-project alias
+  prompt defaulting to a suggested slug, final confirm) — bounded re-prompt loops (max 5
+  attempts) so a piped/garbage stdin cannot spin forever. In a non-TTY or `--json` context
+  with neither `--all` nor `--project-id`, it fails fast instead of hanging on a prompt.
+- **`auth login`** (without `--register-projects`) now also offers the same picker
+  interactively right after reporting a successful login, on a TTY with human output;
+  otherwise it just prints the `auth register-projects` hint. A failure in this optional
+  follow-up never changes `login`'s own already-successful exit code.
+- **Alias-collision behaviour changed** for both the picker and `--register-projects`:
+  previously, two accessible projects sharing the same name collapsed onto one alias and
+  the second was silently skipped with a warning. Both paths now suffix with
+  `-{project_id}` instead, so the second project gets its own working alias. A collision
+  with an existing *static-token* project also suffixes rather than skipping — the static
+  project is never overwritten either way.
+- Both paths share one `_apply_selections` code path in `AuthService`, so `login
+  --register-projects` and `auth register-projects --all` apply identical collision rules.
+
 **`auth status [--stack] [--json]`** — per-stack session: user, access/refresh
 expiry from `auth.json`. For the live check (review NB-2) it must **not** call
 `introspect` on the stored access token directly — a normal session routinely has an

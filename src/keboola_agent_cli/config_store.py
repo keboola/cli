@@ -14,6 +14,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -75,6 +76,79 @@ def _try_flock(fd: int, operation: int) -> None:
         fcntl.flock(fd, operation)
 
 
+# Filesystem-safe slug constraint for a project alias. Aliases land on disk
+# as the nested-sync directory name (``<cwd>/<alias>/``), so they must not
+# contain path separators, NUL bytes, or anything outside the strict slug
+# alphabet. ``..`` is rejected separately to catch ``foo..bar`` cases the
+# regex would otherwise accept (dot is a legal slug character on its own).
+_ALIAS_FORMAT_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.\-]*")
+
+
+def validate_alias_format(alias: str, *, field: str = "alias") -> None:
+    """Reject filesystem-unsafe project alias values.
+
+    Shared by every path that lets a caller *choose* an alias --
+    ``project edit --new-alias`` and the ``auth register-projects`` picker --
+    so the two cannot drift into accepting different character sets for the
+    same dict key. Intentionally stricter than ``project add`` accepts today
+    (which validates nothing): a chosen alias is used as a directory name.
+
+    Forbidden inputs:
+
+    - empty / whitespace-only;
+    - any whitespace anywhere;
+    - the substring ``..`` (path-traversal in any position);
+    - characters outside ``[A-Za-z0-9_.-]`` (catches ``/``, ``\\``, NUL,
+      control chars, Unicode letters);
+    - leading ``.`` or ``-`` (would surprise CLI parsing or hide as a dotfile).
+
+    Args:
+        alias: The candidate alias.
+        field: Label used in the error message, so a caller can name the
+            flag the user actually typed (e.g. ``--new-alias``).
+
+    Raises:
+        ConfigError: With a message naming ``field`` and the reason.
+    """
+    if not alias or not alias.strip():
+        raise ConfigError(f"Invalid {field}: must not be empty or whitespace-only.")
+    if any(ch.isspace() for ch in alias):
+        raise ConfigError(f"Invalid {field} '{alias}': must not contain whitespace.")
+    if ".." in alias:
+        raise ConfigError(
+            f"Invalid {field} '{alias}': must not contain '..' "
+            "(path-traversal sequences are rejected because the alias "
+            "is used as a filesystem directory name)."
+        )
+    if not _ALIAS_FORMAT_RE.fullmatch(alias):
+        raise ConfigError(
+            f"Invalid {field} '{alias}': must match "
+            "[A-Za-z0-9_][A-Za-z0-9_.-]* (filesystem-safe slug). "
+            "Path separators, NULs, and characters outside the slug "
+            "alphabet are rejected because the alias is used as a "
+            "nested-sync directory name."
+        )
+
+
+def _has_stored_session(config_path: object) -> bool:
+    """True when ``auth.json`` sits next to ``config_path`` and holds a session.
+
+    Best-effort and never raises: ``config_path`` is typed ``object`` because
+    services pass whatever their (possibly faked) config store exposes, so a
+    Mock, a str, or a Path all have to be tolerated. Any failure to read the
+    sibling file means "no session" -- this only ever decides whether an
+    extra *hint* is appended to an error message.
+    """
+    try:
+        auth_path = Path(str(config_path)).parent / "auth.json"
+        if not auth_path.is_file():
+            return False
+        payload = json.loads(auth_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(isinstance(payload, dict) and payload.get("sessions"))
+
+
 def project_not_found_error(alias: str, config_path: object, source: object) -> ConfigError:
     """Build the canonical "project not found" error.
 
@@ -83,15 +157,29 @@ def project_not_found_error(alias: str, config_path: object, source: object) -> 
     ``.kbagent`` walk-up vs global) is visible directly in the error message
     instead of failing opaquely (issue #477).
 
+    When a programmatic-auth session exists in the sibling ``auth.json``, the
+    remedy is NOT ``project add`` -- a session user has no static token to
+    paste, and would have to hand-write a ``kbc-session://`` sentinel. Point
+    those users at the picker instead (0.77.0). Note that a session
+    registers aliases from the project *name*, so the numeric project id is
+    never a valid alias, which is the exact trap this hint exists to defuse.
+
     A module-level function (not a ConfigStore method) so services can build
     a real ConfigError even when their config_store is a test double -- the
     path and source are read as plain attributes, never via a method call.
     """
-    return ConfigError(
+    message = (
         f"Project '{alias}' not found in {config_path} "
         f"(source: {source}). "
         "Run 'kbagent project list' to see configured projects."
     )
+    if _has_stored_session(config_path):
+        message += (
+            " You have an active Keboola session for this config: run "
+            "'kbagent auth register-projects' to pick which of its projects "
+            "to register (aliases come from the project NAME, not its id)."
+        )
+    return ConfigError(message)
 
 
 def resolve_config_dir(cli_config_dir: str | None = None) -> tuple[Path, str]:

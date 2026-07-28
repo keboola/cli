@@ -81,7 +81,13 @@ Use `kbagent <command> --help` for full flag details and examples.
     `kbc-session://{{project_id}}` (config.json schema and
     CURRENT_CONFIG_VERSION are unchanged; an existing alias for the same
     project+stack is left alone, one pointing elsewhere is skipped with a
-    warning). PKCE auto-falls-back to the device flow ONLY on a pre-exchange
+    warning; two accessible projects sharing the same name get distinct
+    suggested aliases via a `-{{project_id}}` suffix rather than the second
+    one being silently skipped). Without --register-projects, and on a TTY
+    with human output, login now offers the same picker interactively right
+    after reporting success -- see `auth register-projects` below for the
+    full picker/--all/--project-id/--alias contract, which this shares.
+    PKCE auto-falls-back to the device flow ONLY on a pre-exchange
     failure (no loopback browser, callback timeout, SSH/container/WSL
     detected) -- once the browser callback succeeds there is no fallback.
     A 404 from any auth endpoint means browser login is not enabled on that
@@ -98,6 +104,35 @@ Use `kbagent <command> --help` for full flag details and examples.
     auth.json. --remove-projects also removes config.json project aliases
     pointing at this session (sentinel-token projects only -- a static-token
     project sharing the same stack is never touched).
+
+  kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...] [--alias ID=ALIAS ...] [--yes]
+    Register accessible projects as local config.json aliases from an
+    EXISTING session, without re-running login. Fixes the usability trap
+    where `login` prints an accessible-project table but nothing gets
+    registered unless --register-projects was passed, and where the
+    suggested alias is slugified from the project NAME -- the numeric
+    project id (e.g. 9840) is never a valid alias on its own.
+    --all registers every accessible project. --project-id ID (repeatable)
+    registers specific ones (an id the session cannot access raises a
+    ConfigError naming it). Omitting both starts an interactive picker
+    (numbers / ranges like 1-3 / 'all' / 'none', then a per-project alias
+    prompt defaulting to the suggested slug, then a final confirm) -- this
+    needs a real TTY and non-JSON output; in a non-interactive or --json
+    context with neither --all nor --project-id, the command fails fast and
+    tells you to pass one of them instead of hanging on a prompt. --alias
+    ID=ALIAS (repeatable) overrides the suggested alias for a given project
+    id in every mode, including as the picker's prefilled default. --yes
+    skips only the picker's final "register these N projects?" confirmation.
+    Never overwrites an existing config.json entry: a project already
+    registered under an alias for this project+stack reports status
+    "exists" (no-op, even if you request a different alias -- rename via
+    `project edit --new-alias` instead); an alias already claimed by a
+    DIFFERENT project or a static-token project reports status "skipped"
+    with a note, never clobbered. `auth login` (without --register-projects)
+    now also offers this same picker right after a successful login, when
+    stdout is a TTY and --json was not passed; otherwise it just prints the
+    hint to run this command later. A failure in this optional follow-up
+    never changes login's own (already-successful) exit code.
 
   Storage posture: session tokens live in PLAINTEXT in auth.json (0600), a
   sibling of config.json -- the same posture as the static Storage tokens

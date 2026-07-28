@@ -4,7 +4,6 @@ Orchestrates config persistence and API calls without knowing about CLI or HTTP 
 """
 
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -12,20 +11,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..config_store import project_not_found_error
+from ..config_store import project_not_found_error, validate_alias_format
 from ..constants import ENV_KBAGENT_PROJECT
 from ..errors import ConfigError, KeboolaApiError, mask_token
 from ..models import ProjectConfig, normalize_stack_url
 from .base import BaseService
-
-# Filesystem-safe slug constraint for ``--new-alias``. Aliases land on disk
-# as the nested-sync directory name (``<cwd>/<alias>/``), so they must not
-# contain path separators, NUL bytes, or anything outside the strict slug
-# alphabet. ``..`` is rejected separately to catch ``foo..bar`` cases the
-# regex would otherwise accept (dot is a legal slug character on its own).
-# This is intentionally stricter than ``project add`` accepts today --
-# rename's filesystem interaction is the new pressure point.
-_ALIAS_FORMAT_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.\-]*")
 
 
 class ProjectService(BaseService):
@@ -397,6 +387,12 @@ class ProjectService(BaseService):
     def _validate_alias_format(new_alias: str) -> None:
         """Reject filesystem-unsafe ``--new-alias`` values.
 
+        Delegates to the shared ``config_store.validate_alias_format`` (added
+        for the ``auth register-projects`` picker, 0.77.0) so ``project edit
+        --new-alias`` and the picker can never drift into accepting different
+        alias character sets for the same config.json key. Error messages are
+        byte-identical to the pre-delegation version (same ``field`` label).
+
         Stricter than the no-op check ``project add`` performs today
         (none) because rename uses ``new_alias`` as a directory name.
         Forbidden inputs:
@@ -409,24 +405,7 @@ class ProjectService(BaseService):
         - leading ``.`` or ``-`` (would surprise CLI parsing or hide as
           a dotfile).
         """
-        if not new_alias or not new_alias.strip():
-            raise ConfigError("Invalid --new-alias: must not be empty or whitespace-only.")
-        if any(ch.isspace() for ch in new_alias):
-            raise ConfigError(f"Invalid --new-alias '{new_alias}': must not contain whitespace.")
-        if ".." in new_alias:
-            raise ConfigError(
-                f"Invalid --new-alias '{new_alias}': must not contain '..' "
-                "(path-traversal sequences are rejected because the alias "
-                "is used as a filesystem directory name)."
-            )
-        if not _ALIAS_FORMAT_RE.fullmatch(new_alias):
-            raise ConfigError(
-                f"Invalid --new-alias '{new_alias}': must match "
-                "[A-Za-z0-9_][A-Za-z0-9_.-]* (filesystem-safe slug). "
-                "Path separators, NULs, and characters outside the slug "
-                "alphabet are rejected because the alias is used as a "
-                "nested-sync directory name."
-            )
+        validate_alias_format(new_alias, field="--new-alias")
 
     @staticmethod
     def _rename_nested_sync_dir(

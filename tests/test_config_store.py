@@ -5,11 +5,17 @@ import os
 import stat
 import threading
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
-from keboola_agent_cli.config_store import _HAS_FCNTL, CURRENT_CONFIG_VERSION, ConfigStore
+from keboola_agent_cli.config_store import (
+    _HAS_FCNTL,
+    CURRENT_CONFIG_VERSION,
+    ConfigStore,
+    project_not_found_error,
+    validate_alias_format,
+)
 from keboola_agent_cli.errors import ConfigError
 from keboola_agent_cli.models import AppConfig, DeveloperPortalIdentity, ProjectConfig
 
@@ -1123,3 +1129,137 @@ class TestProjectNotFoundError:
         assert "Project 'ghost' not found" in message
         assert str(tmp_config_dir / "config.json") in message
         assert "(source: local)" in message
+
+
+class TestValidateAliasFormat:
+    """`validate_alias_format` -- shared alias-format guard (0.77.0, added for the
+    `auth register-projects` picker so it and `project edit --new-alias` cannot
+    drift into accepting different character sets for the same config.json key).
+    """
+
+    def test_legal_slug_accepted(self) -> None:
+        # Must not raise for a normal filesystem-safe slug.
+        validate_alias_format("jirka-bq-sox")
+        validate_alias_format("my_project.2")
+        validate_alias_format("a")
+
+    def test_empty_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="must not be empty or whitespace-only"):
+            validate_alias_format("")
+
+    def test_whitespace_only_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="must not be empty or whitespace-only"):
+            validate_alias_format("   ")
+
+    def test_internal_whitespace_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="must not contain whitespace"):
+            validate_alias_format("with space")
+
+    @pytest.mark.parametrize(
+        "alias",
+        ["..", "../etc", "foo..bar", "a..", "..a"],
+        ids=[
+            "bare-dotdot",
+            "leading-traversal",
+            "middle-dotdot",
+            "trailing-dotdot",
+            "leading-dotdot",
+        ],
+    )
+    def test_dotdot_rejected_in_any_position(self, alias: str) -> None:
+        with pytest.raises(ConfigError, match=r"must not contain '\.\.'"):
+            validate_alias_format(alias)
+
+    def test_path_separator_rejected(self) -> None:
+        with pytest.raises(ConfigError, match=r"\[A-Za-z0-9_\]\[A-Za-z0-9_\.-\]\*"):
+            validate_alias_format("foo/bar")
+
+    def test_leading_dot_rejected(self) -> None:
+        with pytest.raises(ConfigError, match=r"\[A-Za-z0-9_\]\[A-Za-z0-9_\.-\]\*"):
+            validate_alias_format(".hidden")
+
+    def test_leading_dash_rejected(self) -> None:
+        with pytest.raises(ConfigError, match=r"\[A-Za-z0-9_\]\[A-Za-z0-9_\.-\]\*"):
+            validate_alias_format("-leading-dash")
+
+    def test_field_label_appears_in_every_message(self) -> None:
+        # The caller-supplied `field` lets each call site name the flag the
+        # user actually typed (e.g. --new-alias) instead of a generic "alias".
+        with pytest.raises(ConfigError, match=r"--new-alias") as excinfo:
+            validate_alias_format("", field="--new-alias")
+        assert "--new-alias" in str(excinfo.value)
+
+        with pytest.raises(ConfigError, match=r"--alias") as excinfo:
+            validate_alias_format("bad space", field="--alias")
+        assert "--alias" in str(excinfo.value)
+
+    def test_default_field_label_is_alias(self) -> None:
+        with pytest.raises(ConfigError, match="Invalid alias:"):
+            validate_alias_format("")
+
+
+class TestProjectNotFoundErrorSessionHint:
+    """`project_not_found_error`'s session-aware hint (0.77.0): a programmatic-auth
+    user has no static token to paste, so the remedy it points at is
+    `auth register-projects`, not `project add` -- but only when a session
+    actually exists (issue: real user hit "project not found" right after
+    `auth login`, with `--project 9840`, the numeric id from the login table).
+    """
+
+    def test_no_sibling_auth_json_no_hint(self, tmp_config_dir: Path) -> None:
+        error = project_not_found_error("9840", tmp_config_dir / "config.json", "local")
+        message = str(error)
+        assert "auth register-projects" not in message
+        assert "Project '9840' not found" in message
+
+    def test_sibling_auth_json_with_sessions_appends_hint(self, tmp_config_dir: Path) -> None:
+        auth_path = tmp_config_dir / "auth.json"
+        auth_path.write_text(json.dumps({"sessions": {"https://connection.keboola.com": {}}}))
+
+        error = project_not_found_error("9840", tmp_config_dir / "config.json", "local")
+        message = str(error)
+        assert "auth register-projects" in message
+        assert "not its id" in message or "not id" in message.lower()
+
+    def test_sibling_auth_json_with_empty_sessions_no_hint(self, tmp_config_dir: Path) -> None:
+        auth_path = tmp_config_dir / "auth.json"
+        auth_path.write_text(json.dumps({"sessions": {}}))
+
+        error = project_not_found_error("9840", tmp_config_dir / "config.json", "local")
+        assert "auth register-projects" not in str(error)
+
+    def test_sibling_auth_json_missing_sessions_key_no_hint(self, tmp_config_dir: Path) -> None:
+        auth_path = tmp_config_dir / "auth.json"
+        auth_path.write_text(json.dumps({"version": 1}))
+
+        error = project_not_found_error("9840", tmp_config_dir / "config.json", "local")
+        assert "auth register-projects" not in str(error)
+
+    def test_malformed_auth_json_is_treated_as_no_session(self, tmp_config_dir: Path) -> None:
+        auth_path = tmp_config_dir / "auth.json"
+        auth_path.write_text("{not valid json")
+
+        # Must never raise -- a corrupted sibling file only ever suppresses
+        # the extra hint, it must not break the primary "not found" error.
+        error = project_not_found_error("9840", tmp_config_dir / "config.json", "local")
+        assert "auth register-projects" not in str(error)
+        assert "Project '9840' not found" in str(error)
+
+    def test_mock_config_path_does_not_raise(self) -> None:
+        # Services may pass a test double whose config_path is a Mock, not a
+        # real Path -- str(Mock()) is well-defined, so this must degrade to
+        # "no session" instead of raising.
+        fake_store = Mock()
+        fake_store.config_path = Mock()
+
+        error = project_not_found_error("9840", fake_store.config_path, "local")
+        assert "auth register-projects" not in str(error)
+
+    def test_str_config_path_does_not_raise(self, tmp_config_dir: Path) -> None:
+        auth_path = tmp_config_dir / "auth.json"
+        auth_path.write_text(json.dumps({"sessions": {"https://connection.keboola.com": {}}}))
+
+        # config_path passed as a plain str (not a Path) must still resolve
+        # the sibling auth.json correctly.
+        error = project_not_found_error("9840", str(tmp_config_dir / "config.json"), "local")
+        assert "auth register-projects" in str(error)

@@ -37,6 +37,27 @@ Versioning convention:
   expected, not a corrupted token. An existing alias already pointing at the
   same project+stack is left untouched (`status: "exists"`); one pointing
   elsewhere is skipped with a warning (`status: "skipped"`), never overwritten.
+- **Registered aliases derive from the project NAME, never the numeric
+  project id -- `--project 9840` will never resolve.** `login`'s
+  accessible-projects table shows a numeric `id`, but the alias
+  `--register-projects` (or `auth register-projects`, or the login picker)
+  writes is a slug of the project *name* (e.g. `jirka-bq-sox`), suffixed
+  with `-{project_id}` only on a name collision. Passing the raw id as
+  `--project` is the single most common mistake right after a first login;
+  the fix is `kbagent project list` to see the real alias, not re-running
+  login. `kbagent auth register-projects [--stack] [--all] [--project-id ID
+  ...] [--alias ID=ALIAS ...] [--yes]` (0.77.0+) registers an EXISTING
+  session's projects without re-logging-in -- `--all`/`--project-id` are
+  non-interactive and safe for an agent to run once a human has confirmed
+  the session is live; omitting both starts an interactive TTY picker
+  (numbers/ranges/`all`/`none` + per-project alias prompt + confirm), which
+  needs a real terminal and is NOT for unattended/agent use -- it fails fast
+  in a non-TTY or `--json` context instead of hanging on a prompt. Two
+  accessible projects sharing the same name each get a distinct suggested
+  alias (via the `-{project_id}` suffix) instead of the second one being
+  silently skipped, unlike the original 0.77.0 `--register-projects` batch
+  path. Collision handling matches `--register-projects` above: never
+  overwrites an existing `config.json` entry.
 - **v1 wires bearer sessions through Storage + Manage command paths ONLY.**
   `kbagent serve`, the importable SDK (`lib.Client`), the MCP subprocess, and
   the AI / data-science / metastore / dev-portal / stream clients all

@@ -1,4 +1,5 @@
-"""CLI tests for the `kbagent auth` command group (login / status / logout).
+"""CLI tests for the `kbagent auth` command group (login / status / logout /
+register-projects).
 
 The service is mocked throughout -- these tests pin the *command* layer's
 contract: argument wiring, exit codes, permission classification, and the
@@ -15,9 +16,17 @@ from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.constants import EXIT_PERMISSION_DENIED
-from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.permissions import OPERATION_REGISTRY
-from keboola_agent_cli.services.auth_service import AuthStatusResult, LoginResult, LogoutResult
+from keboola_agent_cli.services.auth_service import (
+    AuthStatusResult,
+    LoginResult,
+    LogoutResult,
+    ProjectCandidate,
+    ProjectCandidatesResult,
+    RegisteredProject,
+    RegisterProjectsResult,
+)
 
 STACK_URL = "https://connection.keboola.com"
 SECRET_ACCESS_TOKEN = "kbc_at_should_never_leak_00000000"
@@ -84,6 +93,30 @@ def _logout_result(**overrides: object) -> LogoutResult:
     return LogoutResult(**defaults)  # type: ignore[arg-type]
 
 
+def _candidate(**overrides: object) -> ProjectCandidate:
+    defaults: dict[str, object] = {
+        "project_id": 9840,
+        "project_name": "Jirka BQ SOX",
+        "role": "admin",
+        "default_alias": "jirka-bq-sox",
+        "existing_alias": "",
+        "registered": False,
+    }
+    defaults.update(overrides)
+    return ProjectCandidate(**defaults)  # type: ignore[arg-type]
+
+
+def _register_result(**overrides: object) -> RegisterProjectsResult:
+    defaults: dict[str, object] = {
+        "status": "ok",
+        "stack_url": STACK_URL,
+        "registered_projects": [],
+        "warnings": [],
+    }
+    defaults.update(overrides)
+    return RegisterProjectsResult(**defaults)  # type: ignore[arg-type]
+
+
 class TestLogin:
     def test_device_code_json(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
@@ -96,7 +129,11 @@ class TestLogin:
             ["--json", "auth", "login", "--stack", STACK_URL, "--device-code"],
         )
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)["data"]
+        # stdout must stay a SINGLE valid JSON document even though the
+        # post-login hook writes a hint to stderr (accessible_projects is
+        # non-empty and --register-projects was not passed) -- parse
+        # result.stdout specifically, not the mixed result.output.
+        data = json.loads(result.stdout)["data"]
         assert data["method"] == "device"
         assert data["session_id"] == "sess-1"
         kwargs = svc.login.call_args.kwargs
@@ -133,13 +170,13 @@ class TestLogin:
         assert SECRET_REFRESH_TOKEN not in result.output
         assert "access_token" not in result.output
         assert "refresh_token" not in result.output
-        data = json.loads(result.output)["data"]
+        # stdout alone must be exactly one JSON document (see comment above).
+        data = json.loads(result.stdout)["data"]
         assert set(data.keys()).isdisjoint({"access_token", "refresh_token", "token"})
 
     def test_config_error_maps_to_exit_5(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
         config_dir.mkdir()
-        from keboola_agent_cli.errors import ConfigError
 
         svc = MagicMock()
         svc.login.side_effect = ConfigError("No stack to log into.")
@@ -172,6 +209,188 @@ class TestLogin:
         result = _invoke(config_dir, svc, ["--json", "auth", "login"])
         assert result.exit_code != 0
         assert json.loads(result.output)["error"]["code"] == "AUTH_STATE_MISMATCH"
+
+
+class TestPostLoginHook:
+    """The optional "register these projects now?" nudge after a plain login."""
+
+    def test_json_mode_prints_hint_to_stderr_only(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result()
+        result = _invoke(config_dir, svc, ["--json", "auth", "login", "--device-code"])
+        assert result.exit_code == 0, result.output
+        assert "register-projects" in result.stderr
+        assert "register-projects" not in result.stdout
+        # stdout is still exactly one JSON document.
+        json.loads(result.stdout)
+        svc.register_projects.assert_not_called()
+
+    def test_non_tty_human_mode_prints_hint_and_exits_zero(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result()
+        # CliRunner's captured stdout is never a TTY, so the hook takes the
+        # same "print hint only" branch as --json without needing to patch
+        # anything -- this pins that behaviour explicitly.
+        result = _invoke(config_dir, svc, ["auth", "login", "--device-code"])
+        assert result.exit_code == 0, result.output
+        assert "Run 'kbagent auth register-projects'" in result.output
+        svc.register_projects.assert_not_called()
+
+    def test_no_accessible_projects_skips_hook_entirely(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result(accessible_projects=[])
+        result = _invoke(config_dir, svc, ["auth", "login", "--device-code"])
+        assert result.exit_code == 0, result.output
+        assert "register-projects" not in result.output
+
+    def test_register_projects_flag_skips_hook_entirely(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result()
+        result = _invoke(config_dir, svc, ["auth", "login", "--device-code", "--register-projects"])
+        assert result.exit_code == 0, result.output
+        assert "register-projects" not in result.output
+        svc.candidates_from_projects.assert_not_called()
+
+    def test_tty_declined_prints_hint_and_exits_zero(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result()
+        with patch("keboola_agent_cli.commands.auth._is_stdout_tty", return_value=True):
+            result = _invoke(config_dir, svc, ["auth", "login", "--device-code"], input_text="n\n")
+        assert result.exit_code == 0, result.output
+        assert "Run 'kbagent auth register-projects'" in result.output
+        svc.register_projects.assert_not_called()
+
+    def test_tty_accepted_drives_picker_and_registers(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result(
+            accessible_projects=[
+                {"id": 9840, "name": "Jirka BQ SOX", "role": "admin"},
+                {"id": 1234, "name": "Demo", "role": "guest"},
+            ]
+        )
+        candidates = [
+            _candidate(project_id=9840, project_name="Jirka BQ SOX", default_alias="jirka-bq-sox"),
+            _candidate(project_id=1234, project_name="Demo", default_alias="demo"),
+        ]
+        svc.candidates_from_projects.return_value = candidates
+        svc.register_projects.return_value = _register_result(
+            registered_projects=[
+                RegisteredProject(
+                    alias="jirka-bq-sox",
+                    project_id=9840,
+                    project_name="Jirka BQ SOX",
+                    status="registered",
+                )
+            ]
+        )
+        # confirm(yes) -> select "1" -> accept default alias -> confirm(yes).
+        input_text = "y\n1\n\n\n"
+        with patch("keboola_agent_cli.commands.auth._is_stdout_tty", return_value=True):
+            result = _invoke(
+                config_dir, svc, ["auth", "login", "--device-code"], input_text=input_text
+            )
+        assert result.exit_code == 0, result.output
+        assert "jirka-bq-sox" in result.output
+        svc.register_projects.assert_called_once()
+        selections = svc.register_projects.call_args.kwargs["selections"]
+        assert [s.project_id for s in selections] == [9840]
+
+    def test_bare_enter_at_selection_prompt_registers_all(self, tmp_path: Path) -> None:
+        """Regression for the picker's selection-prompt default (`all`, not `none`).
+
+        Two bare Enters (accept the hook's "register now?" question, then
+        accept the selection prompt's default) must register EVERY
+        accessible project, not zero -- that was the whole point of
+        changing the picker's default away from `none`. Asserts on the
+        actual registered project ids, not just exit code, so flipping the
+        default back to `none` fails this test.
+        """
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result(
+            accessible_projects=[
+                {"id": 9840, "name": "Jirka BQ SOX", "role": "admin"},
+                {"id": 1234, "name": "Demo", "role": "guest"},
+            ]
+        )
+        candidates = [
+            _candidate(project_id=9840, project_name="Jirka BQ SOX", default_alias="jirka-bq-sox"),
+            _candidate(project_id=1234, project_name="Demo", default_alias="demo"),
+        ]
+        svc.candidates_from_projects.return_value = candidates
+        svc.register_projects.return_value = _register_result(
+            registered_projects=[
+                RegisteredProject(
+                    alias="jirka-bq-sox",
+                    project_id=9840,
+                    project_name="Jirka BQ SOX",
+                    status="registered",
+                ),
+                RegisteredProject(
+                    alias="demo", project_id=1234, project_name="Demo", status="registered"
+                ),
+            ]
+        )
+        # Bare Enter x5: accept "register now?" -> accept selection default
+        # ("all") -> accept both suggested aliases -> accept final confirm.
+        input_text = "\n\n\n\n\n"
+        with patch("keboola_agent_cli.commands.auth._is_stdout_tty", return_value=True):
+            result = _invoke(
+                config_dir, svc, ["auth", "login", "--device-code"], input_text=input_text
+            )
+        assert result.exit_code == 0, result.output
+        svc.register_projects.assert_called_once()
+        selections = svc.register_projects.call_args.kwargs["selections"]
+        assert {s.project_id for s in selections} == {9840, 1234}
+
+    def test_explicit_none_at_selection_prompt_still_registers_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """The `all` default must not remove the `none` escape hatch."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result(
+            accessible_projects=[{"id": 9840, "name": "Jirka BQ SOX", "role": "admin"}]
+        )
+        svc.candidates_from_projects.return_value = [_candidate(project_id=9840)]
+        # Accept "register now?" -> explicitly type "none" at the selection prompt.
+        input_text = "\nnone\n"
+        with patch("keboola_agent_cli.commands.auth._is_stdout_tty", return_value=True):
+            result = _invoke(
+                config_dir, svc, ["auth", "login", "--device-code"], input_text=input_text
+            )
+        assert result.exit_code == 0, result.output
+        svc.register_projects.assert_not_called()
+
+    def test_hook_failure_does_not_change_exit_code(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result()
+        svc.candidates_from_projects.side_effect = KeboolaApiError(
+            "offline", error_code=ErrorCode.CONNECTION_ERROR
+        )
+        with patch("keboola_agent_cli.commands.auth._is_stdout_tty", return_value=True):
+            result = _invoke(config_dir, svc, ["auth", "login", "--device-code"], input_text="y\n")
+        # Login already succeeded and was already reported -- a failure in
+        # this optional follow-up must never flip a successful login to a
+        # non-zero exit.
+        assert result.exit_code == 0, result.output
+        assert "Warning" in result.output
 
 
 class TestStatus:
@@ -279,11 +498,232 @@ class TestLogout:
         assert result.exit_code == 3, result.output
 
 
+class TestRegisterProjects:
+    def test_all_selects_every_candidate(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        candidates = [
+            _candidate(project_id=9840, default_alias="jirka-bq-sox"),
+            _candidate(project_id=1234, project_name="Demo", default_alias="demo"),
+        ]
+        svc.list_project_candidates.return_value = ProjectCandidatesResult(
+            stack_url=STACK_URL, candidates=candidates
+        )
+        svc.register_projects.return_value = _register_result(
+            registered_projects=[
+                RegisteredProject(
+                    alias="jirka-bq-sox",
+                    project_id=9840,
+                    project_name="Jirka BQ SOX",
+                    status="registered",
+                ),
+                RegisteredProject(
+                    alias="demo", project_id=1234, project_name="Demo", status="registered"
+                ),
+            ]
+        )
+        result = _invoke(config_dir, svc, ["--json", "auth", "register-projects", "--all"])
+        assert result.exit_code == 0, result.output
+        selections = svc.register_projects.call_args.kwargs["selections"]
+        assert {s.project_id for s in selections} == {9840, 1234}
+        assert all(s.alias == "" for s in selections)
+
+    def test_project_id_repeatable(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.register_projects.return_value = _register_result()
+        result = _invoke(
+            config_dir,
+            svc,
+            [
+                "--json",
+                "auth",
+                "register-projects",
+                "--project-id",
+                "9840",
+                "--project-id",
+                "1234",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        selections = svc.register_projects.call_args.kwargs["selections"]
+        assert [s.project_id for s in selections] == [9840, 1234]
+        # --project-id must not trigger a redundant introspection round trip --
+        # `register_projects` already introspects and validates internally.
+        svc.list_project_candidates.assert_not_called()
+
+    def test_all_and_project_id_together_exit_2(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        result = _invoke(
+            config_dir,
+            svc,
+            ["--json", "auth", "register-projects", "--all", "--project-id", "9840"],
+        )
+        assert result.exit_code == 2, result.output
+        svc.register_projects.assert_not_called()
+
+    def test_no_selector_non_tty_raises_config_error(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        # CliRunner's stdout is never a TTY, so no patch is needed to hit
+        # this branch: the picker requires a real terminal.
+        result = _invoke(config_dir, svc, ["--json", "auth", "register-projects"])
+        assert result.exit_code == 5, result.output
+        body = json.loads(result.output)
+        assert body["status"] == "error"
+        assert "--all or --project-id" in body["error"]["message"]
+        svc.register_projects.assert_not_called()
+
+    def test_alias_override_takes_effect(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.register_projects.return_value = _register_result()
+        result = _invoke(
+            config_dir,
+            svc,
+            [
+                "--json",
+                "auth",
+                "register-projects",
+                "--project-id",
+                "9840",
+                "--alias",
+                "9840=my-alias",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        selections = svc.register_projects.call_args.kwargs["selections"]
+        assert selections == [svc.register_projects.call_args.kwargs["selections"][0]]
+        assert selections[0].project_id == 9840
+        assert selections[0].alias == "my-alias"
+
+    def test_invalid_alias_override_exits_5(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        result = _invoke(
+            config_dir,
+            svc,
+            ["--json", "auth", "register-projects", "--project-id", "9840", "--alias", "bad"],
+        )
+        assert result.exit_code == 5, result.output
+        svc.register_projects.assert_not_called()
+        svc.list_project_candidates.assert_not_called()
+
+    def test_interactive_picker_selects_subset_with_default_alias(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        candidates = [
+            _candidate(project_id=9840, project_name="Jirka BQ SOX", default_alias="jirka-bq-sox"),
+            _candidate(project_id=1234, project_name="Demo", default_alias="demo"),
+        ]
+        svc.list_project_candidates.return_value = ProjectCandidatesResult(
+            stack_url=STACK_URL, candidates=candidates
+        )
+        svc.register_projects.return_value = _register_result(
+            registered_projects=[
+                RegisteredProject(
+                    alias="jirka-bq-sox",
+                    project_id=9840,
+                    project_name="Jirka BQ SOX",
+                    status="registered",
+                )
+            ]
+        )
+        # Select "1" -> accept the suggested default alias (bare Enter) ->
+        # accept the final confirmation (bare Enter, default=True).
+        input_text = "1\n\n\n"
+        with patch("keboola_agent_cli.commands.auth._is_stdout_tty", return_value=True):
+            result = _invoke(config_dir, svc, ["auth", "register-projects"], input_text=input_text)
+        assert result.exit_code == 0, result.output
+        selections = svc.register_projects.call_args.kwargs["selections"]
+        assert len(selections) == 1
+        assert selections[0].project_id == 9840
+        assert selections[0].alias == "jirka-bq-sox"
+        assert "jirka-bq-sox" in result.output
+
+    def test_bare_enter_at_selection_prompt_registers_all(self, tmp_path: Path) -> None:
+        """Regression for the picker's selection-prompt default (`all`, not `none`).
+
+        A bare Enter at "Select projects to register" must register EVERY
+        candidate, not zero. Asserts on the actual registered project ids
+        (not just exit code) so a regression back to `default="none"` in
+        `_auth_picker._prompt_selection` fails this test.
+        """
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        candidates = [
+            _candidate(project_id=9840, project_name="Jirka BQ SOX", default_alias="jirka-bq-sox"),
+            _candidate(project_id=1234, project_name="Demo", default_alias="demo"),
+        ]
+        svc.list_project_candidates.return_value = ProjectCandidatesResult(
+            stack_url=STACK_URL, candidates=candidates
+        )
+        svc.register_projects.return_value = _register_result(
+            registered_projects=[
+                RegisteredProject(
+                    alias="jirka-bq-sox",
+                    project_id=9840,
+                    project_name="Jirka BQ SOX",
+                    status="registered",
+                ),
+                RegisteredProject(
+                    alias="demo", project_id=1234, project_name="Demo", status="registered"
+                ),
+            ]
+        )
+        # Bare Enter x4: accept selection default ("all") -> accept both
+        # suggested aliases -> accept the final confirmation.
+        input_text = "\n\n\n\n"
+        with patch("keboola_agent_cli.commands.auth._is_stdout_tty", return_value=True):
+            result = _invoke(config_dir, svc, ["auth", "register-projects"], input_text=input_text)
+        assert result.exit_code == 0, result.output
+        selections = svc.register_projects.call_args.kwargs["selections"]
+        assert {s.project_id for s in selections} == {9840, 1234}
+
+    def test_interactive_picker_empty_selection_exits_zero_without_registering(
+        self, tmp_path: Path
+    ) -> None:
+        """The `all` default must not remove the `none` escape hatch."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        candidates = [_candidate()]
+        svc.list_project_candidates.return_value = ProjectCandidatesResult(
+            stack_url=STACK_URL, candidates=candidates
+        )
+        with patch("keboola_agent_cli.commands.auth._is_stdout_tty", return_value=True):
+            result = _invoke(config_dir, svc, ["auth", "register-projects"], input_text="none\n")
+        assert result.exit_code == 0, result.output
+        svc.register_projects.assert_not_called()
+
+    def test_unknown_project_id_config_error_from_service(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.register_projects.side_effect = ConfigError(
+            "Project 9999 is not accessible to the current session."
+        )
+        result = _invoke(
+            config_dir, svc, ["--json", "auth", "register-projects", "--project-id", "9999"]
+        )
+        assert result.exit_code == 5, result.output
+
+
 class TestPermissionClassification:
     def test_registry_entries(self) -> None:
         assert OPERATION_REGISTRY["auth.login"] == "write"
         assert OPERATION_REGISTRY["auth.logout"] == "write"
         assert OPERATION_REGISTRY["auth.status"] == "read"
+        assert OPERATION_REGISTRY["auth.register-projects"] == "write"
 
     def test_deny_writes_blocks_login(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
@@ -304,6 +744,26 @@ class TestPermissionClassification:
             )
         assert result.exit_code == EXIT_PERMISSION_DENIED
         svc.login.assert_not_called()
+
+    def test_deny_writes_blocks_register_projects(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        with patch("keboola_agent_cli.cli.AuthService", return_value=svc):
+            result = runner.invoke(
+                app,
+                [
+                    "--config-dir",
+                    str(config_dir),
+                    "--deny-writes",
+                    "--json",
+                    "auth",
+                    "register-projects",
+                    "--all",
+                ],
+            )
+        assert result.exit_code == EXIT_PERMISSION_DENIED
+        svc.register_projects.assert_not_called()
 
     def test_deny_writes_does_not_block_status(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
@@ -326,3 +786,4 @@ class TestHelp:
         assert "login" in result.output
         assert "status" in result.output
         assert "logout" in result.output
+        assert "register-projects" in result.output

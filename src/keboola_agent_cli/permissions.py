@@ -19,6 +19,10 @@ OPERATION_REGISTRY: dict[str, str] = {
     "auth.login": "write",
     "auth.logout": "write",
     "auth.status": "read",
+    # register-projects only ever writes config.json (session-sentinel
+    # tokens, never a real credential) -- same risk class as login/logout,
+    # not the "admin" class `project add` uses for a pasted static token.
+    "auth.register-projects": "write",
     # Project management
     "project.add": "admin",
     "project.list": "read",

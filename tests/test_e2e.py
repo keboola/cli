@@ -53,6 +53,7 @@ import shutil
 import subprocess
 import time
 from collections.abc import Generator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -63,11 +64,14 @@ from typer.testing import CliRunner
 
 from helpers import metastore_scope_available
 from keboola_agent_cli import Client
+from keboola_agent_cli.auth.models import StackSession
+from keboola_agent_cli.auth.sentinel import make_session_token
+from keboola_agent_cli.auth.state_store import AuthStateStore
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
-from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.models import ProjectConfig, normalize_stack_url
 
 # ---------------------------------------------------------------------------
 # Environment & skip logic
@@ -117,6 +121,30 @@ HAS_CREDENTIALS = os.environ.get(ENV_TOKEN) is not None
 skip_without_credentials = pytest.mark.skipif(
     not HAS_CREDENTIALS,
     reason=f"E2E tests require {ENV_TOKEN} environment variable",
+)
+
+# Separate gate for `auth register-projects` (programmatic-auth session, not a
+# static Storage token) -- deliberately the SAME env var names as
+# tests/test_e2e_auth.py so one pre-provisioned session covers both files.
+# NEVER the access token: it is short-lived (~1h) and would be stale before a
+# CI run even starts; only the refresh token is taken on the command line.
+ENV_SESSION_REFRESH_TOKEN = "E2E_SESSION_REFRESH_TOKEN"
+ENV_SESSION_PROJECT_ID = "E2E_SESSION_PROJECT_ID"
+
+HAS_SESSION_CREDENTIALS = bool(
+    os.environ.get(ENV_URL)
+    and os.environ.get(ENV_SESSION_REFRESH_TOKEN)
+    and os.environ.get(ENV_SESSION_PROJECT_ID)
+)
+
+skip_without_session_credentials = pytest.mark.skipif(
+    not HAS_SESSION_CREDENTIALS,
+    reason=(
+        f"`auth register-projects` E2E coverage requires {ENV_URL}, "
+        f"{ENV_SESSION_REFRESH_TOKEN} and {ENV_SESSION_PROJECT_ID} (a pre-provisioned "
+        "session on a stack with the programmatic-auth feature flag enabled). See "
+        "tests/test_e2e_auth.py's module docstring for how to provision one."
+    ),
 )
 
 runner = CliRunner()
@@ -12516,3 +12544,173 @@ class TestE2EDeviceEnrollmentPrimitives:
             _step(3, "delete_stream_source", "per-device event-plane revocation")
             kbc.delete_stream_source(source_id)
             self._stream_source_ids.remove(source_id)
+
+
+@skip_without_session_credentials
+@pytest.mark.e2e
+class TestE2EAuthRegisterProjects:
+    """End-to-end coverage for `kbagent auth register-projects` (0.77.0).
+
+    Fixes a real usability bug: `auth login` prints an accessible-projects
+    table but registers nothing unless `--register-projects` is passed, and
+    the alias it would offer is a slug of the project NAME -- the numeric
+    project id shown in that table (e.g. 9840) never resolves as `--project`.
+    This class exercises the fix's non-interactive surface (`--project-id`),
+    which needs no TTY and is therefore safe to run unattended in CI, unlike
+    the flagless interactive picker (covered by unit tests in
+    tests/test_auth_picker.py / tests/test_auth_command.py instead).
+
+    Deliberately gated on the SAME session-credential env vars as
+    tests/test_e2e_auth.py (a programmatic session, not a static Storage
+    token) rather than the rest of this file's `skip_without_credentials` --
+    see that module's docstring for how to provision
+    E2E_SESSION_REFRESH_TOKEN without ever typing it on the command line.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> Generator[None, None, None]:
+        self.stack_url = normalize_stack_url(os.environ[ENV_URL])
+        self.project_id = int(os.environ[ENV_SESSION_PROJECT_ID])
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        # Seed a session directly into auth.json (sibling of config.json in
+        # the same config_dir) -- no interactive browser login here, this
+        # test proves `register-projects` against an EXISTING session, which
+        # is exactly what a real user has once `auth login` already
+        # succeeded. access_token is left blank so the first live call is
+        # forced through a real proactive refresh (only a refresh token is
+        # ever handed to this test on the command line).
+        store = AuthStateStore(self.config_dir)
+        store.put_session(
+            StackSession(
+                stack_url=self.stack_url,
+                session_id="e2e-register-projects-probe",
+                access_token="",
+                refresh_token=os.environ[ENV_SESSION_REFRESH_TOKEN],
+                access_expires_at=None,
+                refresh_expires_at=None,
+                created_at=datetime.now(UTC),
+            )
+        )
+
+        yield
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_register_by_project_id_then_idempotent_on_rerun(self) -> None:
+        """`--project-id` registers a sentinel-token alias; re-running is a no-op.
+
+        Proves the whole non-interactive path end to end: the session can
+        list itself as an accessible project, the CLI writes the
+        `kbc-session://{project_id}` sentinel (never a real token) into
+        config.json, and the resulting alias is immediately usable by an
+        ordinary read command. A second run against the same project+stack
+        must report `status: "exists"` and must NOT overwrite the alias --
+        this is the "never overwrites an existing registration" contract
+        shared with the picker and with `login --register-projects`.
+        """
+        _step(1, "auth register-projects --project-id", "register the session's own project")
+        data = self._run_ok(
+            "auth",
+            "register-projects",
+            "--stack",
+            self.stack_url,
+            "--project-id",
+            str(self.project_id),
+        )["data"]
+
+        registered = data["registered_projects"]
+        assert len(registered) == 1, f"expected exactly one project, got: {registered}"
+        entry = registered[0]
+        assert entry["project_id"] == self.project_id
+        assert entry["status"] in ("registered", "exists")
+        alias = entry["alias"]
+        assert alias, "a registered project must carry a non-empty alias"
+
+        _step(2, "config.json carries the sentinel token, never a real one")
+        config = ConfigStore(config_dir=self.config_dir).load()
+        project = config.projects.get(alias)
+        assert project is not None, f"alias {alias!r} was not persisted to config.json"
+        assert project.token == make_session_token(self.project_id)
+        assert project.project_id == self.project_id
+
+        _step(3, "the new alias is immediately usable by an ordinary read command")
+        status = self._run_ok("project", "status", "--project", alias)["data"]
+        assert status.get("status") in ("ok", "OK") or status.get("alias") == alias
+
+        _step(4, "re-running against the same project+stack is a no-op, never overwritten")
+        rerun = self._run_ok(
+            "auth",
+            "register-projects",
+            "--stack",
+            self.stack_url,
+            "--project-id",
+            str(self.project_id),
+        )["data"]
+        rerun_entry = rerun["registered_projects"][0]
+        assert rerun_entry["status"] == "exists"
+        assert rerun_entry["alias"] == alias, "re-registering must not change the alias"
+
+        config_after = ConfigStore(config_dir=self.config_dir).load()
+        assert config_after.projects[alias].token == make_session_token(self.project_id)
+
+    def test_all_and_project_id_mutually_exclusive(self) -> None:
+        """`--all` and `--project-id` together is a usage error (exit 2), not a merge."""
+        _step(1, "auth register-projects --all --project-id together -> usage error")
+        result = self._run(
+            "auth",
+            "register-projects",
+            "--stack",
+            self.stack_url,
+            "--all",
+            "--project-id",
+            str(self.project_id),
+        )
+        assert result.exit_code == 2, result.output
+
+    def test_unknown_project_id_raises_config_error(self) -> None:
+        """A `--project-id` the session cannot access must fail, never silently register."""
+        _step(1, "auth register-projects --project-id <unreachable> -> ConfigError")
+        # A project id vanishingly unlikely to be in this session's accessible set.
+        bogus_id = 900_000_000 + self.project_id
+        result = self._run(
+            "auth",
+            "register-projects",
+            "--stack",
+            self.stack_url,
+            "--project-id",
+            str(bogus_id),
+        )
+        assert result.exit_code != 0, "an inaccessible project id must not report success"
+        body = json.loads(result.output)
+        assert body["status"] == "error"
+        assert str(bogus_id) in body["error"]["message"]
+
+        config = ConfigStore(config_dir=self.config_dir).load()
+        assert not any(p.project_id == bogus_id for p in config.projects.values()), (
+            "a failed registration must not partially write config.json"
+        )
+
+    def test_no_selector_in_json_mode_fails_fast_instead_of_prompting(self) -> None:
+        """Omitting --all/--project-id under --json must fail fast, never hang on a TTY prompt.
+
+        `--json` implies a non-interactive caller; the interactive picker
+        needs a real terminal (CliRunner's stdin is not a TTY either way).
+        Both signals independently rule out the picker, so this must be a
+        clean, fast `ConfigError` -- not a hang waiting for input that will
+        never arrive.
+        """
+        _step(1, "auth register-projects with neither --all nor --project-id, --json set")
+        result = self._run("auth", "register-projects", "--stack", self.stack_url)
+        assert result.exit_code != 0
+        body = json.loads(result.output)
+        assert body["status"] == "error"
+        message = body["error"]["message"].lower()
+        assert "--all" in message or "--project-id" in message, (
+            f"error should point at the non-interactive flags: {body['error']['message']}"
+        )

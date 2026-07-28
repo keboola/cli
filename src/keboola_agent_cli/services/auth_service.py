@@ -13,7 +13,7 @@ docs/programmatic-auth-login-plan.md section 4.5 step 7).
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import sleep as _time_sleep
@@ -22,7 +22,7 @@ from typing import Any
 from ..auth.auth_client import AuthClient
 from ..auth.device import run_device_flow
 from ..auth.environment import BrowserEnvironment, detect_browser_environment, open_browser
-from ..auth.models import AuthProject, CliTokenResponse, DeviceAuthorization, StackSession
+from ..auth.models import CliTokenResponse, DeviceAuthorization, StackSession
 from ..auth.pkce import (
     PkceAuthorizationError,
     PkceCallbackServer,
@@ -33,9 +33,9 @@ from ..auth.pkce import (
 from ..auth.sentinel import is_session_token, make_session_token
 from ..auth.state_store import AuthStateStore
 from ..auth.token_provider import SessionTokenProvider, reset_provider_registry
-from ..config_store import ConfigStore
+from ..config_store import ConfigStore, validate_alias_format
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..models import ProjectConfig, normalize_stack_url
+from ..models import AppConfig, ProjectConfig, normalize_stack_url
 
 # Error codes from `provider.introspect()` (via `AuthClient.refresh`) that mean
 # "could not reach the auth service", as opposed to a definitive answer about
@@ -68,6 +68,58 @@ class RegisteredProject:
     project_name: str
     status: str  # "registered" | "exists" | "skipped"
     note: str = ""
+
+
+@dataclass(frozen=True)
+class ProjectCandidate:
+    """One project accessible to a session, offered up for local registration.
+
+    `default_alias` is always collision-free -- computed against both
+    `config.json` and every earlier candidate in the same batch (see
+    `AuthService.candidates_from_projects`) -- so a caller (the picker, or
+    `login(register_projects=True)`) can accept it blindly with no further
+    validation beyond `validate_alias_format`.
+    """
+
+    project_id: int
+    project_name: str
+    role: str
+    default_alias: str
+    existing_alias: str  # "" unless already registered as a SESSION project
+    registered: bool  # existing_alias != ""
+
+
+@dataclass(frozen=True)
+class ProjectCandidatesResult:
+    """Result of `AuthService.list_project_candidates`."""
+
+    stack_url: str
+    candidates: list[ProjectCandidate]
+
+
+@dataclass(frozen=True)
+class ProjectSelection:
+    """One caller's choice to register a project, with an optional alias override.
+
+    An empty `alias` means "use the candidate's `default_alias`" -- this is
+    how `login(register_projects=True)` (which wants every accessible
+    project registered under its suggestion) and an explicit `--alias
+    ID=ALIAS` override (which wants exactly one alias) share the same
+    application path (`AuthService._apply_selections`).
+    """
+
+    project_id: int
+    alias: str = ""
+
+
+@dataclass(frozen=True)
+class RegisterProjectsResult:
+    """Result of `AuthService.register_projects`."""
+
+    status: str  # always "ok"
+    stack_url: str
+    registered_projects: list[RegisteredProject]
+    warnings: list[str]
 
 
 @dataclass(frozen=True)
@@ -272,8 +324,14 @@ class AuthService:
 
             registered_projects: list[RegisteredProject] = []
             if register_projects:
-                registered_projects = self._register_projects(
-                    stack_url, introspection.projects, warnings
+                # Build candidates from the introspection this call already
+                # holds -- introspecting a second time (e.g. via
+                # `register_projects`) would be a redundant network round
+                # trip against a session that was only just minted.
+                candidates = self.candidates_from_projects(stack_url, accessible_projects)
+                selections = [ProjectSelection(project_id=c.project_id) for c in candidates]
+                registered_projects = self._apply_selections(
+                    stack_url, {c.project_id: c for c in candidates}, selections, warnings
                 )
 
             return LoginResult(
@@ -339,66 +397,273 @@ class AuthService:
             code_verifier=challenge.code_verifier,
         )
 
-    def _register_projects(
+    # ------------------------------------------------------------------
+    # project candidates / registration
+    # ------------------------------------------------------------------
+
+    def candidates_from_projects(
+        self, stack_url: str, projects: Sequence[Mapping[str, Any]]
+    ) -> list[ProjectCandidate]:
+        """Turn accessible-project entries into collision-free registration candidates.
+
+        Pure and network-free: `projects` entries carry `id` / `name` / `role`
+        keys -- the exact shape of `LoginResult.accessible_projects` -- so the
+        post-login picker can run against data `login()` already fetched,
+        without a second introspect round trip. `list_project_candidates`
+        (which DOES introspect) delegates here too, so the two callers can
+        never compute a different default alias for the same project.
+
+        Default alias algorithm (processed in input order, so earlier
+        candidates in the same batch can claim aliases before later ones):
+
+        1. Already registered? Scan `config.json` for an entry whose token is
+           a session sentinel AND whose `project_id` AND (normalized)
+           `stack_url` match this project. Matching on (project_id, stack_url)
+           -- never on the alias string -- means a project someone already
+           registered under a hand-picked alias is reported as that alias
+           rather than offered a second, colliding suggestion. When found,
+           `existing_alias == default_alias` and `registered=True`.
+        2. Otherwise, slugify the project name (`project-{id}` when the name
+           slugifies to nothing, e.g. all-punctuation names).
+        3. Suffix with `-{id}`, then `-{id}-2`, `-{id}-3`, ... until a value is
+           free, where *free* means absent from `config.json` AND not already
+           claimed by an earlier candidate in this batch. This is a
+           deliberate behaviour change from the old `_register_projects`:
+           two projects sharing a name (or a name colliding with an existing
+           *static-token* project) used to collapse onto one alias and the
+           second was silently skipped with a warning; now each gets a
+           distinct, usable alias and the static project is never touched.
+        """
+        config = self._config_store.load()
+        claimed_aliases = set(config.projects.keys())
+        candidates: list[ProjectCandidate] = []
+        for project in projects:
+            project_id = int(project["id"])
+            project_name = str(project.get("name", ""))
+            role = str(project.get("role", ""))
+
+            existing_alias = self._find_registered_alias(config, stack_url, project_id)
+            if existing_alias:
+                candidates.append(
+                    ProjectCandidate(
+                        project_id=project_id,
+                        project_name=project_name,
+                        role=role,
+                        default_alias=existing_alias,
+                        existing_alias=existing_alias,
+                        registered=True,
+                    )
+                )
+                continue
+
+            base = _slugify_project_name(project_name) or f"project-{project_id}"
+            alias = self._first_free_alias(base, project_id, claimed_aliases)
+            claimed_aliases.add(alias)
+            candidates.append(
+                ProjectCandidate(
+                    project_id=project_id,
+                    project_name=project_name,
+                    role=role,
+                    default_alias=alias,
+                    existing_alias="",
+                    registered=False,
+                )
+            )
+        return candidates
+
+    @staticmethod
+    def _find_registered_alias(config: AppConfig, stack_url: str, project_id: int) -> str:
+        """Return the alias `project_id`/`stack_url` is already registered under, or ""."""
+        for alias, entry in config.projects.items():
+            if (
+                is_session_token(entry.token)
+                and entry.project_id == project_id
+                and normalize_stack_url(entry.stack_url) == stack_url
+            ):
+                return alias
+        return ""
+
+    @staticmethod
+    def _first_free_alias(base: str, project_id: int, claimed: set[str]) -> str:
+        """First of `base`, `{base}-{id}`, `{base}-{id}-2`, ... absent from `claimed`."""
+        if base not in claimed:
+            return base
+        with_id = f"{base}-{project_id}"
+        if with_id not in claimed:
+            return with_id
+        suffix = 2
+        while True:
+            candidate = f"{with_id}-{suffix}"
+            if candidate not in claimed:
+                return candidate
+            suffix += 1
+
+    def _introspect_accessible_projects(self, stack_url: str) -> list[dict[str, Any]]:
+        """Require a stored session for `stack_url`, then introspect it live.
+
+        Shared by `list_project_candidates` and `register_projects`. Goes
+        through a `SessionTokenProvider` (built with this service's own
+        injectable `auth_client_factory`, matching `status()`) rather than
+        introspecting the stored access token directly -- a healthy session
+        routinely has an expired 1 hour access token alongside a valid 30 day
+        refresh token, and the provider refreshes first when needed.
+        """
+        session = self._state_store.get_session(stack_url)
+        if session is None:
+            raise KeboolaApiError(
+                f"No active Keboola session for {stack_url}. Run `kbagent auth login`.",
+                error_code=ErrorCode.SESSION_NOT_FOUND,
+                retryable=False,
+            )
+        provider = SessionTokenProvider(
+            stack_url, self._state_store, client_factory=self._auth_client_factory
+        )
+        introspection = provider.introspect()
+        return [
+            {"id": project.id, "name": project.name, "role": project.role}
+            for project in introspection.projects
+        ]
+
+    def list_project_candidates(self, *, stack: str | None = None) -> ProjectCandidatesResult:
+        """Resolve the stack, require a stored session, introspect, and build candidates.
+
+        The read path for the interactive picker and `auth register-projects`
+        with no selection flags -- never mutates `config.json`.
+        """
+        stack_url = self._resolve_stack_url(stack)
+        projects = self._introspect_accessible_projects(stack_url)
+        candidates = self.candidates_from_projects(stack_url, projects)
+        return ProjectCandidatesResult(stack_url=stack_url, candidates=candidates)
+
+    def register_projects(
+        self, *, stack: str | None = None, selections: Sequence[ProjectSelection]
+    ) -> RegisterProjectsResult:
+        """Introspect, validate every selection against the accessible set, then apply.
+
+        Raises:
+            KeboolaApiError: `SESSION_NOT_FOUND` when no session exists for
+                the stack (via `_introspect_accessible_projects`).
+            ConfigError: Naming the offending id when a selection references
+                a project this session cannot access -- validated up front,
+                against the full candidate set, so a bad id in a batch of N
+                never partially applies the other N-1.
+        """
+        stack_url = self._resolve_stack_url(stack)
+        projects = self._introspect_accessible_projects(stack_url)
+        candidates = self.candidates_from_projects(stack_url, projects)
+        candidates_by_id = {c.project_id: c for c in candidates}
+
+        for selection in selections:
+            if selection.project_id not in candidates_by_id:
+                raise ConfigError(
+                    f"Project {selection.project_id} is not accessible to the current "
+                    f"session on {stack_url}. Run 'kbagent auth register-projects' with "
+                    "no selection flags to see the accessible project ids."
+                )
+
+        warnings: list[str] = []
+        registered = self._apply_selections(stack_url, candidates_by_id, selections, warnings)
+        return RegisterProjectsResult(
+            status="ok",
+            stack_url=stack_url,
+            registered_projects=registered,
+            warnings=warnings,
+        )
+
+    def _apply_selections(
         self,
         stack_url: str,
-        projects: list[AuthProject],
+        candidates_by_id: Mapping[int, ProjectCandidate],
+        selections: Sequence[ProjectSelection],
         warnings: list[str],
     ) -> list[RegisteredProject]:
-        """Register each accessible project under a slugified alias.
+        """Apply each selection: validate the alias, then register/report/skip.
 
-        An existing alias pointing at the SAME project id and stack is left
-        untouched (`status="exists"`, no write, no error). An existing alias
-        pointing elsewhere is never overwritten (`status="skipped"` + a
-        warning) -- this also protects a static-token project sharing the
-        same alias name, which must never be silently replaced.
+        Shared by `register_projects` and `login(register_projects=True)` so
+        the two entry points can never drift on the exists/skip/overwrite
+        rules. Per selection, with `alias = selection.alias or
+        candidate.default_alias`:
+
+        - `validate_alias_format` first -- rejects a hand-typed alias before
+          it is ever compared against `config.json` or written to it.
+        - Already registered (`candidate.registered`): requesting the exact
+          `existing_alias` reports `status="exists"` with no write; any other
+          alias is `status="skipped"` (never overwritten -- the existing
+          registration is the one true entry, so the fix is `project edit
+          --new-alias`, not a silent second write).
+        - Alias already taken in `config.json` by anything else (including a
+          static-token project): `status="skipped"`, never overwritten.
+        - Otherwise: `config_store.add_project` under a session-sentinel
+          token, `status="registered"`.
+
+        `self._config_store.get_project(alias)` is re-read per selection
+        (rather than once up front) so a duplicate `--alias ID=X` across two
+        different project ids in the same batch is caught against what the
+        earlier selection in this same call just wrote, not a stale snapshot.
         """
         registered: list[RegisteredProject] = []
-        for project in projects:
-            alias = _slugify_project_name(project.name) or f"project-{project.id}"
-            existing = self._config_store.get_project(alias)
-            if existing is not None:
-                if existing.project_id == project.id and (
-                    normalize_stack_url(existing.stack_url) == stack_url
-                ):
+        for selection in selections:
+            candidate = candidates_by_id[selection.project_id]
+            alias = selection.alias or candidate.default_alias
+            validate_alias_format(alias, field="alias")
+
+            if candidate.registered:
+                if alias == candidate.existing_alias:
                     registered.append(
                         RegisteredProject(
                             alias=alias,
-                            project_id=project.id,
-                            project_name=project.name,
+                            project_id=candidate.project_id,
+                            project_name=candidate.project_name,
                             status="exists",
                         )
                     )
                 else:
                     note = (
-                        f"Alias '{alias}' already points at a different project; not overwritten."
+                        f"Project {candidate.project_id} is already registered as "
+                        f"'{candidate.existing_alias}'; run 'kbagent project edit "
+                        f"--project {candidate.existing_alias} --new-alias {alias}' "
+                        "to rename it."
                     )
                     warnings.append(note)
                     registered.append(
                         RegisteredProject(
                             alias=alias,
-                            project_id=project.id,
-                            project_name=project.name,
+                            project_id=candidate.project_id,
+                            project_name=candidate.project_name,
                             status="skipped",
                             note=note,
                         )
                     )
                 continue
 
+            if self._config_store.get_project(alias) is not None:
+                note = f"Alias '{alias}' already points at a different project; not overwritten."
+                warnings.append(note)
+                registered.append(
+                    RegisteredProject(
+                        alias=alias,
+                        project_id=candidate.project_id,
+                        project_name=candidate.project_name,
+                        status="skipped",
+                        note=note,
+                    )
+                )
+                continue
+
             self._config_store.add_project(
                 alias,
                 ProjectConfig(
                     stack_url=stack_url,
-                    token=make_session_token(project.id),
-                    project_name=project.name,
-                    project_id=project.id,
+                    token=make_session_token(candidate.project_id),
+                    project_name=candidate.project_name,
+                    project_id=candidate.project_id,
                 ),
             )
             registered.append(
                 RegisteredProject(
                     alias=alias,
-                    project_id=project.id,
-                    project_name=project.name,
+                    project_id=candidate.project_id,
+                    project_name=candidate.project_name,
                     status="registered",
                 )
             )
@@ -666,6 +931,10 @@ __all__ = [
     "AuthStatusResult",
     "LoginResult",
     "LogoutResult",
+    "ProjectCandidate",
+    "ProjectCandidatesResult",
+    "ProjectSelection",
+    "RegisterProjectsResult",
     "RegisteredProject",
     "default_auth_client_factory",
 ]
