@@ -3,19 +3,19 @@ name: kbagent
 description: >
   Use when working with Keboola Connection projects via the kbagent CLI.
   Covers: exploring and searching configurations, job history and runs,
-  cross-project data lineage, Keboola MCP tools, dev branches, SQL debugging in workspaces, GitOps sync of configs
-  (pull/push/diff/clone), bucket sharing and linking, encrypting
-  secrets, Storage tables, files, and snapshots (backup + restore as a new
-  table), data apps (create/deploy/logs/secrets),
-  flows and schedules, members and invitations, feature
-  flags, OTLP data streams, scoped Storage tokens, the semantic layer
-  (models, metrics, constraints, reference data), the Developer
-  Portal, browser login. Triggers: kbagent, Keboola, keboola config, keboola job,
-  keboola lineage, keboola sync, gitops, dev branch, workspace SQL, data app,
-  streamlit deploy, semantic layer, sl, dev-portal, data stream, OTLP,
-  scoped token, bucket sharing, encrypt secrets, feature flag, flow schedule,
-  invite member, SQL transformation edit, sync action, keboola docs,
-  table snapshot, snapshot restore.
+  cross-project data lineage, Keboola MCP tools, dev branches, workspace SQL
+  debugging, GitOps config sync (pull/push/diff/clone), bucket sharing and
+  linking, encrypting secrets, Storage tables, files, and snapshots
+  (backup/restore), data apps (create/deploy/logs/secrets), flows and
+  schedules, members and invitations, feature flags, OTLP data streams,
+  scoped Storage tokens, the semantic layer (models, metrics, constraints),
+  the Developer Portal, browser login. Triggers: kbagent, Keboola, keboola
+  config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
+  workspace SQL, data app, streamlit deploy, semantic layer, sl, dev-portal,
+  data stream, OTLP, scoped token, bucket sharing, encrypt secrets,
+  feature flag, flow schedule, invite member, SQL transformation edit,
+  sync action, keboola docs, table snapshot, auth, login, sign in,
+  browser login.
 ---
 
 # kbagent -- Keboola Agent CLI

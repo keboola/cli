@@ -57,11 +57,18 @@ CHANGELOG: dict[str, list[str]] = {
         "projects sharing the same name now each get a distinct suggested alias (a "
         "`-{project_id}` suffix) instead of the second one being silently skipped, which also "
         "changes `--register-projects`'s own collision behavior from the original release.",
-        "Note: v1 wires session auth through Storage and Manage command paths only. `kbagent "
-        "serve`, the importable SDK (`lib.Client`), the MCP subprocess, and the AI / data-science / "
-        "metastore / dev-portal / stream clients all fail fast on a sentinel-token project with the "
-        "new `AUTH_NOT_SUPPORTED_ON_STACK` error code, naming the static-token fallback, instead of "
-        "silently sending the sentinel string as if it were a real credential.",
+        "Note: v1 wires session auth through the Storage and Manage paths, which both the CLI "
+        "commands and `kbagent serve` reach -- serve delegates to the same already-guarded "
+        "services, so browser-login projects work over the REST surface and the web UI. Anything "
+        "outside those paths (the importable SDK `lib.Client`, the MCP subprocess, the AI / "
+        "data-science / metastore / stream / Scheduler clients, and `sharing` without a master "
+        "token) fails fast on a sentinel-token project with the new `AUTH_NOT_SUPPORTED_ON_STACK` "
+        "error code, naming the static-token fallback, instead of silently sending the sentinel "
+        "string as if it were a real credential. `auth login` and `auth register-projects` print "
+        "that list at registration time and ship it as `session_unsupported_features` in `--json`. "
+        "Over `serve`, a session that expires at runtime answers HTTP 401 with `SESSION_EXPIRED`; "
+        "note that whoever holds `KBAGENT_SERVE_TOKEN` then acts as the signed-in user, so see "
+        "`docs/web-server.md` before exposing a session project over HTTP.",
         "Security: `auth login` REQUIRES A HUMAN AT A BROWSER (or a device to type a short code "
         "into) -- there is no unattended/headless path, and session tokens are never exposed "
         "through any CLI command or `--json` output. Programmatic auth is behind a per-stack "
@@ -70,8 +77,39 @@ CHANGELOG: dict[str, list[str]] = {
         "supported and unchanged -- keep using them for CI/CD and any other headless use.",
         "New error codes: AUTH_NOT_SUPPORTED_ON_STACK, AUTH_FLOW_TIMEOUT, AUTH_FLOW_DENIED, "
         "AUTH_FLOW_EXPIRED, AUTH_BROWSER_UNAVAILABLE, AUTH_STATE_MISMATCH, SESSION_EXPIRED, "
-        "SESSION_NOT_FOUND. See docs/error-codes.md and docs/programmatic-auth-login-plan.md for "
-        "the full design.",
+        "SESSION_NOT_FOUND. `UNEXPECTED_ERROR` and `MCP_ERROR` are now documented `ErrorCode` "
+        "members too (wire values unchanged). See docs/auth.md for the user-facing guide and "
+        "docs/error-codes.md for the catalogue.",
+        "Security: `project refresh` and `org setup --refresh` no longer convert a browser-login "
+        "(session) project into a static Storage token -- they report it as skipped, because a "
+        "session access token rotates on its own. Previously `--force`, or a session that had "
+        "already expired, minted a real static token over the sentinel, and the converted project "
+        "then survived `auth logout --remove-projects` as a long-lived credential. `project edit "
+        "--token` still converts a session project on explicit request, and now warns that the "
+        "alias will no longer be cleaned up by logout.",
+        "New: `project list`, `project status` and `project info` state each project's credential "
+        "type -- an `Auth` column (`session` / `static`) in human output and an explicit "
+        "`auth_mode` field in `--json`, always present. A session project's Token cell shows `-` "
+        "instead of the masked sentinel, which read like a truncated real token; the `--json` "
+        "`token` field is unchanged.",
+        "Fix: in multi-project commands (`data-app list`, `tool list` / `tool call`, `flow list`) "
+        "a per-project failure keeps its real `error_code` in `--json` instead of being relabelled "
+        "`UNEXPECTED_ERROR` / `MCP_ERROR`, so a browser-login project reports "
+        "`AUTH_NOT_SUPPORTED_ON_STACK` and a consumer can branch on it.",
+        "Fix: token refresh for a browser-login session uses a short single-attempt timeout, so a "
+        "slow auth service no longer makes concurrent kbagent processes fail with a false "
+        '"another process may be stuck holding the lock" (exit 5); a refresh that times out '
+        "reports a network error (exit 4). Retrying a refresh would also re-present the same "
+        "refresh token, which past the server's grace window triggers family revocation.",
+        "Fix: stack URLs canonicalize their host to lowercase, so a login and a later "
+        "status/lookup on differently-cased spellings of the same stack resolve to one session; "
+        "credentials embedded in a stack URL are dropped rather than persisted. Project and user "
+        "names coming from the stack are escaped before rendering, so a project name containing "
+        "Rich markup can no longer render as a clickable link in `auth status`, `auth login`, or "
+        "the project picker.",
+        'Fix: the "not supported on session projects" error points at `kbagent project edit '
+        "--project <alias> --token <token>`, which works on an already-registered alias, instead "
+        "of `project add`, which rejects one that already exists.",
     ],
     "0.80.0": [
         "Note (#390): the MCP passthrough now has a named removal date -- `kbagent tool "

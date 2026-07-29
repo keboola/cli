@@ -54,13 +54,13 @@ Storage token (`kbagent project add --token ...` or
    config directory; same permission posture as the static tokens already
    there). It never appears in `config.json` itself.
 4. Fetches the list of projects the session can access (introspection).
-5. With `--register-projects`, writes each accessible project into
-   `config.json` as a normal alias -- except its `token` field is the
-   sentinel string `kbc-session://{project_id}`, not a real token. An alias
-   that already points at the same project+stack is left alone
-   (`status: "exists"`); one pointing somewhere else is skipped with a
-   warning (`status: "skipped"`) -- registration never overwrites an
-   existing static-token project.
+5. Registers projects into `config.json` as normal aliases whose `token`
+   field is the sentinel string `kbc-session://{project_id}` rather than a
+   real token. `--register-projects` registers every accessible project
+   straight away. Without that flag, a TTY in human output mode gets the
+   interactive picker described below; anywhere else, login prints a
+   one-line hint pointing at `auth register-projects`. Either way a failure
+   here never changes login's own already-successful exit code.
 
 A session is **user-scoped, not project-scoped**: one login is enough for
 every project you can see. Which project a given `kbagent` command talks to
@@ -68,14 +68,92 @@ is still chosen the normal way (`--project`, `KBAGENT_PROJECT`, the pinned
 default) -- the session just supplies the credential, and the CLI adds
 `X-KBC-ProjectId` per request.
 
+## Registering projects: `auth register-projects`
+
+```
+kbagent auth register-projects [--stack URL|alias] [--all]
+                               [--project-id ID ...] [--alias ID=ALIAS ...] [--yes]
+```
+
+Registers an existing session's accessible projects as `config.json`
+aliases, without re-running `login`. Run it any time while the session is
+still live -- it is the way to register a project you skipped earlier, or to
+register one at all if you logged in without `--register-projects`.
+
+Exactly one selection method applies:
+
+| Invocation | Selection |
+|---|---|
+| `--all` | Every accessible project. Mutually exclusive with `--project-id`. |
+| `--project-id ID` (repeatable) | Only those ids. An id the session cannot access is a `ConfigError`, not a silent skip. |
+| Neither | The interactive picker -- but only on a TTY without `--json`. |
+
+`--all` and `--project-id` are the non-interactive forms, so this one
+command is safe for an agent to run *after* a human has logged in. The login
+itself still needs the human.
+
+### The picker
+
+Every project the session can see is listed with a suggested alias.
+Candidates not yet registered start **checked**, so a bare `enter`
+registers all of them; already-registered rows start unchecked and carry an
+"already registered" tag.
+
+| Key | Action |
+|---|---|
+| up / down, or `j` / `k` | Move the cursor |
+| `space` | Toggle the row under the cursor |
+| `a` | Toggle select-all / select-none |
+| `enter` | Accept the current selection |
+| `q`, `esc`, `ctrl-c` | Cancel -- registers nothing |
+
+After the selection there is a single `Edit aliases?` confirm defaulting to
+**no**. Declining keeps the suggested alias each row already displayed;
+accepting opens a per-project alias prompt. `--yes` skips only this final
+confirmation.
+
+On a piped stdin, or a terminal without real interactive capabilities, the
+picker degrades to a typed prompt accepting numbers, ranges, `all`, or
+`none` -- so a non-interactive-but-not-`--json` invocation can still select
+something. In a non-TTY or `--json` context with neither `--all` nor
+`--project-id`, the command fails fast telling you to pass one of them
+instead of hanging on a prompt.
+
+### Suggested aliases and collisions
+
+An alias is the project name slugified (`project-{id}` if the name
+slugifies to nothing), then suffixed `-{id}`, `-{id}-2`, ... until it is
+free of both `config.json` and every earlier row in the same batch. Two
+projects sharing a name therefore each get a distinct, usable alias, and a
+name colliding with an existing static-token project suffixes away from it.
+
+`--alias ID=ALIAS` (repeatable) overrides the suggestion in every mode, and
+pre-fills the picker row. Each result carries a status:
+
+| Status | Meaning |
+|---|---|
+| `registered` | Written to `config.json` under a session-sentinel token. |
+| `exists` | This project is already registered under exactly this alias; no write. |
+| `skipped` | The alias is taken -- by a different project, or by this project under another alias. Never overwritten; rename with `kbagent project edit --new-alias`. |
+
+Because the project id, not the alias string, identifies a registration, a
+project you already registered under a hand-picked alias is reported under
+that alias rather than offered a second, colliding suggestion.
+
 ## The loop
 
 ```
 # 1. Sign in (opens a browser; falls back to a device code if needed)
 kbagent auth login --register-projects
 
-# 2. See what you're signed in as, and which projects got registered
-kbagent --json project list | jq '.[] | select(.token | startswith("kbc-session://"))'
+# 2. Register (or top up) local aliases for the projects you want.
+#    Interactive picker; --all or --project-id ID for a non-interactive run.
+kbagent auth register-projects
+
+# 2b. Which projects are session-backed vs static? Read auth_mode -- never
+#     parse the token. Values are exactly "session" or "static", always
+#     present. Also on `project status` / `project info`, and over HTTP.
+kbagent project list --json | jq '.data[].auth_mode'
 
 # 3. Use the registered projects exactly like any other project alias
 kbagent --json config list --project my-project-alias
@@ -100,19 +178,42 @@ kbagent auth logout --remove-projects
 
 ## v1 scope: what session auth does NOT cover yet
 
-Session auth is wired through the **Storage and Manage** command paths only.
-Every other surface recognizes the `kbc-session://` sentinel and refuses
-fast with `AUTH_NOT_SUPPORTED_ON_STACK` instead of silently sending the
-sentinel string as if it were a real credential:
+Session auth is wired through the **Storage and Manage** paths. `kbagent
+serve` reaches them too, because it delegates to the same guarded services --
+but read the caveat below before serving a session project. Every other
+surface recognizes the `kbc-session://` sentinel and refuses fast with
+`AUTH_NOT_SUPPORTED_ON_STACK` instead of silently sending the sentinel
+string as if it were a real credential:
 
-- `kbagent serve` (the REST API / web UI backend)
+- `kai`
+- `semantic-layer` (Metastore Service)
+- `data-app` (Data Science Service)
+- `stream` (Data Streams Service)
+- `tool` (MCP server subprocess), incl. `agent --type mcp_tool`
+- `sharing`, unless a master token is set in the environment
+- the AI Service paths: `docs query`, `config examples`, `config new`,
+  `component detail` / `search`, `flow new` / `update` / `validate`
+- the Scheduler Service paths: `flow schedule`, `flow schedule-remove`
 - the importable SDK (`from keboola_agent_cli import Client`)
-- the MCP subprocess (`kbagent tool ...`, `kbagent agent --type mcp_tool`)
-- the AI Service client (`kai`, `docs query`, component schema lookups)
-- the Data Science client (`data-app ...`)
-- the Metastore client (`semantic-layer ...`)
-- the Developer Portal client (`dev-portal ...`)
-- the Stream client (`stream ...`)
+
+`SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py` is the
+in-code copy of that list. `auth login` and `auth register-projects` print it,
+and both ship it in `--json` as the additive key
+`session_unsupported_features`, so you learn the restrictions up front instead
+of at first use. (`auth status` reports session health, not this list.)
+Two surfaces are commonly assumed to be on it
+and are not: **`dev-portal`** authenticates with its own Developer Portal
+identity, never a project token, so a session changes nothing there; and
+**`flow` splits** -- `flow list` / `flow detail` are plain Storage calls that
+work, while `flow new` / `update` / `validate --project` need the AI Service
+and fail.
+
+In a multi-project command (`data-app list`, `tool list`, `tool call`,
+`flow list`) that guard does not abort the whole run: the offending project
+gets an `errors[]` entry keeping the real `error_code`
+(`AUTH_NOT_SUPPORTED_ON_STACK`, not a generic `UNEXPECTED_ERROR` /
+`MCP_ERROR`) while the other projects succeed. Branch on that code rather
+than on the message text.
 
 If your workflow needs one of those, register the same project again under
 a different alias with a static Storage token:
@@ -122,6 +223,19 @@ kbagent project add --project my-project-static --url <stack> --token <token>
 ```
 
 The two aliases can coexist; only the sentinel-token one is guarded.
+
+### Serving a session project over `kbagent serve`
+
+A session is tied to **your** Keboola identity, while `serve` authenticates
+its callers with `KBAGENT_SERVE_TOKEN`. Anyone holding that token therefore
+acts as the signed-in user for every session-backed project the server
+exposes. Treat the serve token as equivalent to your own credential, or
+serve static-token projects instead. See `docs/web-server.md`.
+
+A session that expires while the server is running answers HTTP 401 with
+`error_code: SESSION_EXPIRED`. Nothing the caller can send fixes it -- a
+browser login only completes on the host, so someone has to run
+`kbagent auth login` there.
 
 ## Troubleshooting
 
@@ -147,6 +261,33 @@ The two aliases can coexist; only the sentinel-token one is guarded.
   only in `auth.json` (0600) for the CLI's own use. Do not `cat` it or paste
   its contents anywhere -- if you need a credential for a script or another
   tool, use a static Storage token instead.
+- **A refresh timed out**: `TIMEOUT` / `CONNECTION_ERROR` (exit 4, network)
+  means the auth service was slow or unreachable -- your login is not dead, so
+  do not re-run `auth login`. The refresh is one attempt under a short budget
+  by design; just run the original command again.
+
+In the human `project list` / `project status` tables the mode shows as an
+`Auth` column, and in `project info` as an `Auth` row above the Token rows. A
+session project's human `Token` cell is a dash -- the sentinel is not a
+credential, and masked (`kbc-...9840`) it reads like a truncated real token.
+The `--json` `token` field is unchanged (still masked), so do not expect a dash
+there.
+
+## Converting a session project to a static token
+
+Two commands touch a session project's credential, and they behave
+differently on purpose:
+
+- **`project refresh` (and `org setup --refresh`) skip it.** There is no
+  static token to replace -- the credential lives in `auth.json` and its
+  access token rotates on its own -- so the project is reported under
+  `skipped` with that reason rather than raising. `--force` does not convert
+  it either.
+- **`project edit --token` converts it, with a warning.** This is the
+  supported deliberate conversion. Once done the alias is a static-token
+  project, so `auth logout --remove-projects` no longer cleans it up -- use
+  `kbagent project remove`. The warning is identical under `--dry-run`, and
+  in `--json` it arrives in an additive top-level `warnings` array.
 
 ## Boundaries (what this surface does NOT own)
 

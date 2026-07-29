@@ -291,9 +291,16 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   USER-scoped "programmatic session" (kbc_at_* access token + kbc_rt_* refresh token) stored in
 #   auth.json (0600), a sibling of config.json -- config.json's schema and CURRENT_CONFIG_VERSION are
 #   unchanged. --register-projects writes each accessible project into config.json with the sentinel
-#   token `kbc-session://{project_id}`. v1 scope is Storage + Manage command paths only: `serve`, the
-#   importable SDK, the MCP subprocess, and the AI/data-science/metastore/dev-portal/stream clients all
-#   fail fast on a sentinel-token project (AUTH_NOT_SUPPORTED_ON_STACK) naming the static-token fallback.
+#   token `kbc-session://{project_id}`. v1 scope is the Storage + Manage paths: the CLI commands and
+#   `serve` both reach them, because `serve` delegates to the same already-guarded services (see
+#   server/dependencies.py). Everything outside those paths fails fast on a sentinel-token project
+#   (AUTH_NOT_SUPPORTED_ON_STACK) naming the static-token fallback; the authoritative list is
+#   SESSION_UNSUPPORTED_FEATURES in services/_auth_registration.py, shipped to callers as
+#   `session_unsupported_features` in --json -- do not re-derive it by hand. `dev-portal` is NOT on it
+#   (it authenticates with its own identity, never a project token). Over `serve`, a session that
+#   expires at runtime answers HTTP 401 with
+#   error_code SESSION_EXPIRED -- a browser login only completes on the host. Serving session projects
+#   means whoever holds KBAGENT_SERVE_TOKEN acts as the signed-in USER; see docs/web-server.md.
 #   New error codes: AUTH_NOT_SUPPORTED_ON_STACK, AUTH_FLOW_TIMEOUT, AUTH_FLOW_DENIED, AUTH_FLOW_EXPIRED,
 #   AUTH_BROWSER_UNAVAILABLE, AUTH_STATE_MISMATCH, SESSION_EXPIRED, SESSION_NOT_FOUND.
 # `auth register-projects` (0.77.0+): fixes the usability gap where nothing was registered unless

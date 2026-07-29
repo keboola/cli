@@ -53,12 +53,19 @@ htmlcov/
 # ruff
 .ruff_cache/
 
+# Generic tool cache directory, at any depth (uv, ruff and others use it)
+.cache/
+
 # Explorer (deprecated -- use 'llm export' instead)
 kbc-explorer/
 
 # Docs (local-only subdirectories)
 docs/done/
 docs/AGENT-REPORTS/
+
+# Per-PR review write-ups: working notes for one PR, not repo documentation.
+# Root-anchored so a genuine document under docs/ can never match the glob.
+/review-pr-*.md
 
 # OS
 .DS_Store

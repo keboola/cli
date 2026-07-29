@@ -43,7 +43,7 @@ Confirmed scope decisions:
 | Secret storage | plaintext in `auth.json` at `0600` — no keyring, no encryption (matches existing static-token storage; deliberate deviation from the RFC, see §4.2) |
 | Command surface | new `kbagent auth` group: `login`, `logout`, `status` |
 | Release scope | PKCE + device flow together |
-| v1 integration | CLI command paths only; `kbagent serve`, SDK (`lib.py`), MCP subprocess stay static-token and fail fast with a clear error on session projects (follow-up issue) |
+| v1 integration | the Storage + Manage paths, reached both by the CLI commands and by `kbagent serve` (which delegates to the same guarded services); everything outside those paths stays static-token and fails fast with a clear error on session projects — the authoritative list is `SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py` (`dev-portal` is not on it: it authenticates with its own identity, never a project token). Serving session projects is a deliberate trade for web-UI usability — see `docs/web-server.md` > "Session-registered projects" for the accepted risk |
 
 ## 2. Server contract consumed by the CLI
 
@@ -236,9 +236,15 @@ touching the token provider or the flows.
 
   429 → treated as slow_down with backoff; unknown 400 → typed error.
 - `exchange_pkce_code(code, state, redirect_uri, code_verifier) -> CliTokenResponse`.
-- `refresh(refresh_token) -> CliTokenResponse` — network/5xx retry is safe (30 s grace
-  makes it idempotent); `invalid_grant`/replay mapped to `SESSION_EXPIRED` before the
-  generic error path.
+- `refresh(refresh_token) -> CliTokenResponse` — a **single attempt**, bypassing
+  `_do_request`'s retry loop, under `AUTH_REFRESH_TIMEOUT` rather than the client default.
+  A retry would re-present the same refresh token, which is exactly the replay the server's
+  30 s grace window exists to forgive — and past that window it triggers family revocation,
+  a hard logout. Losing the retry costs little: the old token is still on disk and still
+  inside the grace window, so the next command simply refreshes again. The single attempt
+  is also what keeps the lock-hold bound (`AUTH_REFRESH_MAX_WALL_CLOCK`) meaningful, since
+  `SessionTokenProvider` holds `auth.json.lock` across this call. `invalid_grant`/replay is
+  mapped to `SESSION_EXPIRED` before the generic error path.
 - `introspect(access_token)` — bearer set per request.
 - `revoke(token, token_type_hint)` (review B-2) — `POST /v1/auth/token/revoke` is a
   **public** endpoint whose input is a JSON **body** `{token, tokenTypeHint?}`, not an
@@ -295,21 +301,29 @@ Manage API (review B-3): the plan does **not** repurpose `resolve_manage_token`
 (`commands/_helpers.py:27-72`) — it currently returns a `str`, has no ConfigStore / stack /
 project / operation context, and its return value is fed into service-level
 `ManageClientFactory` functions, so making it return a `ManageClient` would break both its
-type and every caller. Instead introduce an explicit **Manage credential abstraction**
-(e.g. `resolve_manage_credential(ctx, project) -> ManageCredential`) carrying either a
-static token or a session-bearer marker, and update the manage command/service boundaries
-to consume it deliberately. Crucially, PA sessions **do not** gain admin/super Manage
-privileges — session-compatible Manage operations must be separated from those requiring an
-admin/super token: `feature` and other privileged commands must keep requesting the
-stronger credential (interactive prompt) rather than silently trying a PA session and
-failing with 403.
+type and every caller. An explicit **Manage credential abstraction** (e.g.
+`resolve_manage_credential(ctx, project) -> ManageCredential`) carrying either a static
+token or a session-bearer marker remains the intended shape for the manage
+command/service boundaries. v1 ships without it: `resolve_manage_token` is the only
+manage-credential path, and every `feature` call site uses it, so no privileged command
+can silently try a session and fall over on a 403. The abstraction lands with its first
+real caller and a test rather than ahead of one.
+
+What does hold in v1 is the property that motivated it: PA sessions **do not** gain
+admin/super Manage privileges. Session-compatible Manage operations are separated from
+those requiring an admin/super token — `feature` and other privileged commands keep
+requesting the stronger credential (interactive prompt) instead of trying a PA session.
 
 v1 exclusions — fail fast with a clear `ConfigError` when a project token is a sentinel:
-`kbagent serve` project resolution, `lib.Client`, `services/mcp_service.py`
-`_build_server_params` (never export the sentinel into a subprocess env), and the
-AI / data-science / metastore / dev-portal / stream client factories (the RFC guarantees
-bearer semantics only for Storage + Manage; verify the rest against a flagged stack as a
-follow-up matrix).
+`lib.Client`, `services/mcp_service.py` `_build_server_params` (never export the sentinel
+into a subprocess env), and the AI / data-science / metastore / stream / Scheduler client
+factories plus the `sharing` master-token path (the RFC guarantees bearer semantics only
+for Storage + Manage). `SESSION_UNSUPPORTED_FEATURES` in
+`services/_auth_registration.py` is the authoritative list; the Developer Portal client is
+absent from it because it authenticates with its own identity. `kbagent serve`
+is **not** among them: it reaches the Storage and Manage paths through the same guarded
+services the CLI uses (`server/dependencies.py`), and `tests/test_e2e_auth.py` records the
+per-service verification for the supported set.
 
 **Cross-process lock (review B-4).** The existing `config_store.py` lock helper is a
 deliberate **no-op on Windows** (`_HAS_FCNTL = False` → `_try_flock` returns early,
@@ -480,6 +494,18 @@ command); `--remove-projects` deletes the matching sentinel aliases too.
 `AUTH_DEVICE_MAX_INTERVAL = 60`, `AUTH_REFRESH_MARGIN = 120`, `AUTH_LOCK_TIMEOUT = 30.0`,
 `SESSION_TOKEN_PREFIX = "kbc-session://"`, `AUTH_STATE_FILENAME = "auth.json"`.
 
+`AUTH_REFRESH_TIMEOUT` / `AUTH_REFRESH_MAX_WALL_CLOCK` (review B-5): the refresh request
+runs while `auth.json.lock` is held, and every other holder waits only
+`AUTH_LOCK_TIMEOUT`, so a merely slow auth service must not make concurrent processes
+report the lock as stuck. `AUTH_REFRESH_TIMEOUT` is a per-phase `httpx.Timeout`
+(connect 5.0, read 5.0, write 2.0, pool 2.0) rather than the client default.
+`AUTH_REFRESH_MAX_WALL_CLOCK` is **derived** as the sum of those phases — they are
+sequential and each carries its own deadline — so the two cannot drift apart when a phase
+is retuned. That sum is the whole bound only because `refresh` is a single attempt
+(§ 4.3). The resulting 14.0 s sits under `AUTH_LOCK_TIMEOUT`'s 30.0 s with room to spare:
+`tests/test_auth_client.py` asserts `AUTH_REFRESH_MAX_WALL_CLOCK * 2 <= AUTH_LOCK_TIMEOUT`,
+so a future timeout bump cannot quietly erase the headroom.
+
 `AUTH_CALLBACK_TIMEOUT` (review NB-5): the backend documents
 `AUTH_PKCE_CALLBACK_TIMEOUT_SECONDS = 120` (and a 300 s authorization-code lifetime). The
 CLI callback wait must be **shorter than the server-side window**, otherwise the CLI keeps
@@ -509,10 +535,13 @@ test must cover callback arrival immediately before and after expiry.
 path), `errors.py`, `constants.py`, `cli.py` (register `auth` group), `models.py`
 (docstring note on the token sentinel only), `pyproject.toml` (`filelock` dependency for
 cross-platform auth-lock, review B-4), and fail-fast sentinel guards at **every direct
-`project.token` consumer** (review NB-4): `server/` dependencies, `lib.py`,
-`services/mcp_service.py` (`:238`, `:452`), `services/semantic_layer_service.py` (`:1662`
-`#metastore_token`), `services/kai_service.py` (`:91`), `services/sharing_service.py`
-(`:65`), and the non-Storage client factories.
+`project.token` consumer outside the supported Storage + Manage paths** (review NB-4):
+`lib.py`, `services/mcp_service.py` (`:238`, `:452`),
+`services/semantic_layer_service.py` (`:1662` `#metastore_token`),
+`services/kai_service.py` (`:91`), `services/sharing_service.py` (`:65`), and the
+non-Storage client factories. `server/` holds no such guard by design — it never turns a
+`ProjectConfig` into credentials itself, so it inherits both the bearer support and the
+guards from the services it delegates to (`server/dependencies.py`).
 
 ## 6. PR phasing (each PR leaves main shippable; static path untouched)
 
@@ -562,15 +591,18 @@ cross-platform auth-lock, review B-4), and fail-fast sentinel guards at **every 
   `X-StorageApi-Token`; sub-client auth propagation.
 - `test_cli_auth.py` (CliRunner) — device happy path with mocked service; `--json` output
   contains no token substrings anywhere; 404 UX; sentinel-project fail-fast messages for
-  serve/MCP paths.
-- E2E (`tests/test_e2e.py` additions, env-gated for a feature-flagged stack, **landing in
-  PR5** per NB-3) — one real call through **each** enabled sub-client (Storage, Queue,
-  Query, Encryption, Sync Actions) including a 401→refresh path, plus a Manage call with a
-  pre-provisioned session; device flow as a documented semi-manual scenario.
-- **Capability matrix (NB-1)** — a recorded matrix confirming each directly called service
-  accepts a session access token (`kbc_at_*`), *not only* the PATs (`kbc_pat_*`) that
-  DMD-1593 targets, before its command is enabled for sentinel projects; unsupported
-  services must fail before sending a request and name the static-token fallback.
+  the MCP subprocess and SDK paths (`serve` supports session projects, so it has no
+  fail-fast message to assert).
+- E2E — `tests/test_e2e_auth.py`, env-gated for a feature-flagged stack: one real call
+  through **each** enabled sub-client (Storage, Queue, Query, Encryption, Sync Actions)
+  including a 401→refresh path, plus a Manage call with a pre-provisioned session; device
+  flow as a documented semi-manual scenario. Wired into `make test-e2e-auth` and the
+  default `make test-e2e`; skips cleanly without `E2E_SESSION_REFRESH_TOKEN`.
+- **Capability matrix (NB-1)** — `TestBearerCapabilityMatrix` in `tests/test_e2e_auth.py`
+  is that matrix: one test per directly called service, each asserting the service accepts
+  a session access token (`kbc_at_*`). The CLI mints only `kbc_at_*`, so the PATs
+  (`kbc_pat_*`) DMD-1593 targets are out of its scope. Services outside the supported set
+  fail before sending a request and name the static-token fallback.
 
 ## 8. Verification (definition of done per PR)
 
@@ -603,7 +635,7 @@ cross-platform auth-lock, review B-4), and fail-fast sentinel guards at **every 
    sentinel in a known field that round-trips. Residual: old-CLI `project edit --token` on
    a sentinel project overwrites it — acceptable (explicit user action).
 2. **Non-Storage/Manage services rejecting the bearer** (queue/query/encrypt/sync-actions
-   inherit it; AI/stream/DS/dev-portal gated off in v1) — verify each against a flagged
+   inherit it; AI/stream/DS/Scheduler gated off in v1) — verify each against a flagged
    stack during PR5; unverified paths fail with a clear error, not a confusing 401.
 3. **Refresh rotation races, incl. Windows** — per-stack singleton provider, thread lock +
    dedicated **cross-platform `filelock`** on `auth.json.lock` (the existing `fcntl` helper

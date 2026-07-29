@@ -35,8 +35,12 @@ Versioning convention:
   `config.json`'s schema and `CURRENT_CONFIG_VERSION` are UNCHANGED (still 1).
   Seeing that string in `project list --json` or a raw `config.json` read is
   expected, not a corrupted token. An existing alias already pointing at the
-  same project+stack is left untouched (`status: "exists"`); one pointing
-  elsewhere is skipped with a warning (`status: "skipped"`), never overwritten.
+  same project+stack is left untouched (`status: "exists"`). A *suggested*
+  alias never collides in the first place -- it is computed against every
+  existing `config.json` key and suffixes `-{project_id}` past any clash -- so
+  `status: "skipped"` only arises when you force a taken alias with
+  `--alias ID=ALIAS`, or request a second alias for an already-registered
+  project. An existing entry is never overwritten either way.
 - **Registered aliases derive from the project NAME, never the numeric
   project id -- `--project 9840` will never resolve.** `login`'s
   accessible-projects table shows a numeric `id`, but the alias
@@ -63,15 +67,79 @@ Versioning convention:
   silently skipped, unlike the original 0.77.0 `--register-projects` batch
   path. Collision handling matches `--register-projects` above: never
   overwrites an existing `config.json` entry.
-- **v1 wires bearer sessions through Storage + Manage command paths ONLY.**
-  `kbagent serve`, the importable SDK (`lib.Client`), the MCP subprocess, and
-  the AI / data-science / metastore / dev-portal / stream clients all
-  recognise the `kbc-session://` sentinel and fail FAST with
+- **v1 wires bearer sessions through the Storage + Manage paths.** Everything
+  else recognises the `kbc-session://` sentinel and fails FAST with
   `AUTH_NOT_SUPPORTED_ON_STACK`, naming the static-token fallback, rather than
-  silently sending the sentinel string as if it were a real credential. If a
-  task needs one of those surfaces, register the same project again with a
-  static Storage token (`project add --project <alias2> --token ...`) instead
-  of fighting the guard.
+  silently sending the sentinel string as if it were a real credential. The
+  authoritative list is `SESSION_UNSUPPORTED_FEATURES` in
+  `services/_auth_registration.py`. `auth login` and `auth register-projects`
+  print it and both ship it in `--json` as the additive key
+  `session_unsupported_features` (`auth status` does **not** carry it), so read
+  it from there instead of reconstructing it from memory:
+  `kai`; `semantic-layer` (Metastore); `data-app` (Data Science);
+  `stream` (Data Streams); `tool` (MCP subprocess); `sharing` unless a master
+  token is in the environment; the AI Service paths (`docs query`,
+  `config examples`, `config new`, `component detail`/`search`,
+  `flow new`/`update`/`validate`); the Scheduler Service paths
+  (`flow schedule`, `flow schedule-remove`); and the importable SDK
+  (`lib.Client`). If a task needs one of those, register the same project again
+  with a static Storage token (`project add --project <alias2> --token ...`)
+  instead of fighting the guard.
+- **Two surfaces people wrongly expect on that list.** `dev-portal` is
+  unaffected -- it authenticates with its own Developer Portal identity
+  (`dev-portal identity add`), never a project token, so a session project
+  changes nothing there. And `flow` splits: `flow list` / `flow detail` are
+  plain Storage calls that work, while `flow new` / `flow update` /
+  `flow validate --project` fetch the live schema from the AI Service and so
+  fail -- they do NOT degrade to the semantic-only validation they fall back to
+  when a schema fetch merely errors.
+- **`kbagent serve` DOES serve session projects -- it is not on the fail-fast
+  list.** It delegates to the same already-guarded services, so the REST API
+  and web UI work against a sentinel-token project. Two things follow that are
+  easy to get wrong: a session is a USER credential, so anyone holding
+  `KBAGENT_SERVE_TOKEN` acts as the signed-in user for every session-backed
+  project the server exposes (treat that token as equivalent to the user's own
+  credential, or serve static-token projects instead); and when the session
+  expires at runtime the server answers **HTTP 401 with
+  `error_code: SESSION_EXPIRED`**, which no request payload can fix -- a
+  browser login only completes on the host, so a human has to run
+  `kbagent auth login` there.
+- **`project refresh` and `org setup --refresh` SKIP session projects, and
+  `--force` does not override that.** There is no static token to replace: the
+  credential lives in `auth.json` and its access token rotates on its own. The
+  project appears under `skipped` with that reason instead of raising or being
+  silently converted. A deliberate single-project conversion to a static token
+  is `project edit --token` (next bullet).
+- **`project edit --token` on a session project is allowed, warns, and
+  converts.** The project becomes a static-token project, which means
+  `auth logout --remove-projects` will no longer clean that alias up -- use
+  `project remove` when done with it. The warning text is identical in
+  `--dry-run`; in `--json` it arrives in an additive top-level `warnings`
+  array, so a consumer must not assume the key is absent.
+- **To find out which credential mode a project uses, read `auth_mode` --
+  never parse the token.** `kbagent project list --json | jq '.data[].auth_mode'`
+  (also on `project status` and `project info`, and over HTTP on `/projects`,
+  `/projects/status`, `/projects/{alias}/info`). Exactly two values, `session`
+  and `static`; the field is **always present and never empty**, including on a
+  row synthesized for a project whose connection failed, so branch on it rather
+  than testing for absence. The human tables show it as an `Auth` column
+  (`project list`: before `Token`; `project status`: after `Status`) and
+  `project info` as an `Auth` row above the Token rows. A session project's
+  human `Token` cell is a dash -- the sentinel is not a credential and masked
+  (`kbc-...9840`) it reads like a truncated real token. **`--json` `token` is
+  unchanged** (`mask_token(...)`): that contract did not move, so do not expect
+  a dash there. `project current` / `project add` / `project edit` carry no
+  `auth_mode` by design -- `current` answers which alias is effective (and can
+  report a `KBAGENT_PROJECT` override naming an alias absent from the config),
+  the other two are write confirmations.
+- **A session refresh that times out is a NETWORK error (exit 4), not a
+  session error (exit 3) or a config error (exit 5).** `TIMEOUT` /
+  `CONNECTION_ERROR` mean the auth service was slow or unreachable, not that
+  the login died -- do not tell the user to log in again. The refresh is a
+  single attempt under a short budget by design (a retry would re-present the
+  same refresh token, which is exactly the replay the server's grace window
+  forgives), so the remedy is simply to re-run the command. Only
+  `SESSION_EXPIRED` / `SESSION_NOT_FOUND` mean "log in again".
 - **An older (pre-0.77.0) kbagent build has no sentinel awareness at all.** A
   session-registered project opened on an old CLI gets an opaque 401 on a
   plain `X-StorageApi-Token` call; a few consumers that treat the token as
@@ -1660,6 +1728,17 @@ One project failing does not block others. Check the `errors` array:
 }
 ```
 
+**`error_code` survives the catch-all handler -- branch on it, never on the
+message (since v0.77.0).** In `data-app list`, `tool list`, `tool call` and
+`flow list`, a per-project failure that already carries a code keeps it instead
+of being relabelled `UNEXPECTED_ERROR` / `MCP_ERROR`. So a browser-login
+(session) project hitting an unsupported surface reports
+`error_code: "AUTH_NOT_SUPPORTED_ON_STACK"` for that one project while the
+others succeed, which is the hook for auto-remediating (register a static-token
+alias) without parsing prose. Only an exception carrying no code at all falls
+back, and then its message is deliberately truncated because its content is
+unknown -- do not try to parse a fallback message.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -1667,8 +1746,8 @@ One project failing does not block others. Check the `errors` array:
 | 0 | Success |
 | 1 | General error |
 | 2 | Usage error (invalid arguments) |
-| 3 | Authentication error (invalid or expired token) |
-| 4 | Network error (timeout, unreachable) -- includes `QUEUE_JOB_TIMEOUT` (local gave up AND the remote-kill attempt failed; the remote job may still be running) |
+| 3 | Authentication error (invalid or expired token) -- includes `SESSION_EXPIRED` / `SESSION_NOT_FOUND` / `AUTH_FLOW_DENIED`, whose remedy is `kbagent auth login` (since v0.77.0) |
+| 4 | Network error (timeout, unreachable) -- includes `QUEUE_JOB_TIMEOUT` (local gave up AND the remote-kill attempt failed; the remote job may still be running), `AUTH_FLOW_TIMEOUT`, and a session refresh that timed out or could not reach the auth service (`TIMEOUT` / `CONNECTION_ERROR`; a slow auth service is NOT a dead login -- re-run, do not re-login) (since v0.77.0) |
 | 5 | Configuration error (corrupt config, missing alias) |
 | 6 | Permission denied (blocked by firewall / `--deny-writes` / `--deny-destructive`) |
 | 7 | `JOB_TIMEOUT_TERMINATED` -- `job run --timeout` elapsed AND the remote job was successfully cancelled (since 0.22.0). Scripts can distinguish "we killed it" from "it failed on its own" (exit 1) from "it's still running" (exit 4). |

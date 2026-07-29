@@ -261,6 +261,44 @@ stdout, and refuses any request that does not present it as
 `Authorization: Bearer <token>`. Public paths: `/health/ping`,
 `/health/auth-info`, `/openapi.json`, `/docs`, `/redoc`.
 
+### Session-registered projects
+
+Projects registered through `kbagent auth login --register-projects` carry a
+`kbc-session://<project_id>` sentinel instead of a Storage token; the live
+credential is a browser-login session in `auth.json` on the host. `serve`
+supports them for the Storage and Manage paths, because it never turns a
+project into credentials itself — every service in the registry resolves its
+own client factory, so the REST surface inherits the same bearer support the
+CLI has (`server/dependencies.py`). Everything outside those paths fails fast
+with `AUTH_NOT_SUPPORTED_ON_STACK` and names the static-token fallback, over
+REST exactly as on the CLI. The authoritative list of those surfaces is
+`SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py`; see
+[Browser login](auth.md) for the same list in prose.
+
+A session that expires while the server runs answers **HTTP 401** with
+`error_code: SESSION_EXPIRED`. The server cannot recover on its own: a browser
+login only completes where a human sits, so the remedy is `kbagent auth login`
+**on the host running serve**, not anything the REST caller can do.
+
+Two properties of this are consciously accepted, traded for being able to drive
+a session-backed project from the web UI at all:
+
+- **The serve token borrows a user identity.** A browser-login session is
+  USER-scoped, so whoever holds `KBAGENT_SERVE_TOKEN` acts as the signed-in
+  Keboola user for as long as that session lives. The serve token is not that
+  user's Keboola identity and the REST surface has no second identity layer to
+  distinguish them — treat the serve token as equivalent to the session it can
+  reach, and keep the default localhost bind unless you have a reason not to.
+- **Rotation was designed for short invocations.** Refresh-token rotation
+  assumes a CLI process that exits in seconds. In a daemon up for weeks, the
+  crash window between persisting a rotated session and revoking the previous
+  one stays open far longer, and a crash inside it leaves a server-side session
+  that no later `auth logout` can revoke. Such a session expires on its own
+  schedule; it cannot be revoked from this CLI afterwards.
+
+For a project you would rather not expose this way, register it with a static
+Storage token (`kbagent project add --token`) — that path has neither property.
+
 ### Manage tokens are per-request
 
 Operations that need a Keboola Manage API token (`org setup`,
