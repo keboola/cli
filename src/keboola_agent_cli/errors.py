@@ -34,6 +34,10 @@ class ErrorCode(StrEnum):
     USAGE_ERROR = "USAGE_ERROR"
     MISSING_PARAMETER = "MISSING_PARAMETER"
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
+    # Per-project envelope fallback in multi-project commands: the operation
+    # raised something that carried no code of its own (see
+    # `services.base.project_error_entry`).
+    UNEXPECTED_ERROR = "UNEXPECTED_ERROR"
     # `kbagent serve` HTTP envelope (0.40.0+)
     HTTP_ERROR = "HTTP_ERROR"  # Generic HTTP-layer error (Starlette HTTPException passthrough)
     INTERNAL_ERROR = "INTERNAL_ERROR"  # Uncaught exception inside a route handler
@@ -117,6 +121,11 @@ class ErrorCode(StrEnum):
     DP_APP_NOT_FOUND = "DP_APP_NOT_FOUND"
     DP_PUBLISH_REQUIREMENTS_MISSING = "DP_PUBLISH_REQUIREMENTS_MISSING"
     DP_ICON_UPLOAD_FAILED = "DP_ICON_UPLOAD_FAILED"
+
+    # MCP tool dispatch
+    # Failure originating in the MCP layer itself (transport, subprocess,
+    # protocol) rather than in the tool's own result.
+    MCP_ERROR = "MCP_ERROR"
 
     # Programmatic auth / browser login (since 0.77.0)
     AUTH_NOT_SUPPORTED_ON_STACK = "AUTH_NOT_SUPPORTED_ON_STACK"
@@ -240,26 +249,50 @@ class SessionAuthUnsupportedError(ConfigError):
     """Raised when a session-registered project (``kbc-session://`` sentinel token)
     reaches a code path that only understands static Storage tokens.
 
-    v1 wires bearer sessions through the Storage and Manage clients only. Every
-    other consumer (MCP subprocess, AI/data-science/metastore/dev-portal/stream
-    clients, the importable SDK, ``kbagent serve``) must fail fast here rather
-    than send the literal sentinel string as a credential -- an opaque 401, or
-    worse, the sentinel being encrypted/persisted as if it were a real token.
+    v1 wires bearer sessions through the Storage and Manage clients. Everything
+    outside those paths fails fast here -- the MCP subprocess, the
+    AI/data-science/metastore/stream/Scheduler clients, the ``sharing``
+    master-token path, and the importable SDK; the authoritative list is
+    ``SESSION_UNSUPPORTED_FEATURES`` in ``services/_auth_registration.py``. The
+    Developer Portal client is absent from it because it authenticates with its
+    own identity, never a project token. Failing fast beats sending the literal
+    sentinel string as a credential, which
+    yields an opaque 401 or, worse, gets the sentinel encrypted and persisted as
+    if it were a real token. ``kbagent serve`` is **not** among them: it reaches
+    Storage and Manage by delegating to those same already-guarded services, so
+    session projects do work through it (``server/dependencies.py``).
+
+    Also raised outside the sentinel guards by
+    ``ConfigStore._reject_session_credential_swap``, where the project stays
+    registered and only its credential *type* is at stake -- which is why the
+    default remedy below steps aside for a caller-supplied one.
     """
 
     def __init__(self, feature: str, *, remedy: str = "") -> None:
-        message = (
-            f"{feature} does not support browser-login (session) projects yet. "
-            "Register the project with a static Storage token instead: "
-            "kbagent project add --project <alias> --url <stack> --token <token>."
-        )
+        message = f"{feature} does not support browser-login (session) projects yet."
+        # A caller that knows its own recovery path replaces the generic
+        # suggestion rather than being appended to it: the two are not always
+        # compatible, and a message carrying both reads as self-contradictory.
         if remedy:
             message = f"{message} {remedy}"
+        else:
+            message = (
+                f"{message} Point the project at a static Storage token instead: "
+                "`kbagent project edit --project <alias> --token <token>` converts the "
+                "alias you are already using, replacing its session credential. Use "
+                "`kbagent project add --project <new-alias> --url <stack> --token <token>` "
+                "only for a genuinely new alias -- `project add` rejects one that already exists."
+            )
         super().__init__(message)
         self.feature = feature
         self.error_code = ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
 
 
+# Sparse by design: only codes whose broad type differs from the ``"api"``
+# default `map_error_code_to_type` returns. Catch-alls (`UNKNOWN_ERROR`,
+# `INTERNAL_ERROR`, `UNEXPECTED_ERROR`, `MCP_ERROR`, ...) and the API/job/storage
+# families are deliberately absent -- a new ErrorCode member needs an entry here
+# only when "api" would be wrong for it.
 _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.INVALID_TOKEN: "authentication",
     ErrorCode.MISSING_MASTER_TOKEN: "authentication",

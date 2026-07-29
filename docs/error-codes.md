@@ -43,6 +43,7 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `USAGE_ERROR` | Incorrect CLI flag combination or missing required argument |
 | `MISSING_PARAMETER` | A required parameter was not supplied |
 | `UNKNOWN_ERROR` | Catch-all for unclassified errors |
+| `UNEXPECTED_ERROR` | Per-project fallback in a multi-project command: that project raised an error carrying no code of its own. Other projects in the same run still report their own outcome |
 | `HTTP_ERROR` | Generic HTTP-layer error in the `kbagent serve` envelope (HTTPException passthrough) |
 | `INTERNAL_ERROR` | Uncaught exception inside a `kbagent serve` route handler (HTTP 500) |
 
@@ -162,6 +163,12 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `DP_APP_NOT_FOUND` | Developer Portal app not found under the vendor |
 | `DP_PUBLISH_REQUIREMENTS_MISSING` | App is missing required fields for publishing (fix via `dev-portal patch` first) |
 | `DP_ICON_UPLOAD_FAILED` | Uploading the app icon to the Developer Portal failed |
+
+### MCP
+
+| Code | Description |
+|---|---|
+| `MCP_ERROR` | The MCP layer itself failed (transport, subprocess, or protocol), as opposed to the tool returning an error result |
 
 ### Programmatic Auth (browser login)
 

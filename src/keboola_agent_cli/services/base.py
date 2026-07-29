@@ -15,11 +15,17 @@ from ..auth.sentinel import is_session_token, parse_session_project_id, require_
 from ..client import KeboolaClient
 from ..config_store import ConfigError, ConfigStore, project_not_found_error
 from ..constants import ENV_MAX_PARALLEL_WORKERS, UNEXPECTED_ERROR_MAX_MESSAGE_LEN
+from ..errors import ErrorCode
 from ..models import ProjectConfig
 
 logger = logging.getLogger(__name__)
 
 ClientFactory = Callable[[str, str], KeboolaClient]
+
+# Per-project error entries fall back to this code when the exception carries
+# none of its own. `StrEnum`, so it still serialises as the plain string
+# "UNEXPECTED_ERROR" that every multi-project service emits in its envelope.
+UNEXPECTED_ERROR_CODE = ErrorCode.UNEXPECTED_ERROR
 
 
 @dataclass(frozen=True)
@@ -71,6 +77,41 @@ def sanitize_unexpected_error(exc: BaseException) -> str:
     if len(raw) > UNEXPECTED_ERROR_MAX_MESSAGE_LEN:
         return raw[:UNEXPECTED_ERROR_MAX_MESSAGE_LEN] + "..."
     return raw
+
+
+def project_error_entry(
+    alias: str,
+    exc: BaseException,
+    *,
+    fallback_code: str | ErrorCode = UNEXPECTED_ERROR_CODE,
+    message: str | None = None,
+) -> dict[str, str]:
+    """Build one per-project error entry, keeping a typed ``error_code`` intact.
+
+    A `--json` consumer branches on ``error_code``, so a code the exception
+    already carries must survive a catch-all handler: ``KeboolaApiError`` and
+    the ``ConfigError`` subclasses that set one (``SessionAuthUnsupportedError``
+    -> ``AUTH_NOT_SUPPORTED_ON_STACK``) are machine-readable contracts, not
+    unexpected failures. ``error_code`` may be an :class:`ErrorCode` member or a
+    plain string; ``str()`` normalises both to the wire form.
+
+    ``fallback_code`` applies only to an exception without a code. Such a
+    message is truncated (:func:`sanitize_unexpected_error`, CWE-209) because
+    its content is unknown; a typed error's message is curated and passes
+    through whole.
+    """
+    code = getattr(exc, "error_code", None)
+    if code:
+        return {
+            "project_alias": alias,
+            "error_code": str(code),
+            "message": message if message is not None else str(exc),
+        }
+    return {
+        "project_alias": alias,
+        "error_code": str(fallback_code),
+        "message": message if message is not None else sanitize_unexpected_error(exc),
+    }
 
 
 def default_client_factory(stack_url: str, token: str) -> KeboolaClient:
@@ -219,6 +260,10 @@ class BaseService:
             Tuple of (successes, errors) where:
             - successes: list of 3+-tuples from successful workers
             - errors: list of error dicts with project_alias, error_code, message
+
+        A worker that raises instead of returning an error tuple still lands in
+        ``errors``, with its own ``error_code`` when it carries one (see
+        :func:`project_error_entry`).
         """
         if not projects:
             return [], []
@@ -243,13 +288,7 @@ class BaseService:
                         proj_alias,
                         exc,
                     )
-                    errors.append(
-                        {
-                            "project_alias": proj_alias,
-                            "error_code": "UNEXPECTED_ERROR",
-                            "message": sanitize_unexpected_error(exc),
-                        }
-                    )
+                    errors.append(project_error_entry(proj_alias, exc))
                     continue
 
                 if len(result) == 2:

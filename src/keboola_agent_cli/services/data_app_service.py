@@ -26,11 +26,12 @@ from datetime import datetime
 from typing import Any
 
 from ..auth.sentinel import require_static_token
+from ..client import KeboolaClient
 from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..data_science_client import DataScienceClient
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
-from .base import BaseService, ClientFactory
+from .base import BaseService, ClientFactory, project_error_entry
 from .encrypt_service import EncryptService
 
 logger = logging.getLogger(__name__)
@@ -377,9 +378,15 @@ class DataAppService(BaseService):
         def worker(
             alias: str, project: ProjectConfig
         ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, str]]:
-            ds_client = self._ds_client_factory(project.stack_url, project.token)
-            storage_client = self._client_factory(project.stack_url, project.token)
+            # Both clients are built inside the try: the Data Science factory is
+            # static-token-only, so on a session project its
+            # AUTH_NOT_SUPPORTED_ON_STACK becomes this project's error entry
+            # instead of aborting the whole listing under a generic code.
+            ds_client: DataScienceClient | None = None
+            storage_client: KeboolaClient | None = None
             try:
+                ds_client = self._ds_client_factory(project.stack_url, project.token)
+                storage_client = self._client_factory(project.stack_url, project.token)
                 apps = ds_client.list_apps()
                 config_names = self._fetch_data_app_config_names(storage_client, branch_id)
                 merged: list[dict[str, Any]] = []
@@ -417,18 +424,13 @@ class DataAppService(BaseService):
                 # Per-project sort dropped: the global sort below
                 # subsumes it after we concatenate every worker's output.
                 return (alias, merged, True)
-            except KeboolaApiError as exc:
-                return (
-                    alias,
-                    {
-                        "project_alias": alias,
-                        "error_code": str(exc.error_code),
-                        "message": exc.message,
-                    },
-                )
+            except (KeboolaApiError, ConfigError) as exc:
+                return (alias, project_error_entry(alias, exc))
             finally:
-                ds_client.close()
-                storage_client.close()
+                if ds_client is not None:
+                    ds_client.close()
+                if storage_client is not None:
+                    storage_client.close()
 
         successes, errors = self._run_parallel(projects, worker)
         all_apps: list[dict[str, Any]] = []

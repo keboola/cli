@@ -18,7 +18,9 @@ Covers three things:
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -53,9 +55,79 @@ def _config_store_with_sentinel_project(tmp_path: Path, alias: str = "sentinel")
     return store
 
 
+def _static_project() -> ProjectConfig:
+    return ProjectConfig(
+        stack_url=STACK_URL,
+        token=STATIC_TOKEN,
+        project_name="Static Project",
+        project_id=5725,
+    )
+
+
+def _mixed_config_store(tmp_path: Path) -> ConfigStore:
+    """A config.json holding one session and one static project side by side --
+    the shape ``auth register-projects`` produces on a stack where only some
+    projects were migrated to browser login."""
+    store = ConfigStore(config_dir=tmp_path)
+    store.add_project("session", _sentinel_project())
+    store.add_project("static", _static_project())
+    return store
+
+
 # ----------------------------------------------------------------------------
 # services.base: default_client_factory / make_client_factory
 # ----------------------------------------------------------------------------
+
+
+class TestRemedyText:
+    """The remedy must name a command that actually works for the reader.
+
+    Every caller of `require_static_token` generates this message, so it has to
+    be true for all of them -- the earlier text told the user to
+    `project add --project <alias>`, which `add_project` rejects outright once
+    that alias exists (and it always does: the guard fires on a *registered*
+    session project).
+    """
+
+    def test_default_remedy_leads_with_project_edit(self) -> None:
+        exc = SessionAuthUnsupportedError("The MCP server subprocess")
+
+        assert "project edit --project <alias> --token <token>" in exc.message
+        # `project add` is still mentioned, but scoped to the case it works for.
+        assert "project add --project <new-alias>" in exc.message
+        assert "rejects one that already exists" in exc.message
+
+    def test_default_remedy_does_not_suggest_add_for_the_existing_alias(self) -> None:
+        """The exact dead-end the previous wording produced."""
+        exc = SessionAuthUnsupportedError("The importable SDK Client")
+
+        assert "project add --project <alias>" not in exc.message
+
+    def test_caller_supplied_remedy_replaces_the_default(self) -> None:
+        """A credential-type swap keeps the project registered, so the generic
+        "register it with a static token" advice would contradict the specific
+        remedy the caller already supplies."""
+        exc = SessionAuthUnsupportedError(
+            "Replacing the stored credential of project 'prod' with a static Storage token",
+            remedy="Run `kbagent project edit --project prod --token <token>` deliberately.",
+        )
+
+        assert exc.message.endswith(
+            "Run `kbagent project edit --project prod --token <token>` deliberately."
+        )
+        assert "Point the project at a static Storage token instead" not in exc.message
+        assert "<new-alias>" not in exc.message
+
+    def test_feature_name_and_code_are_carried_either_way(self) -> None:
+        with_remedy = SessionAuthUnsupportedError("kbagent kai", remedy="Do the other thing.")
+        without = SessionAuthUnsupportedError("kbagent kai")
+
+        for exc in (with_remedy, without):
+            assert exc.feature == "kbagent kai"
+            assert exc.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+            assert exc.message.startswith(
+                "kbagent kai does not support browser-login (session) projects yet."
+            )
 
 
 class TestDefaultClientFactory:
@@ -251,6 +323,185 @@ class TestStreamServiceGuard:
         with pytest.raises(SessionAuthUnsupportedError) as exc_info:
             default_stream_client_factory(STACK_URL, _sentinel_token())
         assert exc_info.value.feature == "The Data Streams Service"
+
+
+# ----------------------------------------------------------------------------
+# Multi-project paths: the guard's AUTH_NOT_SUPPORTED_ON_STACK reaches the
+# --json envelope per project, and the static project's result is unaffected.
+# ----------------------------------------------------------------------------
+
+
+class TestListDataAppsMixedProjects:
+    def _service(self, store: ConfigStore, ds_mock: MagicMock, storage_mock: MagicMock):
+        from keboola_agent_cli.services.data_app_service import DataAppService
+
+        # Patching the client class (not the factory) keeps the real
+        # static-token guard in `_default_ds_client_factory` in the path.
+        return patch(
+            "keboola_agent_cli.services.data_app_service.DataScienceClient",
+            return_value=ds_mock,
+        ), DataAppService(
+            config_store=store,
+            client_factory=lambda url, token: storage_mock,
+            encrypt_service=MagicMock(),
+        )
+
+    def test_session_project_errors_with_auth_code_static_project_lists(
+        self, tmp_path: Path
+    ) -> None:
+        store = _mixed_config_store(tmp_path)
+        storage_mock = MagicMock()
+        storage_mock.list_component_configs.return_value = [
+            {"id": "cfg1", "name": "Sales dashboard"}
+        ]
+        ds_mock = MagicMock()
+        ds_mock.list_apps.return_value = [
+            {
+                "id": "77",
+                "componentId": "keboola.data-apps",
+                "configId": "cfg1",
+                "type": "python-js",
+            }
+        ]
+        ds_patch, service = self._service(store, ds_mock, storage_mock)
+
+        with ds_patch:
+            result = service.list_data_apps(["session", "static"])
+
+        assert [a["project_alias"] for a in result["apps"]] == ["static"]
+        assert result["apps"][0]["name"] == "Sales dashboard"
+
+        assert len(result["errors"]) == 1
+        error = result["errors"][0]
+        assert error["project_alias"] == "session"
+        assert error["error_code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+        assert "static Storage token" in error["message"]
+
+        # The --json envelope a consuming agent branches on.
+        assert (
+            json.loads(json.dumps(result["errors"]))[0]["error_code"]
+            == "AUTH_NOT_SUPPORTED_ON_STACK"
+        )
+
+    def test_unexpected_failure_still_reports_unexpected_error(self, tmp_path: Path) -> None:
+        """The typed code must not come at the cost of the generic fallback."""
+        store = _mixed_config_store(tmp_path)
+        ds_mock = MagicMock()
+        ds_mock.list_apps.side_effect = RuntimeError("connection pool exhausted")
+        ds_patch, service = self._service(store, ds_mock, MagicMock())
+
+        with ds_patch:
+            result = service.list_data_apps(["session", "static"])
+
+        assert result["apps"] == []
+        by_alias = {e["project_alias"]: e["error_code"] for e in result["errors"]}
+        assert by_alias == {
+            "session": ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,
+            "static": "UNEXPECTED_ERROR",
+        }
+
+
+class TestListToolsMixedProjects:
+    @staticmethod
+    def _patch_stdio_transport(
+        monkeypatch: pytest.MonkeyPatch, *, fail_static: bool = False
+    ) -> None:
+        """Stand in for the MCP subprocess while keeping the real guard.
+
+        ``_build_server_params`` is called for real, so the sentinel project
+        still fails through ``require_static_token``; only the stdio session
+        below it is replaced.
+        """
+        from keboola_agent_cli.services import mcp_service as mcp_module
+        from keboola_agent_cli.services.mcp_service import McpService
+
+        async def fake_connect_and_list_tools(
+            project: ProjectConfig, branch_id: str | None = None
+        ) -> list[dict[str, object]]:
+            mcp_module._build_server_params(project, branch_id=branch_id)
+            if fail_static:
+                raise RuntimeError("stdio session closed")
+            return [{"name": "get_buckets", "description": "", "inputSchema": {}}]
+
+        def fake_which(cmd: str) -> str | None:
+            return "/usr/local/bin/uvx" if cmd == "uvx" else None
+
+        monkeypatch.setattr(mcp_module, "_connect_and_list_tools", fake_connect_and_list_tools)
+        monkeypatch.setattr(mcp_module.shutil, "which", fake_which)
+        monkeypatch.setattr(McpService, "_get_server_url", lambda self: None)
+
+    def test_session_project_errors_with_auth_code_static_project_lists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from keboola_agent_cli.services.mcp_service import McpService
+
+        self._patch_stdio_transport(monkeypatch)
+        service = McpService(config_store=_mixed_config_store(tmp_path))
+
+        result = service.list_tools(aliases=["session", "static"])
+
+        assert [t["name"] for t in result["tools"]] == ["get_buckets"]
+        assert len(result["errors"]) == 1
+        error = result["errors"][0]
+        assert error["project_alias"] == "session"
+        assert error["error_code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+        assert "Failed to list tools" in error["message"]
+
+    def test_real_mcp_failure_still_reports_mcp_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from keboola_agent_cli.services.mcp_service import McpService
+
+        self._patch_stdio_transport(monkeypatch, fail_static=True)
+        service = McpService(config_store=_mixed_config_store(tmp_path))
+
+        result = service.list_tools(aliases=["session", "static"])
+
+        assert result["tools"] == []
+        by_alias = {e["project_alias"]: e["error_code"] for e in result["errors"]}
+        assert by_alias == {
+            "session": ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,
+            "static": "MCP_ERROR",
+        }
+
+
+class TestGatherResultsMixedProjects:
+    """The parallel read-tool path (`_call_read_tool` -> `_gather_results`)."""
+
+    @staticmethod
+    def _gather(outcomes: dict[str, Any]) -> dict[str, Any]:
+        from keboola_agent_cli.services.mcp_service import McpService
+
+        async def _run() -> dict[str, Any]:
+            async def _produce(outcome: Any) -> dict[str, Any]:
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                return outcome
+
+            tasks = {
+                alias: asyncio.create_task(_produce(outcome)) for alias, outcome in outcomes.items()
+            }
+            return await McpService._gather_results(tasks)
+
+        return asyncio.run(_run())
+
+    def test_session_project_error_keeps_auth_code(self) -> None:
+        result = self._gather(
+            {
+                "session": SessionAuthUnsupportedError("The MCP server subprocess"),
+                "static": {"data": "rows"},
+            }
+        )
+
+        assert result["results"] == [{"data": "rows", "project_alias": "static"}]
+        assert result["errors"][0]["project_alias"] == "session"
+        assert result["errors"][0]["error_code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+
+    def test_transport_failure_still_reports_mcp_error(self) -> None:
+        result = self._gather({"static": RuntimeError("stdio session closed")})
+
+        assert result["errors"][0]["error_code"] == "MCP_ERROR"
+        assert result["errors"][0]["message"] == "stdio session closed"
 
 
 # ----------------------------------------------------------------------------

@@ -29,7 +29,7 @@ from ..config_store import ConfigStore
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ComponentDetail, ProjectConfig
 from ..scheduler_client import SchedulerClient
-from .base import BaseService, ClientFactory
+from .base import BaseService, ClientFactory, project_error_entry
 from .flow_validation import find_unreachable_phases, validate_conditional_flow
 
 logger = logging.getLogger(__name__)
@@ -396,24 +396,8 @@ class FlowService(BaseService):
                         flow_row["schedules"] = schedules_by_parent.get(key, [])
 
                 return (alias, flows, legacy_count)
-            except KeboolaApiError as exc:
-                return (
-                    alias,
-                    {
-                        "project_alias": alias,
-                        "error_code": exc.error_code,
-                        "message": exc.message,
-                    },
-                )
             except Exception as exc:
-                return (
-                    alias,
-                    {
-                        "project_alias": alias,
-                        "error_code": "UNEXPECTED_ERROR",
-                        "message": str(exc),
-                    },
-                )
+                return (alias, project_error_entry(alias, exc))
             finally:
                 client.close()
 

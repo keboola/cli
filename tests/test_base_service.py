@@ -5,6 +5,7 @@ concrete _TestService subclass, since BaseService is not meant to be
 instantiated directly in production code.
 """
 
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -13,9 +14,21 @@ import pytest
 
 from helpers import setup_single_project, setup_two_projects
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError
+from keboola_agent_cli.constants import UNEXPECTED_ERROR_MAX_MESSAGE_LEN
+from keboola_agent_cli.errors import (
+    ConfigError,
+    ErrorCode,
+    KeboolaApiError,
+    SessionAuthUnsupportedError,
+)
 from keboola_agent_cli.models import ProjectConfig
-from keboola_agent_cli.services.base import ENV_MAX_PARALLEL_WORKERS, BaseService
+from keboola_agent_cli.services.base import (
+    ENV_MAX_PARALLEL_WORKERS,
+    UNEXPECTED_ERROR_CODE,
+    BaseService,
+    project_error_entry,
+)
+from keboola_agent_cli.services.mcp_service import MCP_ERROR_CODE
 
 
 class _TestService(BaseService):
@@ -395,6 +408,123 @@ class TestRunParallel:
         for err in errors:
             assert err["error_code"] == "UNEXPECTED_ERROR"
             assert "cannot reach" in err["message"]
+
+
+class TestProjectErrorEntry:
+    """Tests for project_error_entry() -- the per-project error envelope filler."""
+
+    def test_typed_error_keeps_its_code(self) -> None:
+        exc = KeboolaApiError("Forbidden", status_code=403, error_code=ErrorCode.ACCESS_DENIED)
+        entry = project_error_entry("prod", exc)
+
+        assert entry == {
+            "project_alias": "prod",
+            "error_code": "ACCESS_DENIED",
+            "message": "Forbidden",
+        }
+
+    def test_session_guard_code_survives(self) -> None:
+        """A --json consumer branches on this code to offer a static-token remedy."""
+        exc = SessionAuthUnsupportedError("The Data Science Service (data apps)")
+        entry = project_error_entry("session", exc)
+
+        assert entry["error_code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+        assert "static Storage token" in entry["message"]
+
+    def test_uncoded_exception_uses_fallback(self) -> None:
+        entry = project_error_entry("prod", RuntimeError("pool exhausted"))
+
+        assert entry["error_code"] == UNEXPECTED_ERROR_CODE
+        assert entry["message"] == "pool exhausted"
+
+    def test_explicit_fallback_code_is_honoured(self) -> None:
+        entry = project_error_entry("prod", RuntimeError("stdio closed"), fallback_code="MCP_ERROR")
+
+        assert entry["error_code"] == "MCP_ERROR"
+
+    def test_explicit_message_overrides_the_exception_text(self) -> None:
+        exc = SessionAuthUnsupportedError("The MCP server subprocess")
+        entry = project_error_entry("session", exc, message="Failed to list tools: nope")
+
+        assert entry["error_code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+        assert entry["message"] == "Failed to list tools: nope"
+
+    def test_uncoded_message_is_truncated(self) -> None:
+        """An unknown exception may embed response buffers, so its text is capped."""
+        entry = project_error_entry("prod", RuntimeError("x" * 5000))
+
+        assert len(entry["message"]) == UNEXPECTED_ERROR_MAX_MESSAGE_LEN + len("...")
+        assert entry["message"].endswith("...")
+
+    def test_typed_message_is_not_truncated(self) -> None:
+        """A typed error's message is curated remedy text -- it must arrive whole."""
+        long_remedy = "y" * 5000
+        exc = KeboolaApiError(long_remedy, error_code=ErrorCode.VALIDATION_ERROR)
+        entry = project_error_entry("prod", exc)
+
+        assert entry["message"] == long_remedy
+
+    def test_error_code_serialises_as_a_plain_string(self) -> None:
+        """The wire format must stay a JSON string, not an enum repr."""
+        exc = SessionAuthUnsupportedError("The MCP server subprocess")
+        payload = json.loads(json.dumps([project_error_entry("session", exc)]))
+
+        assert payload[0]["error_code"] == "AUTH_NOT_SUPPORTED_ON_STACK"
+
+    def test_fallback_code_is_an_enum_member_that_serialises_unchanged(self) -> None:
+        """The two most-emitted per-project codes are `ErrorCode` members, not bare
+        literals -- but `StrEnum` means the `--json` wire value is byte-identical,
+        so no consumer branching on the string sees a change."""
+        assert UNEXPECTED_ERROR_CODE is ErrorCode.UNEXPECTED_ERROR
+        payload = json.loads(json.dumps([project_error_entry("prod", RuntimeError("boom"))]))
+
+        assert payload[0]["error_code"] == "UNEXPECTED_ERROR"
+
+    def test_mcp_fallback_code_serialises_unchanged(self) -> None:
+        assert MCP_ERROR_CODE is ErrorCode.MCP_ERROR
+        entry = project_error_entry(
+            "prod", RuntimeError("stdio closed"), fallback_code=MCP_ERROR_CODE
+        )
+        payload = json.loads(json.dumps([entry]))
+
+        assert payload[0]["error_code"] == "MCP_ERROR"
+
+
+class TestRunParallelPreservesErrorCodes:
+    """_run_parallel()'s catch-all must not relabel a typed exception."""
+
+    def test_session_guard_from_worker_keeps_its_code(self, tmp_config_dir: Path) -> None:
+        store = setup_two_projects(tmp_config_dir)
+        service = _TestService(config_store=store)
+        projects = service.resolve_projects()
+
+        def worker(alias: str, project: ProjectConfig) -> tuple[Any, ...]:
+            if alias == "prod":
+                raise SessionAuthUnsupportedError("The Data Science Service (data apps)")
+            return (alias, project.project_id, "ok")
+
+        successes, errors = service._run_parallel(projects, worker)
+
+        assert [s[0] for s in successes] == ["dev"]
+        assert len(errors) == 1
+        assert errors[0]["project_alias"] == "prod"
+        assert errors[0]["error_code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+
+    def test_api_error_from_worker_keeps_its_code(self, tmp_config_dir: Path) -> None:
+        store = setup_single_project(tmp_config_dir)
+        service = _TestService(config_store=store)
+        projects = service.resolve_projects()
+
+        def worker(alias: str, project: ProjectConfig) -> tuple[Any, ...]:
+            raise KeboolaApiError(
+                "Bucket not found", status_code=404, error_code=ErrorCode.NOT_FOUND
+            )
+
+        successes, errors = service._run_parallel(projects, worker)
+
+        assert successes == []
+        assert errors[0]["error_code"] == ErrorCode.NOT_FOUND
+        assert errors[0]["message"] == "Bucket not found"
 
 
 class TestDefaultClientFactory:
