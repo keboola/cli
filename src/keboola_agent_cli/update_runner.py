@@ -271,6 +271,12 @@ def build_waiter_script(
     it gave up. Doing nothing is always safe here; the update simply retries on
     a later run.
 
+    The installer's output is appended through ``UTF8Encoding($false)`` rather
+    than a ``*>>`` redirection. Windows PowerShell 5.1 writes redirections as
+    **UTF-16LE with a BOM**, which made the shared install log unreadable as the
+    UTF-8 every other writer and reader of that file assumes -- caught by the
+    Windows CI job, which is the only place the helper actually executes.
+
     Returns:
         A self-contained script suitable for ``powershell.exe -Command``.
     """
@@ -295,10 +301,17 @@ def build_waiter_script(
             f"    Set-Content -LiteralPath $exitFile -Value {abandoned_literal}",
             "    exit 0",
             "  }",
-            f"  & {quoted_argv} *>> $logFile",
-            "  Set-Content -LiteralPath $exitFile -Value ([string]$LASTEXITCODE)",
+            # -Width keeps Out-String from wrapping uv's output at the default
+            # console width and mangling long requirement lines in the log.
+            f"  $output = (& {quoted_argv} 2>&1 | Out-String -Width 4096)",
+            # Captured before anything else runs, so nothing can clobber it.
+            "  $code = $LASTEXITCODE",
+            "  [System.IO.File]::AppendAllText("
+            "$logFile, $output, (New-Object System.Text.UTF8Encoding $false))",
+            "  Set-Content -LiteralPath $exitFile -Value ([string]$code)",
             "} catch {",
-            "  $_ | Out-File -FilePath $logFile -Append",
+            "  [System.IO.File]::AppendAllText("
+            "$logFile, ($_ | Out-String -Width 4096), (New-Object System.Text.UTF8Encoding $false))",
             "  Set-Content -LiteralPath $exitFile -Value 'failed'",
             "}",
         ]

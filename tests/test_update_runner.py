@@ -1,10 +1,15 @@
 """Tests for the self-reinstall runner (issue #528).
 
-The failure these guard against is not observable on the CI platforms: it needs
-a Windows file lock on a running `uv tool` environment. So the contracts are
-pinned structurally instead -- the waiter script's text, the scheduling
-bookkeeping, and the one behaviour that *is* directly observable everywhere:
-that a slow installer is never killed.
+The original corruption is not reproducible here -- it needs a real `uv tool
+install` losing a race against a real Windows file lock on a live environment.
+So most contracts are pinned structurally: the waiter script's text, the
+scheduling bookkeeping, and the one behaviour observable everywhere, that a slow
+installer is never killed.
+
+``TestWaiterScriptOnWindows`` goes further and *executes* the generated
+PowerShell on the windows-latest CI runner, which is the only place it runs at
+all. That is not decoration -- it is what caught the helper writing its log as
+UTF-16LE.
 """
 
 import json
@@ -180,10 +185,21 @@ class TestBuildWaiterScript:
 
     def test_installs_the_exact_prepared_command(self, script: str) -> None:
         expected = " ".join(quote_for_powershell(part) for part in REQUEST.install_command)
-        assert f"& {expected} *>> $logFile" in script
+        assert f"$output = (& {expected} 2>&1 | Out-String -Width 4096)" in script
+
+    def test_writes_the_log_as_utf8_not_a_redirection(self, script: str) -> None:
+        """PowerShell 5.1 redirections are UTF-16LE; the log must be UTF-8.
+
+        Every other writer and reader of that file assumes UTF-8, so a `*>>`
+        redirection made it unreadable (caught by the Windows CI job).
+        """
+        assert "*>>" not in script
+        assert "New-Object System.Text.UTF8Encoding $false" in script
 
     def test_records_the_installer_exit_code(self, script: str) -> None:
-        assert "Set-Content -LiteralPath $exitFile -Value ([string]$LASTEXITCODE)" in script
+        # Captured immediately after the installer, before anything else runs.
+        assert "$code = $LASTEXITCODE" in script
+        assert "Set-Content -LiteralPath $exitFile -Value ([string]$code)" in script
 
     def test_a_powershell_level_error_is_recorded_as_a_failure(self, script: str) -> None:
         assert "Set-Content -LiteralPath $exitFile -Value 'failed'" in script
@@ -404,8 +420,11 @@ class TestWaiterScriptOnWindows:
             )
         )
 
-        assert exit_file.read_text().strip() == "0"
-        assert "installed" in install_log.read_text()
+        assert exit_file.read_text(encoding="utf-8").strip() == "0"
+        # The log must be plain UTF-8. PowerShell 5.1's `*>>` wrote UTF-16LE
+        # with a BOM, which `_tail` -- and the user -- read as mojibake.
+        assert not install_log.read_bytes().startswith(b"\xff\xfe")
+        assert "installed" in install_log.read_text(encoding="utf-8")
 
     def test_failing_installer_is_reported_not_swallowed(self, tmp_path: Path) -> None:
         exit_file = tmp_path / DEFERRED_UPDATE_EXIT_FILENAME
@@ -428,7 +447,7 @@ class TestWaiterScriptOnWindows:
             )
         )
 
-        assert exit_file.read_text().strip() == "3"
+        assert exit_file.read_text(encoding="utf-8").strip() == "3"
 
     def test_gives_up_without_installing_while_a_process_is_still_running(
         self, tmp_path: Path
@@ -463,5 +482,5 @@ class TestWaiterScriptOnWindows:
             )
         )
 
-        assert exit_file.read_text().strip() == DEFERRED_UPDATE_ABANDONED_MARKER
+        assert exit_file.read_text(encoding="utf-8").strip() == DEFERRED_UPDATE_ABANDONED_MARKER
         assert not sentinel.exists(), "the installer must not touch a live environment"
