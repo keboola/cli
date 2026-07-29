@@ -337,6 +337,13 @@ ENV_DEFER_UPDATE: str = "KBAGENT_DEFER_UPDATE"
 DEFERRED_UPDATE_MARKER_FILENAME: str = "pending_update.json"
 DEFERRED_UPDATE_EXIT_FILENAME: str = "pending_update.exit"
 DEFERRED_UPDATE_LOG_FILENAME: str = "pending_update.log"
+# The install log is appended to by every update (kbagent and MCP, inline and
+# deferred), so it is rolled once it passes this size rather than growing for
+# the life of the install.
+DEFERRED_UPDATE_LOG_MAX_BYTES: int = 1_048_576
+# How much of a run's own output is carried back in the result. Only the bytes
+# this run appended are ever read, so this bounds one transcript, not the file.
+DEFERRED_UPDATE_OUTPUT_MAX_CHARS: int = 4000
 # Written by the helper into the exit file when kbagent never stopped running
 # within the wait window, so nothing was installed and nothing was mutated.
 DEFERRED_UPDATE_ABANDONED_MARKER: str = "abandoned"

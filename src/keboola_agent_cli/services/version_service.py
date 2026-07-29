@@ -937,7 +937,11 @@ class VersionService:
                 {
                     "kbagent": {"updated": bool, "current_version": str,
                                 "latest_version": str|None, "message": str,
-                                "output": str|None},
+                                "output": str|None,
+                                # Both below distinguish "not updated YET" from
+                                # "failed" -- neither is an error:
+                                "deferred": bool,      # handed to the helper
+                                "still_running": bool},  # outran the wait
                     "mcp": {"updated": bool|None, "current_version": str|None,
                             "latest_version": str|None, "install_method": str,
                             "message": str, "output": str|None},
@@ -998,6 +1002,12 @@ class VersionService:
             parts.append(
                 f"kbagent v{kbagent_result.get('current_version')}"
                 f" -> v{kbagent_result.get('latest_version')} (scheduled)"
+            )
+        elif kbagent_result.get("still_running"):
+            # Outran our patience, not our expectations -- it was never killed.
+            parts.append(
+                f"kbagent v{kbagent_result.get('current_version')}"
+                f" -> v{kbagent_result.get('latest_version')} (still installing)"
             )
         elif kbagent_result.get("up_to_date"):
             parts.append(f"kbagent v{kbagent_result.get('current_version')} (already up to date)")
@@ -1115,11 +1125,13 @@ class VersionService:
             }
         if run.status is InstallStatus.STILL_RUNNING:
             # Not killed, still installing -- offering a recovery command here
-            # would invite a second installer into the same environment.
+            # would invite a second installer into the same environment. The
+            # explicit flag keeps the summary from calling this a failure.
             timeout_s = int(get_update_timeout())
             return {
                 "planned": True,
                 "updated": False,
+                "still_running": True,
                 "up_to_date": False,
                 "current_version": old_version,
                 "latest_version": kbagent_latest,

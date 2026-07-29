@@ -1528,3 +1528,45 @@ class TestComposeUpdateSummary:
         assert VersionService._summarize_failure_tail(msg) == "error: the real reason"
         assert VersionService._summarize_failure_tail("") == "update failed"
         assert VersionService._summarize_failure_tail(None) == "update failed"
+
+
+class TestSummaryDistinguishesNotYetFromFailed:
+    """ "Not updated" has three meanings; only one of them is a failure (#528)."""
+
+    @staticmethod
+    def _kbagent(**overrides: object) -> dict:
+        base = {
+            "planned": True,
+            "updated": False,
+            "up_to_date": False,
+            "current_version": "0.77.0",
+            "latest_version": "0.77.1",
+            "message": "...",
+        }
+        base.update(overrides)
+        return base
+
+    @staticmethod
+    def _mcp_up_to_date() -> dict:
+        return {"updated": False, "up_to_date": True, "current_version": "1.0.0"}
+
+    def test_scheduled_is_not_a_failure(self) -> None:
+        summary = VersionService._compose_update_summary(
+            self._kbagent(deferred=True), self._mcp_up_to_date()
+        )
+        assert "(scheduled)" in summary
+        assert "FAILED" not in summary
+
+    def test_still_running_is_not_a_failure(self) -> None:
+        """It was never killed -- calling it FAILED contradicts the banner."""
+        summary = VersionService._compose_update_summary(
+            self._kbagent(still_running=True), self._mcp_up_to_date()
+        )
+        assert "(still installing)" in summary
+        assert "FAILED" not in summary
+
+    def test_a_real_failure_is_still_reported_as_one(self) -> None:
+        summary = VersionService._compose_update_summary(
+            self._kbagent(message="Update failed: locked"), self._mcp_up_to_date()
+        )
+        assert "FAILED" in summary

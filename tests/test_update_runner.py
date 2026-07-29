@@ -123,15 +123,21 @@ class TestRunInstall:
         sentinel = tmp_path / "finished.txt"
         program = (
             "import time, pathlib, sys;"
+            "print('early-output', flush=True);"
             "time.sleep(1.5);"
             f"pathlib.Path({str(sentinel)!r}).write_text('done')"
         )
 
-        run = run_install((sys.executable, "-c", program), timeout=0.2)
+        run = run_install((sys.executable, "-c", program), timeout=0.5)
 
         assert run.status is InstallStatus.STILL_RUNNING
         assert run.exit_code is None
         assert not sentinel.exists(), "precondition: the child cannot have finished yet"
+        # `run.output` was read while the child still holds the log open and the
+        # parent has already closed its own handle. On Windows that combination
+        # depends on file-sharing semantics, so this assertion is what proves it
+        # -- the Windows CI job runs this suite.
+        assert "early-output" in run.output
 
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline and not sentinel.exists():
@@ -484,3 +490,41 @@ class TestWaiterScriptOnWindows:
 
         assert exit_file.read_text(encoding="utf-8").strip() == DEFERRED_UPDATE_ABANDONED_MARKER
         assert not sentinel.exists(), "the installer must not touch a live environment"
+
+
+class TestInstallOutputBelongsToItsOwnRun:
+    """`output` must be this run's transcript, not the shared log's tail.
+
+    The log is appended to by every update -- the MCP stage writes to it moments
+    before the kbagent stage in the very same `kbagent update`, and the Windows
+    helper appends to it too. Reporting the tail of the whole file attributed
+    someone else's output to this command.
+    """
+
+    def test_second_run_output_excludes_the_first(self) -> None:
+        first = run_install((sys.executable, "-c", "print('FIRST-RUN-MARKER')"), timeout=30)
+        second = run_install((sys.executable, "-c", "print('SECOND-RUN-MARKER')"), timeout=30)
+
+        assert "FIRST-RUN-MARKER" in first.output
+        assert "SECOND-RUN-MARKER" in second.output
+        assert "FIRST-RUN-MARKER" not in second.output
+
+    def test_log_keeps_every_run_even_though_output_does_not(self, tmp_path: Path) -> None:
+        """Trimming the *report* must not trim the *log* -- it is the diagnosis."""
+        run_install((sys.executable, "-c", "print('FIRST-RUN-MARKER')"), timeout=30)
+        run_install((sys.executable, "-c", "print('SECOND-RUN-MARKER')"), timeout=30)
+
+        log = (tmp_path / "pending_update.log").read_text(encoding="utf-8")
+        assert "FIRST-RUN-MARKER" in log
+        assert "SECOND-RUN-MARKER" in log
+
+    def test_oversized_log_is_rolled(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Every update appends here, so the file cannot grow without bound."""
+        monkeypatch.setattr("keboola_agent_cli.update_runner.DEFERRED_UPDATE_LOG_MAX_BYTES", 64)
+        log = tmp_path / "pending_update.log"
+        log.write_text("x" * 500, encoding="utf-8")
+
+        run = run_install((sys.executable, "-c", "print('AFTER-ROLL')"), timeout=30)
+
+        assert "x" * 100 not in log.read_text(encoding="utf-8")
+        assert "AFTER-ROLL" in run.output

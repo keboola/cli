@@ -181,8 +181,11 @@ def update_command(
         # The summary line only says "(scheduled)". What the user has to *do*
         # -- close other kbagent processes -- lives on the stage result, so
         # print that too rather than leave the instruction in JSON only.
+        # Only for the scheduled case: every other branch already has its
+        # message carried into the summary verbatim, so printing it here again
+        # would just repeat the same sentence back at the user.
         kbagent_stage = result.get("kbagent", {})
-        if kbagent_stage.get("deferred") is not None and not kbagent_stage.get("updated"):
+        if kbagent_stage.get("deferred") is True:
             formatter.console.print(kbagent_stage["message"])
 
 

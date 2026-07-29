@@ -51,8 +51,10 @@ from .constants import (
     DEFERRED_UPDATE_ABANDONED_MARKER,
     DEFERRED_UPDATE_EXIT_FILENAME,
     DEFERRED_UPDATE_LOG_FILENAME,
+    DEFERRED_UPDATE_LOG_MAX_BYTES,
     DEFERRED_UPDATE_MARKER_FILENAME,
     DEFERRED_UPDATE_MAX_WAIT_SECONDS,
+    DEFERRED_UPDATE_OUTPUT_MAX_CHARS,
     DEFERRED_UPDATE_POLL_SECONDS,
     DEFERRED_UPDATE_PROCESS_NAME,
     DEFERRED_UPDATE_STALE_SECONDS,
@@ -110,6 +112,14 @@ class DeferredUpdateStatus(Enum):
     FAILED = "failed"
     ABANDONED = "abandoned"
     LOST = "lost"
+
+
+@dataclass(frozen=True)
+class ClassifiedExit:
+    """What the helper's exit file meant, and the code behind it if any."""
+
+    status: DeferredUpdateStatus
+    exit_code: int | None
 
 
 @dataclass(frozen=True)
@@ -192,6 +202,12 @@ def run_install(command: tuple[str, ...], *, timeout: float) -> InstallRun:
     except OSError:
         logger.debug("Could not create the update log directory", exc_info=True)
 
+    # Where this run's own output begins. The log is shared -- the MCP stage
+    # writes to it moments before the kbagent stage, and the Windows helper
+    # appends to it too -- so reporting the tail of the whole file would
+    # attribute someone else's transcript to this command.
+    start_offset = _roll_log_if_oversized(destination)
+
     try:
         with destination.open("a", encoding="utf-8", errors="replace") as sink:
             process = subprocess.Popen(
@@ -207,7 +223,7 @@ def run_install(command: tuple[str, ...], *, timeout: float) -> InstallRun:
                 return InstallRun(
                     status=InstallStatus.STILL_RUNNING,
                     exit_code=None,
-                    output=_tail(destination),
+                    output=_tail(destination, start=start_offset),
                     log_path=destination,
                 )
     except OSError as exc:
@@ -221,18 +237,45 @@ def run_install(command: tuple[str, ...], *, timeout: float) -> InstallRun:
     return InstallRun(
         status=InstallStatus.SUCCEEDED if exit_code == 0 else InstallStatus.FAILED,
         exit_code=exit_code,
-        output=_tail(destination),
+        output=_tail(destination, start=start_offset),
         log_path=destination,
     )
 
 
-def _tail(path: Path, *, max_chars: int = 4000) -> str:
-    """Return the end of the install log, or an empty string if unreadable."""
+def _roll_log_if_oversized(path: Path) -> int:
+    """Bound the shared log, and return the offset this run should read from.
+
+    Returns 0 when the file was rolled or does not exist yet, otherwise its
+    current size -- everything past that point is what this run writes.
+    """
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        size = path.stat().st_size
+    except OSError:
+        return 0
+    if size < DEFERRED_UPDATE_LOG_MAX_BYTES:
+        return size
+    try:
+        path.unlink()
+    except OSError:
+        logger.debug("Could not roll the oversized update log", exc_info=True)
+        return size
+    return 0
+
+
+def _tail(path: Path, *, start: int = 0, max_chars: int = DEFERRED_UPDATE_OUTPUT_MAX_CHARS) -> str:
+    """Return what was appended from ``start``, or "" if unreadable.
+
+    Read as bytes and decoded here rather than via ``read_text`` so the offset
+    is exact and a byte range split mid-character cannot raise -- the child may
+    still be writing while we read.
+    """
+    try:
+        with path.open("rb") as handle:
+            handle.seek(start)
+            payload = handle.read()
     except OSError:
         return ""
-    return text[-max_chars:].strip()
+    return payload.decode("utf-8", errors="replace")[-max_chars:].strip()
 
 
 def quote_for_powershell(value: str) -> str:
@@ -482,20 +525,18 @@ def collect_finished_deferred_update() -> DeferredUpdateReport | None:
 
     _clear_deferred_state()
 
-    status, exit_code = _classify_exit(raw_exit, helper_reported=reported)
+    classified = _classify_exit(raw_exit, helper_reported=reported)
     return DeferredUpdateReport(
-        status=status,
+        status=classified.status,
         from_version=str(marker.get("from_version") or "unknown"),
         target_version=str(marker.get("target_version") or "unknown"),
-        exit_code=exit_code,
+        exit_code=classified.exit_code,
         recovery_command=marker.get("recovery_command"),
         log_path=log_path(),
     )
 
 
-def _classify_exit(
-    raw_exit: str | None, *, helper_reported: bool
-) -> tuple[DeferredUpdateStatus, int | None]:
+def _classify_exit(raw_exit: str | None, *, helper_reported: bool) -> ClassifiedExit:
     """Map the helper's exit file to a status.
 
     Anything that is neither a clean exit code nor the explicit "gave up"
@@ -510,16 +551,18 @@ def _classify_exit(
             LOST (killed, or the machine rebooted mid-wait).
     """
     if raw_exit is None:
-        return (DeferredUpdateStatus.FAILED if helper_reported else DeferredUpdateStatus.LOST), None
+        return ClassifiedExit(
+            DeferredUpdateStatus.FAILED if helper_reported else DeferredUpdateStatus.LOST, None
+        )
     if raw_exit == DEFERRED_UPDATE_ABANDONED_MARKER:
-        return DeferredUpdateStatus.ABANDONED, None
+        return ClassifiedExit(DeferredUpdateStatus.ABANDONED, None)
     try:
         exit_code = int(raw_exit)
     except ValueError:
-        return DeferredUpdateStatus.FAILED, None
+        return ClassifiedExit(DeferredUpdateStatus.FAILED, None)
     if exit_code == 0:
-        return DeferredUpdateStatus.SUCCEEDED, 0
-    return DeferredUpdateStatus.FAILED, exit_code
+        return ClassifiedExit(DeferredUpdateStatus.SUCCEEDED, 0)
+    return ClassifiedExit(DeferredUpdateStatus.FAILED, exit_code)
 
 
 def _clear_deferred_state() -> None:
