@@ -8,18 +8,14 @@
     <version>{VERSION}</version>
     <title>Keboola Agent CLI (kbagent)</title>
     <authors>Keboola</authors>
+    <owners>Matovidlo</owners>
     <projectUrl>https://github.com/keboola/cli</projectUrl>
-    <!-- iconUrl: uncomment once build/package/chocolatey/keboola.png (32-128px) is
-         committed. jsDelivr is the Chocolatey-recommended CDN (raw.githubusercontent
-         is discouraged). A broken link is worse than none, so this stays off until
-         the file exists. Guideline flagged by chocolatey-ops on 0.66.1.
-    <iconUrl>https://cdn.jsdelivr.net/gh/keboola/cli@main/build/package/chocolatey/keboola.png</iconUrl>
-    -->
     <licenseUrl>https://github.com/keboola/cli/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <packageSourceUrl>https://github.com/keboola/cli</packageSourceUrl>
     <projectSourceUrl>https://github.com/keboola/cli</projectSourceUrl>
     <bugTrackerUrl>https://github.com/keboola/cli/issues</bugTrackerUrl>
+    <docsUrl>https://help.keboola.com/</docsUrl>
     <!-- URL form so this never needs per-version edits (moderator-endorsed). -->
     <releaseNotes>https://github.com/keboola/cli/releases</releaseNotes>
     <copyright>Keboola</copyright>
