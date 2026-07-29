@@ -581,40 +581,47 @@ class TestDetectMcpInstallMethod:
 # ---------------------------------------------------------------------------
 
 
+def _mcp_install_run(status: InstallStatus, output: str, exit_code: int | None = 0) -> InstallRun:
+    """An :class:`InstallRun` stand-in for a mocked MCP upgrade."""
+    return InstallRun(
+        status=status, exit_code=exit_code, output=output, log_path=Path("update.log")
+    )
+
+
 class TestPerformMcpUpdate:
     """Tests for ``_perform_mcp_update``."""
 
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    @patch("keboola_agent_cli.services.version_service.subprocess.run")
-    def test_uv_tool_success(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+    @patch("keboola_agent_cli.services.version_service.run_install")
+    def test_uv_tool_success(self, mock_install: MagicMock, mock_which: MagicMock) -> None:
         mock_which.return_value = "/usr/local/bin/uv"
-        mock_run.return_value = MagicMock(returncode=0, stdout="upgraded", stderr="")
+        mock_install.return_value = _mcp_install_run(InstallStatus.SUCCEEDED, "upgraded")
         ok, info = _perform_mcp_update(method="uv_tool")
         assert ok is True
         assert "upgraded" in info
         # Verify the command shape we are about to run.
-        cmd = mock_run.call_args.args[0]
+        cmd = mock_install.call_args.args[0]
         assert "tool" in cmd and "upgrade" in cmd and MCP_PACKAGE_NAME in cmd
         # issue #324: the pre-release opt-in is mandatory -- without it uv
         # backtracks to a stale MCP (toon-format~=0.9.0b1 pin) and exits 0.
         assert "--prerelease=allow" in cmd
 
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    @patch("keboola_agent_cli.services.version_service.subprocess.run")
-    def test_pip_env_success(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+    @patch("keboola_agent_cli.services.version_service.run_install")
+    def test_pip_env_success(self, mock_install: MagicMock, mock_which: MagicMock) -> None:
         mock_which.return_value = "/usr/local/bin/pip"
-        mock_run.return_value = MagicMock(returncode=0, stdout="upgraded via pip", stderr="")
+        mock_install.return_value = _mcp_install_run(InstallStatus.SUCCEEDED, "upgraded via pip")
         ok, _info = _perform_mcp_update(method="pip_env")
         assert ok is True
-        cmd = mock_run.call_args.args[0]
+        cmd = mock_install.call_args.args[0]
         assert "install" in cmd and "--upgrade" in cmd
         # issue #324: pip's pre-release opt-in flag is --pre.
         assert "--pre" in cmd
 
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    @patch("keboola_agent_cli.services.version_service.run_install")
     def test_uvx_promotes_to_uv_tool_install(
-        self, mock_run: MagicMock, mock_which: MagicMock
+        self, mock_install: MagicMock, mock_which: MagicMock
     ) -> None:
         """Bug B fix from issue #263: uvx-cache install is promoted to a
         persistent ``uv tool install --upgrade``.
@@ -630,10 +637,10 @@ class TestPerformMcpUpdate:
         runs use the faster ``uv_tool`` detection path.
         """
         mock_which.return_value = "/usr/local/bin/uv"
-        mock_run.return_value = MagicMock(returncode=0, stdout="installed", stderr="")
+        mock_install.return_value = _mcp_install_run(InstallStatus.SUCCEEDED, "installed")
         ok, _info = _perform_mcp_update(method="uvx")
         assert ok is True
-        cmd = mock_run.call_args.args[0]
+        cmd = mock_install.call_args.args[0]
         assert "tool" in cmd and "install" in cmd and "--upgrade" in cmd
         assert MCP_PACKAGE_NAME in cmd
         # The broken --version arg must be GONE from the uvx upgrade path.
@@ -654,15 +661,22 @@ class TestPerformMcpUpdate:
         assert "not installed" in info
 
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    @patch(
-        "keboola_agent_cli.services.version_service.subprocess.run",
-        side_effect=subprocess.TimeoutExpired(cmd="x", timeout=MCP_UPGRADE_TIMEOUT),
-    )
-    def test_timeout(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+    @patch("keboola_agent_cli.services.version_service.run_install")
+    def test_slow_upgrade_is_left_running_not_killed(
+        self, mock_install: MagicMock, mock_which: MagicMock
+    ) -> None:
+        """Issue #528: terminating uv mid-write half-recreates the MCP env.
+
+        The MCP environment is not the one kbagent runs from, so no file lock
+        is involved -- but a killed installer leaves it just as broken, and
+        `kbagent tool call` is what stops working.
+        """
         mock_which.return_value = "/usr/local/bin/uv"
+        mock_install.return_value = _mcp_install_run(InstallStatus.STILL_RUNNING, "", None)
         ok, info = _perform_mcp_update(method="uv_tool", timeout=MCP_UPGRADE_TIMEOUT)
         assert ok is False
-        assert "timed out" in info
+        assert "still running" in info
+        assert "timed out" not in info
 
 
 # ---------------------------------------------------------------------------
@@ -1407,21 +1421,21 @@ class TestMcpPrereleaseOptIn:
         ],
     )
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    @patch("keboola_agent_cli.services.version_service.run_install")
     def test_internal_upgrade_command_opts_into_prereleases(
         self,
-        mock_run: MagicMock,
+        mock_install: MagicMock,
         mock_which: MagicMock,
         method: str,
         expected_flag: str,
     ) -> None:
         mock_which.return_value = "/usr/local/bin/uv"
-        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+        mock_install.return_value = _mcp_install_run(InstallStatus.SUCCEEDED, "ok")
 
         ok, _info = _perform_mcp_update(method=method)
 
         assert ok is True
-        cmd = mock_run.call_args.args[0]
+        cmd = mock_install.call_args.args[0]
         assert expected_flag in cmd, f"{method} command missing {expected_flag}: {cmd}"
         assert MCP_PACKAGE_NAME in cmd
 

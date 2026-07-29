@@ -513,10 +513,17 @@ def _perform_mcp_update(
 ) -> tuple[bool, str]:
     """Run the appropriate upgrade command for keboola-mcp-server.
 
+    Goes through :func:`run_install`, so a slow upgrade is never terminated
+    (issue #528). The MCP environment is not the one kbagent runs from, so the
+    Windows file-lock problem does not apply here -- but killing uv part-way
+    through recreating *any* tool environment leaves it half-written, and that
+    would break ``kbagent tool call`` until the user reinstalled MCP by hand.
+
     Args:
         method: Optional install method; if None, detect via
             :func:`_detect_mcp_install_method`.
-        timeout: Subprocess timeout in seconds.
+        timeout: How long to wait before giving up on the wait -- not on the
+            upgrade, which is left running.
         command: Prepared command. Supplying it guarantees this apply phase
             does not probe PATH or rebuild commands.
 
@@ -539,20 +546,15 @@ def _perform_mcp_update(
             return False, "pip not found on PATH"
         return False, f"could not build MCP upgrade command for {method!r}"
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+    run = run_install(tuple(cmd), timeout=timeout)
+    if run.status is InstallStatus.SUCCEEDED:
+        return True, run.output
+    if run.status is InstallStatus.STILL_RUNNING:
+        return False, (
+            f"still running after {int(timeout)}s; it continues in the background "
+            f"and applies on the next launch (log: {run.log_path})"
         )
-        if result.returncode == 0:
-            return True, (result.stdout or "").strip()
-        return False, (result.stderr or "").strip() or "upgrade subprocess failed"
-    except subprocess.TimeoutExpired:
-        return False, f"upgrade timed out after {timeout}s"
-    except OSError as exc:
-        return False, f"subprocess error: {exc}"
+    return False, run.output or "upgrade subprocess failed"
 
 
 def build_mcp_upgrade_command(method: str) -> list[str] | None:

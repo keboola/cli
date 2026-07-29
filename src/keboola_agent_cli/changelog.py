@@ -37,13 +37,16 @@ CHANGELOG: dict[str, list[str]] = {
         "only then installs; the outcome (including a copy-paste recovery command on failure) is "
         "reported on the next launch. POSIX keeps the proven inline install plus re-exec. "
         "Thanks to @papousek-radan for three rounds of precise Windows reports.",
-        "Fix (#528): a slow install is no longer killed mid-write. Both update paths used "
+        "Fix (#528): a slow install is no longer killed mid-write. Every update path used "
         "`subprocess.run(timeout=...)`, which terminates the child when the deadline passes -- on "
         "Windows a hard `TerminateProcess` of uv part-way through recreating a venv, producing "
         "exactly the same half-deleted environment a file lock does. The deadline now bounds only "
         "how long kbagent waits; the installer is left to finish the transaction it started, and "
         "the banner says so instead of offering a recovery command that would start a second "
-        "installer against the same environment.",
+        "installer against the same environment. This covers the keboola-mcp-server upgrade too: "
+        "that environment is not the one kbagent runs from, so no lock is involved, but a killed "
+        "installer leaves it just as broken and `kbagent tool call` is what stops working. "
+        "Read-only version probes still time out normally -- killing a probe is harmless.",
         "New (#528): `KBAGENT_DEFER_UPDATE` forces the out-of-process update path on (`1`) or off "
         "(`0`), overriding the platform default. Intended for reproducing the deferred flow on "
         "POSIX and as an escape hatch on Windows.",
