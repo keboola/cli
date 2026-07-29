@@ -103,7 +103,10 @@ CHANGELOG: dict[str, list[str]] = {
         "refresh token, which past the server's grace window triggers family revocation.",
         "Fix: stack URLs canonicalize their host to lowercase, so a login and a later "
         "status/lookup on differently-cased spellings of the same stack resolve to one session; "
-        "credentials embedded in a stack URL are dropped rather than persisted. Project and user "
+        "credentials embedded in a stack URL are dropped rather than persisted. If you had a "
+        "`https://user:pass@host` stack URL stored, that basic-auth pair stops being sent on the "
+        "next save and the stack will answer 401 -- re-add the project with the credentials "
+        "supplied the way the stack expects. Project and user "
         "names coming from the stack are escaped before rendering, so a project name containing "
         "Rich markup can no longer render as a clickable link in `auth status`, `auth login`, or "
         "the project picker.",

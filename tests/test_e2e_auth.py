@@ -57,12 +57,14 @@ merge here advertises an unverified auth path").
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from keboola_agent_cli.auth.auth_client import AuthClient
 from keboola_agent_cli.auth.models import StackSession
@@ -72,6 +74,7 @@ from keboola_agent_cli.auth.token_provider import (
     SessionTokenProvider,
     reset_provider_registry,
 )
+from keboola_agent_cli.cli import app
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.manage_client import ManageClient
@@ -359,7 +362,107 @@ class TestBearerManageApi:
 
 
 # ---------------------------------------------------------------------------
-# 4. Device flow -- documented semi-manual scenario (cannot run unattended)
+# 4. The CLI layer itself -- `auth status` end to end
+# ---------------------------------------------------------------------------
+
+
+@skip_without_session_credentials
+@pytest.mark.e2e
+@pytest.mark.e2e_auth
+class TestAuthStatusCommand:
+    """Drives the real `kbagent auth status` command against a real session.
+
+    The capability matrix above builds `AuthClient` / `SessionTokenProvider` /
+    `KeboolaClient` directly, which leaves the four new commands themselves
+    covered only by mocked `CliRunner` tests (review NB-1). `auth status` is the
+    one of the four that needs no browser and no interactivity, so it is the one
+    that can close that gap unattended: it exercises the whole stack --
+    `--config-dir` resolution, `AuthStateStore.from_config_store`, a real
+    proactive refresh, introspection, exit-code mapping and `--json` shape.
+
+    The other three stay out: `login` needs a human at a browser, `logout` would
+    destroy the provisioned credential these tests share, and
+    `register-projects` writes into `config.json`.
+    """
+
+    def test_status_reports_a_live_session(
+        self, session_state_store: AuthStateStore, stack_url: str
+    ) -> None:
+        """Exit 0 and a live/refreshed verdict, from a seeded refresh token alone.
+
+        The fixture stores no access token, so anything other than `refreshed`
+        would mean the command reported health without proving it.
+        """
+        result = CliRunner().invoke(
+            app,
+            [
+                "--json",
+                "--config-dir",
+                str(session_state_store.config_dir),
+                "auth",
+                "status",
+                "--stack",
+                stack_url,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert data["status"] in {"live", "refreshed"}
+        assert data["stack_url"] == stack_url
+        assert data["user_email"]
+        assert data["accessible_projects"]
+
+    def test_status_never_prints_a_token_value(
+        self, session_state_store: AuthStateStore, stack_url: str
+    ) -> None:
+        """The one output that would be unrecoverable: a credential in a CI log."""
+        result = CliRunner().invoke(
+            app,
+            [
+                "--json",
+                "--config-dir",
+                str(session_state_store.config_dir),
+                "auth",
+                "status",
+                "--stack",
+                stack_url,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        refresh_token = os.environ[ENV_SESSION_REFRESH_TOKEN]
+        assert refresh_token not in result.output
+        # The rotated pair the refresh just minted must not leak either.
+        session = session_state_store.get_session(stack_url)
+        assert session is not None
+        assert session.access_token not in result.output
+        assert session.refresh_token not in result.output
+
+    def test_status_exits_3_for_a_stack_with_no_session(self, tmp_path: Path) -> None:
+        """A missing session is exit 3 (auth), the code scripts branch on."""
+        empty_config_dir = tmp_path / "empty"
+        empty_config_dir.mkdir()
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "--json",
+                "--config-dir",
+                str(empty_config_dir),
+                "auth",
+                "status",
+                "--stack",
+                os.environ[ENV_URL],
+            ],
+        )
+
+        assert result.exit_code == 3, result.output
+        assert json.loads(result.output)["data"]["status"] == "missing"
+
+
+# ---------------------------------------------------------------------------
+# 5. Device flow -- documented semi-manual scenario (cannot run unattended)
 # ---------------------------------------------------------------------------
 
 
