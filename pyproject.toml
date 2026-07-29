@@ -93,6 +93,7 @@ markers = [
     "integration: marks tests as integration tests requiring real API credentials (deselect with '-m \"not integration\"')",
     "e2e: marks tests as end-to-end tests requiring real API credentials (deselect with '-m \"not e2e\"')",
     "e2e_invite: project invite E2E -- requires E2E_MANAGE_TOKEN + E2E_INVITE_PROJECT_ID; opt-in via 'make test-e2e-invite'",
+    "e2e_auth: programmatic-auth (browser login) session E2E -- requires E2E_URL + E2E_SESSION_REFRESH_TOKEN + E2E_SESSION_PROJECT_ID; opt-in via 'make test-e2e-auth'",
 ]
 
 [tool.ruff]

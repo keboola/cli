@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-mcp install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-file test-cov lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes loc-check loc-report loc-baseline parity-check command-sync-check gen-command-reference check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
+.PHONY: help install install-mcp install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-e2e-auth test-file test-cov lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes loc-check loc-report loc-baseline parity-check command-sync-check gen-command-reference check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -26,8 +26,8 @@ test-unit: ## Run unit tests only (exclude integration and e2e)
 test-integration: ## Run integration tests only
 	uv run pytest tests/ -v -m integration
 
-test-e2e: ## Run E2E tests (E2E_API_TOKEN and E2E_URL required)
-	uv run pytest tests/test_e2e.py tests/test_server_semantic_layer_routes_e2e.py -v -s --tb=long
+test-e2e: ## Run E2E tests (E2E_API_TOKEN and E2E_URL required; auth tests skip without session env vars)
+	uv run pytest tests/test_e2e.py tests/test_server_semantic_layer_routes_e2e.py tests/test_e2e_auth.py -v -s --tb=long
 
 test-e2e-local: ## Run E2E against a project in a local config.json (CONFIG_DIR=/path/.kbagent ALIAS=my-proj)
 	KBAGENT_E2E_CONFIG_DIR=$(CONFIG_DIR) KBAGENT_E2E_ALIAS=$(ALIAS) \
@@ -41,6 +41,9 @@ test-e2e-feature: ## Run feature-flag E2E (E2E_MANAGE_TOKEN super-admin + E2E_AP
 
 test-e2e-stream: ## Run Data Streams OTLP E2E (E2E_API_TOKEN + E2E_URL required; creates + deletes a temp source)
 	uv run pytest tests/test_e2e.py -v -s --tb=long -k test_stream_otlp_e2e
+
+test-e2e-auth: ## Run programmatic-auth E2E (E2E_URL + E2E_SESSION_REFRESH_TOKEN + E2E_SESSION_PROJECT_ID required)
+	uv run pytest tests/test_e2e_auth.py -v -s --tb=long
 
 test-file: ## Run a specific test file (FILE=tests/test_cli.py)
 	uv run pytest $(FILE) -v

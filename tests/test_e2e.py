@@ -12558,7 +12558,7 @@ class TestE2EAuthRegisterProjects:
     This class exercises the fix's non-interactive surface (`--project-id`),
     which needs no TTY and is therefore safe to run unattended in CI, unlike
     the flagless interactive picker (covered by unit tests in
-    tests/test_auth_picker.py / tests/test_auth_command.py instead).
+    tests/test_auth_picker.py / tests/test_cli_auth.py instead).
 
     Deliberately gated on the SAME session-credential env vars as
     tests/test_e2e_auth.py (a programmatic session, not a static Storage

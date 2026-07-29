@@ -38,12 +38,16 @@ Run:
     E2E_URL=connection.keboola.com \\
     E2E_SESSION_REFRESH_TOKEN=kbc_rt_... \\
     E2E_SESSION_PROJECT_ID=12345 \\
-        uv run pytest tests/test_e2e_auth.py -v -s --tb=long -m e2e
+        make test-e2e-auth
 
-All tests carry `@pytest.mark.e2e`, so the default suite (`make test` / `-m
-"not e2e"`) never runs them, and none of them are wired into `make test-e2e`
-today (same as test_sync_e2e.py / test_e2e_lineage_deep.py) -- run this file
-directly, or add it to that Makefile target in a follow-up.
+`make test-e2e-auth` runs this file on its own; the default `make test-e2e`
+runs it alongside the static-token suite. With the three env vars above unset
+every test in here skips, so its presence in the default target costs nothing
+on a machine with no session provisioned.
+
+Every test carries `@pytest.mark.e2e` -- the default suite (`make test` / `-m
+"not e2e"`) never runs them -- plus `@pytest.mark.e2e_auth`, which selects
+exactly this file's tests out of a wider run (`-m e2e_auth`).
 
 Every test's docstring states what it proves and what a failure would mean,
 per the "one real call through each bearer-auth capability" requirement in
@@ -189,6 +193,7 @@ def bearer_client(
 
 @skip_without_session_credentials
 @pytest.mark.e2e
+@pytest.mark.e2e_auth
 class TestBearerCapabilityMatrix:
     """One real call through each sub-client that inherits the `BearerAuth`
     hook: Storage, Queue, Query, Encryption, and Sync Actions.
@@ -260,6 +265,7 @@ class TestBearerCapabilityMatrix:
 
 @skip_without_session_credentials
 @pytest.mark.e2e
+@pytest.mark.e2e_auth
 class TestBearerReactiveRefresh:
     """A stale/invalid access token already in `auth.json` must trigger
     `BearerAuth`'s reactive 401 -> `force_refresh` -> retry-exactly-once path,
@@ -327,11 +333,11 @@ class TestBearerReactiveRefresh:
 
 @skip_without_session_credentials
 @pytest.mark.e2e
+@pytest.mark.e2e_auth
 class TestBearerManageApi:
     """A programmatic session is USER-scoped and does NOT carry admin/super
-    Manage privileges (plan section 4.4 / `commands/_helpers.py`
-    `ManageCredential`). This proves the session-compatible SUBSET of the
-    Manage API works over bearer auth.
+    Manage privileges (plan section 4.4). This proves the session-compatible
+    SUBSET of the Manage API works over bearer auth.
 
     Deliberately does NOT assert that a privileged endpoint (e.g.
     `list_organization_projects`, which requires org-admin) succeeds with a
@@ -358,6 +364,7 @@ class TestBearerManageApi:
 
 
 @pytest.mark.e2e
+@pytest.mark.e2e_auth
 @pytest.mark.skip(
     reason=(
         "Manual-only: RFC 8628 device authorization requires a human to approve "
