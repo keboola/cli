@@ -10,8 +10,10 @@ rather than on the client, and `revoke` is a public endpoint that takes the
 token to revoke in its request body.
 
 Inherits shared retry/backoff (429/5xx) and error-mapping infrastructure from
-:class:`BaseHttpClient`, with one deliberate exception: `poll_device_token`
-bypasses that infrastructure entirely (see its docstring).
+:class:`BaseHttpClient`, with two deliberate exceptions that keep the mapping
+but skip the retry loop: `poll_device_token` (a polling 400 is a protocol
+state, not a failure) and `refresh` (it runs inside a cross-process file lock
+whose acquire timeout the retry loop could outlast). See their docstrings.
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ from ..constants import (
     AUTH_DEVICE_TOKEN_PATH,
     AUTH_PKCE_AUTHORIZE_PATH,
     AUTH_PKCE_TOKEN_PATH,
+    AUTH_REFRESH_MAX_WALL_CLOCK,
+    AUTH_REFRESH_TIMEOUT,
     AUTH_SESSIONS_PATH,
     AUTH_TOKEN_INTROSPECT_PATH,
     AUTH_TOKEN_REFRESH_PATH,
@@ -281,41 +285,85 @@ class AuthClient(BaseHttpClient):
     # ------------------------------------------------------------------
 
     def refresh(self, refresh_token: str) -> CliTokenResponse:
-        """Rotate a token pair (``POST /v1/auth/token/refresh``).
+        """Rotate a token pair (``POST /v1/auth/token/refresh``), single attempt.
 
-        Uses `_do_request` -- network/5xx retry is safe here because the
-        server grants a 30 second idempotent grace window on the old
-        refresh token. A rejected grant (the refresh token was replayed
-        after the grace window, or its whole family was revoked) is mapped
-        to `ErrorCode.SESSION_EXPIRED` before the generic error path, so
-        callers can distinguish "log in again" from a transient API failure.
-        That distinction is load-bearing in two places, which is why it must
-        not depend on the server's prose: `SessionTokenProvider._perform_refresh`
+        The second deliberate exception to the shared retry infrastructure
+        (`poll_device_token` is the other): this bypasses `_do_request` and
+        issues exactly ONE request, under `AUTH_REFRESH_TIMEOUT` rather than
+        the client's default timeout. `SessionTokenProvider._refresh_locked`
+        holds the cross-process ``auth.json.lock`` across this call, and every
+        other holder of that lock waits only `AUTH_LOCK_TIMEOUT`; three
+        retries at the default 30 s read timeout plus backoff would let a slow
+        refresh outlast it, so a merely slow auth service would make every
+        concurrent kbagent process report the lock as stuck. The bound is
+        `AUTH_REFRESH_MAX_WALL_CLOCK`.
+
+        Dropping the retry costs little: on failure the old refresh token is
+        still on disk and still inside the server's 30 second idempotent grace
+        window, so the next command refreshes again -- while a retry would
+        re-present that same token, which is the very replay the grace window
+        exists to forgive.
+
+        A rejected grant (the refresh token was replayed after the grace
+        window, or its whole family was revoked) is mapped to
+        `ErrorCode.SESSION_EXPIRED` before the generic error path, so callers
+        can distinguish "log in again" from a transient API failure. That
+        distinction is load-bearing in two places, which is why it must not
+        depend on the server's prose: `SessionTokenProvider._perform_refresh`
         purges the dead session from `auth.json` only for `SESSION_EXPIRED`,
         and `AuthService.status` reports "expired" only for `SESSION_EXPIRED`
         (re-raising anything else). Get the classification wrong and a dead
         session lingers forever, every command fails with an opaque 401, and
         even `auth status` -- the one command meant to diagnose it -- crashes
         instead of answering.
+
+        A transport failure is reported as `ErrorCode.TIMEOUT` /
+        `ErrorCode.CONNECTION_ERROR` (both exit 4, network) so a slow or
+        unreachable auth service never masquerades as a session problem.
         """
         try:
-            response = self._do_request(
+            response = self._client.request(
                 "POST",
                 AUTH_TOKEN_REFRESH_PATH,
                 json={"refreshToken": refresh_token},
+                timeout=AUTH_REFRESH_TIMEOUT,
             )
-        except KeboolaApiError as exc:
-            if _is_rejected_grant(exc):
-                raise KeboolaApiError(
-                    message=(
-                        "Your Keboola login expired or was revoked. Run "
-                        "`kbagent auth login` to sign in again."
-                    ),
-                    status_code=exc.status_code,
-                    error_code=ErrorCode.SESSION_EXPIRED,
-                    retryable=False,
-                ) from exc
-            raise
+        except httpx.TimeoutException as exc:
+            raise KeboolaApiError(
+                message=(
+                    f"Refreshing your Keboola login at {self._base_url} timed out "
+                    f"(hard budget {AUTH_REFRESH_MAX_WALL_CLOCK:.0f}s). Run the command again."
+                ),
+                status_code=0,
+                error_code=ErrorCode.TIMEOUT,
+                retryable=True,
+            ) from exc
+        except httpx.TransportError as exc:
+            raise KeboolaApiError(
+                message=(
+                    f"Cannot reach {self._base_url} to refresh your Keboola login "
+                    f"({type(exc).__name__})."
+                ),
+                status_code=0,
+                error_code=ErrorCode.CONNECTION_ERROR,
+                retryable=True,
+            ) from exc
+
+        if response.status_code >= 400:
+            try:
+                self._map_auth_error(response)
+            except KeboolaApiError as exc:
+                if _is_rejected_grant(exc):
+                    raise KeboolaApiError(
+                        message=(
+                            "Your Keboola login expired or was revoked. Run "
+                            "`kbagent auth login` to sign in again."
+                        ),
+                        status_code=exc.status_code,
+                        error_code=ErrorCode.SESSION_EXPIRED,
+                        retryable=False,
+                    ) from exc
+                raise
         return CliTokenResponse.model_validate(response.json())
 
     def introspect(self, access_token: str) -> IntrospectResponse:

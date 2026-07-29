@@ -232,6 +232,39 @@ class TestPkceCallbackServerLifecycle:
         finally:
             probe.close()
 
+    def test_failing_thread_start_does_not_leak_the_bound_socket(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`__init__` binds before it starts the serving thread, and `__exit__`
+        only runs once `__init__` returns -- so a `RuntimeError: can't start new
+        thread` (thread exhaustion) would otherwise leave a listener bound with
+        no owner left to close it. The port must be free again afterwards."""
+        bound: list[pkce._CallbackHTTPServer] = []
+        real_bind = PkceCallbackServer._bind
+
+        def capturing_bind(expected_state: str) -> pkce._CallbackHTTPServer:
+            httpd = real_bind(expected_state)
+            bound.append(httpd)
+            return httpd
+
+        def refuse_to_start(_self: threading.Thread) -> None:
+            raise RuntimeError("can't start new thread")
+
+        monkeypatch.setattr(PkceCallbackServer, "_bind", staticmethod(capturing_bind))
+        monkeypatch.setattr(threading.Thread, "start", refuse_to_start)
+
+        with pytest.raises(RuntimeError, match="can't start new thread"):
+            PkceCallbackServer(expected_state="s")
+
+        assert len(bound) == 1
+        port = bound[0].server_address[1]
+        monkeypatch.undo()  # restore Thread.start before touching sockets
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind(("127.0.0.1", port))
+        finally:
+            probe.close()
+
     def test_bind_failure_raises_pkce_setup_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             pkce,

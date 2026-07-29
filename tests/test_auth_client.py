@@ -1,16 +1,19 @@
 """Tests for `AuthClient` (Layer 3, programmatic auth / browser login).
 
 Covers the RFC 8628 device-poll matrix, PKCE code exchange body, refresh's
-`invalid_grant` -> `SESSION_EXPIRED` mapping, the 404 -> feature-flag mapping
-shared by every auth endpoint, the per-request bearer header on introspect,
-and revoke's public (no-Authorization, JSON-body) contract including its
-never-raises uncertain-result path.
+`invalid_grant` -> `SESSION_EXPIRED` mapping and its bounded single-attempt
+lock-hold budget, the 404 -> feature-flag mapping shared by every auth
+endpoint, the per-request bearer header on introspect, and revoke's public
+(no-Authorization, JSON-body) contract including its never-raises
+uncertain-result path.
 """
 
 from __future__ import annotations
 
+import time
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 
 from keboola_agent_cli.auth.auth_client import AuthClient
@@ -20,6 +23,12 @@ from keboola_agent_cli.auth.models import (
     DevicePollStatus,
     IntrospectResponse,
     RevokeResult,
+)
+from keboola_agent_cli.commands._helpers import map_error_to_exit_code
+from keboola_agent_cli.constants import (
+    AUTH_LOCK_TIMEOUT,
+    AUTH_REFRESH_MAX_WALL_CLOCK,
+    AUTH_REFRESH_TIMEOUT,
 )
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 
@@ -507,6 +516,98 @@ class TestRefresh:
 
 
 # ----------------------------------------------------------------------------
+# refresh: the lock-hold budget (single attempt + short timeout)
+# ----------------------------------------------------------------------------
+
+
+class TestRefreshLockHoldBudget:
+    """`refresh` runs inside `auth.json.lock`, so its wall clock is bounded.
+
+    Every other holder of that lock waits only `AUTH_LOCK_TIMEOUT` before
+    reporting it as stuck (a `ConfigError`, exit 5, blaming a "stuck" process
+    that is merely slow). The retry loop `refresh` would otherwise inherit
+    allows 3 x 30 s reads plus 1 s + 2 s backoff -- three times the acquire
+    timeout. These tests pin the two properties that keep the hold short.
+    """
+
+    def test_budget_leaves_clear_headroom_under_the_lock_acquire_timeout(self) -> None:
+        """The arithmetic bound, asserted so a future timeout bump cannot break it."""
+        assert AUTH_REFRESH_MAX_WALL_CLOCK * 2 <= AUTH_LOCK_TIMEOUT
+
+    def test_request_carries_the_constrained_timeout(self, httpx_mock) -> None:
+        """Per-request, so `introspect` and the login flows keep DEFAULT_TIMEOUT."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            json={"accessToken": "kbc_at_new", "refreshToken": "kbc_rt_new", "expiresIn": 3600},
+        )
+        client = _make_client()
+        try:
+            client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert httpx_mock.get_requests()[0].extensions["timeout"] == AUTH_REFRESH_TIMEOUT.as_dict()
+
+    def test_retryable_status_is_not_retried(self, httpx_mock) -> None:
+        """A 503 fails immediately instead of burning 3 attempts + 3 s of backoff."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            status_code=503,
+            json={"error": "Service Unavailable"},
+        )
+        client = _make_client()
+        started = time.monotonic()
+        try:
+            with pytest.raises(KeboolaApiError):
+                client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+        elapsed = time.monotonic() - started
+
+        assert len(httpx_mock.get_requests()) == 1
+        # The shared retry loop would sleep 1 s then 2 s between attempts.
+        assert elapsed < 1.0
+
+    def test_timeout_is_reported_as_a_network_error(self, httpx_mock) -> None:
+        """Truthful classification: a slow auth service is a network problem (exit 4),
+        not a session problem (exit 3) and not a stuck lock (exit 5)."""
+        httpx_mock.add_exception(
+            httpx.ReadTimeout("read timed out"),
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.refresh("kbc_rt_slow")
+        finally:
+            client.close()
+
+        assert excinfo.value.error_code == ErrorCode.TIMEOUT
+        assert map_error_to_exit_code(excinfo.value) == 4
+        assert len(httpx_mock.get_requests()) == 1
+        assert "kbc_rt_slow" not in excinfo.value.message
+
+    def test_connect_failure_is_reported_as_a_network_error(self, httpx_mock) -> None:
+        httpx_mock.add_exception(
+            httpx.ConnectError("no route to host"),
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert excinfo.value.error_code == ErrorCode.CONNECTION_ERROR
+        assert map_error_to_exit_code(excinfo.value) == 4
+
+
+# ----------------------------------------------------------------------------
 # introspect
 # ----------------------------------------------------------------------------
 
@@ -703,7 +804,7 @@ class TestDeleteSession:
 
 
 # ----------------------------------------------------------------------------
-# 404 -> AUTH_NOT_SUPPORTED_ON_STACK on every _do_request-based endpoint
+# 404 -> AUTH_NOT_SUPPORTED_ON_STACK on every endpoint that maps errors
 # ----------------------------------------------------------------------------
 
 

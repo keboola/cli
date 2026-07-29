@@ -237,10 +237,22 @@ class PkceCallbackServer:
     """
 
     def __init__(self, expected_state: str) -> None:
+        # Starts True so a construction that raises leaves nothing half-open to
+        # close: `close()` would otherwise call `shutdown()` on a server whose
+        # `serve_forever` never ran, which blocks forever waiting for it to stop.
+        self._closed = True
         self._expected_state = expected_state
         self._httpd = self._bind(expected_state)
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
-        self._thread.start()
+        # The socket is bound by now, but `__exit__` only runs once `__init__`
+        # has returned -- so a failing `start()` (`RuntimeError: can't start new
+        # thread` under thread exhaustion) would leak the bound listener with no
+        # owner left to close it.
+        try:
+            self._thread.start()
+        except BaseException:
+            self._httpd.server_close()
+            raise
         self._closed = False
 
     @staticmethod

@@ -12,7 +12,10 @@ Everything in this file exists to protect that invariant:
   Windows and this project ships a Windows wheel),
 - a rotated pair is persisted **before** it is handed to a caller,
 - a process that blocks on the file lock **re-reads** `auth.json` afterwards and
-  adopts whatever the winner persisted, instead of minting a second pair.
+  adopts whatever the winner persisted, instead of minting a second pair,
+- a refresh that fails inside the file lock releases it, keeps the still-valid
+  session on disk, and surfaces a network error rather than the misleading
+  "another kbagent process may be stuck holding it".
 
 The cross-process test at the bottom uses real spawned processes. What it
 proves and what it deliberately does not is documented on the test itself.
@@ -30,6 +33,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import filelock
 import httpx
 import pytest
 
@@ -303,6 +307,112 @@ class TestTerminalStates:
 
 
 # ----------------------------------------------------------------------------
+# A refresh that times out
+# ----------------------------------------------------------------------------
+
+
+class _TimingOutThenOkAuthClient(AuthClient):
+    """Fake whose first refresh times out and whose second one succeeds."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def __enter__(self) -> _TimingOutThenOkAuthClient:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def refresh(self, refresh_token: str) -> CliTokenResponse:
+        self.calls.append(refresh_token)
+        if len(self.calls) == 1:
+            raise KeboolaApiError(
+                "Refreshing your Keboola login timed out.",
+                error_code=ErrorCode.TIMEOUT,
+                retryable=True,
+            )
+        return CliTokenResponse(
+            accessToken="kbc_at_rotated_1",
+            refreshToken="kbc_rt_rotated_1",
+            expiresIn=3600,
+            sessionId="session-1",
+        )
+
+
+class TestRefreshTimeout:
+    """A refresh bounded by `AUTH_REFRESH_TIMEOUT` can time out; that must be clean.
+
+    The failure happens while `auth.json.lock` is held, so three things have to
+    hold at once: the error keeps its network classification (never the
+    `ConfigError` "another process may be stuck holding it", which blames the
+    wrong thing and exits 5), the still-valid session survives on disk, and
+    both the file lock and the in-process lock are released so the next attempt
+    is not wedged.
+    """
+
+    def test_timeout_keeps_its_network_classification(self, tmp_path: Path) -> None:
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        provider = SessionTokenProvider(
+            STACK_URL, store, client_factory=lambda _url: _TimingOutThenOkAuthClient()
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            provider.get_access_token()
+
+        assert exc_info.value.error_code == ErrorCode.TIMEOUT
+
+    def test_session_is_not_purged(self, tmp_path: Path) -> None:
+        """Only a rejected grant means "log in again"; a timeout says nothing about
+        whether the refresh token is still good, so it must stay."""
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        provider = SessionTokenProvider(
+            STACK_URL, store, client_factory=lambda _url: _TimingOutThenOkAuthClient()
+        )
+
+        with pytest.raises(KeboolaApiError):
+            provider.get_access_token()
+
+        persisted = store.get_session(STACK_URL)
+        assert persisted is not None
+        assert persisted.refresh_token == "kbc_rt_original"
+
+    def test_file_lock_is_released(self, tmp_path: Path) -> None:
+        """Probed with an independent `FileLock` at timeout=0: a same-thread
+        `store.transaction()` is reentrant and would pass even if the lock leaked."""
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        provider = SessionTokenProvider(
+            STACK_URL, store, client_factory=lambda _url: _TimingOutThenOkAuthClient()
+        )
+
+        with pytest.raises(KeboolaApiError):
+            provider.get_access_token()
+
+        probe = filelock.FileLock(str(store.lock_path), timeout=0)
+        probe.acquire()  # raises filelock.Timeout if the failed refresh leaked it
+        probe.release()
+
+    def test_a_later_attempt_succeeds(self, tmp_path: Path) -> None:
+        """Neither lock is wedged: the retry the user (or the next command) makes
+        reaches the server and rotates the pair."""
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        fake = _TimingOutThenOkAuthClient()
+        provider = SessionTokenProvider(STACK_URL, store, client_factory=lambda _url: fake)
+
+        with pytest.raises(KeboolaApiError):
+            provider.get_access_token()
+
+        assert provider.get_access_token() == "kbc_at_rotated_1"
+        assert fake.calls == ["kbc_rt_original", "kbc_rt_original"]
+
+
+# ----------------------------------------------------------------------------
 # force_refresh
 # ----------------------------------------------------------------------------
 
@@ -409,11 +519,15 @@ class TestInProcessRace:
     def test_ten_threads_on_an_expired_cache_trigger_exactly_one_refresh(
         self, tmp_path: Path
     ) -> None:
-        """Without the per-provider lock this would mint ten refresh tokens.
+        """Ten concurrent callers must mint exactly one refresh token.
 
-        Nine of them would immediately become stale, and reusing any one after
-        the server's 30s grace window triggers family revocation -- a hard
-        logout. Exactly one refresh is the whole invariant.
+        Nine extra rotations would immediately go stale, and reusing any one
+        after the server's 30s grace window triggers family revocation -- a hard
+        logout. This asserts the end-to-end outcome without attributing it to
+        either serialization layer: the per-provider `threading.Lock` and the
+        flock-based re-read-and-adopt in `_refresh_locked` each suffice on their
+        own, so this passes with either one removed. What the thread lock
+        specifically contributes is pinned by the next test.
         """
         store = AuthStateStore(tmp_path)
         _seed_session(store, access_expires_in=-10)
@@ -426,6 +540,39 @@ class TestInProcessRace:
         assert len(fake.calls) == 1
         assert set(tokens) == {"kbc_at_rotated_1"}
 
+    def test_the_thread_lock_keeps_nine_threads_out_of_the_file_lock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The thread lock's own contribution: nine threads never reach the flock.
+
+        `_refresh_locked` reads the session exactly once per entry, so counting
+        `get_session` counts how many threads got past the double-checked cache
+        and into the cross-process transaction. With the `threading.Lock` the
+        losers wake up, see a fresh cache, and return without touching
+        `auth.json` at all -- one entry. Without it all ten queue on the OS lock
+        and re-read in turn; the refresh count stays 1 either way, which is why
+        the test above cannot tell the difference.
+        """
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        fake = _FakeAuthClient()
+        provider = SessionTokenProvider(STACK_URL, store, client_factory=lambda _url: fake)
+
+        reads: list[str] = []
+        real_get_session = store.get_session
+
+        def counting_get_session(stack_url: str) -> StackSession | None:
+            reads.append(stack_url)
+            return real_get_session(stack_url)
+
+        monkeypatch.setattr(store, "get_session", counting_get_session)
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            list(executor.map(lambda _i: provider.get_access_token(), range(10)))
+
+        assert len(fake.calls) == 1
+        assert len(reads) == 1
+
     def test_registry_returns_one_provider_per_stack_and_state_file(self, tmp_path: Path) -> None:
         """A fresh provider per call site would each hold its own lock and refresh
         independently -- the registry is what makes the in-process lock effective."""
@@ -433,6 +580,62 @@ class TestInProcessRace:
         first = get_session_token_provider(STACK_URL, store)
         second = get_session_token_provider("connection.keboola.com", store)
         assert first is second
+
+
+# ----------------------------------------------------------------------------
+# Stack URL as a dict key
+# ----------------------------------------------------------------------------
+
+
+class TestStackKeyIsCaseInsensitive:
+    """Both places a stack URL is used as a key must fold host case.
+
+    Hostnames are case-insensitive, so a session stored under
+    `Connection.Keboola.Com` has to be the same session a later
+    `connection.keboola.com` lookup finds -- otherwise `auth status` reports a
+    live session as missing, and the next login mints a redundant second session
+    for one physical stack. `models.normalize_stack_url` is the single place that
+    canonicalizes; these pin that both key surfaces actually go through it.
+    """
+
+    def test_a_session_stored_mixed_case_is_found_lowercase(self, tmp_path: Path) -> None:
+        store = AuthStateStore(tmp_path)
+        now = datetime.now(UTC)
+        store.put_session(
+            StackSession(
+                stack_url="https://Connection.Keboola.Com",
+                session_id="session-1",
+                user_email="user@example.com",
+                user_name="Test User",
+                access_token="kbc_at_original",
+                refresh_token="kbc_rt_original",
+                access_expires_at=now + timedelta(seconds=3600),
+                refresh_expires_at=now + timedelta(days=30),
+                created_at=now,
+            )
+        )
+
+        found = store.get_session("https://connection.keboola.com")
+
+        assert found is not None
+        assert found.access_token == "kbc_at_original"
+        # Persisted canonically, so `auth.json` holds one key per physical stack.
+        assert found.stack_url == "https://connection.keboola.com"
+        assert json.loads(store.state_path.read_text(encoding="utf-8"))["sessions"] == {
+            "https://connection.keboola.com": found.model_dump(mode="json")
+        }
+
+    def test_the_provider_registry_shares_one_provider_across_spellings(
+        self, tmp_path: Path
+    ) -> None:
+        """Two providers for one stack would each hold their own thread lock and
+        their own token cache, refreshing independently."""
+        store = AuthStateStore(tmp_path)
+        mixed = get_session_token_provider("https://Connection.Keboola.Com", store)
+        lower = get_session_token_provider("connection.keboola.com", store)
+
+        assert mixed is lower
+        assert mixed.stack_url == "https://connection.keboola.com"
 
 
 # ----------------------------------------------------------------------------
@@ -469,12 +672,13 @@ def _append_session_worker(config_dir: str, stack_url: str) -> None:
         store.save(state)
 
 
-@pytest.mark.skipif(
-    multiprocessing.get_start_method(allow_none=True) == "fork" and os.name == "nt",
-    reason="spawn start method unavailable",
-)
 class TestCrossProcessLock:
     """Real separate processes contending on `auth.json` via `filelock`.
+
+    Requires the ``spawn`` start method, which CPython offers on every platform
+    this project supports; these must fail loudly rather than skip if it ever
+    goes missing, because a silent skip would leave the cross-process guarantee
+    unverified.
 
     What this proves: the lock guarding rotation is a genuine OS-level advisory
     lock that serializes *across processes*, so two kbagent invocations cannot
@@ -627,10 +831,6 @@ def _get_access_token_race_worker(
         result_queue.put({"pid": os.getpid(), "token": None, "error": repr(exc)})
 
 
-@pytest.mark.skipif(
-    multiprocessing.get_start_method(allow_none=True) == "fork" and os.name == "nt",
-    reason="spawn start method unavailable",
-)
 class TestCrossProcessRefreshRace:
     """Two real OS processes both racing `SessionTokenProvider.get_access_token()`
     against the same stale session -- the scenario `TestCrossProcessLock`

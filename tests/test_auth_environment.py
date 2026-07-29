@@ -187,6 +187,69 @@ class TestForcedRemoteHeuristics:
         assert result.loopback_browser_usable is False
 
 
+class TestWslviewProbeCost:
+    """`wslview --version` costs up to `_WSLVIEW_PROBE_TIMEOUT_SECONDS` per spawn.
+
+    Three consumers need the answer (the WSL heuristic, the opener name, and the
+    no-opener check), so probing per consumer would put several seconds on the
+    login hot path for every WSL user. The result is computed once and threaded
+    through instead of memoized, so nothing survives between calls -- a cache
+    would also make this suite order-dependent.
+    """
+
+    def _counting_baseline(self, monkeypatch: pytest.MonkeyPatch, *, returncode: int) -> list[str]:
+        spawns: list[str] = []
+
+        def counting_run(
+            args: list[str], *, capture_output: bool, timeout: float, check: bool
+        ) -> subprocess.CompletedProcess[bytes]:
+            spawns.append(" ".join(args))
+            return subprocess.CompletedProcess(args=args, returncode=returncode)
+
+        _baseline(monkeypatch, which=lambda name: "/usr/bin/wslview" if name == "wslview" else None)
+        monkeypatch.setattr(environment.subprocess, "run", counting_run)
+        return spawns
+
+    def test_working_wslview_is_probed_once_per_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        spawns = self._counting_baseline(monkeypatch, returncode=0)
+        monkeypatch.setenv("WSL_INTEROP", "/run/WSL/1_interop")
+
+        result = detect_browser_environment()
+
+        assert result.opener == "wslview"
+        assert spawns == ["wslview --version"]
+
+    def test_broken_wslview_is_probed_once_per_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The early-return path must not re-probe on its way out either."""
+        spawns = self._counting_baseline(monkeypatch, returncode=1)
+        monkeypatch.setenv("WSL_INTEROP", "/run/WSL/1_interop")
+
+        result = detect_browser_environment()
+
+        assert result.loopback_browser_usable is False
+        assert spawns == ["wslview --version"]
+
+    def test_not_probed_at_all_once_ssh_already_forced_the_device_flow(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SSH and container are decided before the probe, so those machines pay nothing."""
+        spawns = self._counting_baseline(monkeypatch, returncode=0)
+        monkeypatch.setenv("SSH_CONNECTION", "10.0.0.1 22 10.0.0.2 22")
+
+        detect_browser_environment()
+
+        assert spawns == []
+
+    def test_result_is_not_memoized_between_calls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A newly-installed (or newly-broken) wslview is picked up by the next login."""
+        spawns = self._counting_baseline(monkeypatch, returncode=0)
+
+        detect_browser_environment()
+        detect_browser_environment()
+
+        assert spawns == ["wslview --version", "wslview --version"]
+
+
 class TestNoOpenerHeuristic:
     def test_no_opener_and_no_webbrowser_controller_forces_device_flow(
         self, monkeypatch: pytest.MonkeyPatch

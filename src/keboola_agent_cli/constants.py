@@ -661,6 +661,29 @@ AUTH_REFRESH_MARGIN: int = 120
 # Cross-process advisory lock (filelock) acquisition timeout for auth.json.
 AUTH_LOCK_TIMEOUT: float = 30.0
 
+# Timeout for the token-refresh request alone. `SessionTokenProvider` holds the
+# `auth.json.lock` flock across that request, so the request must finish well
+# inside AUTH_LOCK_TIMEOUT -- otherwise a merely slow auth service makes every
+# other kbagent process (including a read-only `auth status`) report the lock as
+# stuck and exit 5, which is false. Tighter than DEFAULT_TIMEOUT on every phase:
+# a refresh that takes longer than this is useless anyway.
+AUTH_REFRESH_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=5.0, write=2.0, pool=2.0)
+# Worst-case wall clock a refresh can add to the lock hold: the httpx phases are
+# sequential and each carries its own deadline, so the bound is their sum -- and
+# it stays the whole bound only because `AuthClient.refresh` runs as a single
+# attempt, outside `BaseHttpClient`'s retry loop. Must keep clear headroom under
+# AUTH_LOCK_TIMEOUT, which `tests/test_auth_client.py` asserts.
+AUTH_REFRESH_MAX_WALL_CLOCK: float = sum(
+    phase
+    for phase in (
+        AUTH_REFRESH_TIMEOUT.connect,
+        AUTH_REFRESH_TIMEOUT.read,
+        AUTH_REFRESH_TIMEOUT.write,
+        AUTH_REFRESH_TIMEOUT.pool,
+    )
+    if phase is not None
+)
+
 # The backend closes the PKCE callback window at
 # AUTH_PKCE_CALLBACK_TIMEOUT_SECONDS = 120; wait slightly less so we never sit
 # waiting for a callback the server can no longer deliver. Tracks the backend value.

@@ -176,6 +176,14 @@ class SessionTokenProvider:
         own). This is a different lock from `ConfigStore`'s `config.json`
         lock, which must never be held across network I/O; that invariant is
         untouched by this module.
+
+        Holding a lock across network I/O is only safe while the hold stays
+        shorter than the `AUTH_LOCK_TIMEOUT` every other holder waits, so
+        `AuthClient.refresh` is a single attempt bounded by
+        `AUTH_REFRESH_MAX_WALL_CLOCK` (< half of `AUTH_LOCK_TIMEOUT`). Without
+        that bound a slow auth service would make concurrent processes report
+        this lock as stuck -- with a `ConfigError` (exit 5) that names the
+        wrong cause.
         """
         with self._state_store.transaction():
             session = self._state_store.get_session(self._stack_url)

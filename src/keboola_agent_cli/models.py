@@ -16,14 +16,23 @@ def normalize_stack_url(value: str) -> str:
       - a full base URL + slash    ``https://connection.keboola.com/``
       - a full project deep-link   ``https://connection.keboola.com/admin/projects/10105/dashboard``
 
-    and reduces every form to ``https://<host>`` (path/query/fragment dropped).
-    A missing scheme defaults to ``https://``. Any *explicit* non-https scheme
+    and reduces every form to ``https://<host>`` -- path, query, fragment and
+    any ``user:password@`` userinfo are dropped; an explicit port is kept. A
+    missing scheme defaults to ``https://``. Any *explicit* non-https scheme
     (``http://``, ``file://``, ``ftp://``, ...) is rejected -- this is an
     SSRF / protocol-abuse guard, so we never silently upgrade a typed-out
     ``http://`` to https.
 
+    The host is lowercased. Hostnames are case-insensitive, but the returned
+    string is used directly as a **dict key** -- ``auth.json``'s ``sessions``
+    map and the process-wide session-token provider registry -- so two
+    spellings of one physical stack must collapse to one key, or a login as
+    ``Connection.Keboola.Com`` becomes invisible to a later
+    ``connection.keboola.com`` lookup.
+
     Raises:
-        ValueError: empty input, an explicit non-https scheme, or no host.
+        ValueError: empty input, an explicit non-https scheme, no host, or an
+            unparseable port.
     """
     raw = value.strip()
     if not raw:
@@ -37,12 +46,23 @@ def normalize_stack_url(value: str) -> str:
             f"Stack URL must use https:// scheme, got: {parsed.scheme or '(none)'}://. "
             "Plain HTTP, file://, and other protocols are not allowed."
         )
-    if not parsed.netloc:
+    # `hostname` is what makes the result canonical: urlparse lowercases it and
+    # strips userinfo, the port, and an IPv6 literal's brackets. Reassembling
+    # from it (rather than from `netloc`) is why credentials cannot survive into
+    # a persisted stack URL, where `project list` would echo them to a terminal.
+    host = parsed.hostname
+    if not host:
         raise ValueError(
             f"Stack URL has no host: {value!r}. Expected e.g. "
             "'connection.keboola.com' or 'https://connection.keboola.com'."
         )
-    return f"https://{parsed.netloc}"
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"Stack URL has an invalid port: {value!r} ({exc}).") from exc
+    # URL syntax requires the brackets `hostname` removed from an IPv6 literal.
+    authority = f"[{host}]" if ":" in host else host
+    return f"https://{authority}:{port}" if port is not None else f"https://{authority}"
 
 
 class ProjectConfig(BaseModel):

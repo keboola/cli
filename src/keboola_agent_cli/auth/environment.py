@@ -77,18 +77,21 @@ def _wslview_is_working() -> bool:
     return completed.returncode == 0
 
 
-def _is_wsl_without_working_opener() -> bool:
-    return _env_flag_set("WSL_INTEROP") and not _wslview_is_working()
+def _is_wsl_without_working_opener(*, wslview_works: bool) -> bool:
+    return _env_flag_set("WSL_INTEROP") and not wslview_works
 
 
-def _detect_opener() -> str:
+def _detect_opener(*, wslview_works: bool) -> str:
     """Best-effort name of the command `open_browser` would end up using.
 
     Purely informational (surfaced to the user in the fallback notice /
     `--verbose`); the actual open still goes through `webbrowser.open`, which
     has its own, more complete resolution logic.
+
+    ``wslview_works`` is passed in rather than probed here so one login spawns
+    at most one `wslview --version`.
     """
-    if shutil.which("wslview") is not None and _wslview_is_working():
+    if wslview_works:
         return "wslview"
     if sys.platform == "darwin":
         return "open" if shutil.which("open") is not None else ""
@@ -101,10 +104,8 @@ def _detect_opener() -> str:
     return "xdg-open" if shutil.which("xdg-open") is not None else ""
 
 
-def _has_no_opener() -> bool:
-    """True when neither a known opener command nor `webbrowser.get()` is available."""
-    if _detect_opener():
-        return False
+def _webbrowser_has_no_controller() -> bool:
+    """True when `webbrowser.get()` resolves no handler at all (e.g. no $BROWSER)."""
     try:
         webbrowser.get()
     except webbrowser.Error:
@@ -140,7 +141,13 @@ def detect_browser_environment() -> BrowserEnvironment:
             opener="",
         )
 
-    if _is_wsl_without_working_opener():
+    # Probed once here and threaded through both consumers below. The probe
+    # costs up to _WSLVIEW_PROBE_TIMEOUT_SECONDS, and it sits after the SSH and
+    # container checks so a machine that already forced the device flow never
+    # pays for it at all.
+    wslview_works = _wslview_is_working()
+
+    if _is_wsl_without_working_opener(wslview_works=wslview_works):
         return BrowserEnvironment(
             loopback_browser_usable=False,
             reason=(
@@ -150,8 +157,8 @@ def detect_browser_environment() -> BrowserEnvironment:
             opener="",
         )
 
-    opener = _detect_opener()
-    if _has_no_opener():
+    opener = _detect_opener(wslview_works=wslview_works)
+    if not opener and _webbrowser_has_no_controller():
         return BrowserEnvironment(
             loopback_browser_usable=False,
             reason="No browser opener command was found on this machine.",
