@@ -13,6 +13,13 @@ tests/test_cli_auth.py (numeric-fallback path) and directly with monkeypatched
 `checkbox_select` / `typer` prompts in tests/test_auth_picker.py (checkbox
 path) instead.
 
+Server-supplied project names reach a Rich console with `markup=True`, so
+every one of them is passed through `rich.markup.escape` before rendering --
+otherwise a `[link=...]` project name would render as a clickable, misleading
+hyperlink in whoever's terminal is running the picker. `typer.prompt` text and
+`CheckboxItem` labels are deliberately NOT escaped: click and prompt_toolkit
+render them verbatim, so escaping there would print visible backslashes.
+
 The primary selection UI is the arrow-key + spacebar checkbox in
 `_checkbox_select.py` -- users move with up/down (or j/k), toggle with space,
 and accept with enter, so the common case never requires typing a project id.
@@ -28,6 +35,7 @@ from collections.abc import Mapping, Sequence
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from ..config_store import validate_alias_format
@@ -136,8 +144,8 @@ def _render_candidates_table(
         table.add_row(
             str(position),
             str(candidate.project_id),
-            candidate.project_name,
-            candidate.role,
+            escape(candidate.project_name),
+            escape(candidate.role),
             alias_preview,
             "registered" if candidate.registered else "new",
         )
@@ -164,7 +172,7 @@ def _prompt_selection(console: Console, count: int) -> list[int]:
         try:
             return parse_selection(raw, count)
         except ValueError as exc:
-            console.print(f"[bold red]Error:[/bold red] {exc}")
+            console.print(f"[bold red]Error:[/bold red] {escape(str(exc))}")
     raise typer.Abort()
 
 
@@ -228,13 +236,13 @@ def _prompt_alias(
         try:
             validate_alias_format(candidate_alias, field="alias")
         except ConfigError as exc:
-            console.print(f"[bold red]Error:[/bold red] {exc.message}")
+            console.print(f"[bold red]Error:[/bold red] {escape(exc.message)}")
             continue
 
         chosen_by = chosen_aliases.get(candidate_alias)
         if chosen_by is not None and chosen_by != candidate.project_id:
             console.print(
-                f"[bold red]Error:[/bold red] Alias '{candidate_alias}' was already "
+                f"[bold red]Error:[/bold red] Alias '{escape(candidate_alias)}' was already "
                 f"chosen for project {chosen_by} earlier in this run."
             )
             continue
@@ -251,7 +259,7 @@ def _prompt_alias(
         if other is not None:
             console.print(
                 f"[bold red]Error:[/bold red] Alias '{candidate_alias}' is already "
-                f"registered to project {other.project_id} ({other.project_name})."
+                f"registered to project {other.project_id} ({escape(other.project_name)})."
             )
             continue
 
@@ -269,7 +277,7 @@ def _print_selection_summary(
     table.add_column("Project")
     for selection in selections:
         candidate = by_id[selection.project_id]
-        table.add_row(selection.alias, f"{candidate.project_name} ({candidate.project_id})")
+        table.add_row(selection.alias, f"{escape(candidate.project_name)} ({candidate.project_id})")
     console.print(table)
 
 

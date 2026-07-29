@@ -289,3 +289,50 @@ class TestRunProjectPicker:
         selections = run_project_picker(Console(), [_candidate()], assume_yes=True)
         assert len(selections) == 1
         assert "Register these 1 project(s)?" not in seen_messages
+
+
+class TestRichMarkupInProjectNames:
+    """A project name is server-controlled, so it must never act as Rich markup.
+
+    Anyone with rename rights on a shared project could otherwise plant
+    `[link=https://phish.example]` in a name and have it render as a clickable,
+    deceptively-labelled hyperlink in another admin's terminal.
+    """
+
+    HOSTILE_NAME = "[link=https://phish.example]Payroll[/link]"
+
+    def _console(self) -> Console:
+        # width kept wide enough that the table cannot truncate the marker away
+        return Console(record=True, width=200, no_color=True)
+
+    def test_numbered_fallback_table_renders_markup_literally(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def raise_unavailable(*args: object, **kwargs: object) -> list[int]:
+            raise CheckboxUnavailable("no usable terminal")
+
+        monkeypatch.setattr(_auth_picker, "checkbox_select", raise_unavailable)
+        monkeypatch.setattr(_auth_picker.typer, "prompt", lambda *args, **kwargs: "1")
+        console = self._console()
+        _select_indices(console, [_candidate(project_name=self.HOSTILE_NAME)], {})
+        rendered = console.export_text()
+        assert "[link=https://phish.example]Payroll[/link]" in rendered
+
+    def test_selection_summary_renders_markup_literally(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(_auth_picker, "checkbox_select", lambda *args, **kwargs: [0])
+        monkeypatch.setattr(_auth_picker.typer, "confirm", lambda message, default=False: False)
+        console = self._console()
+        run_project_picker(console, [_candidate(project_name=self.HOSTILE_NAME)])
+        assert "[link=https://phish.example]Payroll[/link]" in console.export_text()
+
+    def test_role_is_escaped_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def raise_unavailable(*args: object, **kwargs: object) -> list[int]:
+            raise CheckboxUnavailable("no usable terminal")
+
+        monkeypatch.setattr(_auth_picker, "checkbox_select", raise_unavailable)
+        monkeypatch.setattr(_auth_picker.typer, "prompt", lambda *args, **kwargs: "1")
+        console = self._console()
+        _select_indices(console, [_candidate(role="[blink]admin")], {})
+        assert "[blink]admin" in console.export_text()

@@ -12,9 +12,8 @@ docs/programmatic-auth-login-plan.md section 4.5 step 7).
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from time import sleep as _time_sleep
 from typing import Any
@@ -30,12 +29,25 @@ from ..auth.pkce import (
     PkceStateMismatch,
     generate_pkce_challenge,
 )
-from ..auth.sentinel import is_session_token, make_session_token
+from ..auth.sentinel import is_session_token
 from ..auth.state_store import AuthStateStore
 from ..auth.token_provider import SessionTokenProvider, reset_provider_registry
-from ..config_store import ConfigStore, validate_alias_format
+from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..models import AppConfig, ProjectConfig, normalize_stack_url
+from ..models import normalize_stack_url
+from ._auth_registration import (
+    SESSION_UNSUPPORTED_FEATURES,
+    ProjectCandidate,
+    ProjectCandidatesResult,
+    ProjectSelection,
+    RegisteredProject,
+    RegisterProjectsResult,
+    apply_selections,
+    build_candidates,
+    default_unsupported_features,
+    require_single_selection_mode,
+    resolve_selections,
+)
 
 # Error codes from `provider.introspect()` (via `AuthClient.refresh`) that mean
 # "could not reach the auth service", as opposed to a definitive answer about
@@ -46,80 +58,38 @@ _NETWORK_ERROR_CODES = frozenset(
     {ErrorCode.TIMEOUT, ErrorCode.CONNECTION_ERROR, ErrorCode.RETRY_EXHAUSTED}
 )
 
-_SLUG_INVALID_CHARS = re.compile(r"[^a-z0-9]+")
-
-
-def _slugify_project_name(name: str) -> str:
-    """Turn a project name into a lowercase, hyphenated alias candidate."""
-    return _SLUG_INVALID_CHARS.sub("-", name.strip().lower()).strip("-")
-
 
 def _iso(value: datetime | None) -> str:
     """Format a datetime as ISO-8601, or "" when absent."""
     return value.isoformat() if value is not None else ""
 
 
-@dataclass(frozen=True)
-class RegisteredProject:
-    """Outcome of registering one accessible project as a `kbagent` alias."""
+def _noop_notice(_message: str) -> None:
+    """Default `on_notice`: a caller that wants no progress narration."""
 
-    alias: str
-    project_id: int
-    project_name: str
-    status: str  # "registered" | "exists" | "skipped"
-    note: str = ""
+
+def _noop_device_prompt(_authorization: DeviceAuthorization) -> None:
+    """Default `on_device_prompt`: a caller that renders the code itself, or not at all."""
 
 
 @dataclass(frozen=True)
-class ProjectCandidate:
-    """One project accessible to a session, offered up for local registration.
+class _LiveAccessToken:
+    """Outcome of the best-effort live-token fetch that orphan cleanup needs.
 
-    `default_alias` is always collision-free -- computed against both
-    `config.json` and every earlier candidate in the same batch (see
-    `AuthService.candidates_from_projects`) -- so a caller (the picker, or
-    `login(register_projects=True)`) can accept it blindly with no further
-    validation beyond `validate_alias_format`.
+    `token` is None exactly when `unavailable_reason` explains why the current
+    session could not produce one.
     """
 
-    project_id: int
-    project_name: str
-    role: str
-    default_alias: str
-    existing_alias: str  # "" unless already registered as a SESSION project
-    registered: bool  # existing_alias != ""
+    token: str | None
+    unavailable_reason: str
 
 
 @dataclass(frozen=True)
-class ProjectCandidatesResult:
-    """Result of `AuthService.list_project_candidates`."""
+class _OrphanRetryOutcome:
+    """Which recorded orphan sessions the server confirmed gone, and which it did not."""
 
-    stack_url: str
-    candidates: list[ProjectCandidate]
-
-
-@dataclass(frozen=True)
-class ProjectSelection:
-    """One caller's choice to register a project, with an optional alias override.
-
-    An empty `alias` means "use the candidate's `default_alias`" -- this is
-    how `login(register_projects=True)` (which wants every accessible
-    project registered under its suggestion) and an explicit `--alias
-    ID=ALIAS` override (which wants exactly one alias) share the same
-    application path (`AuthService._apply_selections`).
-    """
-
-    project_id: int
-    alias: str = ""
-
-
-@dataclass(frozen=True)
-class RegisterProjectsResult:
-    """Result of `AuthService.register_projects`."""
-
-    status: str  # always "ok"
-    stack_url: str
-    registered_projects: list[RegisteredProject]
-    warnings: list[str]
+    revoked: list[str]
+    remaining: list[str]
 
 
 @dataclass(frozen=True)
@@ -140,6 +110,10 @@ class LoginResult:
     accessible_projects: list[dict[str, Any]]
     registered_projects: list[RegisteredProject]
     warnings: list[str]
+    # What a session-backed project cannot do. A property of the session this
+    # login just created, so it is always populated; the human renderer only
+    # prints it once projects have actually been registered.
+    session_unsupported_features: list[str] = field(default_factory=default_unsupported_features)
 
 
 @dataclass(frozen=True)
@@ -237,8 +211,8 @@ class AuthService:
         5. Optionally register each accessible project as a local alias.
         """
         stack_url = self._resolve_stack_url(stack)
-        notice = on_notice or (lambda _message: None)
-        prompt = on_device_prompt or (lambda _authorization: None)
+        notice = on_notice or _noop_notice
+        prompt = on_device_prompt or _noop_device_prompt
         warnings: list[str] = []
         fallback_reason = ""
         method = "device" if device_code else "pkce"
@@ -250,8 +224,7 @@ class AuthService:
                 fallback_reason = environment.reason
                 notice(f"Using device login: {environment.reason}")
 
-        client = self._auth_client_factory(stack_url)
-        try:
+        with self._auth_client_factory(stack_url) as client:
             tokens = None
             if method == "pkce":
                 try:
@@ -336,8 +309,12 @@ class AuthService:
                 # trip against a session that was only just minted.
                 candidates = self.candidates_from_projects(stack_url, accessible_projects)
                 selections = [ProjectSelection(project_id=c.project_id) for c in candidates]
-                registered_projects = self._apply_selections(
-                    stack_url, {c.project_id: c for c in candidates}, selections, warnings
+                registered_projects = apply_selections(
+                    self._config_store,
+                    stack_url,
+                    {c.project_id: c for c in candidates},
+                    selections,
+                    warnings,
                 )
 
             return LoginResult(
@@ -356,8 +333,6 @@ class AuthService:
                 registered_projects=registered_projects,
                 warnings=warnings,
             )
-        finally:
-            client.close()
 
     def _wrap_device_prompt(
         self, prompt: Callable[[DeviceAuthorization], None]
@@ -410,99 +385,13 @@ class AuthService:
     def candidates_from_projects(
         self, stack_url: str, projects: Sequence[Mapping[str, Any]]
     ) -> list[ProjectCandidate]:
-        """Turn accessible-project entries into collision-free registration candidates.
+        """Build collision-free registration candidates from accessible-project entries.
 
-        Pure and network-free: `projects` entries carry `id` / `name` / `role`
-        keys -- the exact shape of `LoginResult.accessible_projects` -- so the
-        post-login picker can run against data `login()` already fetched,
-        without a second introspect round trip. `list_project_candidates`
-        (which DOES introspect) delegates here too, so the two callers can
-        never compute a different default alias for the same project.
-
-        Default alias algorithm (processed in input order, so earlier
-        candidates in the same batch can claim aliases before later ones):
-
-        1. Already registered? Scan `config.json` for an entry whose token is
-           a session sentinel AND whose `project_id` AND (normalized)
-           `stack_url` match this project. Matching on (project_id, stack_url)
-           -- never on the alias string -- means a project someone already
-           registered under a hand-picked alias is reported as that alias
-           rather than offered a second, colliding suggestion. When found,
-           `existing_alias == default_alias` and `registered=True`.
-        2. Otherwise, slugify the project name (`project-{id}` when the name
-           slugifies to nothing, e.g. all-punctuation names).
-        3. Suffix with `-{id}`, then `-{id}-2`, `-{id}-3`, ... until a value is
-           free, where *free* means absent from `config.json` AND not already
-           claimed by an earlier candidate in this batch. This is a
-           deliberate behaviour change from the old `_register_projects`:
-           two projects sharing a name (or a name colliding with an existing
-           *static-token* project) used to collapse onto one alias and the
-           second was silently skipped with a warning; now each gets a
-           distinct, usable alias and the static project is never touched.
+        Network-free, so the post-login picker can run against the data
+        `login()` already fetched. See `_auth_registration.build_candidates`
+        for the default-alias algorithm.
         """
-        config = self._config_store.load()
-        claimed_aliases = set(config.projects.keys())
-        candidates: list[ProjectCandidate] = []
-        for project in projects:
-            project_id = int(project["id"])
-            project_name = str(project.get("name", ""))
-            role = str(project.get("role", ""))
-
-            existing_alias = self._find_registered_alias(config, stack_url, project_id)
-            if existing_alias:
-                candidates.append(
-                    ProjectCandidate(
-                        project_id=project_id,
-                        project_name=project_name,
-                        role=role,
-                        default_alias=existing_alias,
-                        existing_alias=existing_alias,
-                        registered=True,
-                    )
-                )
-                continue
-
-            base = _slugify_project_name(project_name) or f"project-{project_id}"
-            alias = self._first_free_alias(base, project_id, claimed_aliases)
-            claimed_aliases.add(alias)
-            candidates.append(
-                ProjectCandidate(
-                    project_id=project_id,
-                    project_name=project_name,
-                    role=role,
-                    default_alias=alias,
-                    existing_alias="",
-                    registered=False,
-                )
-            )
-        return candidates
-
-    @staticmethod
-    def _find_registered_alias(config: AppConfig, stack_url: str, project_id: int) -> str:
-        """Return the alias `project_id`/`stack_url` is already registered under, or ""."""
-        for alias, entry in config.projects.items():
-            if (
-                is_session_token(entry.token)
-                and entry.project_id == project_id
-                and normalize_stack_url(entry.stack_url) == stack_url
-            ):
-                return alias
-        return ""
-
-    @staticmethod
-    def _first_free_alias(base: str, project_id: int, claimed: set[str]) -> str:
-        """First of `base`, `{base}-{id}`, `{base}-{id}-2`, ... absent from `claimed`."""
-        if base not in claimed:
-            return base
-        with_id = f"{base}-{project_id}"
-        if with_id not in claimed:
-            return with_id
-        suffix = 2
-        while True:
-            candidate = f"{with_id}-{suffix}"
-            if candidate not in claimed:
-                return candidate
-            suffix += 1
+        return build_candidates(self._config_store, stack_url, projects)
 
     def _introspect_accessible_projects(self, stack_url: str) -> list[dict[str, Any]]:
         """Require a stored session for `stack_url`, then introspect it live.
@@ -542,24 +431,52 @@ class AuthService:
         return ProjectCandidatesResult(stack_url=stack_url, candidates=candidates)
 
     def register_projects(
-        self, *, stack: str | None = None, selections: Sequence[ProjectSelection]
+        self,
+        *,
+        stack: str | None = None,
+        select_all: bool = False,
+        project_ids: Sequence[int] | None = None,
+        alias_overrides: Mapping[int, str] | None = None,
+        selections: Sequence[ProjectSelection] | None = None,
     ) -> RegisterProjectsResult:
-        """Introspect, validate every selection against the accessible set, then apply.
+        """Register accessible projects as local aliases, under one of three selectors.
+
+        Exactly one selector applies and they are alternatives, never layers:
+        `select_all` takes every accessible project, `project_ids` takes those
+        ids, `selections` takes an explicit list (what the interactive picker
+        produces). `alias_overrides` (`--alias ID=ALIAS`) applies in every mode
+        and fills in an alias only where the selection does not already carry
+        one, so a picker-resolved alias is never overwritten.
+
+        Introspection happens exactly once, here, regardless of the selector:
+        the accessible set is needed both to validate the selection and to
+        compute default aliases, so no caller should pre-fetch it.
 
         Raises:
+            ConfigError: When zero or more than one selector is given (before
+                any network call), or naming the offending id when a selection
+                references a project this session cannot access -- validated
+                up front, against the full candidate set, so a bad id in a
+                batch of N never partially applies the other N-1.
             KeboolaApiError: `SESSION_NOT_FOUND` when no session exists for
                 the stack (via `_introspect_accessible_projects`).
-            ConfigError: Naming the offending id when a selection references
-                a project this session cannot access -- validated up front,
-                against the full candidate set, so a bad id in a batch of N
-                never partially applies the other N-1.
         """
+        require_single_selection_mode(
+            select_all=select_all, project_ids=project_ids, selections=selections
+        )
         stack_url = self._resolve_stack_url(stack)
         projects = self._introspect_accessible_projects(stack_url)
         candidates = self.candidates_from_projects(stack_url, projects)
         candidates_by_id = {c.project_id: c for c in candidates}
+        resolved = resolve_selections(
+            candidates,
+            select_all=select_all,
+            project_ids=project_ids,
+            selections=selections,
+            alias_overrides=alias_overrides or {},
+        )
 
-        for selection in selections:
+        for selection in resolved:
             if selection.project_id not in candidates_by_id:
                 raise ConfigError(
                     f"Project {selection.project_id} is not accessible to the current "
@@ -568,112 +485,15 @@ class AuthService:
                 )
 
         warnings: list[str] = []
-        registered = self._apply_selections(stack_url, candidates_by_id, selections, warnings)
+        registered = apply_selections(
+            self._config_store, stack_url, candidates_by_id, resolved, warnings
+        )
         return RegisterProjectsResult(
             status="ok",
             stack_url=stack_url,
             registered_projects=registered,
             warnings=warnings,
         )
-
-    def _apply_selections(
-        self,
-        stack_url: str,
-        candidates_by_id: Mapping[int, ProjectCandidate],
-        selections: Sequence[ProjectSelection],
-        warnings: list[str],
-    ) -> list[RegisteredProject]:
-        """Apply each selection: validate the alias, then register/report/skip.
-
-        Shared by `register_projects` and `login(register_projects=True)` so
-        the two entry points can never drift on the exists/skip/overwrite
-        rules. Per selection, with `alias = selection.alias or
-        candidate.default_alias`:
-
-        - `validate_alias_format` first -- rejects a hand-typed alias before
-          it is ever compared against `config.json` or written to it.
-        - Already registered (`candidate.registered`): requesting the exact
-          `existing_alias` reports `status="exists"` with no write; any other
-          alias is `status="skipped"` (never overwritten -- the existing
-          registration is the one true entry, so the fix is `project edit
-          --new-alias`, not a silent second write).
-        - Alias already taken in `config.json` by anything else (including a
-          static-token project): `status="skipped"`, never overwritten.
-        - Otherwise: `config_store.add_project` under a session-sentinel
-          token, `status="registered"`.
-
-        `self._config_store.get_project(alias)` is re-read per selection
-        (rather than once up front) so a duplicate `--alias ID=X` across two
-        different project ids in the same batch is caught against what the
-        earlier selection in this same call just wrote, not a stale snapshot.
-        """
-        registered: list[RegisteredProject] = []
-        for selection in selections:
-            candidate = candidates_by_id[selection.project_id]
-            alias = selection.alias or candidate.default_alias
-            validate_alias_format(alias, field="alias")
-
-            if candidate.registered:
-                if alias == candidate.existing_alias:
-                    registered.append(
-                        RegisteredProject(
-                            alias=alias,
-                            project_id=candidate.project_id,
-                            project_name=candidate.project_name,
-                            status="exists",
-                        )
-                    )
-                else:
-                    note = (
-                        f"Project {candidate.project_id} is already registered as "
-                        f"'{candidate.existing_alias}'; run 'kbagent project edit "
-                        f"--project {candidate.existing_alias} --new-alias {alias}' "
-                        "to rename it."
-                    )
-                    warnings.append(note)
-                    registered.append(
-                        RegisteredProject(
-                            alias=alias,
-                            project_id=candidate.project_id,
-                            project_name=candidate.project_name,
-                            status="skipped",
-                            note=note,
-                        )
-                    )
-                continue
-
-            if self._config_store.get_project(alias) is not None:
-                note = f"Alias '{alias}' already points at a different project; not overwritten."
-                warnings.append(note)
-                registered.append(
-                    RegisteredProject(
-                        alias=alias,
-                        project_id=candidate.project_id,
-                        project_name=candidate.project_name,
-                        status="skipped",
-                        note=note,
-                    )
-                )
-                continue
-
-            self._config_store.add_project(
-                alias,
-                ProjectConfig(
-                    stack_url=stack_url,
-                    token=make_session_token(candidate.project_id),
-                    project_name=candidate.project_name,
-                    project_id=candidate.project_id,
-                ),
-            )
-            registered.append(
-                RegisteredProject(
-                    alias=alias,
-                    project_id=candidate.project_id,
-                    project_name=candidate.project_name,
-                    status="registered",
-                )
-            )
-        return registered
 
     # ------------------------------------------------------------------
     # status
@@ -802,87 +622,90 @@ class AuthService:
                 retryable=False,
             )
 
-        client = self._auth_client_factory(stack_url)
         try:
-            orphans_revoked: list[str] = []
-            orphans_remaining: list[str] = list(session.orphaned_session_ids)
-            orphan_skip_reason = ""
-            if session.orphaned_session_ids:
-                access_token, orphan_skip_reason = self._try_get_live_access_token(stack_url)
-                if access_token is not None:
-                    orphans_revoked, orphans_remaining = self._retry_orphans(
-                        client, session.orphaned_session_ids, access_token
+            with self._auth_client_factory(stack_url) as client:
+                orphans_revoked: list[str] = []
+                orphans_remaining: list[str] = list(session.orphaned_session_ids)
+                orphan_skip_reason = ""
+                if session.orphaned_session_ids:
+                    live_token = self._try_get_live_access_token(stack_url)
+                    orphan_skip_reason = live_token.unavailable_reason
+                    if live_token.token is not None:
+                        outcome = self._retry_orphans(
+                            client, session.orphaned_session_ids, live_token.token
+                        )
+                        orphans_revoked = outcome.revoked
+                        orphans_remaining = outcome.remaining
+
+                revoke_result = client.revoke(session.refresh_token, token_type_hint="refreshToken")
+                detail_parts: list[str] = []
+                if orphans_remaining and orphan_skip_reason:
+                    detail_parts.append(
+                        f"Could not retry {len(orphans_remaining)} orphaned session(s): "
+                        f"{orphan_skip_reason}"
                     )
+                if not revoke_result.confirmed:
+                    detail_parts.append(
+                        f"Local credentials cleared, but the server session "
+                        f"{session.session_id} may still be active"
+                        + (f": {revoke_result.message}" if revoke_result.message else ".")
+                    )
+                detail = " ".join(detail_parts)
 
-            revoke_result = client.revoke(session.refresh_token, token_type_hint="refreshToken")
-            detail_parts: list[str] = []
-            if orphans_remaining and orphan_skip_reason:
-                detail_parts.append(
-                    f"Could not retry {len(orphans_remaining)} orphaned session(s): "
-                    f"{orphan_skip_reason}"
+                self._state_store.delete_session(stack_url)
+
+                removed_projects: list[str] = []
+                if remove_projects:
+                    config = self._config_store.load()
+                    for alias, project in list(config.projects.items()):
+                        if is_session_token(project.token) and (
+                            normalize_stack_url(project.stack_url) == stack_url
+                        ):
+                            self._config_store.remove_project(alias)
+                            removed_projects.append(alias)
+
+                return LogoutResult(
+                    status="ok",
+                    stack_url=stack_url,
+                    session_id=session.session_id,
+                    remote_revoked=revoke_result.confirmed,
+                    detail=detail,
+                    removed_projects=removed_projects,
+                    orphans_revoked=orphans_revoked,
+                    orphans_remaining=orphans_remaining,
                 )
-            if not revoke_result.confirmed:
-                detail_parts.append(
-                    f"Local credentials cleared, but the server session "
-                    f"{session.session_id} may still be active"
-                    + (f": {revoke_result.message}" if revoke_result.message else ".")
-                )
-            detail = " ".join(detail_parts)
-
-            self._state_store.delete_session(stack_url)
-
-            removed_projects: list[str] = []
-            if remove_projects:
-                config = self._config_store.load()
-                for alias, project in list(config.projects.items()):
-                    if is_session_token(project.token) and (
-                        normalize_stack_url(project.stack_url) == stack_url
-                    ):
-                        self._config_store.remove_project(alias)
-                        removed_projects.append(alias)
-
-            return LogoutResult(
-                status="ok",
-                stack_url=stack_url,
-                session_id=session.session_id,
-                remote_revoked=revoke_result.confirmed,
-                detail=detail,
-                removed_projects=removed_projects,
-                orphans_revoked=orphans_revoked,
-                orphans_remaining=orphans_remaining,
-            )
         finally:
-            client.close()
             # Any BearerAuth-backed client elsewhere in this process must stop
             # trusting its cached access token for this stack once the
             # session is gone -- drop the whole process-wide registry (test
-            # seam doubles as the production logout hook).
+            # seam doubles as the production logout hook). Outside the `with`
+            # so it still runs when closing the client raises.
             reset_provider_registry()
 
-    def _try_get_live_access_token(self, stack_url: str) -> tuple[str | None, str]:
+    def _try_get_live_access_token(self, stack_url: str) -> _LiveAccessToken:
         """Best-effort live access token for orphan cleanup during `logout`.
 
-        Returns ``(token, "")`` on success or ``(None, reason)`` when the
-        current session cannot produce one -- e.g. its own refresh token
-        already expired, or the network is down. Never raises: `logout`
-        must be able to skip orphan retries without blocking local cleanup.
+        Never raises: `logout` must be able to skip orphan retries without
+        blocking local cleanup, so a session whose own refresh token already
+        expired (or an offline machine) comes back as `token=None` plus the
+        reason.
         """
         provider = SessionTokenProvider(
             stack_url, self._state_store, client_factory=self._auth_client_factory
         )
         try:
-            return provider.get_access_token(), ""
+            return _LiveAccessToken(token=provider.get_access_token(), unavailable_reason="")
         except KeboolaApiError as exc:
-            return None, exc.message
+            return _LiveAccessToken(token=None, unavailable_reason=exc.message)
 
     @staticmethod
     def _retry_orphans(
         client: AuthClient, orphan_ids: list[str], access_token: str
-    ) -> tuple[list[str], list[str]]:
+    ) -> _OrphanRetryOutcome:
         """Attempt `AuthClient.delete_session` for each recorded orphan id.
 
-        Returns ``(revoked, remaining)``. `delete_session` never raises, so
-        this never needs to guard against an exception mid-loop.
+        `delete_session` never raises, so this never needs to guard against an
+        exception mid-loop.
         """
         revoked: list[str] = []
         remaining: list[str] = []
@@ -892,7 +715,7 @@ class AuthService:
                 revoked.append(orphan_id)
             else:
                 remaining.append(orphan_id)
-        return revoked, remaining
+        return _OrphanRetryOutcome(revoked=revoked, remaining=remaining)
 
     # ------------------------------------------------------------------
     # shared
@@ -932,6 +755,7 @@ class AuthService:
 
 
 __all__ = [
+    "SESSION_UNSUPPORTED_FEATURES",
     "AuthClientFactory",
     "AuthService",
     "AuthStatusResult",

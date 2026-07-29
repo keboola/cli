@@ -18,11 +18,12 @@ safe by construction.
 from __future__ import annotations
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, NoReturn
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -84,6 +85,14 @@ def _handle_errors(formatter: Any, exc: Exception) -> NoReturn:
 
 
 # ── Human formatters ──────────────────────────────────────────────────
+#
+# Every server-supplied string below goes through `rich.markup.escape` before
+# it reaches a Rich console: `OutputFormatter`'s Console has `markup=True`, and
+# a project name is settable by anyone with rename rights on a shared project,
+# so an unescaped `[link=...]` name would render in another admin's terminal as
+# a clickable, deceptively-labelled hyperlink. Strings handed to `typer.prompt`
+# or to the prompt_toolkit checkbox are deliberately NOT escaped -- neither
+# parses Rich markup, so escaping there would print visible backslashes.
 
 
 def _render_registered_projects_table(
@@ -105,49 +114,79 @@ def _render_registered_projects_table(
     for registered in registered_projects:
         table.add_row(
             registered.alias,
-            f"{registered.project_name} ({registered.project_id})",
+            f"{escape(registered.project_name)} ({registered.project_id})",
             registered.status,
-            registered.note,
+            escape(registered.note),
+        )
+    console.print(table)
+
+
+def _render_session_restrictions(console: Console, features: Sequence[str]) -> None:
+    """Disclose what a session-backed project cannot do, right after registering it.
+
+    Printed at registration time (rather than left to `docs/auth.md`) so the
+    v1 scope -- Storage and Manage only -- is known before the first refusal
+    instead of being discovered one failed command at a time. The same list
+    ships as `session_unsupported_features` in `--json`.
+    """
+    if not features:
+        return
+    body = "\n".join(f"- {escape(feature)}" for feature in features)
+    console.print(
+        Panel(
+            f"{body}\n\nRegister a project with a static Storage API token "
+            "('kbagent project add') to use those.",
+            title="Not available on session-backed projects",
+            expand=False,
+        )
+    )
+
+
+def _render_accessible_projects_table(console: Console, projects: Sequence[dict[str, Any]]) -> None:
+    """Render the shared "Accessible projects" table for login and status."""
+    if not projects:
+        return
+    table = Table(title="Accessible projects")
+    table.add_column("ID", justify="right")
+    table.add_column("Name")
+    table.add_column("Role")
+    for project in projects:
+        table.add_row(
+            str(project.get("id", "")),
+            escape(str(project.get("name", ""))),
+            escape(str(project.get("role", ""))),
         )
     console.print(table)
 
 
 def _format_login_result(console: Console, result: LoginResult) -> None:
     """Render a completed login: session summary, accessible/registered projects."""
+    signed_in_as = result.user_name or result.user_email or "(unknown)"
     lines = [
-        f"[bold]Stack:[/bold] {result.stack_url}",
+        f"[bold]Stack:[/bold] {escape(result.stack_url)}",
         f"[bold]Method:[/bold] {result.method}",
-        f"[bold]Signed in as:[/bold] {result.user_name or result.user_email or '(unknown)'}",
-        f"[bold]Session:[/bold] {result.session_id}",
+        f"[bold]Signed in as:[/bold] {escape(signed_in_as)}",
+        f"[bold]Session:[/bold] {escape(result.session_id)}",
         f"[bold]Access token expires:[/bold] {result.access_expires_at}",
     ]
     if result.fallback_reason:
-        lines.append(f"[dim]Fell back to device login: {result.fallback_reason}[/dim]")
+        lines.append(f"[dim]Fell back to device login: {escape(result.fallback_reason)}[/dim]")
     if result.orphaned_session_id:
         lines.append(
             f"[bold yellow]Warning:[/bold yellow] previous session "
-            f"{result.orphaned_session_id} could not be confirmed revoked -- "
+            f"{escape(result.orphaned_session_id)} could not be confirmed revoked -- "
             "`kbagent auth logout` will retry it."
         )
     console.print(Panel("\n".join(lines), title="Signed in to Keboola", expand=False))
 
-    if result.accessible_projects:
-        table = Table(title="Accessible projects")
-        table.add_column("ID", justify="right")
-        table.add_column("Name")
-        table.add_column("Role")
-        for project in result.accessible_projects:
-            table.add_row(
-                str(project.get("id", "")),
-                str(project.get("name", "")),
-                str(project.get("role", "")),
-            )
-        console.print(table)
-
+    _render_accessible_projects_table(console, result.accessible_projects)
     _render_registered_projects_table(console, result.registered_projects)
 
     for warning in result.warnings:
-        console.print(f"[bold yellow]Warning:[/bold yellow] {warning}")
+        console.print(f"[bold yellow]Warning:[/bold yellow] {escape(warning)}")
+
+    if result.registered_projects:
+        _render_session_restrictions(console, result.session_unsupported_features)
 
 
 def _format_status_result(console: Console, result: AuthStatusResult) -> None:
@@ -160,62 +199,54 @@ def _format_status_result(console: Console, result: AuthStatusResult) -> None:
         "missing": "bold red",
     }.get(result.status, "bold")
     lines = [
-        f"[bold]Stack:[/bold] {result.stack_url}",
+        f"[bold]Stack:[/bold] {escape(result.stack_url)}",
         f"[bold]Status:[/bold] [{status_style}]{result.status}[/{status_style}]",
     ]
     if result.session_id:
-        lines.append(f"[bold]Session:[/bold] {result.session_id}")
+        lines.append(f"[bold]Session:[/bold] {escape(result.session_id)}")
     if result.user_name or result.user_email:
-        lines.append(f"[bold]User:[/bold] {result.user_name or result.user_email}")
+        lines.append(f"[bold]User:[/bold] {escape(result.user_name or result.user_email)}")
     if result.access_expires_at:
         lines.append(f"[bold]Access token expires:[/bold] {result.access_expires_at}")
     if result.refresh_expires_at:
         lines.append(f"[bold]Refresh token expires:[/bold] {result.refresh_expires_at}")
     if result.detail:
-        lines.append(f"[dim]{result.detail}[/dim]")
+        lines.append(f"[dim]{escape(result.detail)}[/dim]")
     if result.orphaned_session_ids:
         lines.append(
             f"[bold yellow]Orphaned server sessions:[/bold yellow] "
-            f"{', '.join(result.orphaned_session_ids)} (retried on `kbagent auth logout`)"
+            f"{escape(', '.join(result.orphaned_session_ids))} "
+            "(retried on `kbagent auth logout`)"
         )
     console.print(Panel("\n".join(lines), title="Keboola auth status", expand=False))
 
-    if result.accessible_projects:
-        table = Table(title="Accessible projects")
-        table.add_column("ID", justify="right")
-        table.add_column("Name")
-        table.add_column("Role")
-        for project in result.accessible_projects:
-            table.add_row(
-                str(project.get("id", "")),
-                str(project.get("name", "")),
-                str(project.get("role", "")),
-            )
-        console.print(table)
+    _render_accessible_projects_table(console, result.accessible_projects)
 
 
 def _format_logout_result(console: Console, result: LogoutResult) -> None:
     """Render a logout outcome, surfacing an uncertain remote revoke distinctly."""
     if result.remote_revoked:
         console.print(
-            f"[bold green]Signed out[/bold green] of {result.stack_url} "
-            f"(session {result.session_id})."
+            f"[bold green]Signed out[/bold green] of {escape(result.stack_url)} "
+            f"(session {escape(result.session_id)})."
         )
     else:
         console.print(
-            f"[bold yellow]Local credentials cleared[/bold yellow] for {result.stack_url}, "
-            f"but the server session {result.session_id} may still be active."
+            f"[bold yellow]Local credentials cleared[/bold yellow] for "
+            f"{escape(result.stack_url)}, but the server session "
+            f"{escape(result.session_id)} may still be active."
         )
     if result.detail and not result.remote_revoked:
-        console.print(f"[dim]{result.detail}[/dim]")
+        console.print(f"[dim]{escape(result.detail)}[/dim]")
     if result.orphans_revoked:
         console.print(
-            f"[dim]Also revoked orphaned session(s): {', '.join(result.orphans_revoked)}[/dim]"
+            f"[dim]Also revoked orphaned session(s): "
+            f"{escape(', '.join(result.orphans_revoked))}[/dim]"
         )
     if result.orphans_remaining:
         console.print(
             f"[bold yellow]Could not confirm revocation of orphaned session(s):[/bold yellow] "
-            f"{', '.join(result.orphans_remaining)}"
+            f"{escape(', '.join(result.orphans_remaining))}"
         )
     if result.removed_projects:
         console.print(f"[dim]Removed project alias(es): {', '.join(result.removed_projects)}[/dim]")
@@ -228,7 +259,9 @@ def _format_register_projects_result(console: Console, result: RegisterProjectsR
     else:
         _render_registered_projects_table(console, result.registered_projects)
     for warning in result.warnings:
-        console.print(f"[bold yellow]Warning:[/bold yellow] {warning}")
+        console.print(f"[bold yellow]Warning:[/bold yellow] {escape(warning)}")
+    if result.registered_projects:
+        _render_session_restrictions(console, result.session_unsupported_features)
 
 
 # ── Commands ──────────────────────────────────────────────────────────
@@ -260,7 +293,7 @@ def auth_login(
     When `--register-projects` is NOT passed and the session can see at
     least one project, a post-login hook offers to run the interactive
     picker right away (TTY + human mode) or otherwise prints a one-line
-    hint pointing at `auth register-projects` -- see `_run_post_login_hook`.
+    hint -- see `kbagent auth register-projects --help`.
     """
     formatter = get_formatter(ctx)
     service: AuthService = get_service(ctx, "auth_service")
@@ -270,16 +303,16 @@ def auth_login(
         lines = [
             "Open this URL and enter the code to finish signing in:",
             "",
-            f"[bold]{authorization.verification_uri}[/bold]",
+            f"[bold]{escape(authorization.verification_uri)}[/bold]",
             "",
-            f"Code: [bold yellow]{authorization.user_code}[/bold yellow]",
+            f"Code: [bold yellow]{escape(authorization.user_code)}[/bold yellow]",
         ]
         target_console.print(
             Panel("\n".join(lines), title="Keboola CLI device login", expand=False)
         )
 
     def _on_notice(message: str) -> None:
-        target_console.print(f"[dim]{message}[/dim]")
+        target_console.print(f"[dim]{escape(message)}[/dim]")
 
     try:
         result = service.login(
@@ -330,19 +363,19 @@ def _run_post_login_hook(
             return
 
         candidates = service.candidates_from_projects(result.stack_url, result.accessible_projects)
-        formatter.console.print(f"\n[bold]Accessible projects on {result.stack_url}[/bold]\n")
+        formatter.console.print(
+            f"\n[bold]Accessible projects on {escape(result.stack_url)}[/bold]\n"
+        )
         selections = run_project_picker(formatter.console, candidates)
         if not selections:
             formatter.console.print("No projects selected.")
             return
 
         register_result = service.register_projects(stack=result.stack_url, selections=selections)
-        _render_registered_projects_table(formatter.console, register_result.registered_projects)
-        for warning in register_result.warnings:
-            formatter.console.print(f"[bold yellow]Warning:[/bold yellow] {warning}")
+        _format_register_projects_result(formatter.console, register_result)
     except (ConfigError, KeboolaApiError, typer.Abort) as exc:
         detail = getattr(exc, "message", "") or str(exc)
-        suffix = f": {detail}" if detail else "."
+        suffix = f": {escape(detail)}" if detail else "."
         target_console.print(
             f"[bold yellow]Warning:[/bold yellow] Could not register projects{suffix}"
         )
@@ -467,57 +500,65 @@ def auth_register_projects(
     except ConfigError as exc:
         _handle_errors(formatter, exc)
 
-    selections: list[ProjectSelection]
-    if all_projects:
-        # Needs the live candidate set (that IS the selection); --project-id
-        # below deliberately skips this call -- see its comment.
-        try:
-            candidates_result = service.list_project_candidates(stack=stack)
-        except (ConfigError, KeboolaApiError) as exc:
-            _handle_errors(formatter, exc)
-        selections = [
-            ProjectSelection(project_id=c.project_id, alias=alias_overrides.get(c.project_id, ""))
-            for c in candidates_result.candidates
-        ]
-    elif project_id:
-        # No upfront introspection here -- `register_projects` already does
-        # its own (it must, to validate + apply), so calling
-        # `list_project_candidates` first would introspect twice for no
-        # benefit. An id this session cannot access is NOT filtered out
-        # here either: the service raises ConfigError naming the offending
-        # id, which is more useful than a silent skip.
-        selections = [
-            ProjectSelection(project_id=pid, alias=alias_overrides.get(pid, ""))
-            for pid in project_id
-        ]
-    else:
-        if formatter.json_mode or not _is_stdout_tty():
-            _handle_errors(
-                formatter,
-                ConfigError(
-                    "No selection given and no terminal available for the interactive "
-                    "picker. Pass --all or --project-id (repeatable)."
-                ),
-            )
-        try:
-            candidates_result = service.list_project_candidates(stack=stack)
-        except (ConfigError, KeboolaApiError) as exc:
-            _handle_errors(formatter, exc)
-        formatter.console.print(
-            f"\n[bold]Accessible projects on {candidates_result.stack_url}[/bold]\n"
-        )
-        selections = run_project_picker(
-            formatter.console,
-            candidates_result.candidates,
-            alias_overrides=alias_overrides,
-            assume_yes=yes,
-        )
-        if not selections:
-            formatter.console.print("No projects selected.")
-            raise typer.Exit(code=0)
-
+    # Which selector wins, and whether the accessible set has to be fetched at
+    # all, is the service's decision (`AuthService.register_projects`). What
+    # stays here is the interactive branch: the picker needs the candidate list
+    # in hand, and it cannot run without a real terminal.
     try:
-        result = service.register_projects(stack=stack, selections=selections)
+        if all_projects or project_id:
+            result = service.register_projects(
+                stack=stack,
+                select_all=all_projects,
+                project_ids=project_id or None,
+                alias_overrides=alias_overrides,
+            )
+        else:
+            selections = _pick_projects_interactively(
+                formatter, service, stack=stack, alias_overrides=alias_overrides, assume_yes=yes
+            )
+            result = service.register_projects(
+                stack=stack, selections=selections, alias_overrides=alias_overrides
+            )
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
     formatter.output(result, _format_register_projects_result)
+
+
+def _pick_projects_interactively(
+    formatter: OutputFormatter,
+    service: AuthService,
+    *,
+    stack: str | None,
+    alias_overrides: Mapping[int, str],
+    assume_yes: bool,
+) -> list[ProjectSelection]:
+    """Run the arrow-key picker over the session's accessible projects.
+
+    Exits 0 when nothing is selected -- an empty picker result is a deliberate
+    "never mind", not an error. A piped stdout or `--json` invocation has no
+    terminal to drive the picker with, which is a usage problem the caller must
+    fix by passing `--all` or `--project-id`, so it fails fast instead of
+    hanging on a prompt nobody can answer.
+    """
+    if formatter.json_mode or not _is_stdout_tty():
+        _handle_errors(
+            formatter,
+            ConfigError(
+                "No selection given and no terminal available for the interactive "
+                "picker. Pass --all or --project-id (repeatable)."
+            ),
+        )
+    candidates_result = service.list_project_candidates(stack=stack)
+    formatter.console.print(
+        f"\n[bold]Accessible projects on {escape(candidates_result.stack_url)}[/bold]\n"
+    )
+    selections = run_project_picker(
+        formatter.console,
+        candidates_result.candidates,
+        alias_overrides=alias_overrides,
+        assume_yes=assume_yes,
+    )
+    if not selections:
+        formatter.console.print("No projects selected.")
+        raise typer.Exit(code=0)
+    return selections

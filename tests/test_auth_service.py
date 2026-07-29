@@ -36,7 +36,11 @@ from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services import auth_service as svc_mod
-from keboola_agent_cli.services.auth_service import AuthService
+from keboola_agent_cli.services.auth_service import (
+    SESSION_UNSUPPORTED_FEATURES,
+    AuthService,
+    ProjectSelection,
+)
 
 STACK_URL = "https://connection.keboola.com"
 ALIAS = "padak"
@@ -935,3 +939,170 @@ class TestLogout:
         service.logout(stack=STACK_URL)
 
         assert calls == [None]
+
+
+# ----------------------------------------------------------------------------
+# register_projects -- selection modes
+# ----------------------------------------------------------------------------
+
+
+class TestRegisterProjectsSelectionModes:
+    """The three selectors of `AuthService.register_projects`.
+
+    Which selector applies (and whether the accessible set has to be fetched)
+    is a service decision, so it is pinned here rather than through the command
+    layer. `test_auth_register_projects.py` covers the `selections` mode's
+    exists/skip/overwrite rules in depth; these tests cover mode dispatch.
+    """
+
+    def _service(self, store, state_store, projects):
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        client.introspect_response = _introspect(projects=projects)
+        return _make_service(store, state_store, client), client
+
+    def _two_projects(self) -> list[AuthProject]:
+        return [
+            AuthProject(id=101, name="Prod Project", role="admin"),
+            AuthProject(id=202, name="Dev Project", role="guest"),
+        ]
+
+    def test_select_all_registers_every_accessible_project(self, store, state_store) -> None:
+        service, client = self._service(store, state_store, self._two_projects())
+
+        result = service.register_projects(stack=STACK_URL, select_all=True)
+
+        assert [r.project_id for r in result.registered_projects] == [101, 202]
+        assert [r.alias for r in result.registered_projects] == ["prod-project", "dev-project"]
+        assert all(r.status == "registered" for r in result.registered_projects)
+        # One introspect for the whole call, regardless of the selector.
+        assert [name for name, _ in client.calls] == ["introspect"]
+
+    def test_project_ids_registers_only_those_ids(self, store, state_store) -> None:
+        service, client = self._service(store, state_store, self._two_projects())
+
+        result = service.register_projects(stack=STACK_URL, project_ids=[202])
+
+        assert [r.project_id for r in result.registered_projects] == [202]
+        assert store.get_project("prod-project") is None
+        assert store.get_project("dev-project") is not None
+        # `--project-id` must not cost a second introspection round trip.
+        assert [name for name, _ in client.calls] == ["introspect"]
+
+    def test_unknown_project_id_raises_config_error_and_writes_nothing(
+        self, store, state_store
+    ) -> None:
+        service, _client = self._service(store, state_store, self._two_projects())
+
+        with pytest.raises(ConfigError, match="9999"):
+            service.register_projects(stack=STACK_URL, project_ids=[101, 9999])
+
+        # Validated up front against the full candidate set, so the valid id in
+        # the same batch must not have been partially applied.
+        assert store.get_project("prod-project") is None
+
+    def test_explicit_selections_are_used_verbatim(self, store, state_store) -> None:
+        service, _client = self._service(store, state_store, self._two_projects())
+
+        result = service.register_projects(
+            stack=STACK_URL, selections=[ProjectSelection(project_id=101, alias="picked")]
+        )
+
+        assert [r.alias for r in result.registered_projects] == ["picked"]
+        assert store.get_project("picked") is not None
+
+    def test_alias_overrides_apply_to_select_all(self, store, state_store) -> None:
+        service, _client = self._service(store, state_store, self._two_projects())
+
+        result = service.register_projects(
+            stack=STACK_URL, select_all=True, alias_overrides={202: "dev"}
+        )
+
+        aliases = {r.project_id: r.alias for r in result.registered_projects}
+        assert aliases == {101: "prod-project", 202: "dev"}
+
+    def test_alias_overrides_apply_to_project_ids(self, store, state_store) -> None:
+        service, _client = self._service(store, state_store, self._two_projects())
+
+        result = service.register_projects(
+            stack=STACK_URL, project_ids=[101], alias_overrides={101: "prod"}
+        )
+
+        assert [r.alias for r in result.registered_projects] == ["prod"]
+
+    def test_an_alias_already_on_the_selection_wins_over_an_override(
+        self, store, state_store
+    ) -> None:
+        """The picker resolves aliases itself, so its answer must not be overwritten."""
+        service, _client = self._service(store, state_store, self._two_projects())
+
+        result = service.register_projects(
+            stack=STACK_URL,
+            selections=[ProjectSelection(project_id=101, alias="from-picker")],
+            alias_overrides={101: "from-flag"},
+        )
+
+        assert [r.alias for r in result.registered_projects] == ["from-picker"]
+
+    def test_two_selectors_together_raise_before_any_network_call(self, store, state_store) -> None:
+        service, client = self._service(store, state_store, self._two_projects())
+
+        with pytest.raises(ConfigError, match="mutually exclusive"):
+            service.register_projects(stack=STACK_URL, select_all=True, project_ids=[101])
+
+        assert client.calls == []
+
+    def test_no_selector_raises_before_any_network_call(self, store, state_store) -> None:
+        service, client = self._service(store, state_store, self._two_projects())
+
+        with pytest.raises(ConfigError, match="No project selection given"):
+            service.register_projects(stack=STACK_URL)
+
+        assert client.calls == []
+
+    def test_result_discloses_the_session_restrictions(self, store, state_store) -> None:
+        service, _client = self._service(store, state_store, self._two_projects())
+
+        result = service.register_projects(stack=STACK_URL, select_all=True)
+
+        assert result.session_unsupported_features == list(SESSION_UNSUPPORTED_FEATURES)
+
+
+# ----------------------------------------------------------------------------
+# logout helper return shapes
+# ----------------------------------------------------------------------------
+
+
+class TestLogoutHelperResults:
+    """The two logout helpers return named fields, not positional tuples."""
+
+    def test_live_access_token_carries_the_token_on_success(self, store, state_store) -> None:
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        service = _make_service(store, state_store, _FakeAuthClient())
+
+        outcome = service._try_get_live_access_token(STACK_URL)
+
+        assert outcome.token == "old-at"
+        assert outcome.unavailable_reason == ""
+
+    def test_live_access_token_carries_the_reason_on_failure(self, store, state_store) -> None:
+        service = _make_service(store, state_store, _FakeAuthClient())
+
+        outcome = service._try_get_live_access_token(STACK_URL)
+
+        assert outcome.token is None
+        assert outcome.unavailable_reason != ""
+
+    def test_orphan_retry_outcome_splits_revoked_from_remaining(self, store, state_store) -> None:
+        class _PartialClient(_FakeAuthClient):
+            def delete_session(self, session_id: str, access_token: str) -> RevokeResult:
+                self.calls.append(("delete_session", (session_id, access_token)))
+                return RevokeResult(confirmed=session_id == "gone")
+
+        client = _PartialClient()
+        service = _make_service(store, state_store, client)
+
+        outcome = service._retry_orphans(client, ["gone", "stuck"], "at-1")  # ty: ignore[invalid-argument-type]
+
+        assert outcome.revoked == ["gone"]
+        assert outcome.remaining == ["stuck"]

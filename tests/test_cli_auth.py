@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -19,6 +20,7 @@ from keboola_agent_cli.constants import EXIT_PERMISSION_DENIED
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.permissions import OPERATION_REGISTRY
 from keboola_agent_cli.services.auth_service import (
+    SESSION_UNSUPPORTED_FEATURES,
     AuthStatusResult,
     LoginResult,
     LogoutResult,
@@ -40,8 +42,8 @@ def _invoke(config_dir: Path, svc: MagicMock, args: list[str], input_text: str |
         return runner.invoke(app, ["--config-dir", str(config_dir), *args], input=input_text)
 
 
-def _login_result(**overrides: object) -> LoginResult:
-    defaults: dict[str, object] = {
+def _login_result(**overrides: Any) -> LoginResult:
+    defaults: dict[str, Any] = {
         "status": "ok",
         "method": "device",
         "stack_url": STACK_URL,
@@ -61,8 +63,8 @@ def _login_result(**overrides: object) -> LoginResult:
     return LoginResult(**defaults)  # type: ignore[arg-type]
 
 
-def _status_result(**overrides: object) -> AuthStatusResult:
-    defaults: dict[str, object] = {
+def _status_result(**overrides: Any) -> AuthStatusResult:
+    defaults: dict[str, Any] = {
         "status": "live",
         "stack_url": STACK_URL,
         "session_id": "sess-1",
@@ -78,8 +80,8 @@ def _status_result(**overrides: object) -> AuthStatusResult:
     return AuthStatusResult(**defaults)  # type: ignore[arg-type]
 
 
-def _logout_result(**overrides: object) -> LogoutResult:
-    defaults: dict[str, object] = {
+def _logout_result(**overrides: Any) -> LogoutResult:
+    defaults: dict[str, Any] = {
         "status": "ok",
         "stack_url": STACK_URL,
         "session_id": "sess-1",
@@ -93,8 +95,8 @@ def _logout_result(**overrides: object) -> LogoutResult:
     return LogoutResult(**defaults)  # type: ignore[arg-type]
 
 
-def _candidate(**overrides: object) -> ProjectCandidate:
-    defaults: dict[str, object] = {
+def _candidate(**overrides: Any) -> ProjectCandidate:
+    defaults: dict[str, Any] = {
         "project_id": 9840,
         "project_name": "Jirka BQ SOX",
         "role": "admin",
@@ -106,8 +108,8 @@ def _candidate(**overrides: object) -> ProjectCandidate:
     return ProjectCandidate(**defaults)  # type: ignore[arg-type]
 
 
-def _register_result(**overrides: object) -> RegisterProjectsResult:
-    defaults: dict[str, object] = {
+def _register_result(**overrides: Any) -> RegisterProjectsResult:
+    defaults: dict[str, Any] = {
         "status": "ok",
         "stack_url": STACK_URL,
         "registered_projects": [],
@@ -499,17 +501,16 @@ class TestLogout:
 
 
 class TestRegisterProjects:
-    def test_all_selects_every_candidate(self, tmp_path: Path) -> None:
+    def test_all_delegates_selection_to_the_service(self, tmp_path: Path) -> None:
+        """`--all` hands `select_all=True` over; the command never builds the list.
+
+        Selecting every accessible project needs the accessible set, which only
+        the service can fetch -- so the command must not pre-fetch candidates
+        just to turn them into selections.
+        """
         config_dir = tmp_path / "c"
         config_dir.mkdir()
         svc = MagicMock()
-        candidates = [
-            _candidate(project_id=9840, default_alias="jirka-bq-sox"),
-            _candidate(project_id=1234, project_name="Demo", default_alias="demo"),
-        ]
-        svc.list_project_candidates.return_value = ProjectCandidatesResult(
-            stack_url=STACK_URL, candidates=candidates
-        )
         svc.register_projects.return_value = _register_result(
             registered_projects=[
                 RegisteredProject(
@@ -525,9 +526,12 @@ class TestRegisterProjects:
         )
         result = _invoke(config_dir, svc, ["--json", "auth", "register-projects", "--all"])
         assert result.exit_code == 0, result.output
-        selections = svc.register_projects.call_args.kwargs["selections"]
-        assert {s.project_id for s in selections} == {9840, 1234}
-        assert all(s.alias == "" for s in selections)
+        kwargs = svc.register_projects.call_args.kwargs
+        assert kwargs["select_all"] is True
+        assert kwargs["project_ids"] is None
+        assert kwargs["alias_overrides"] == {}
+        assert "selections" not in kwargs
+        svc.list_project_candidates.assert_not_called()
 
     def test_project_id_repeatable(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
@@ -548,8 +552,9 @@ class TestRegisterProjects:
             ],
         )
         assert result.exit_code == 0, result.output
-        selections = svc.register_projects.call_args.kwargs["selections"]
-        assert [s.project_id for s in selections] == [9840, 1234]
+        kwargs = svc.register_projects.call_args.kwargs
+        assert kwargs["project_ids"] == [9840, 1234]
+        assert kwargs["select_all"] is False
         # --project-id must not trigger a redundant introspection round trip --
         # `register_projects` already introspects and validates internally.
         svc.list_project_candidates.assert_not_called()
@@ -598,10 +603,9 @@ class TestRegisterProjects:
             ],
         )
         assert result.exit_code == 0, result.output
-        selections = svc.register_projects.call_args.kwargs["selections"]
-        assert selections == [svc.register_projects.call_args.kwargs["selections"][0]]
-        assert selections[0].project_id == 9840
-        assert selections[0].alias == "my-alias"
+        kwargs = svc.register_projects.call_args.kwargs
+        assert kwargs["project_ids"] == [9840]
+        assert kwargs["alias_overrides"] == {9840: "my-alias"}
 
     def test_invalid_alias_override_exits_5(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
@@ -787,3 +791,154 @@ class TestHelp:
         assert "status" in result.output
         assert "logout" in result.output
         assert "register-projects" in result.output
+
+    def test_login_help_does_not_name_a_private_symbol(self, tmp_path: Path) -> None:
+        """Help text is user-facing: it must point at a runnable command."""
+        result = runner.invoke(app, ["auth", "login", "--help"])
+        assert result.exit_code == 0
+        assert "_run_post_login_hook" not in result.output
+
+
+class TestServerControlledStringsAreNotMarkup:
+    """Project / user strings come from the stack, so they must render literally.
+
+    `OutputFormatter`'s Console has `markup=True`, and a project name is
+    settable by anyone with rename rights on a shared project -- an unescaped
+    `[link=...]` name would render as a clickable, deceptively-labelled
+    hyperlink in another admin's terminal during their own `auth status` run.
+    """
+
+    HOSTILE = "[link=https://phish.example]Payroll[/link]"
+
+    def test_status_accessible_projects_table_escapes_name_and_role(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.status.return_value = _status_result(
+            accessible_projects=[{"id": 101, "name": self.HOSTILE, "role": "[blink]admin"}]
+        )
+        result = _invoke(config_dir, svc, ["auth", "status"])
+        assert result.exit_code == 0, result.output
+        assert self.HOSTILE in result.output
+        assert "[blink]admin" in result.output
+
+    def test_status_panel_escapes_the_user_name(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.status.return_value = _status_result(user_name="[red]Not Really Admin[/red]")
+        result = _invoke(config_dir, svc, ["auth", "status"])
+        assert result.exit_code == 0, result.output
+        assert "[red]Not Really Admin[/red]" in result.output
+
+    def test_login_panel_escapes_the_user_name(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result(
+            user_name="[red]Not Really Admin[/red]", accessible_projects=[]
+        )
+        result = _invoke(config_dir, svc, ["auth", "login", "--device-code"])
+        assert result.exit_code == 0, result.output
+        assert "[red]Not Really Admin[/red]" in result.output
+
+    def test_registered_projects_table_escapes_the_project_name(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.register_projects.return_value = _register_result(
+            registered_projects=[
+                RegisteredProject(
+                    alias="payroll", project_id=9840, project_name=self.HOSTILE, status="registered"
+                )
+            ]
+        )
+        result = _invoke(config_dir, svc, ["auth", "register-projects", "--all"])
+        assert result.exit_code == 0, result.output
+        assert self.HOSTILE in result.output
+
+    def test_logout_detail_from_the_server_is_escaped(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.logout.return_value = _logout_result(
+            remote_revoked=False, detail="server said [red]nope[/red]"
+        )
+        result = _invoke(config_dir, svc, ["auth", "logout", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert "[red]nope[/red]" in result.output
+
+
+class TestSessionRestrictionDisclosure:
+    """The v1 restrictions must be stated at registration time, not on first failure."""
+
+    def _registered(self) -> list[RegisteredProject]:
+        return [
+            RegisteredProject(
+                alias="payroll", project_id=9840, project_name="Payroll", status="registered"
+            )
+        ]
+
+    def test_register_projects_human_output_lists_the_restrictions(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.register_projects.return_value = _register_result(
+            registered_projects=self._registered()
+        )
+        result = _invoke(config_dir, svc, ["auth", "register-projects", "--all"])
+        assert result.exit_code == 0, result.output
+        assert "Not available on session-backed projects" in result.output
+        assert "kbagent kai" in result.output
+
+    def test_register_projects_json_carries_the_list(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.register_projects.return_value = _register_result(
+            registered_projects=self._registered()
+        )
+        result = _invoke(config_dir, svc, ["--json", "auth", "register-projects", "--all"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)["data"]
+        assert data["session_unsupported_features"] == list(SESSION_UNSUPPORTED_FEATURES)
+
+    def test_nothing_registered_prints_no_restriction_panel(self, tmp_path: Path) -> None:
+        """Nothing was registered, so there is no session project to warn about."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.register_projects.return_value = _register_result(registered_projects=[])
+        result = _invoke(config_dir, svc, ["auth", "register-projects", "--all"])
+        assert result.exit_code == 0, result.output
+        assert "Not available on session-backed projects" not in result.output
+
+    def test_login_with_register_projects_lists_the_restrictions(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result(registered_projects=self._registered())
+        result = _invoke(config_dir, svc, ["auth", "login", "--device-code", "--register-projects"])
+        assert result.exit_code == 0, result.output
+        assert "Not available on session-backed projects" in result.output
+
+    def test_login_json_carries_the_list(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result(registered_projects=self._registered())
+        result = _invoke(
+            config_dir, svc, ["--json", "auth", "login", "--device-code", "--register-projects"]
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)["data"]
+        assert data["session_unsupported_features"] == list(SESSION_UNSUPPORTED_FEATURES)
+
+    def test_plain_login_without_registering_prints_no_panel(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result(accessible_projects=[])
+        result = _invoke(config_dir, svc, ["auth", "login", "--device-code"])
+        assert result.exit_code == 0, result.output
+        assert "Not available on session-backed projects" not in result.output
