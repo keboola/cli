@@ -1805,7 +1805,7 @@ class TestFullE2E:
             "--config-id",
             config_id,
             "--set",
-            "parameters.db.timeout=15",
+            "parameters.audit_probe=1",
             "--change-description",
             change_desc,
             "--dry-run",
@@ -1823,7 +1823,7 @@ class TestFullE2E:
             "--config-id",
             config_id,
             "--set",
-            "parameters.db.timeout=15",
+            "parameters.audit_probe=1",
             "--change-description",
             change_desc,
         )
