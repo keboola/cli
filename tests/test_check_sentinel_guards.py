@@ -183,6 +183,54 @@ def cmd(service, alias, token):
         root = _tree(tmp_path, **{"config_store.py": _UNGUARDED_KEYWORD_WRITE})
         assert _mod._unguarded_credential_writers(root) == []
 
+    @pytest.mark.parametrize(
+        ("label", "init"),
+        [
+            ("annotated parameter", "def __init__(self, config_store: ConfigStore) -> None:"),
+            ("unannotated parameter", "def __init__(self, config_store):"),
+        ],
+    )
+    def test_a_config_store_held_under_an_unconventional_name_is_still_seen(
+        self, tmp_path: Path, label: str, init: str
+    ) -> None:
+        """`CONFIG_STORE_RECEIVERS` is a naming convention, not a fact about the object.
+
+        A future `self._cfg = config_store` is an ordinary naming choice, not an
+        attempt to evade the gate, and byte-identical unsafe logic must not become
+        invisible because of it.
+        """
+        source = f"""
+class NewService:
+    {init}
+        self._cfg = config_store
+
+    def refresh(self, alias, token):
+        self._cfg.edit_project(alias, token=token)
+"""
+        root = _tree(tmp_path, **{"services/new_service.py": source})
+        offenders = _mod._unguarded_credential_writers(root)
+        assert len(offenders) == 1, f"{label} went undetected"
+        assert "(in refresh)" in offenders[0]
+
+    def test_an_unconventionally_named_store_that_is_guarded_stays_clean(
+        self, tmp_path: Path
+    ) -> None:
+        source = """
+from ..auth.sentinel import is_session_token
+
+
+class NewService:
+    def __init__(self, config_store: ConfigStore) -> None:
+        self._cfg = config_store
+
+    def refresh(self, alias, token):
+        if is_session_token(token):
+            return
+        self._cfg.edit_project(alias, token=token)
+"""
+        root = _tree(tmp_path, **{"services/new_service.py": source})
+        assert _mod._unguarded_credential_writers(root) == []
+
 
 # --------------------------------------------------------------------------
 # Check 4 -- Storage clients built from a project credential
@@ -230,6 +278,38 @@ def build(stack_url, provider, project_id):
         root = _tree(tmp_path, **{"services/bearer_service.py": source})
         assert _mod._unguarded_project_clients(root) == []
 
+    def test_an_import_alias_does_not_hide_the_construction(self, tmp_path: Path) -> None:
+        """`KeboolaClient as _Storage` still constructs a `KeboolaClient`."""
+        root = _tree(
+            tmp_path,
+            **{
+                "client/_client.py": "class KeboolaClient(BaseHttpClient):\n    pass\n",
+                "services/rogue_service.py": (
+                    "from ..client import KeboolaClient as _Storage\n\n\n"
+                    "def _client_for(project):\n"
+                    "    return _Storage(project.stack_url, project.token)\n"
+                ),
+            },
+        )
+        offenders = _mod._unguarded_project_clients(root)
+        assert len(offenders) == 1
+        assert "rogue_service.py" in offenders[0]
+
+    def test_a_subclass_construction_is_the_same_finding(self, tmp_path: Path) -> None:
+        """A subclass puts the same credential on the same wire."""
+        root = _tree(
+            tmp_path,
+            **{
+                "client/_client.py": "class KeboolaClient(BaseHttpClient):\n    pass\n",
+                "client/sub.py": "class ProjectStorage(KeboolaClient):\n    pass\n",
+                "services/rogue_service.py": (
+                    "def _client_for(project):\n"
+                    "    return ProjectStorage(project.stack_url, project.token)\n"
+                ),
+            },
+        )
+        assert len(_mod._unguarded_project_clients(root)) == 1
+
     def test_a_manage_client_is_not_a_project_credential_risk(self, tmp_path: Path) -> None:
         """A manage token is never a sentinel, so its construction is out of scope."""
         source = """
@@ -272,6 +352,34 @@ class ManageClient(BaseHttpClient):
 """
         root = _tree(tmp_path, **{"manage_client.py": source})
         assert _mod._undecided_clients(root) == []
+
+    def test_a_bearer_capable_subclass_inherits_the_decision(self, tmp_path: Path) -> None:
+        """Behaviour is inherited, so the decision about it is too."""
+        root = _tree(
+            tmp_path,
+            **{
+                "client/_core.py": "class _CoreClient(BaseHttpClient):\n    pass\n",
+                "client/_client.py": "class KeboolaClient(_CoreClient):\n    pass\n",
+                "client/sub.py": "class ProjectStorage(KeboolaClient):\n    pass\n",
+            },
+        )
+        assert _mod._undecided_clients(root) == []
+
+    def test_an_indirect_subclass_of_an_undecided_client_still_needs_a_decision(
+        self, tmp_path: Path
+    ) -> None:
+        """Check 2 read only the immediate base, so a two-step chain slipped past."""
+        root = _tree(
+            tmp_path,
+            **{
+                "thing_client.py": (
+                    'class ThingClient(BaseHttpClient):\n    SESSION_AUTH_FEATURE = "Thing"\n'
+                ),
+                "other_client.py": "class OtherClient(ThingClient):\n    pass\n",
+            },
+        )
+        offenders = _mod._undecided_clients(root)
+        assert [o for o in offenders if "OtherClient" in o]
 
     def test_an_unrelated_class_is_ignored(self, tmp_path: Path) -> None:
         source = """

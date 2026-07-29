@@ -155,6 +155,67 @@ def _receiver_source(node: ast.Call) -> str:
 
 CONFIG_STORE_RECEIVERS = ("config_store", "store", "_store")
 
+# Type name whose holders count as a config store however the attribute is spelled.
+CONFIG_STORE_TYPE = "ConfigStore"
+
+
+def _alias_map(tree: ast.AST) -> dict[str, str]:
+    """Local name -> original name for every import in the module.
+
+    Check 4 compares a constructor call against a set of class names, so an
+    ``import ... as`` would otherwise hide the construction behind a name the set
+    does not contain: `KeboolaClient as _Storage` is still a `KeboolaClient`.
+    """
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom | ast.Import):
+            for name in node.names:
+                if name.asname:
+                    aliases[name.asname] = name.name.rsplit(".", 1)[-1]
+    return aliases
+
+
+def _config_store_holders(tree: ast.AST) -> set[str]:
+    """Rendered receivers known to hold a `ConfigStore`, by type rather than by name.
+
+    A receiver whose attribute name happens not to contain "store"
+    (`self._cfg = config_store`) is invisible to `CONFIG_STORE_RECEIVERS`, which
+    is a naming convention, not a fact about the object. This resolves the two
+    ways the codebase actually acquires one: a parameter annotated `ConfigStore`,
+    and an attribute assigned from such a parameter or from a direct
+    `ConfigStore(...)` construction.
+    """
+    holders: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            args = node.args
+            typed_params = {
+                arg.arg
+                for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs]
+                if isinstance(arg.annotation, ast.Name | ast.Constant)
+                and CONFIG_STORE_TYPE in ast.unparse(arg.annotation)
+            }
+            holders |= typed_params
+            for stmt in ast.walk(node):
+                if not isinstance(stmt, ast.Assign):
+                    continue
+                value = stmt.value
+                from_param = isinstance(value, ast.Name) and (
+                    value.id in typed_params
+                    # An unannotated parameter still betrays itself by name; the
+                    # repo annotates everything, but the check must not depend on
+                    # that to notice a credential write.
+                    or any(marker in value.id for marker in CONFIG_STORE_RECEIVERS)
+                )
+                from_construction = (
+                    isinstance(value, ast.Call) and _call_name(value) == CONFIG_STORE_TYPE
+                )
+                if not (from_param or from_construction):
+                    continue
+                for target in stmt.targets:
+                    holders.add(ast.unparse(target))
+    return holders
+
 
 def _parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
     """child -> parent for the whole tree; `ast` keeps no upward links."""
@@ -272,11 +333,13 @@ def _unguarded_credential_writers(root: Path = SRC_ROOT) -> list[str]:
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
         parents = _parent_map(tree)
+        holders = _config_store_holders(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or _call_name(node) not in CREDENTIAL_WRITERS:
                 continue
             receiver = _receiver_source(node)
-            if not any(marker in receiver for marker in CONFIG_STORE_RECEIVERS):
+            named_like_a_store = any(marker in receiver for marker in CONFIG_STORE_RECEIVERS)
+            if not named_like_a_store and receiver not in holders:
                 continue
             if _scope_is_sentinel_aware(node, parents, source):
                 continue
@@ -300,12 +363,20 @@ def _unguarded_project_clients(root: Path = SRC_ROOT) -> list[str]:
     `token=""` is the bearer branch's own construction and is not a finding.
     """
     offenders = []
+    # A subclass constructs the same wire behaviour as its base, so a
+    # `class ProjectStorage(KeboolaClient)` built from `project.token` is the very
+    # same finding under a different name.
+    credential_clients = _descendants_of(root, set(PROJECT_CREDENTIAL_CLIENTS))
     for path in _py_files(root):
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
         parents = _parent_map(tree)
+        aliases = _alias_map(tree)
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or _call_name(node) not in PROJECT_CREDENTIAL_CLIENTS:
+            if not isinstance(node, ast.Call):
+                continue
+            called = _call_name(node)
+            if aliases.get(called, called) not in credential_clients:
                 continue
             token_args = [kw.value for kw in node.keywords if kw.arg == "token"]
             if token_args and all(
@@ -322,19 +393,54 @@ def _unguarded_project_clients(root: Path = SRC_ROOT) -> list[str]:
 def _undecided_clients(root: Path = SRC_ROOT) -> list[str]:
     """Check 2: BaseHttpClient subclasses that never decided about sessions."""
     offenders = []
+    http_clients = _descendants_of(root, {"BaseHttpClient"})
+    settled = _descendants_of(root, set(BEARER_CAPABLE_CLIENTS))
     for path in _py_files(root):
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        aliases = _alias_map(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
             bases = {getattr(b, "id", getattr(b, "attr", "")) for b in node.bases}
-            if "BaseHttpClient" not in bases:
+            bases = {aliases.get(base, base) for base in bases}
+            # Transitively: a class inheriting from `KeboolaClient` inherits the
+            # same bearer-vs-sentinel behaviour as one inheriting `BaseHttpClient`
+            # directly, so it needs a decision just the same.
+            if not (bases & http_clients):
                 continue
-            if node.name in BEARER_CAPABLE_CLIENTS:
+            # ...and it inherits the DECISION too: everything under an entry in
+            # BEARER_CAPABLE_CLIENTS is already settled (the Storage mixins and
+            # the composed `KeboolaClient` all sit under `_CoreClient`).
+            if node.name in settled:
                 continue
             if _class_attr_string(node, "SESSION_AUTH_FEATURE") is None:
                 offenders.append(f"{_rel(path, root)}:{node.lineno} {node.name}")
     return offenders
+
+
+def _descendants_of(root: Path, seeds: set[str]) -> set[str]:
+    """``seeds`` plus every class in the tree that transitively inherits one.
+
+    A fixpoint rather than a single pass, because a subclass can be declared in a
+    file parsed before its own base class.
+    """
+    edges: list[tuple[str, set[str]]] = []
+    for path in _py_files(root):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        aliases = _alias_map(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                bases = {getattr(b, "id", getattr(b, "attr", "")) for b in node.bases}
+                edges.append((node.name, {aliases.get(base, base) for base in bases}))
+    known = set(seeds)
+    changed = True
+    while changed:
+        changed = False
+        for name, bases in edges:
+            if name not in known and bases & known:
+                known.add(name)
+                changed = True
+    return known
 
 
 def main() -> int:
