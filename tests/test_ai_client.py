@@ -160,6 +160,55 @@ class TestSuggestComponents:
             client.close()
 
 
+class TestDocsQuestion:
+    """Verify docs_question() sends the query and returns the raw answer."""
+
+    def test_docs_question_success(self, httpx_mock) -> None:
+        """docs_question() POSTs {"query": ...} and returns text + sourceUrls."""
+        httpx_mock.add_response(
+            url=f"{AI_BASE_URL}/docs/question",
+            json={
+                "text": "Incremental loading appends only changed rows.",
+                "sourceUrls": ["https://help.keboola.com/storage/tables/"],
+            },
+            status_code=200,
+        )
+
+        client = AiServiceClient(stack_url=STACK_URL, token=TOKEN)
+        try:
+            result = client.docs_question("how does incremental loading work?")
+
+            assert result["text"].startswith("Incremental loading")
+            assert result["sourceUrls"] == ["https://help.keboola.com/storage/tables/"]
+
+            # Verify the request payload
+            request = httpx_mock.get_requests()[0]
+            assert request.method == "POST"
+            import json
+
+            body = json.loads(request.content)
+            assert body == {"query": "how does incremental loading work?"}
+        finally:
+            client.close()
+
+    def test_docs_question_api_error(self, httpx_mock) -> None:
+        """docs_question() raises KeboolaApiError on a 4xx response."""
+        httpx_mock.add_response(
+            url=f"{AI_BASE_URL}/docs/question",
+            json={"error": "Bad request"},
+            status_code=400,
+        )
+
+        client = AiServiceClient(stack_url=STACK_URL, token=TOKEN)
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client.docs_question("")
+            assert exc_info.value.status_code == 400
+            assert exc_info.value.retryable is False
+        finally:
+            client.close()
+
+
 class TestUrlEncoding:
     """Verify component IDs with special characters are URL-encoded."""
 

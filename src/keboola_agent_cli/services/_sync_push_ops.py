@@ -165,6 +165,7 @@ def _push_create_row(
         name=name,
         configuration=configuration,
         description=description,
+        is_disabled=bool(local_data.get("is_disabled", False)),
         branch_id=branch_id,
     )
     new_row_id = str(result.get("id", ""))
@@ -224,6 +225,9 @@ def push_update_row(
         configuration=configuration,
         description=description,
         change_description="Updated via kbagent sync push",
+        # Explicit key in the local YAML pushes the state; an absent key
+        # leaves the remote enabled/disabled state untouched (issue #467).
+        is_disabled=(bool(local_data["is_disabled"]) if "is_disabled" in local_data else None),
         branch_id=branch_id,
     )
     logger.info("Updated row %s/%s/%s", component_id, parent_config_id, row_id)
@@ -304,6 +308,7 @@ def push_create(
         configuration=configuration,
         description=description,
         branch_id=branch_id,
+        is_disabled=bool(local_data.get("is_disabled", False)),
     )
     new_config_id = result.get("id", "")
     logger.info("Created config %s/%s (ID: %s)", component_id, name, new_config_id)
@@ -360,6 +365,9 @@ def push_update(
         configuration=configuration,
         description=description,
         change_description="Updated via kbagent sync push",
+        # Explicit key in the local YAML pushes the state; an absent key
+        # leaves the remote enabled/disabled state untouched (issue #467).
+        is_disabled=(bool(local_data["is_disabled"]) if "is_disabled" in local_data else None),
         branch_id=branch_id,
     )
     logger.info("Updated config %s/%s", component_id, config_id)

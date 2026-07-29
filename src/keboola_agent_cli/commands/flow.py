@@ -19,6 +19,12 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..services.flow_service import (
+    FLOW_COMPONENT_ID,
+    LEGACY_FLOW_COMPONENT_ID,
+    get_bundled_flow_schema,
+    get_flow_examples,
+)
 from ..services.flow_validation import find_unreachable_phases, validate_conditional_flow
 from ._helpers import (
     check_cli_permission,
@@ -43,6 +49,7 @@ _FLOW_SCHEMA = """\
 # Update with: kbagent flow update --project ALIAS --flow-id ID --file @flow.yaml
 # Validate offline: kbagent flow validate --file @flow.yaml
 # Full JSON schema: kbagent flow schema --full
+# Real-world examples: kbagent flow examples
 #
 # IDs are STRINGS. goto is a phase id or null (= end the flow).
 
@@ -63,11 +70,13 @@ phases:
         goto: "transform"
   - id: "transform"
     name: "Transform"
+    # Phase-level retry applies to every job task in the phase.
+    # Omit retryOn to retry on ANY error.
     retry:
       strategy: linear
       strategyParams:
-        delaySeconds: 60
-      retryOn: ["error"]
+        maxRetries: 3
+        delay: 60  # seconds between attempts
     next:
       - id: "done"
         goto: null
@@ -84,11 +93,16 @@ tasks:
       componentId: "keboola.ex-http"
       configId: "123456789"
       mode: run
+      # Task-level retry overrides the phase-level one. retryOn entries are
+      # objects: type is errorMessageContains or errorMessageExact.
       retry:
         strategy: linear
         strategyParams:
-          delaySeconds: 30
-        retryOn: ["error"]
+          maxRetries: 2
+          delay: 30
+        retryOn:
+          - type: errorMessageContains
+            value: "timeout"
   - id: "task-transform"
     name: "Run transformation"
     phase: "transform"
@@ -363,37 +377,50 @@ def _format_flow_detail(formatter: Any, result: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _print_json_schema(formatter: Any, schema: dict[str, Any], source: str) -> None:
+    """Emit a JSON Schema payload in either output mode, tagged with its source."""
+    if formatter.json_mode:
+        formatter.output({"format": "json-schema", "source": source, "schema": schema})
+    else:
+        formatter.console.print(
+            Syntax(json.dumps(schema, indent=2), "json", theme="monokai", line_numbers=False)
+        )
+
+
 @flow_app.command("schema")
 def flow_schema(
     ctx: typer.Context,
     full: bool = typer.Option(
         False,
         "--full",
-        help="Dump the live JSON Schema fetched from the stack (requires --project).",
+        help=(
+            "Dump the conditional-flow JSON Schema: live from the stack with "
+            "--project, bundled snapshot without it."
+        ),
     ),
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias -- required for --full (the schema is served by the stack).",
+        help="Project alias -- with --full, fetch the live schema from this stack.",
     ),
 ) -> None:
-    """Print the conditional-flow YAML template, or --full for the live JSON Schema.
+    """Print the conditional-flow YAML template, or --full for the JSON Schema.
 
-    The plain template is offline. ``--full`` fetches the real keboola.flow
-    JSON Schema from the stack's component registry, so it needs ``--project``.
+    The plain template is offline. ``--full`` dumps the keboola.flow JSON
+    Schema: with ``--project`` it is fetched live from the stack's component
+    registry; without it the bundled snapshot (vendored at build time, see
+    ``kbagent flow examples`` for matching examples) is served offline.
     """
     formatter = get_formatter(ctx)
     if full:
         if not project:
-            formatter.error(
-                message=(
-                    "--full requires --project: the conditional-flow JSON Schema is "
-                    "served by the stack's component registry, not bundled. "
-                    "Run e.g. 'kbagent flow schema --full --project ALIAS'."
-                ),
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
-            raise typer.Exit(code=2)
+            if not formatter.json_mode:
+                formatter.console.print(
+                    "[dim]Bundled conditional-flow JSON Schema snapshot (offline). "
+                    "Pass --project ALIAS to fetch the live schema from the stack.[/dim]"
+                )
+            _print_json_schema(formatter, get_bundled_flow_schema(FLOW_COMPONENT_ID), "bundled")
+            return
 
         service = get_service(ctx, "flow_service")
         try:
@@ -413,12 +440,7 @@ def flow_schema(
             )
             raise typer.Exit(code=4)
 
-        if formatter.json_mode:
-            formatter.output({"format": "json-schema", "schema": schema})
-        else:
-            formatter.console.print(
-                Syntax(json.dumps(schema, indent=2), "json", theme="monokai", line_numbers=False)
-            )
+        _print_json_schema(formatter, schema, "live")
         return
 
     if formatter.json_mode:
@@ -431,6 +453,63 @@ def flow_schema(
         )
     else:
         formatter.console.print(Syntax(_FLOW_SCHEMA, "yaml", theme="monokai", line_numbers=False))
+
+
+# ---------------------------------------------------------------------------
+# flow examples
+# ---------------------------------------------------------------------------
+
+
+@flow_app.command("examples")
+def flow_examples(
+    ctx: typer.Context,
+    component_id: str = typer.Option(
+        FLOW_COMPONENT_ID,
+        "--component-id",
+        help=(
+            "Flow component id: keboola.flow (conditional, default) or "
+            "keboola.orchestrator (legacy, informational only)."
+        ),
+    ),
+) -> None:
+    """Show bundled example flow configurations (offline, no project needed).
+
+    Examples are vendored from keboola-mcp-server. The default is
+    keboola.flow (Conditional Flow); use them as blueprints for
+    ``kbagent flow new --file @flow.yaml``.
+
+    ``--component-id keboola.orchestrator`` serves the legacy orchestrator
+    examples for reference only -- kbagent cannot create or edit orchestrator
+    flows (support was dropped in 0.57.0).
+    """
+    formatter = get_formatter(ctx)
+    try:
+        examples = get_flow_examples(component_id)
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
+
+    if component_id == LEGACY_FLOW_COMPONENT_ID:
+        formatter.warning(
+            "kbagent cannot create or edit keboola.orchestrator flows (legacy "
+            "orchestrator support was dropped in 0.57.0). These examples are "
+            "informational only, e.g. for reading flows in foreign projects."
+        )
+
+    if formatter.json_mode:
+        formatter.output(examples)
+        return
+
+    formatter.console.print(
+        f"\n[bold]Flow configuration examples for {escape(component_id)}[/bold] "
+        f"({len(examples)} example{'s' if len(examples) != 1 else ''}):\n"
+    )
+    for index, example in enumerate(examples, 1):
+        formatter.console.print(f"[cyan bold]{index}. Flow Configuration:[/cyan bold]")
+        formatter.console.print(
+            Syntax(json.dumps(example, indent=2), "json", theme="monokai", line_numbers=False)
+        )
+        formatter.console.print()
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,145 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.76.3": [
+        "Security: bump npm dependencies flagged by Dependabot in `web/backend` and "
+        "`web/frontend` -- `@fastify/static` (path traversal / auth bypass), "
+        "`brace-expansion` and `find-my-way` (DoS), `postcss` (source-map path traversal), "
+        "and `dompurify` (XSS/sanitization bypass, pinned via an npm override on the "
+        "`monaco-editor`/`mermaid` transitive copy). No behavior change.",
+    ],
+    "0.76.2": [
+        "Fix (#528, #530): self-update no longer risks leaving the running Windows uv tool "
+        "environment partially upgraded. kbagent now completes all network checks and command "
+        "planning before mutation, upgrades the independent keboola-mcp-server environment "
+        "first, caches the result, then performs an exact-version full reinstall as the terminal "
+        "step and immediately re-executes. Failed or timed-out updates print a copy-paste recovery "
+        "command instead of continuing without repair guidance. Thanks to @papousek-radan for "
+        "the detailed corruption reports.",
+        "Fix (#529, #531): `kbagent semantic-layer export` now writes snapshots on Windows. "
+        "The writer conditionally enables platform-specific `O_NOFOLLOW` and `O_BINARY` flags, "
+        "so Windows no longer raises `AttributeError` while POSIX keeps its existing final-path "
+        "symlink protection; the real Windows export path is covered by CI. Thanks to "
+        "@papousek-radan for the report.",
+    ],
+    "0.76.1": [
+        "Fix (#522, #526): `kbagent serve --ui` no longer crashes on startup on Windows "
+        "consoles with a non-UTF-8 codepage (cp1250 on Czech/Polish/Hungarian Windows). The "
+        "startup banner's box-drawing glyphs (`├─` / `└─`) raised `UnicodeEncodeError` from "
+        "`sys.stdout.write` before uvicorn bound the port, so the server never started. They "
+        "now degrade to ASCII (`|-` / `` `- ``) when the console can't encode them -- the same "
+        "UTF-8/ASCII fallback `install.sh` already uses -- with a belt-and-braces `try/except` "
+        "so a cosmetic banner can never abort startup. Modern UTF-8 terminals are unchanged. "
+        "The `set PYTHONUTF8=1` workaround is no longer needed. Thanks to @papousek-radan for "
+        "the detailed report.",
+    ],
+    "0.76.0": [
+        "Change (#520): the ~3,960-LOC `client.py` is split into a `client/` package by "
+        "endpoint family (storage tables/files, configs, queue, tokens, branches, stream, "
+        "query, workspaces, misc, plus `_core`/`_transfer`). `KeboolaClient` stays a single "
+        "class composed from per-family mixins, so the public import surface and the SDK "
+        "`Client.raw` contract are byte-identical -- verified as a pure move (every method "
+        "body unchanged) plus a full live E2E pass.",
+        "Note: this is an internal-only release -- no user-facing behavior changes. It bundles "
+        "the client refactor above with E2E test-suite hardening; every `client/*.py` module is "
+        "under the CONTRIBUTING.md file-size ceiling, and new HTTP methods now go into the "
+        "relevant `client/*.py` mixin instead of the old monolith.",
+        "Fix (tests, #521 #523): repaired the long-standing nightly E2E flakes -- clone "
+        "(missing bucket create on the default branch), config-secret (response-envelope path), "
+        "swap + file-list (read-after-write / read-after-DDL eventual consistency, now polled), "
+        "and stream (unique per-run source name to dodge a wedged orphan). The nightly E2E is "
+        "green again after ~7 weeks.",
+    ],
+    "0.75.0": [
+        "New (#512): table snapshots -- `kbagent storage table-from-snapshot` creates a NEW "
+        "table from an existing snapshot (restore), plus the full lifecycle: "
+        "`snapshot-create`, `snapshots` (list), `snapshot-detail`, `snapshot-delete`. "
+        "A snapshot captures a table's data, columns, and primary key at a point in time; "
+        "restore rebuilds them into a fresh table in any existing bucket.",
+        "Note (#512): `table-from-snapshot --name` is REQUIRED -- the live API rejects an "
+        "omitted/empty name (the reference PHP client's 'defaults to snapshot name' docblock "
+        "is stale). Restore goes through the classic `tables-async` endpoint, not "
+        "`tables-definition`, which is why it is a dedicated command instead of a "
+        "`create-table` flag. No overwrite semantics: restore under a new name, verify, then "
+        "swap or delete the old table yourself.",
+        "Permissions: `storage.snapshots`/`snapshot-detail` classify as read, "
+        "`snapshot-create`/`table-from-snapshot` as write, `snapshot-delete` as destructive "
+        "(it forecloses restores; source tables are untouched).",
+    ],
+    "0.74.0": [
+        "MCP passthrough deprecation (#478 phase 2, epic #390): `tool call` / `tool list` "
+        "/ `agent --type mcp_tool` are now formally deprecated in favor of native commands. "
+        "Nothing breaks yet -- everything keeps working through the deprecation window.",
+        "`tool call` warns with the EXACT native replacement for the tool being called "
+        "(stderr in human mode; additive `deprecation` key in the `--json` envelope). "
+        "`tool list` gains a `cli_equivalent` column/field sourced from the new parity map.",
+        "New: `src/keboola_agent_cli/mcp_parity.py` -- the tool->command parity map as code, "
+        "with offline tests pinning every entry to a registered CLI operation, and a weekly "
+        "`mcp-parity-canary` GitHub workflow (`make parity-check`) that diffs the live "
+        "keboola-mcp-server catalog against it so a new upstream tool turns the canary red "
+        "instead of silently widening the gap.",
+        "`agent create/update/test --type mcp_tool` warn and point at `--type cli_command` "
+        "with the native command; existing mcp_tool tasks keep running unchanged.",
+        "Serve: `/mcp/tools*` routes are marked deprecated in OpenAPI "
+        "(`/mcp/server-status` stays -- it reports embedded-server health).",
+    ],
+    "0.73.0": [
+        "MCP parity + fail-closed firewall (#478 phase 0, epic #390 phase 1): six native "
+        "commands port the remaining keboola-mcp-server tools, and MCP tool classification "
+        "fails closed.",
+        "Security (#478): unknown MCP tool names now classify as `destructive` (strictest) "
+        "instead of falling through to `read`. Catalog tools `run_job`, `run_sync_action`, "
+        "`modify_*`, `deploy_*` move from read to write -- they previously passed "
+        "`--deny-writes` and fanned out to every configured project. Multi-project dispatch "
+        "is fail-closed too: only known-read tools fan out.",
+        "Security (#478): `tool call` now enforces the SESSION firewall per tool name -- "
+        "`--deny-destructive` blocks `tool call delete_bucket` (previously only the persisted "
+        "policy was checked at tool granularity).",
+        'New (#392): `kbagent docs query "QUESTION"` -- answers from the Keboola '
+        "documentation via the AI Service (ports `docs_query`).",
+        "New (#393): `kbagent config examples --component-id ID` -- sample root/row "
+        "configurations for a component (ports `get_config_examples`).",
+        "New (#394): `kbagent semantic-layer schema --type metric,dataset,...` -- live JSON "
+        "schemas of semantic object types from the metastore (ports `get_semantic_schema`).",
+        "New (#395): `kbagent component sync-action ACTION` -- run synchronous component "
+        "actions like testConnection (ports `run_sync_action`; shallow root+row config merge "
+        "identical to the MCP tool).",
+        "New (#396): `kbagent transformation create|show|edit` -- SQL transformation "
+        "authoring with the 9-op block/code edit engine (ports create/update_sql_"
+        "transformation; synthetic b{i}/b{i}.c{j} ids, dialect from project default_backend).",
+        "New (#397): `kbagent flow examples` + `flow schema` now serves the authoritative "
+        "bundled conditional-flow schema (ports `get_flow_examples`; fixes schema drift).",
+    ],
+    "0.72.0": [
+        "Sync trust cluster (#466, #467, #472, #497): four reliability fixes that make "
+        "`kbagent sync` safe to run against production trees edited by other people.",
+        'New: `sync pull --theirs` (#466) -- the supported "discard local changes, take '
+        'production" reconcile path. Overwrites locally-modified configs and rows, restores '
+        "deleted/missing files, and resolves true merge conflicts by taking the remote version "
+        "instead of aborting. No more hand-editing `.keboola/manifest.json` to reconcile a "
+        "drifted tree; the SYNC_CONFLICT error message now points at it.",
+        "Fixed (#472): `sync push --force` can no longer plan a DELETE of a remote config "
+        "that was never fetched. A manifest entry with an empty `pull_hash` and no local files "
+        "(a phantom left by a pre-0.72 name-collision pull) is excluded from delete planning "
+        "and surfaced as a `never_fetched` warning on diff/push; the next `sync pull` "
+        "materializes it. Deleting a properly-pulled config locally still deletes on push.",
+        "Fixed (#466/#472): `sync pull` enforces the manifest<->disk invariant -- a tracked "
+        "config whose local directory was deleted is re-materialized on the next pull even "
+        'when the remote is unchanged (previously: silent "Already up to date"), and pull '
+        "can no longer register a manifest entry without writing its files.",
+        "New (#467): config-level `isDisabled` round-trips through sync. Pull writes a sparse "
+        "`is_disabled: true` into `_config.yml` (absent key = enabled, so existing trees do "
+        "not mass-diff), `sync diff` surfaces enabled/disabled drift (a flow disabled in "
+        'production no longer reports "in sync"), and push updates the remote state when '
+        "the key is present (absent key leaves remote untouched). Rows too; `config new "
+        "--push`/`sync clone` create disabled configs when the local file says so.",
+        "Fixed (#497): pushing an untracked local config whose `_keboola.config_id` resolves "
+        "on the target branch (adopted-by-id update, #482) now writes the manifest entry with "
+        "fresh hashes, so follow-up diffs are stable and a later local deletion is detected.",
+        '`sync status` all-clear output now says "No local changes detected ... Local check '
+        'only" and points at `sync diff` -- status never contacts the API, so it cannot see '
+        "remote drift (#466).",
+    ],
     "0.71.0": [
         "Note: catch-up release -- the first published release since v0.66.1. Versions 0.67.0 "
         "through 0.70.1 were merged to main with their changelog entries but never tagged or "

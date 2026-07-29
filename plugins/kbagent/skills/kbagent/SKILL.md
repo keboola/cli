@@ -2,19 +2,20 @@
 name: kbagent
 description: >
   Use when working with Keboola Connection projects via the kbagent CLI.
-  Covers: exploring and searching component configurations, job history and
-  job runs, cross-project data lineage, Keboola MCP tools, development
-  branches, SQL debugging in temporary workspaces, GitOps sync of configs as
-  local files (pull/push/diff/clone), bucket sharing and linking, encrypting
-  secrets, Storage tables and files, data apps (create/deploy/logs/secrets),
-  conditional flows and schedules, project members and invitations, feature
+  Covers: exploring and searching configurations, job history and runs,
+  cross-project data lineage, Keboola MCP tools, dev branches, SQL debugging in workspaces, GitOps sync of configs
+  (pull/push/diff/clone), bucket sharing and linking, encrypting
+  secrets, Storage tables, files, and snapshots (backup + restore as a new
+  table), data apps (create/deploy/logs/secrets),
+  flows and schedules, members and invitations, feature
   flags, OTLP data streams, scoped Storage tokens, the semantic layer
-  (models, datasets, metrics, constraints, reference data), and the Keboola
-  Developer Portal. Triggers: kbagent, Keboola, keboola config, keboola job,
+  (models, metrics, constraints, reference data), and the Developer
+  Portal. Triggers: kbagent, Keboola, keboola config, keboola job,
   keboola lineage, keboola sync, gitops, dev branch, workspace SQL, data app,
   streamlit deploy, semantic layer, sl, dev-portal, data stream, OTLP,
   scoped token, bucket sharing, encrypt secrets, feature flag, flow schedule,
-  invite member.
+  invite member, SQL transformation edit, sync action, keboola docs,
+  table snapshot, snapshot restore.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -97,8 +98,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Rotate a token: generate a new value and invalidate the old one (secret shown once) | `kbagent token refresh --project PROJECT --token-id TOKEN-ID` |
 | List available components from connected projects | `kbagent component list` |
 | Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
+| Run a synchronous component action such as testConnection | `kbagent component sync-action <ACTION-NAME> --component-id COMPONENT-ID --project PROJECT` |
 | List configurations from connected projects | `kbagent config list` |
 | Show detailed information about one or many configurations | `kbagent config detail --component-id COMPONENT-ID` |
+| Show sample configuration JSON examples for a component | `kbagent config examples --component-id COMPONENT-ID` |
 | Search through configuration bodies for a string or pattern | `kbagent config search --query QUERY` |
 | Update a configuration's metadata and/or content | `kbagent config update --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Set or clear ``storage.output.default_bucket`` on a configuration | `kbagent config set-default-bucket --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -166,6 +169,11 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Delete one or more Storage Files | `kbagent storage file-delete --project PROJECT --file-id FILE-ID` |
 | Load a Storage File into a table | `kbagent storage load-file --project PROJECT --file-id FILE-ID --table-id TABLE-ID` |
 | Export a table to a Storage File | `kbagent storage unload-table --project PROJECT --table-id TABLE-ID` |
+| List snapshots of a table | `kbagent storage snapshots --project PROJECT --table-id TABLE-ID` |
+| Create a snapshot of a table (data + columns + primary key) | `kbagent storage snapshot-create --project PROJECT --table-id TABLE-ID` |
+| Show one snapshot's detail (source table, creation time, description) | `kbagent storage snapshot-detail --project PROJECT --snapshot-id SNAPSHOT-ID` |
+| Delete one or more table snapshots (the source tables are untouched) | `kbagent storage snapshot-delete --project PROJECT --snapshot-id SNAPSHOT-ID` |
+| Create a NEW table from an existing snapshot (snapshot restore) | `kbagent storage table-from-snapshot --project PROJECT --snapshot-id SNAPSHOT-ID --bucket-id BUCKET-ID --name NAME` |
 | List Data Streams sources in a project | `kbagent stream list --project PROJECT` |
 | Create an OTLP (or HTTP) source and return its endpoint | `kbagent stream create-source --project PROJECT --name NAME` |
 | Show a source's endpoints, protocol, and destination tables | `kbagent stream detail [SOURCE-ID] --project PROJECT` |
@@ -186,9 +194,14 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Check whether the configured token can use Kai (master token + AI Agent Chat) | `kbagent kai preflight` |
 | Fetch the full message history of a single Kai chat | `kbagent kai chat-detail --chat-id CHAT-ID` |
 | List recent Kai chat sessions | `kbagent kai history` |
+| Ask the Keboola documentation a natural language question | `kbagent docs query <QUESTION>` |
+| Create a SQL transformation from a SQL script | `kbagent transformation create --name NAME` |
+| Show a SQL transformation's block/code tree with positional IDs | `kbagent transformation show --config-id CONFIG-ID` |
+| Edit a SQL transformation's blocks/codes with positional operations | `kbagent transformation edit --config-id CONFIG-ID --change-description CHANGE-DESCRIPTION` |
 | List conditional flows (keboola.flow) across projects | `kbagent flow list` |
 | Show detailed conditional-flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |
-| Print the conditional-flow YAML template, or --full for the live JSON Schema | `kbagent flow schema` |
+| Print the conditional-flow YAML template, or --full for the JSON Schema | `kbagent flow schema` |
+| Show bundled example flow configurations (offline, no project needed) | `kbagent flow examples` |
 | Validate a conditional-flow definition (schema + semantic checks) | `kbagent flow validate --file FILE` |
 | Create a new conditional-flow (keboola.flow) configuration | `kbagent flow new --project PROJECT --name NAME` |
 | Update a flow's name, description, or phases/tasks | `kbagent flow update --project PROJECT --flow-id FLOW-ID` |
@@ -234,6 +247,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent semantic-layer promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
 | Replay a snapshot into a project. | `kbagent semantic-layer import --project PROJECT --file FILE` |
 | Show the entities in a semantic-layer model | `kbagent semantic-layer show --project PROJECT` |
+| Fetch the server-side JSON Schema of semantic object types | `kbagent semantic-layer schema --project PROJECT` |
 | Snapshot a semantic-layer model to a self-describing JSON file | `kbagent semantic-layer export --project PROJECT` |
 | Diff two semantic-layer snapshots (project↔project, project↔file, file↔file) | `kbagent semantic-layer diff` |
 | Validate a semantic-layer model | `kbagent semantic-layer validate --project PROJECT` |
@@ -266,6 +280,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent sl promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
 | Replay a snapshot into a project. | `kbagent sl import --project PROJECT --file FILE` |
 | Show the entities in a semantic-layer model | `kbagent sl show --project PROJECT` |
+| Fetch the server-side JSON Schema of semantic object types | `kbagent sl schema --project PROJECT` |
 | Snapshot a semantic-layer model to a self-describing JSON file | `kbagent sl export --project PROJECT` |
 | Diff two semantic-layer snapshots (project↔project, project↔file, file↔file) | `kbagent sl diff` |
 | Validate a semantic-layer model | `kbagent sl validate --project PROJECT` |
@@ -361,12 +376,14 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | All commands cheat sheet | [commands-reference](references/commands-reference.md) |
 | **Safe config write workflow** (fetch → dry-run → confirm → push) | [safe-write-workflow](references/safe-write-workflow.md) |
 | Creating new configurations | [scaffold-workflow](references/scaffold-workflow.md) |
+| **SQL transformations** (create / show / edit; the show-before-edit rule for positional block/code ids) | [transformation-workflow](references/transformation-workflow.md) |
 | MCP tools (multi-project read/write) | [mcp-workflow](references/mcp-workflow.md) |
 | Workspace SQL debugging | [workspace-workflow](references/workspace-workflow.md) |
 | **Agent Tasks via CLI** (`kbagent agent` CRUD + run + cron-preview + prompt-improve; cron / manual / chained; mcp_tool / cli_command / ai_agent action flavours) | [agent-tasks-cli-workflow](references/agent-tasks-cli-workflow.md) |
 | **Agent Tasks via REST** (`kbagent http <verb> /agents...` from inside scheduled subprocesses; SSE streaming) | [agent-tasks-rest-workflow](references/agent-tasks-rest-workflow.md) |
 | **Data apps** (create / deploy / start / stop / password / delete; the §9 redeploy contract) | [data-app-workflow](references/data-app-workflow.md) |
 | Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
+| **Table snapshots** (point-in-time backup; restore as a NEW table; `--name` required, no overwrite) | [snapshot-workflow](references/snapshot-workflow.md) |
 | **Python library** (`from keboola_agent_cli import Client` -- in-process query + Storage Files, no CLI/daemon/config-dir) | [library-workflow](references/library-workflow.md) |
 | **Data Streams (OTLP / OpenTelemetry)** (create/inspect OTLP source, masked secret-in-URL, OTEL_EXPORTER_OTLP_ENDPOINT) | [stream-workflow](references/stream-workflow.md) |
 | **Storage column types** (native types, NOT NULL, DEFAULT, branch materialize) | [storage-types-workflow](references/storage-types-workflow.md) |

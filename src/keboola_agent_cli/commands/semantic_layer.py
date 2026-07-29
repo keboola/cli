@@ -12,9 +12,12 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
+from rich.syntax import Syntax
 from rich.table import Table
 
 from ..errors import ErrorCode
+from ..services.semantic_layer_service import SCHEMA_TYPE_ALIAS
 from ._helpers import (
     check_cli_permission,
     get_formatter,
@@ -638,6 +641,76 @@ def semantic_layer_show(
         formatter.output(result, _print_show_summary)
     else:
         formatter.output(result, _print_show_detail)
+
+
+# ---------------------------------------------------------------------------
+# semantic-layer schema
+# ---------------------------------------------------------------------------
+
+
+def _print_schemas(console: Console, data: dict) -> None:
+    """Render each requested type's JSON schema in its own panel."""
+    project = data.get("project", "")
+    for entry in data.get("schemas", []):
+        schema_json = json.dumps(entry.get("schema", {}), indent=2)
+        console.print(
+            Panel(
+                Syntax(schema_json, "json", theme="ansi_dark", word_wrap=True),
+                title=(
+                    f"[bold cyan]{entry.get('type', '?')}[/bold cyan] schema "
+                    f"([magenta]{project}[/magenta])"
+                ),
+                border_style="dim",
+            )
+        )
+
+
+@semantic_layer_app.command("schema")
+def semantic_layer_schema(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    types: str | None = typer.Option(
+        None,
+        "--type",
+        help=(
+            "Comma-separated semantic type(s): "
+            "model | dataset | metric | relationship | constraint | glossary."
+        ),
+    ),
+    all_types: bool = typer.Option(
+        False, "--all", help="Fetch the schema of every known semantic type."
+    ),
+) -> None:
+    """Fetch the server-side JSON Schema of semantic object types.
+
+    Schemas are fetched live from the project's metastore (never bundled),
+    so they always match the deployed metastore version. Pass exactly one
+    of ``--type`` (comma-separated list) or ``--all``.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "semantic_layer_service")
+
+    # Mutual exclusion: exactly one of --type / --all.
+    if all_types == (types is not None):
+        formatter.error(
+            message="Specify exactly one of --type or --all.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+
+    if all_types:
+        type_list = list(SCHEMA_TYPE_ALIAS)
+    else:
+        type_list = [t.strip() for t in (types or "").split(",") if t.strip()]
+        if not type_list:
+            formatter.error(
+                message="--type contained no type names.",
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
+            raise typer.Exit(code=2)
+
+    result = _handle_service_call(ctx, service.get_schema, alias=project, types=type_list)
+    formatter.output(result, _print_schemas)
 
 
 # ---------------------------------------------------------------------------

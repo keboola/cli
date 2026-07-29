@@ -455,6 +455,13 @@ class TestFullE2E:
         )
         self._test_truncate_table_roundtrip(table_id)
 
+        _step(
+            11.2,
+            "storage snapshot-* + table-from-snapshot",
+            "snapshot lifecycle + restore as new table (issue #512)",
+        )
+        self._test_snapshot_roundtrip(bucket_id, table_id)
+
         _step(12, "storage tables + table-detail")
         self._test_table_listing(bucket_id, table_id)
 
@@ -619,6 +626,17 @@ class TestFullE2E:
 
         _step(38, "kai ping / ask / history", "Keboola AI Assistant")
         self._test_kai_commands()
+
+        # ==============================================================
+        # PHASE 12.6: MCP parity commands (epic #390, 0.73.0)
+        # ==============================================================
+
+        _step(
+            38.5,
+            "docs/examples/schema/sync-action/transformation/flow examples",
+            "native ports of the keboola-mcp-server tools",
+        )
+        self._test_mcp_parity_commands()
 
         # ==============================================================
         # PHASE 13: Job commands (expanded)
@@ -1084,6 +1102,162 @@ class TestFullE2E:
         assert restored["rows_count"] == before["rows_count"], (
             f"restore failed: expected {before['rows_count']} rows, got {restored['rows_count']}"
         )
+
+    def _test_snapshot_roundtrip(self, bucket_id: str, table_id: str) -> None:
+        """Snapshot lifecycle + restore-as-new-table (issue #512).
+
+        create -> list -> detail -> table-from-snapshot (dry-run, then apply)
+        -> verify the restored table matches the source (rows, columns,
+        primary key) -> delete the restored table and the snapshot -> verify
+        the snapshot is gone. Leaves the source table untouched for the
+        downstream hops.
+        """
+        before = self._run_ok(
+            "storage",
+            "table-detail",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )["data"]
+        assert before["rows_count"] > 0, "snapshot roundtrip needs a non-empty table"
+        before_columns = sorted(c["name"] for c in before["column_details"])
+        before_pk = list(before.get("primary_key") or [])
+
+        # Create a snapshot; the receipt carries the new snapshot ID.
+        created = self._run_ok(
+            "storage",
+            "snapshot-create",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--description",
+            "kbagent E2E snapshot roundtrip",
+        )["data"]
+        snapshot_id = str(created["snapshot_id"])
+        assert snapshot_id, f"snapshot-create returned no snapshot_id: {created}"
+
+        # List: the new snapshot must appear for the source table.
+        listed = self._run_ok(
+            "storage",
+            "snapshots",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )["data"]
+        assert listed["count"] >= 1
+        assert snapshot_id in [str(s["id"]) for s in listed["snapshots"]]
+
+        # Detail: the snapshot must point back at the source table.
+        detail = self._run_ok(
+            "storage",
+            "snapshot-detail",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+        )["data"]
+        assert str(detail["snapshot"]["id"]) == snapshot_id
+        assert detail["snapshot"]["table"]["id"] == table_id
+
+        # Restore dry-run: receipt only, no table created.
+        restored_name = "e2e_snapshot_restore"
+        restored_table_id = f"{bucket_id}.{restored_name}"
+        dry = self._run_ok(
+            "storage",
+            "table-from-snapshot",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            restored_name,
+            "--dry-run",
+        )["data"]
+        assert dry["dry_run"] is True
+        tables = self._run_ok(
+            "storage", "tables", "--project", self.alias, "--bucket-id", bucket_id
+        )["data"]["tables"]
+        assert restored_table_id not in [t["id"] for t in tables], (
+            "dry-run must not create the table"
+        )
+
+        # Restore for real: a NEW table with the snapshot's data appears.
+        applied = self._run_ok(
+            "storage",
+            "table-from-snapshot",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+            "--bucket-id",
+            bucket_id,
+            "--name",
+            restored_name,
+        )["data"]
+        assert applied["dry_run"] is False
+        assert applied["table_id"] == restored_table_id
+
+        # The restored table must match the source: rows, columns, primary key.
+        restored = self._run_ok(
+            "storage",
+            "table-detail",
+            "--project",
+            self.alias,
+            "--table-id",
+            restored_table_id,
+        )["data"]
+        assert restored["rows_count"] == before["rows_count"], (
+            f"restored rows {restored['rows_count']} != source rows {before['rows_count']}"
+        )
+        assert sorted(c["name"] for c in restored["column_details"]) == before_columns
+        assert list(restored.get("primary_key") or []) == before_pk
+
+        # Drop the restored table so downstream bucket listings are unchanged.
+        self._run_ok(
+            "storage",
+            "delete-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            restored_table_id,
+            "--yes",
+        )
+
+        # Delete the snapshot (dry-run first) and verify it is gone.
+        del_dry = self._run_ok(
+            "storage",
+            "snapshot-delete",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+            "--dry-run",
+        )["data"]
+        assert del_dry["would_delete"] == [snapshot_id]
+        deleted = self._run_ok(
+            "storage",
+            "snapshot-delete",
+            "--project",
+            self.alias,
+            "--snapshot-id",
+            snapshot_id,
+        )["data"]
+        assert deleted["deleted"] == [snapshot_id]
+        assert deleted["failed"] == []
+        after_delete = self._run_ok(
+            "storage",
+            "snapshots",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+        )["data"]
+        assert snapshot_id not in [str(s["id"]) for s in after_delete["snapshots"]]
 
     def _test_table_listing(self, bucket_id: str, table_id: str) -> None:
         """Verify table appears in listings and detail is correct."""
@@ -2125,8 +2299,17 @@ class TestFullE2E:
 
             assert kbc.files.read_bytes(meta.id) == payload, "read_bytes round-trip mismatch"
 
-            listed = kbc.files.list(tags=[facade_tag])
-            assert any(f.id == meta.id for f in listed), "uploaded file must appear in list"
+            # The tag-filtered Files list is read-after-write eventually
+            # consistent: the upload is durable (read_bytes round-tripped it
+            # just above), but the tag index can lag a few seconds. Poll instead
+            # of asserting the first list (intermittently missed in CI 2026-07-22).
+            found = False
+            for _ in range(15):
+                if any(f.id == meta.id for f in kbc.files.list(tags=[facade_tag])):
+                    found = True
+                    break
+                time.sleep(2)
+            assert found, "uploaded file must appear in list"
 
             kbc.files.delete(meta.id)
             self._created_file_ids.remove(meta.id)
@@ -2546,16 +2729,23 @@ class TestFullE2E:
         self._created_file_ids.append(file_id)
         assert file_id > 0
 
-        # files (list)
-        data = self._run_ok(
-            "storage",
-            "files",
-            "--project",
-            self.alias,
-            "--tag",
-            f"e2e-{RUN_ID}",
-        )
-        file_ids = [f["id"] for f in data["data"]["files"]]
+        # files (list) -- the tag index is read-after-write eventually
+        # consistent; poll until the just-uploaded file appears rather than
+        # asserting the first list.
+        file_ids: list[int] = []
+        for _ in range(15):
+            data = self._run_ok(
+                "storage",
+                "files",
+                "--project",
+                self.alias,
+                "--tag",
+                f"e2e-{RUN_ID}",
+            )
+            file_ids = [f["id"] for f in data["data"]["files"]]
+            if file_id in file_ids:
+                break
+            time.sleep(2)
         assert file_id in file_ids
 
         # file-detail
@@ -2987,6 +3177,131 @@ class TestFullE2E:
         # We just chatted, so there should be at least 1
         assert len(data["data"]["chats"]) >= 1
 
+    def _test_mcp_parity_commands(self) -> None:
+        """MCP parity commands from epic #390 (0.73.0): docs query, config
+        examples, semantic-layer schema, component sync-action, transformation
+        lifecycle, flow examples."""
+        # docs query — server-side documentation RAG (AI Service)
+        result = self._run(
+            "docs", "query", "What is a Keboola Storage bucket?", "--project", self.alias
+        )
+        if result.exit_code != 0:
+            print(f"  {_YELLOW}SKIP: docs query failed (AI Service unavailable?){_RESET}")
+        else:
+            data = _json_ok(result)
+            assert isinstance(data["data"]["text"], str) and data["data"]["text"].strip()
+            assert isinstance(data["data"]["source_urls"], list)
+
+        # config examples — reformat of AI-service component detail
+        data = self._run_ok(
+            "config",
+            "examples",
+            "--component-id",
+            "keboola.ex-google-drive",
+            "--project",
+            self.alias,
+        )
+        assert data["data"]["component_id"] == "keboola.ex-google-drive"
+        assert isinstance(data["data"]["root_examples"], list)
+
+        # semantic-layer schema — live metastore JSON Schema (version-resolved)
+        result = self._run("semantic-layer", "schema", "--project", self.alias, "--type", "metric")
+        if result.exit_code != 0:
+            print(f"  {_YELLOW}SKIP: semantic-layer schema (metastore unavailable?){_RESET}")
+        else:
+            data = _json_ok(result)
+            schemas = data["data"]["schemas"]
+            assert [s["type"] for s in schemas] == ["metric"]
+            assert isinstance(schemas[0]["schema"], dict) and schemas[0]["schema"]
+
+        # component sync-action — full round-trip to sync-actions.{stack};
+        # deliberately bad config: a structured API error PROVES the wiring
+        # (URL derivation, auth, camelCase body); a 2xx needs live DB creds.
+        result = self._run(
+            "component",
+            "sync-action",
+            "testConnection",
+            "--component-id",
+            "keboola.ex-db-snowflake",
+            "--project",
+            self.alias,
+            "--config-data",
+            '{"parameters": {"db": {"host": "invalid.example.com"}}}',
+        )
+        assert result.exit_code != 0
+        # NOT _json(): that helper asserts exit_code == 0, but this command is
+        # EXPECTED to fail -- parse the error envelope directly (#508 regression).
+        err = json.loads(result.output)
+        assert err["error"]["code"] in ("API_ERROR", "VALIDATION_ERROR")
+
+        # flow examples — bundled, offline
+        data = self._run_ok("flow", "examples")
+        assert isinstance(data["data"], list) and data["data"]
+        assert {"phases", "tasks"} <= set(data["data"][0])
+
+        # flow schema --full without --project — bundled snapshot fallback
+        data = self._run_ok("flow", "schema", "--full")
+        assert data["data"]["source"] == "bundled"
+
+        # transformation lifecycle: create -> show (ids) -> edit -> verify.
+        # Cleanup: sync-based delete is heavyweight here; the config is
+        # removed via the recycle-bin-safe Storage API through self.api.
+        created = self._run_ok(
+            "transformation",
+            "create",
+            "--project",
+            self.alias,
+            "--name",
+            "E2E Parity Transformation",
+            "--sql",
+            'CREATE TABLE "e2e_tf_out" AS SELECT 1 AS "id"; SELECT 2;',
+            "--created-table",
+            "e2e_tf_out",
+        )
+        tf_config_id = created["data"]["config_id"]
+        tf_component_id = created["data"]["component_id"]
+        try:
+            shown = self._run_ok(
+                "transformation",
+                "show",
+                "--project",
+                self.alias,
+                "--config-id",
+                tf_config_id,
+            )
+            block = shown["data"]["blocks"][0]
+            assert block["id"] == "b0"
+            assert block["codes"][0]["id"] == "b0.c0"
+            assert len(block["codes"][0]["script"]) == 2
+
+            self._run_ok(
+                "transformation",
+                "edit",
+                "--project",
+                self.alias,
+                "--config-id",
+                tf_config_id,
+                "--change-description",
+                "e2e parity check",
+                "--op",
+                '{"op": "str_replace", "search_for": "SELECT 2", "replace_with": "SELECT 3"}',
+            )
+            reshown = self._run_ok(
+                "transformation",
+                "show",
+                "--project",
+                self.alias,
+                "--config-id",
+                tf_config_id,
+            )
+            assert reshown["data"]["blocks"][0]["codes"][0]["script"][1] == "SELECT 3;"
+        finally:
+            try:
+                self.api.delete_config(tf_component_id, tf_config_id)
+                print(f"  Deleted transformation config {tf_config_id}")
+            except Exception as exc:
+                print(f"  WARN: failed to delete transformation {tf_config_id}: {exc}")
+
     def _test_job_commands(self) -> None:
         """Verify job listing structure and detail (if jobs exist)."""
         # job list
@@ -3045,6 +3360,32 @@ class TestFullE2E:
         # Remove from cleanup since we deleted via CLI
         self._created_config_ids.remove((TEST_COMPONENT_ID, config_id))
 
+    def _poll_columns(
+        self, table_id: str, *, present: str | None = None, absent: str | None = None
+    ) -> list[str]:
+        """Poll table-detail until a column appears/disappears (max ~30s).
+
+        The Storage API's column listing is read-after-write eventually
+        consistent on some stacks: an add-column/delete-column receipt is
+        authoritative (the API confirmed the DDL), but an immediately-following
+        table-detail can serve stale metadata for a few seconds -- measured
+        live on connection.us-east4.gcp.keboola.com 2026-07-22 (~5-10s lag,
+        wider when the table recently had snapshot activity). Poll instead of
+        asserting the first read.
+        """
+        columns: list[str] = []
+        for _ in range(15):
+            data = self._run_ok(
+                "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+            )
+            columns = data["data"]["columns"]
+            if (present is None or present in columns) and (
+                absent is None or absent not in columns
+            ):
+                return columns
+            time.sleep(2)
+        return columns
+
     def _test_delete_column(self, table_id: str) -> None:
         """Delete a column from a table: dry-run, actual delete, verify."""
         # Verify the table has 'value' column before we delete it
@@ -3073,12 +3414,8 @@ class TestFullE2E:
         assert data["data"]["column"] == "status"
         assert data["data"]["definition"]["type"] == "VARCHAR"
         assert data["data"]["table_id"] == table_id
-        data = self._run_ok(
-            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
-        )
-        assert "status" in data["data"]["columns"], (
-            f"Expected 'status' column after add-column, got {data['data']['columns']}"
-        )
+        columns = self._poll_columns(table_id, present="status")
+        assert "status" in columns, f"Expected 'status' column after add-column, got {columns}"
 
         # delete-column dry-run
         data = self._run_ok(
@@ -3112,16 +3449,8 @@ class TestFullE2E:
         assert data["data"]["failed"] == []
         assert data["data"]["table_id"] == table_id
 
-        # Verify the column is gone
-        data = self._run_ok(
-            "storage",
-            "table-detail",
-            "--project",
-            self.alias,
-            "--table-id",
-            table_id,
-        )
-        columns_after = data["data"]["columns"]
+        # Verify the column is gone (poll: same read-after-DDL staleness as add)
+        columns_after = self._poll_columns(table_id, absent="value")
         assert "value" not in columns_after, (
             f"'value' column should be deleted, got {columns_after}"
         )
@@ -4375,6 +4704,155 @@ class TestE2ESyncWorkflow:
             assert envelope["status"] == "error"
             assert envelope["error"]["code"] == "SYNC_CONFLICT"
             assert any(c["config_id"] == cfg_id for c in envelope["error"]["details"]["conflicts"])
+        finally:
+            cfg_id = cfg.get("id") if cfg else None
+            if cfg_id:
+                try:
+                    with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                        api.delete_config(component_id=TEST_COMPONENT_ID, config_id=cfg_id)
+                except Exception as exc:
+                    print(f"  [cleanup] Failed to delete {TEST_COMPONENT_ID}/{cfg_id}: {exc}")
+
+    def test_sync_theirs_reconcile_and_is_disabled(self) -> None:
+        """Sync trust cluster (0.72.0, issues #466/#467/#472), end-to-end.
+
+        * ``pull --theirs`` resolves a true conflict by taking remote (no abort).
+        * Deleting a config dir + plain ``pull`` re-materializes it (#466 pt3).
+        * Config-level ``isDisabled`` round-trips: remote disable -> pulled as
+          ``is_disabled: true``; explicit local ``is_disabled: false`` push
+          re-enables the remote config (#467).
+        * A phantom manifest entry (empty pull_hash, no dir) is excluded from
+          push delete-planning and reported as ``never_fetched`` (#472).
+
+        Creates + cleans up a dedicated config so the test is idempotent.
+        """
+        import yaml as _yaml
+
+        from keboola_agent_cli.client import KeboolaClient
+        from keboola_agent_cli.constants import CONFIG_FILENAME
+
+        cfg: dict = {}
+        try:
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                cfg = api.create_config(
+                    component_id=TEST_COMPONENT_ID,
+                    name=f"{RUN_ID}-trustcluster",
+                    description="E2E sync trust-cluster fixture",
+                    configuration={"parameters": {"db": {"host": "orig.example.com"}}},
+                )
+            cfg_id = str(cfg["id"])
+
+            _step("8a", "sync init + pull (trust-cluster fixture)")
+            self._run_ok(
+                "sync", "init", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            matches = [
+                p
+                for p in self.project_dir.rglob(CONFIG_FILENAME)
+                if "rows" not in p.relative_to(self.project_dir).parts
+                and str(
+                    _yaml.safe_load(p.read_text(encoding="utf-8"))
+                    .get("_keboola", {})
+                    .get("config_id")
+                )
+                == cfg_id
+            ]
+            assert len(matches) == 1, f"config YAML not found after pull: {matches}"
+            config_file = matches[0]
+            config_dir = config_file.parent
+
+            # --- (a) true conflict: local edit + remote edit -> --theirs wins ---
+            _step("8b", "pull --theirs resolves a true conflict by taking remote")
+            local = _yaml.safe_load(config_file.read_text(encoding="utf-8"))
+            local.setdefault("parameters", {})["_e2e_local"] = "keep-me-not"
+            config_file.write_text(_yaml.dump(local, default_flow_style=False), encoding="utf-8")
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                api.update_config(
+                    component_id=TEST_COMPONENT_ID,
+                    config_id=cfg_id,
+                    configuration={"parameters": {"db": {"host": "theirs.example.com"}}},
+                    change_description="e2e theirs conflict",
+                )
+            self._run_ok(
+                "sync",
+                "pull",
+                "--project",
+                self.alias,
+                "--directory",
+                str(self.project_dir),
+                "--theirs",
+            )
+            after = _yaml.safe_load(config_file.read_text(encoding="utf-8"))
+            assert after["parameters"]["db"]["host"] == "theirs.example.com"
+            assert "_e2e_local" not in after.get("parameters", {}), (
+                "--theirs must overwrite local edits with remote"
+            )
+
+            # --- (b) delete dir + plain pull -> re-materialized (#466 pt3) ---
+            _step("8c", "plain pull re-materializes a deleted config dir")
+            shutil.rmtree(config_dir)
+            self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            assert config_file.exists(), "deleted config dir must be refetched by plain pull"
+
+            # --- (c) isDisabled round-trip (#467) ---
+            _step("8d", "isDisabled: remote disable -> pull; local false -> push re-enables")
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                api.update_config(
+                    component_id=TEST_COMPONENT_ID,
+                    config_id=cfg_id,
+                    is_disabled=True,
+                    change_description="e2e disable",
+                )
+            self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            pulled = _yaml.safe_load(config_file.read_text(encoding="utf-8"))
+            assert pulled.get("is_disabled") is True, "disabled state must be pulled (#467)"
+            pulled["is_disabled"] = False
+            config_file.write_text(_yaml.dump(pulled, default_flow_style=False), encoding="utf-8")
+            self._run_ok(
+                "sync", "push", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                detail = api.get_config_detail(component_id=TEST_COMPONENT_ID, config_id=cfg_id)
+            assert detail.get("isDisabled") is False, "explicit is_disabled: false must re-enable"
+
+            # --- (d) phantom manifest entry never planned as DELETE (#472) ---
+            _step("8e", "never-fetched phantom entry excluded from push delete-planning")
+            manifest_path = self.project_dir / ".keboola" / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for entry in manifest["configurations"]:
+                if entry["id"] == cfg_id:
+                    entry["metadata"]["pull_hash"] = ""
+                    entry["metadata"]["pull_config_hash"] = ""
+                    entry["metadata"]["pull_extra_hashes"] = {}
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            shutil.rmtree(config_dir)
+            push_dry = self._run_ok(
+                "sync",
+                "push",
+                "--project",
+                self.alias,
+                "--directory",
+                str(self.project_dir),
+                "--force",
+                "--dry-run",
+            )
+            envelope = push_dry["data"]
+            planned_deletes = [
+                c
+                for c in envelope.get("changes", [])
+                if c["change_type"] == "deleted" and c["config_id"] == cfg_id
+            ]
+            assert not planned_deletes, "phantom entry must never be planned as a remote DELETE"
+            assert any(item["config_id"] == cfg_id for item in envelope.get("never_fetched", [])), (
+                f"phantom entry must be reported as never_fetched: {envelope}"
+            )
         finally:
             cfg_id = cfg.get("id") if cfg else None
             if cfg_id:
@@ -7397,14 +7875,27 @@ class TestE2EStorageSwapTables:
             "id",
         )
 
-        def _value_len(table_detail: dict[str, Any]) -> str:
-            cols = {c["name"]: c for c in table_detail["definition"]["columns"]}
-            return cols["value"]["definition"]["length"]
+        # Read the 'value' length via the CLI's normalized `column_details`
+        # (what a user/agent sees). The raw `/tables/{id}` `definition.columns`
+        # block is read-after-DDL eventually consistent on this stack -- after a
+        # swap it can keep reporting the pre-swap length for >30s -- whereas
+        # `column_details` reflects the swap at once (verified 2026-07-22).
+        def _value_len(table_id: str) -> str:
+            detail = self._run_ok(
+                "storage",
+                "table-detail",
+                "--project",
+                self.alias,
+                "--table-id",
+                table_id,
+                "--branch",
+                str(branch_id),
+            )["data"]
+            cols = {c["name"]: c for c in detail["column_details"]}
+            return str(cols["value"]["length"])
 
-        before_original = self.client.get_table_detail(original_id, branch_id=branch_id)
-        before_typed = self.client.get_table_detail(typed_id, branch_id=branch_id)
-        assert _value_len(before_original) == "20"
-        assert _value_len(before_typed) == "80"
+        assert _value_len(original_id) == "20"
+        assert _value_len(typed_id) == "80"
 
         _step(3, "storage swap-tables", "POST /tables/.../swap with targetTableId")
         result = self._run_ok(
@@ -7426,15 +7917,30 @@ class TestE2EStorageSwapTables:
         assert result["dry_run"] is False
 
         _step(4, "table-detail", "verify VARCHAR lengths exchanged")
-        after_original = self.client.get_table_detail(original_id, branch_id=branch_id)
-        after_typed = self.client.get_table_detail(typed_id, branch_id=branch_id)
-        assert _value_len(after_original) == "80", (
+
+        def _poll_value_len(table_id: str, expected: str) -> str:
+            """Poll column_details until 'value' has the expected length (max ~30s).
+
+            Small safety margin for any residual read lag after the swap job
+            completes; column_details is normally consistent immediately.
+            """
+            length = ""
+            for _ in range(15):
+                length = _value_len(table_id)
+                if length == expected:
+                    return length
+                time.sleep(2)
+            return length
+
+        after_original_len = _poll_value_len(original_id, "80")
+        after_typed_len = _poll_value_len(typed_id, "20")
+        assert after_original_len == "80", (
             f"After swap, '{original_id}' should adopt the schema of '{typed_id}' "
-            f"(VARCHAR(80)); got VARCHAR({_value_len(after_original)})."
+            f"(VARCHAR(80)); got VARCHAR({after_original_len})."
         )
-        assert _value_len(after_typed) == "20", (
+        assert after_typed_len == "20", (
             f"After swap, '{typed_id}' should adopt the schema of '{original_id}' "
-            f"(VARCHAR(20)); got VARCHAR({_value_len(after_typed)})."
+            f"(VARCHAR(20)); got VARCHAR({after_typed_len})."
         )
 
     def test_swap_dry_run_does_not_call_api(self) -> None:
@@ -7598,10 +8104,28 @@ class TestE2EStorageCloneTable:
 
     def test_clone_prod_table_into_dev_branch(self) -> None:
         """Live pull: a production table becomes available in the dev branch."""
-        bucket_id = f"in.c-{RUN_ID.replace('-', '_')}_clone"
+        bucket_stage = "in"
+        bucket_name = f"{RUN_ID.replace('-', '_')}_clone"
+        bucket_id = f"in.c-{bucket_name}"
         table_id = f"{bucket_id}.source"
 
-        _step(1, "create a production table (default branch)")
+        # create-table on the DEFAULT branch does NOT auto-create the bucket
+        # (that convenience is dev-branch-only, to materialize the branch's
+        # isolated storage). The production path needs the bucket first.
+        _step(1, "create the destination bucket (default branch)")
+        self._run_ok(
+            "storage",
+            "create-bucket",
+            "--project",
+            self.alias,
+            "--stage",
+            bucket_stage,
+            "--name",
+            bucket_name,
+        )
+        self._created_buckets.append(bucket_id)
+
+        _step(2, "create a production table (default branch)")
         self._run_ok(
             "storage",
             "create-table",
@@ -7618,16 +8142,15 @@ class TestE2EStorageCloneTable:
             "--primary-key",
             "id",
         )
-        self._created_buckets.append(bucket_id)
 
-        _step(2, "branch create", "target dev branch for the pull")
+        _step(3, "branch create", "target dev branch for the pull")
         branch = self._run_ok(
             "branch", "create", "--project", self.alias, "--name", f"{RUN_ID}-clone-branch"
         )["data"]
         branch_id = int(branch["branch_id"])
         self._created_branch_ids.append(branch_id)
 
-        _step(3, "storage clone-table", "POST /tables/.../pull (default -> branch)")
+        _step(4, "storage clone-table", "POST /tables/.../pull (default -> branch)")
         result = self._run_ok(
             "storage",
             "clone-table",
@@ -7643,7 +8166,7 @@ class TestE2EStorageCloneTable:
         assert result["dry_run"] is False
         assert result["response"]["status"] == "success"
 
-        _step(4, "table-detail in branch", "table is materialized/visible after pull")
+        _step(5, "table-detail in branch", "table is materialized/visible after pull")
         detail = self.client.get_table_detail(table_id, branch_id=branch_id)
         col_names = {c["name"] for c in detail["definition"]["columns"]}
         assert col_names == {"id", "value"}
@@ -8961,7 +9484,12 @@ def test_stream_otlp_e2e(tmp_path: Path) -> None:
     config_dir = tmp_path / "kbagent-config"
     config_dir.mkdir()
     alias = "e2e-stream-target"
-    source_name = "kbagent-e2e-stream"
+    # Unique per run: a fixed name reuses whatever source is already there, and
+    # a source whose async delete once got wedged server-side (unremovable via
+    # the API) would then red every subsequent run. A fresh per-run source
+    # creates and deletes cleanly (~3s) and is isolated from any orphan.
+    source_name = f"kbagent-{RUN_ID}"
+    sink_bucket = f"in.c-otlp-{source_name}"
 
     def _run(*args: str) -> Any:
         return runner.invoke(
@@ -9018,13 +9546,42 @@ def test_stream_otlp_e2e(tmp_path: Path) -> None:
         assert "/***" not in rdata["endpoint"]
     finally:
         # 5. Clean up -- delete the source and confirm it is gone.
+        #
+        # Deleting an OTLP source tears down its auto-provisioned sinks, which
+        # runs as an async Stream task. It is usually fast (~3s) but under CI
+        # load has exceeded the client's task timeout, surfacing as a retryable
+        # TIMEOUT (exit 4) even though the delete keeps running server-side.
+        # Treat that as "delete in progress" and confirm eventual removal via
+        # the list below, so a slow-but-successful teardown does not red the run.
         deleted = _run("stream", "delete", source_name, "--project", alias, "--yes")
-        assert deleted.exit_code == 0, deleted.output
-        assert json.loads(deleted.output)["data"]["status"] == "deleted"
+        if deleted.exit_code == 0:
+            assert json.loads(deleted.output)["data"]["status"] == "deleted"
+        else:
+            payload = json.loads(deleted.output)
+            assert payload["error"]["code"] == "TIMEOUT", deleted.output
 
-    final = _run("stream", "list", "--project", alias)
-    remaining = {s["source_id"] for s in json.loads(final.output)["data"]["sources"]}
+    # Poll the source list until the (possibly still-processing) delete lands.
+    remaining: set[str] = set()
+    for _ in range(30):
+        final = _run("stream", "list", "--project", alias)
+        remaining = {s["source_id"] for s in json.loads(final.output)["data"]["sources"]}
+        if source_name not in remaining:
+            break
+        time.sleep(2)
     assert source_name not in remaining
+
+    # Best-effort: drop the auto-provisioned sink bucket, which lingers after
+    # the source is gone. Failure here is not a test failure (throwaway project).
+    _run(
+        "storage",
+        "delete-bucket",
+        "--project",
+        alias,
+        "--bucket-id",
+        sink_bucket,
+        "--force",
+        "--yes",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -11516,7 +12073,7 @@ class TestE2EConfigSecretEncryption:
         return _json_ok(_invoke(self.config_dir, ["--json", *args]))
 
     def _read_password(self, config_id: str) -> str:
-        data = self._run_ok(
+        envelope = self._run_ok(
             "config",
             "detail",
             "--project",
@@ -11526,7 +12083,9 @@ class TestE2EConfigSecretEncryption:
             "--config-id",
             config_id,
         )
-        return data["configuration"]["parameters"]["#password"]
+        # _run_ok returns the full {status, data} envelope; the config body
+        # lives under .data.configuration (config detail is single-project here).
+        return envelope["data"]["configuration"]["parameters"]["#password"]
 
     def test_config_create_and_update_encrypt_secret(self) -> None:
         _step(1, "config new --push with a #password", "must encrypt before write")

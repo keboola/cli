@@ -107,6 +107,22 @@ def search_configs(
     )
 
 
+@router.get("/examples/{component_id}", summary="Get configuration examples for a component")
+def config_examples(
+    component_id: str,
+    project: str | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Fetch root and row configuration example bodies for a component.
+
+    Mirrors `kbagent config examples`. The method lives on ComponentService
+    (the AI Service component detail carries the example bodies); ``project``
+    only selects which stack URL + token to use -- omitted means the first
+    configured project.
+    """
+    return registry.component.get_config_examples(alias=project, component_id=component_id)
+
+
 @router.get("/{project}/{component_id}/{config_id}", summary="Get configuration detail")
 def config_detail(
     project: str,

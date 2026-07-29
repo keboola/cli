@@ -98,9 +98,18 @@ def normalize_for_comparison(obj: Any) -> Any:
     variable-link backfill in ``sync push``) must refresh the stored
     ``pull_config_hash`` afterwards or ``sync diff`` will report a conflict.
 
+    A falsy ROOT-level ``is_disabled`` is dropped before comparison: the
+    serializer emits the key only when true, so "absent" and "false" must
+    hash identically or every tree pulled before the field existed would
+    diff on all configs (issue #467). Only the root key is dropped --
+    a user parameter named ``is_disabled`` deeper in the config is data.
+
     Returns a deep copy -- the original object is never mutated.
     """
-    return _normalize(copy.deepcopy(obj))
+    normalized = copy.deepcopy(obj)
+    if isinstance(normalized, dict) and not normalized.get("is_disabled"):
+        normalized.pop("is_disabled", None)
+    return _normalize(normalized)
 
 
 def _normalize(obj: Any) -> Any:

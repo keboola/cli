@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from rich.console import Console
 from rich.markup import escape
 from rich.syntax import Syntax
 
@@ -383,6 +384,92 @@ def _format_config_detail_bulk(
 
         console.print(table)
         console.print()
+
+
+def _format_config_examples(console: Console, data: dict) -> None:
+    """Render numbered JSON syntax blocks per example section.
+
+    Sections absent from ``data`` (e.g. root examples filtered out by
+    ``--row``) are skipped entirely.
+    """
+    component_id = data.get("component_id", "")
+    console.print(
+        f"\n[bold]Configuration examples for [cyan]{escape(component_id)}[/cyan][/bold]\n"
+    )
+
+    sections = (
+        ("Root Configuration Examples", data.get("root_examples")),
+        ("Row Configuration Examples", data.get("row_examples")),
+    )
+    for heading, examples in sections:
+        if examples is None:
+            continue
+        console.print(f"[bold underline]{heading}[/bold underline]")
+        if not examples:
+            console.print("[dim](none)[/dim]\n")
+            continue
+        for index, example in enumerate(examples, start=1):
+            console.print(f"[bold]Example {index}[/bold]")
+            syntax = Syntax(
+                json.dumps(example, indent=2, ensure_ascii=False),
+                "json",
+                theme="monokai",
+            )
+            console.print(syntax)
+            console.print()
+
+
+@config_app.command("examples", rich_help_panel="Browse")
+def config_examples(
+    ctx: typer.Context,
+    component_id: str = typer.Option(
+        ...,
+        "--component-id",
+        help="Component ID (e.g. keboola.ex-google-drive)",
+    ),
+    project: str | None = typer.Option(
+        None,
+        "--project",
+        help="Project alias (uses first available if not set)",
+    ),
+    row: bool = typer.Option(
+        False,
+        "--row",
+        help="Show row configuration examples only",
+    ),
+) -> None:
+    """Show sample configuration JSON examples for a component.
+
+    Surfaces the root and row configuration examples published in the
+    component documentation (the same bodies 'config new' seeds scaffolds
+    from). Useful as a starting point before 'config update' or
+    'config row-create'.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "component_service")
+
+    try:
+        result = service.get_config_examples(alias=project, component_id=component_id)
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            project=project or "",
+            retryable=exc.retryable,
+        )
+        raise typer.Exit(code=exit_code) from None
+
+    if row:
+        result = {
+            "component_id": result["component_id"],
+            "row_examples": result["row_examples"],
+        }
+
+    formatter.output(result, _format_config_examples)
 
 
 @config_app.command("search", rich_help_panel="Browse")

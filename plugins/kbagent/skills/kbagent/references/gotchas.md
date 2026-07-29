@@ -11,6 +11,56 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## MCP passthrough is DEPRECATED; parity map + canary (since v0.74.0)
+
+- **`tool call` / `tool list` / `agent --type mcp_tool` are on a removal
+  track** (epic #390 phase 2). `tool call` warns with the exact native
+  replacement (stderr in human mode; additive `deprecation` key in the
+  `--json` envelope -- parse-safe, no existing key changed). `tool list`
+  gains a `cli_equivalent` column/field. Serve `/mcp/tools*` routes are
+  marked `deprecated` in OpenAPI (`/mcp/server-status` stays).
+- **The parity map is code**: `src/keboola_agent_cli/mcp_parity.py` --
+  one entry per upstream tool; offline tests pin every entry to a real
+  OPERATION_REGISTRY key, and the weekly `mcp-parity-canary` workflow
+  (also `make parity-check`) diffs the live keboola-mcp-server `TOOLS.md`
+  against it, so a new upstream tool turns the canary red instead of
+  silently widening the gap.
+- **`agent --type mcp_tool` tasks keep working** through the deprecation
+  window -- creation just warns; migrate to `--type cli_command` with the
+  native command at your own pace before the removal release.
+
+## MCP tool classification is FAIL-CLOSED; parity commands replace `tool call` (since v0.73.0)
+
+- **Unknown MCP tool names classify as `destructive`** -- blocked by BOTH
+  `--deny-writes` and `--deny-destructive`, and never fanned out multi-project.
+  Before 0.73.0 anything not matching a write prefix classified as `read`:
+  `run_job`, `run_sync_action`, `deploy_data_app`, `modify_*` passed
+  `--deny-writes` AND ran on every configured project in parallel. They are
+  writes now (single-project dispatch).
+- **`tool call` enforces the session firewall per tool name** -- a session-only
+  `--deny-destructive` now blocks `tool call delete_bucket` (previously only a
+  PERSISTED `permissions set` policy was checked at tool granularity; session
+  flags stopped at the coarse `tool.call` operation).
+- **Prefer the native parity commands over `tool call`** -- the MCP passthrough
+  is on a deprecation track (epic #390 / issue #478): `docs query`,
+  `config examples`, `semantic-layer schema`, `component sync-action`,
+  `transformation create|show|edit`, `flow examples`. `query_data`'s CLI
+  answer is `workspace query`.
+- **`component sync-action --row-id` merge is SHALLOW** (MCP parity): row
+  `parameters`/`storage` top-level keys replace the root's wholesale -- a row
+  that sets `parameters.db` replaces the ENTIRE root `db` object, it does not
+  deep-merge into it.
+- **`transformation edit` ids are positional and renumber** after every
+  structural op -- always `transformation show` immediately before `edit`
+  (fresh-fetch rule). `--storage` REPLACES `configuration.storage` wholesale.
+- **`semantic-layer schema` resolves the default schema VERSION** -- the bare
+  metastore endpoint returns only a `{versions: [...]}` listing (the upstream
+  MCP tool ships that listing as-is; the CLI fetches the real document and
+  reports `schema_version`).
+- **`docs query` vs `kai ask`**: `docs query` is documentation-only RAG (any
+  token, no feature flag, no project data); `kai ask` sees project data but
+  needs the master token + `agent-chat` feature.
+
 ## `token` group mints/rotates/revokes SCOPED Storage tokens; secret shown ONCE (since v0.66.0)
 
 - **`kbagent token create --project P --description D [--bucket-write B ...]
@@ -910,11 +960,17 @@ events and emits a final `done` SSE frame mirroring the same record.
   schema is missing fields (e.g. `configuration_row_ids` added in MCP v1.55.0)
   and `kbagent --json tool list` reports the stale schema with no warning.
   Reported in #243 -- a real user hit this with MCP v1.49.0 (six minors behind).
-- Since v0.30.1: `kbagent` startup runs a two-stage auto-update -- (1) kbagent
-  itself, (2) `keboola-mcp-server`. The MCP stage detects the install method
+- Since v0.30.1: `kbagent` startup runs a two-stage auto-update for kbagent
+  itself and `keboola-mcp-server`. The MCP stage detects the install method
   (`uv_tool` / `pip_env` / `uvx`) and runs the matching upgrade command
   (`uv tool upgrade` / `pip install -U` / `uvx --refresh`). No re-exec needed
   for the MCP path -- the next `tool call` spawn picks up the new version.
+- Since v0.76.2 (#528/#530), both updates are fully planned before anything is
+  mutated. MCP is upgraded first; a pending kbagent self-update is the terminal
+  mutation and uses an exact-version full reinstall (`uv tool install --force
+  --reinstall` for uv tools), then immediately re-executes the original command.
+  A failed or timed-out reinstall prints a copy-paste recovery command. Do not
+  run discovery or another update stage after the kbagent reinstall starts.
 - Since v0.43.8: every MCP install/upgrade command carries `--prerelease=allow`
   (uv) / `--pre` (pip). `keboola-mcp-server >= 1.55.0` pins a pre-release-only
   transitive dep (`toon-format~=0.9.0b1`); without the opt-in uv backtracks to
@@ -2049,14 +2105,16 @@ Update all references in the code that creates and uses the renamed table.
 
 ## Auto-update
 
-kbagent automatically checks for updates on every invocation. When a newer version
-is available on PyPI, it installs the update and re-executes the same command
-seamlessly. This is transparent -- no user action required.
+kbagent automatically checks for updates on every invocation. When a newer stable
+GitHub Release is available, it prefers the release wheel, performs a full
+exact-version reinstall, and re-executes the same command seamlessly. This is
+transparent -- no user action is normally required.
 
 - Opt-out: `KBAGENT_AUTO_UPDATE=false`
-- Version cache: checks PyPI at most once per hour
+- Version cache: checks the release endpoints at most once per hour
 - Skipped for: dev/editable installs, `update`/`version` commands
-- Never crashes the CLI -- update failures are silently ignored
+- Never crashes the CLI -- update failures leave the current invocation running
+  and print a recovery command (since v0.76.2)
 
 ## `lineage build` and sync layouts
 
@@ -2937,3 +2995,65 @@ shape consistency and is empty (`[]`) when the table matched on its own name
 (only column matches populate it). The human table adds
 the "Matched columns" column **only when at least one result actually matched via
 a column** -- a plain search that hit nothing by column shows no extra column.
+
+## Sync trust cluster: --theirs reconcile, manifest<->disk invariant, isDisabled round-trip, never-fetched guard (since v0.72.0)
+
+Four related sync-engine behaviors landed together (issues #466 / #467 / #472 / #497):
+
+- **`sync pull --theirs` is the supported "discard local, take production" path.**
+  It overwrites locally-modified configs AND rows, restores deleted/missing
+  files, and resolves true merge conflicts by taking the remote version instead
+  of aborting. No `.keboola/manifest.json` hand-editing is ever needed to
+  reconcile a drifted tree. Works standalone (does not require `--force`).
+- **Plain `sync pull` re-materializes missing local dirs.** A tracked config
+  whose directory/`_config.yml` was deleted locally is re-fetched on the next
+  pull even when the remote is unchanged (manifest<->disk invariant). The old
+  behavior silently reported "Already up to date". NOTE the interplay with the
+  GitOps delete flow: delete-dir-then-PUSH still deletes the remote config;
+  delete-dir-then-PULL now restores it instead of doing nothing.
+- **Config-level `isDisabled` round-trips.** Pull writes a sparse
+  `is_disabled: true` line into `_config.yml` (absent key = enabled -- old trees
+  do not mass-diff), `sync diff` surfaces enabled/disabled drift (a config
+  disabled in production no longer looks "in sync"), and push sends the state:
+  an explicit `is_disabled:` key in the local YAML updates the remote; an
+  absent key leaves the remote state untouched. Same semantics for rows.
+- **Never-fetched guard.** A manifest entry with an EMPTY `pull_hash` and no
+  local files (a phantom left by a pre-0.72 name-collision pull, issue #472) is
+  excluded from delete planning: `sync push --force` will NOT delete that
+  remote config. diff/push report it under `never_fetched` (JSON key + human
+  warning); the next `sync pull` materializes it. A properly-pulled config
+  (non-empty `pull_hash`) that you delete locally is still planned as a remote
+  DELETE on push -- the guard only protects entries that were never on disk.
+- **Adopted-by-id push writes the manifest.** Pushing an untracked local file
+  whose `_keboola.config_id` resolves on the target branch (the #482
+  adopt-update path) now also creates the manifest entry (fresh
+  `pull_hash`/`pull_config_hash`), so the very next `sync diff` reads a stable
+  entry and a later local deletion is detected -- previously the config stayed
+  untracked until the next pull (#497).
+- **`sync status` wording.** The all-clear line now reads "No local changes
+  detected ... Local check only -- run 'kbagent sync diff'": `status` never
+  contacts the API, so it cannot see remote drift; treating it as a
+  local-vs-production audit was the #466 trap.
+
+## Table snapshots: restore is `tables-async`, `--name` is required, no overwrite (since v0.75.0)
+
+`kbagent storage table-from-snapshot` (issue #512) creates a NEW table from an
+existing snapshot. Three traps, all verified live (us-east4.gcp, 2026-07-22):
+
+- **`--name` is REQUIRED.** The API rejects an omitted or empty name with
+  `Table create option "name" is required and cannot be empty` -- the reference
+  PHP client's "defaults to the snapshotted table's name" docblock is stale.
+- **No overwrite semantics.** Restoring onto an existing table name fails with
+  a duplicate-name error. The safe pattern: restore under a new name, verify
+  the data, then `storage swap-tables` (or `delete-table` + re-restore) to
+  promote it. The destination bucket must already exist.
+- **It is not a `create-table` flag.** Restore goes through the classic
+  `tables-async` import endpoint; `create-table` uses `tables-definition`,
+  which does not accept `snapshotId` -- hence the dedicated command.
+
+Lifecycle: `snapshot-create` (write; receipt carries `snapshot_id`),
+`snapshots` (read, per table), `snapshot-detail` (read; global snapshot ID ->
+embeds the source `table` object), `snapshot-delete` (destructive: forecloses
+restores, source tables untouched; batch-tolerant, exit 1 on any failure).
+Snapshot create and restore are async storage jobs -- the CLI polls to
+completion, so the receipt's `table.rowsCount` is authoritative.

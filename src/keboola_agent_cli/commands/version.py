@@ -142,12 +142,13 @@ def update_command(
 
     Two-stage upgrade (since v0.30.1):
 
-    1. **kbagent** -- ``uv tool install --upgrade`` (preferred) or
-       ``pip install --upgrade`` from the GitHub repository.
-    2. **keboola-mcp-server** -- detects install method and runs the
+    1. **keboola-mcp-server** -- detects install method and runs the
        matching upgrade command (``uv tool upgrade`` / ``pip install -U``
-       / ``uvx --refresh``). Always runs, regardless of whether kbagent
-       itself needed an upgrade.
+       / ``uvx --refresh``).
+    2. **kbagent** -- final terminal stage: ``uv tool install --force
+       --reinstall`` from an exact release wheel or Git tag. This recreates
+       the whole tool environment and preserves ``[server]`` extras. On a
+       failure the result includes a copy/paste recovery command.
 
     JSON output reports both stages independently. Human mode prints a
     one-line summary such as

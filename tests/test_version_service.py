@@ -9,6 +9,9 @@ from keboola_agent_cli.constants import MCP_UPGRADE_TIMEOUT
 from keboola_agent_cli.services.version_service import (
     MCP_BINARY_NAME,
     MCP_PACKAGE_NAME,
+    KbagentUpdatePlan,
+    McpUpdatePlan,
+    UpdatePlan,
     VersionService,
     _detect_mcp_install_method,
     _fetch_kbagent_latest_version,
@@ -17,6 +20,7 @@ from keboola_agent_cli.services.version_service import (
     _is_up_to_date,
     _is_uvx_available,
     _perform_mcp_update,
+    _recovery_command,
     _uv_tool_list_get_mcp_version,
     _uv_tool_list_has_mcp,
     build_kbagent_upgrade_command,
@@ -725,7 +729,67 @@ class TestSelfUpdateTwoStage:
         # Critical: kbagent up-to-date does NOT short-circuit MCP stage.
         assert result["mcp"]["updated"] is True
         assert result["updated"] is True
-        mock_perform.assert_called_once()
+
+    def test_prepares_every_lookup_then_updates_mcp_before_terminal_kbagent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #528: no discovery may happen after self-mutation begins."""
+        events: list[str] = []
+        mutated = False
+
+        def prepare(*, include_prerelease: bool = False) -> UpdatePlan:
+            events.append("prepare")
+            return UpdatePlan(
+                kbagent=KbagentUpdatePlan(
+                    current_version="1.0.0",
+                    latest_version="2.0.0",
+                    up_to_date=False,
+                    command=("uv", "tool", "install"),
+                    recovery_command="uv tool install --force --reinstall exact",
+                ),
+                mcp=McpUpdatePlan(
+                    current_version="1.0.0",
+                    latest_version="2.0.0",
+                    install_method="uv_tool",
+                    up_to_date=False,
+                    command=("uv", "tool", "upgrade", MCP_PACKAGE_NAME),
+                ),
+            )
+
+        def perform_mcp(*args: object, **kwargs: object) -> tuple[bool, str]:
+            assert not mutated
+            events.append("mcp")
+            return True, "ok"
+
+        def probe_mcp() -> str:
+            assert not mutated
+            events.append("mcp_probe")
+            return "2.0.0"
+
+        def run(command: list[str], **kwargs: object) -> MagicMock:
+            nonlocal mutated
+            assert command == ["uv", "tool", "install"]
+            mutated = True
+            events.append("kbagent")
+            return MagicMock(returncode=1, stdout="", stderr="locked")
+
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service.prepare_update_plan", prepare
+        )
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service._perform_mcp_update", perform_mcp
+        )
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service._get_local_mcp_version", probe_mcp
+        )
+        monkeypatch.setattr("keboola_agent_cli.services.version_service.subprocess.run", run)
+
+        result = VersionService().self_update()
+
+        assert events == ["prepare", "mcp", "mcp_probe", "kbagent"]
+        assert result["mcp"]["updated"] is True
+        assert result["kbagent"]["updated"] is False
+        assert result["kbagent"]["recovery_command"].endswith("exact")
 
     @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
     @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
@@ -1078,7 +1142,8 @@ class TestBuildKbagentWheelInstall:
             prerelease=True, target_version="1.2.3", wheel_url=self.WHEEL
         )
         assert cmd is not None
-        assert "--prerelease=allow" not in cmd
+        assert "--prerelease=allow" in cmd
+        assert "--reinstall" in cmd
         assert all("git+" not in part for part in cmd)
         assert cmd[-1] == f"keboola-cli[server] @ {self.WHEEL}"
 
@@ -1174,24 +1239,44 @@ class TestBuildKbagentUpgradeCommand:
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras")
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    def test_uv_stable_with_target_version_ignores_tag(
+    def test_uv_stable_with_target_version_pins_tag(
         self, mock_which: MagicMock, mock_has_server: MagicMock
     ) -> None:
-        """target_version is ignored unless prerelease=True.
-
-        Stable upgrades always track main (which IS the stable channel),
-        so tag-pinning would just add a needless HTTP round-trip without
-        changing the resolved version.
-        """
+        """Stable recovery is pinned to the requested immutable release tag."""
         mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
         mock_has_server.return_value = False
 
         cmd = build_kbagent_upgrade_command(prerelease=False, target_version="0.43.3")
 
         assert cmd is not None
-        # No tag suffix when prerelease=False, even if target_version supplied.
-        assert not cmd[-1].endswith("@v0.43.3")
-        assert "@v" not in cmd[-1]
+        assert cmd[-1].endswith("@v0.43.3")
+        assert "--force" in cmd
+        assert "--reinstall" in cmd
+
+    def test_windows_uv_executable_keeps_exact_beta_recovery_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """uv.exe is uv, not a pip fallback; retain its prerelease flag."""
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service._render_command",
+            subprocess.list2cmdline,
+        )
+        command = (
+            r"C:\Users\test\.local\bin\uv.exe",
+            "tool",
+            "install",
+            "--force",
+            "--reinstall",
+            "--prerelease=allow",
+            "keboola-cli[server] @ https://example.test/keboola.whl",
+        )
+
+        recovery = _recovery_command(command, "1.0.0b1")
+
+        assert recovery is not None
+        assert recovery.startswith("uv tool install")
+        assert "--prerelease=allow" in recovery
+        assert "'keboola-cli" not in recovery
 
 
 # ---------------------------------------------------------------------------

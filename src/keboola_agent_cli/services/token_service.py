@@ -23,7 +23,7 @@ from typing import Any
 
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
-from ..errors import ConfigError
+from .base import ResolvedProjectCredentials, resolve_project_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -64,14 +64,14 @@ class TokenService:
         API response (its ``token`` field is a one-time secret reveal) plus the
         resolving ``alias``.
         """
-        stack_url, token = self._resolve_project(alias)
+        creds = self._resolve_project(alias)
         bucket_permissions: dict[str, str] = {}
         for bucket_id in bucket_read or []:
             bucket_permissions[bucket_id] = "read"
         for bucket_id in bucket_write or []:
             # write is the stronger grant -- it wins over a read on the same bucket.
             bucket_permissions[bucket_id] = "write"
-        client = self._client_factory(stack_url, token)
+        client = self._client_factory(creds.stack_url, creds.token)
         try:
             result = client.create_scoped_token(
                 description=description,
@@ -86,8 +86,8 @@ class TokenService:
 
     def delete_token(self, *, alias: str, token_id: str) -> dict[str, Any]:
         """Revoke a token immediately in ``alias``'s project."""
-        stack_url, token = self._resolve_project(alias)
-        client = self._client_factory(stack_url, token)
+        creds = self._resolve_project(alias)
+        client = self._client_factory(creds.stack_url, creds.token)
         try:
             client.delete_token(token_id)
             return {"status": "deleted", "alias": alias, "token_id": token_id}
@@ -96,19 +96,14 @@ class TokenService:
 
     def refresh_token(self, *, alias: str, token_id: str) -> dict[str, Any]:
         """Rotate a token (old value invalidated) in ``alias``'s project."""
-        stack_url, token = self._resolve_project(alias)
-        client = self._client_factory(stack_url, token)
+        creds = self._resolve_project(alias)
+        client = self._client_factory(creds.stack_url, creds.token)
         try:
             result = client.refresh_token(token_id)
             return {"alias": alias, **result}
         finally:
             client.close()
 
-    def _resolve_project(self, alias: str) -> tuple[str, str]:
-        """Resolve ``alias`` to its ``(stack_url, token)``."""
-        project = self._config_store.get_project(alias)
-        if project is None:
-            raise ConfigError(
-                f"Project alias '{alias}' is not registered. Run `kbagent project list`."
-            )
-        return project.stack_url, project.token
+    def _resolve_project(self, alias: str) -> ResolvedProjectCredentials:
+        """Resolve ``alias`` to its stack URL + token (or raise ConfigError)."""
+        return resolve_project_credentials(self._config_store, alias)

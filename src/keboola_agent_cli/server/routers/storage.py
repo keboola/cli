@@ -103,6 +103,18 @@ class CloneTable(BaseModel):
     branch_id: int
 
 
+class CreateSnapshot(BaseModel):
+    description: str | None = None
+    branch_id: int | None = None
+
+
+class TableFromSnapshot(BaseModel):
+    snapshot_id: str
+    bucket_id: str
+    name: str
+    branch_id: int | None = None
+
+
 @router.get("/buckets", summary="List storage buckets")
 def list_buckets(
     project: str | None = None,
@@ -429,6 +441,85 @@ def clone_table(
     return registry.storage.clone_table(
         alias=project,
         table_id=table_id,
+        branch_id=body.branch_id,
+        dry_run=dry_run,
+    )
+
+
+@router.post("/tables/{project}/{table_id:path}/snapshots", summary="Create a table snapshot")
+def create_snapshot(
+    project: str,
+    table_id: str,
+    body: CreateSnapshot,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Create a point-in-time snapshot of a table. Mirrors `kbagent storage snapshot-create`."""
+    return registry.snapshot.create_snapshot(
+        alias=project,
+        table_id=table_id,
+        description=body.description,
+        branch_id=body.branch_id,
+    )
+
+
+@router.get("/snapshots/{project}/{table_id:path}", summary="List table snapshots")
+def list_snapshots(
+    project: str,
+    table_id: str,
+    limit: int | None = None,
+    branch_id: int | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """List snapshots of a table. Mirrors `kbagent storage snapshots`."""
+    return registry.snapshot.list_snapshots(
+        alias=project,
+        table_id=table_id,
+        limit=limit,
+        branch_id=branch_id,
+    )
+
+
+@router.get("/snapshot-detail/{project}/{snapshot_id}", summary="Get snapshot detail")
+def snapshot_detail(
+    project: str,
+    snapshot_id: str,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """One snapshot's detail (embeds the source table). Mirrors `kbagent storage snapshot-detail`."""
+    return registry.snapshot.get_snapshot(alias=project, snapshot_id=snapshot_id)
+
+
+@router.delete("/snapshots/{project}", summary="Delete snapshots")
+def delete_snapshots(
+    project: str,
+    snapshot_id: list[str] = Query(...),
+    dry_run: bool = False,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Delete one or more snapshots (batch-tolerant). Mirrors `kbagent storage snapshot-delete`."""
+    return registry.snapshot.delete_snapshots(
+        alias=project,
+        snapshot_ids=snapshot_id,
+        dry_run=dry_run,
+    )
+
+
+@router.post("/table-from-snapshot/{project}", summary="Create a NEW table from a snapshot")
+def table_from_snapshot(
+    project: str,
+    body: TableFromSnapshot,
+    dry_run: bool = False,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Restore a snapshot as a NEW table (data + columns + primary key).
+
+    Mirrors `kbagent storage table-from-snapshot`.
+    """
+    return registry.snapshot.create_table_from_snapshot(
+        alias=project,
+        bucket_id=body.bucket_id,
+        snapshot_id=body.snapshot_id,
+        name=body.name,
         branch_id=body.branch_id,
         dry_run=dry_run,
     )

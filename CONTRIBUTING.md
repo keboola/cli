@@ -21,7 +21,7 @@ Read this **before** writing code. It will save review rounds.
 ### 3-Layer architecture -- respect the boundaries
 
 ```
-CLI Commands (commands/)  -->  Services (services/)  -->  API Client (client.py, manage_client.py)
+CLI Commands (commands/)  -->  Services (services/)  -->  API Client (client/, manage_client.py)
   Typer, output                 Business logic             HTTP, endpoints
 ```
 
@@ -29,7 +29,7 @@ CLI Commands (commands/)  -->  Services (services/)  -->  API Client (client.py,
 |-------|---------------|----------------------|
 | **Commands** (`commands/`) | Typer option parsing, `OutputFormatter` calls, error-to-exit-code mapping | Business logic, HTTP calls, data transformation |
 | **Services** (`services/`) | Orchestration, validation, data normalization, parallel execution | Typer imports, output formatting, raw HTTP |
-| **Clients** (`client.py`, etc.) | HTTP requests, URL construction, response parsing, retry logic | Business decisions, output formatting |
+| **Clients** (`client/` package, `manage_client.py`, etc.) | HTTP requests, URL construction, response parsing, retry logic | Business decisions, output formatting |
 
 When adding a new feature, you will almost always touch all three layers.
 If you find yourself importing `typer` in a service or calling `httpx` in a command, stop -- you're in the wrong layer.
@@ -188,12 +188,12 @@ Hard ceiling per file:
 |-------|--------------|--------------|
 | `commands/*.py` | 800 LOC | 1200 LOC |
 | `services/*.py` | 1000 LOC | 1500 LOC |
-| `client.py` / `manage_client.py` | 1500 LOC | 2000 LOC |
+| `client/*.py` (per module) / `manage_client.py` | 1500 LOC | 2000 LOC |
 
 When a file crosses the **soft** ceiling, the next PR that adds material to it should split first. When a file crosses the **hard** ceiling, splitting is required before merging more functionality into it.
 
 How to split:
-- `client.py` mixing multiple Keboola subsystems (Storage, Queue, Sandboxes, Manage proxy, AI, encryption, ...) → split by **endpoint family**, e.g. `client/storage.py`, `client/queue.py`, `client/sandboxes.py`. Keep `BaseHttpClient` shared.
+- A client mixing multiple Keboola subsystems (Storage, Queue, Sandboxes, ...) → split by **endpoint family** into a package, e.g. `client/storage_tables.py`, `client/queue.py`, `client/configs.py`, composed into one class via mixins. Keep `BaseHttpClient` shared. (This is exactly what `client.py` -> the `client/` package was in #520.)
 - A service crossing the ceiling almost always mixes orchestration with parsing/transformation → extract pure helpers into a sibling `_helpers.py` or `_transformers.py`.
 
 This is a guideline driven by review feedback (kbagent 0.31.0: `client.py` ≈3000 LOC, `storage_service.py` ≈2180 LOC, `sync_service.py` ≈2765 LOC); the soft ceilings exist so the situation does not get worse before it gets better.
@@ -269,7 +269,7 @@ Many Storage API operations offer both sync and async variants. Sync endpoints a
 simpler but have lower limits (e.g., file size caps, timeouts). Always use the async
 variant for production code unless there is a specific reason not to.
 
-Use `_wait_for_storage_job()` from `client.py` for polling -- it already handles
+Use `_wait_for_storage_job()` from the client (`client/_core.py`) for polling -- it already handles
 intervals, backoff, timeout, and error extraction.
 
 ### Graceful resource creation (UX principle)
@@ -325,7 +325,7 @@ When adding a new command (e.g., `kbagent storage create-foo`), you must update 
 
 ### Code changes
 
-- [ ] **Client method** in `client.py` (or `manage_client.py`) -- HTTP layer
+- [ ] **Client method** in the relevant `client/*.py` mixin (or `manage_client.py`) -- HTTP layer
 - [ ] **Service method** in `services/` -- business logic, validation, orchestration
 - [ ] **Command function** in `commands/` -- Typer options, formatter, error handling
 - [ ] **Permission registration** in `permissions.py` (`OPERATION_REGISTRY` dict)

@@ -29,9 +29,47 @@ class TestClassifyMcpTool:
         assert classify_mcp_tool("add_tag") == "write"
         assert classify_mcp_tool("set_metadata") == "write"
 
+    def test_mutating_tools_previously_misclassified_as_read(self) -> None:
+        """Issue #478: run_*/modify_*/deploy_* used to fall through to 'read'."""
+        assert classify_mcp_tool("run_job") == "write"
+        assert classify_mcp_tool("run_sync_action") == "write"
+        assert classify_mcp_tool("modify_flow") == "write"
+        assert classify_mcp_tool("modify_streamlit_data_app") == "write"
+        assert classify_mcp_tool("deploy_data_app") == "write"
+
     def test_destructive_tools(self) -> None:
         assert classify_mcp_tool("delete_config") == "destructive"
         assert classify_mcp_tool("remove_tag") == "destructive"
+        assert classify_mcp_tool("truncate_table") == "destructive"
+        assert classify_mcp_tool("drop_bucket") == "destructive"
+        assert classify_mcp_tool("purge_files") == "destructive"
+
+    def test_unknown_tools_fail_closed_to_destructive(self) -> None:
+        """Issue #478: a tool matching no known prefix must NOT pass as a read.
+
+        'destructive' is the strictest category: both --deny-writes and
+        --deny-destructive policies block it.
+        """
+        assert classify_mcp_tool("frobnicate_project") == "destructive"
+        assert classify_mcp_tool("describe_table") == "destructive"
+        assert classify_mcp_tool("") == "destructive"
+
+    def test_current_catalog_read_tools(self) -> None:
+        """Every read tool in today's keboola-mcp-server catalog stays 'read'."""
+        for name in (
+            "get_project_info",
+            "get_configs",
+            "get_flows",
+            "get_data_apps",
+            "get_semantic_context",
+            "search",
+            "search_semantic_context",
+            "find_component_id",
+            "docs_query",
+            "query_data",
+            "validate_semantic_query",
+        ):
+            assert classify_mcp_tool(name) == "read", name
 
 
 class TestOperationRegistry:

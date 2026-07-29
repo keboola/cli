@@ -473,3 +473,69 @@ class TestConfigChange:
         assert d["config_name"] == "Test Config"
         assert d["path"] == "extractor/keboola.ex-http/test-config"
         assert len(d["details"]) == 1
+
+
+# ===================================================================
+# TestIsDisabledNormalization (issue #467)
+# ===================================================================
+
+
+class TestIsDisabledNormalization:
+    """Root-level falsy ``is_disabled`` is dropped before hashing.
+
+    The serializer emits ``is_disabled`` only when true (sparse), so "absent"
+    and "false" must hash identically -- otherwise every tree pulled before
+    the field existed would diff on all configs. Only the ROOT key is
+    special; a nested ``is_disabled`` anywhere deeper is user data.
+    """
+
+    def test_absent_and_false_hash_identically(self) -> None:
+        """{name} == {name, is_disabled: False} under config_hash."""
+        assert config_hash({"name": "x"}) == config_hash({"name": "x", "is_disabled": False})
+
+    def test_true_is_disabled_changes_hash(self) -> None:
+        """A truly disabled config hashes differently from an enabled one."""
+        assert config_hash({"name": "x"}) != config_hash({"name": "x", "is_disabled": True})
+
+    def test_nested_falsy_is_disabled_is_data(self) -> None:
+        """parameters.is_disabled=False is payload -- it must survive hashing."""
+        assert config_hash({"parameters": {"is_disabled": False}}) != config_hash(
+            {"parameters": {}}
+        )
+
+    def test_remote_disabled_pre_fix_tree_is_remote_modified(self) -> None:
+        """Upgrade path: pre-fix local tree vs a disabled prod config.
+
+        The local file (pulled before the field existed) lacks ``is_disabled``;
+        the remote reports it True; the stored base hash equals the local
+        hash. The 3-way diff must classify this as ``remote_modified`` (run
+        pull) -- not ``modified``/``conflict``, which would push an enable.
+        """
+        local_data = {"name": "X", "parameters": {"a": 1}}
+        local_configs = [
+            {
+                "component_id": "keboola.ex-http",
+                "config_id": "cfg-1",
+                "config_name": "X",
+                "path": "extractor/keboola.ex-http/x",
+                "data": local_data,
+            }
+        ]
+        remote_configs = {
+            "keboola.ex-http/cfg-1": {
+                "name": "X",
+                "parameters": {"a": 1},
+                "is_disabled": True,
+            }
+        }
+        base_hashes = {"keboola.ex-http/cfg-1": config_hash(local_data)}
+
+        changes = compute_changeset(
+            local_configs,
+            remote_configs,
+            tracked_keys={"keboola.ex-http/cfg-1"},
+            base_hashes=base_hashes,
+        )
+
+        assert len(changes) == 1
+        assert changes[0].change_type == "remote_modified"

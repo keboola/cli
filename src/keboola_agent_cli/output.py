@@ -483,6 +483,7 @@ def format_tools_table(console: Console, data: dict[str, Any]) -> None:
 
     table = Table(title="MCP Tools")
     table.add_column("Tool Name", style="bold cyan")
+    table.add_column("CLI equivalent", style="green")
     table.add_column("Parameters")
     table.add_column("Multi-Project", justify="center")
     table.add_column("Description", max_width=60)
@@ -492,6 +493,7 @@ def format_tools_table(console: Console, data: dict[str, Any]) -> None:
         params_str = _format_tool_params(tool.get("inputSchema", {}))
         table.add_row(
             tool["name"],
+            tool.get("cli_equivalent", ""),
             params_str,
             multi,
             tool.get("description", ""),

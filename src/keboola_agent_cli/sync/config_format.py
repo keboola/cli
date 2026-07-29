@@ -82,6 +82,7 @@ _ROW_LOCAL_RESERVED_KEYS: frozenset[str] = frozenset(
         "version",
         "name",
         "description",
+        "is_disabled",
         "parameters",
         "input",
         "output",
@@ -113,6 +114,9 @@ def api_config_to_local(
     Transformation rules:
     - ``version``: always ``CONFIG_YML_VERSION``
     - ``name``, ``description``: taken from the top-level API response
+    - ``is_disabled``: from top-level ``isDisabled``, emitted ONLY when true
+      (sparse -- absence means enabled, so trees pulled before this field
+      existed do not show a spurious diff on every config; issue #467)
     - ``configuration.parameters`` -> ``parameters``
     - ``configuration.storage.input`` -> ``input``
     - ``configuration.storage.output`` -> ``output``
@@ -130,6 +134,8 @@ def api_config_to_local(
         "name": config_data.get("name", ""),
         "description": config_data.get("description", ""),
     }
+    if config_data.get("isDisabled"):
+        local["is_disabled"] = True
 
     # Promote well-known nested keys
     if "parameters" in configuration:
@@ -222,6 +228,8 @@ def api_row_to_local(row_data: dict[str, Any], component_id: str) -> dict[str, A
         "name": row_data.get("name", ""),
         "description": row_data.get("description", ""),
     }
+    if row_data.get("isDisabled"):
+        local["is_disabled"] = True
 
     if "parameters" in configuration:
         local["parameters"] = configuration["parameters"]

@@ -35,6 +35,7 @@ def pull_all(
     with_samples: bool = False,
     sample_limit: int = DEFAULT_SAMPLE_LIMIT,
     max_samples: int = DEFAULT_MAX_SAMPLES,
+    theirs: bool = False,
 ) -> dict[str, Any]:
     """Pull all registered projects in parallel.
 
@@ -65,6 +66,7 @@ def pull_all(
                 with_samples=with_samples,
                 sample_limit=sample_limit,
                 max_samples=max_samples,
+                theirs=theirs,
             )
             results[alias] = result
             success_count += 1

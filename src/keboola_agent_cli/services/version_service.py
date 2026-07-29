@@ -11,8 +11,10 @@ import importlib.util
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -37,6 +39,37 @@ logger = logging.getLogger(__name__)
 # keboola-mcp-server constants
 MCP_PACKAGE_NAME = "keboola-mcp-server"
 MCP_BINARY_NAME = "keboola_mcp_server"
+
+
+@dataclass(frozen=True)
+class KbagentUpdatePlan:
+    """All information needed to perform the terminal kbagent reinstall."""
+
+    current_version: str
+    latest_version: str | None
+    up_to_date: bool | None
+    command: tuple[str, ...] | None
+    recovery_command: str | None
+
+
+@dataclass(frozen=True)
+class McpUpdatePlan:
+    """All discovery needed before applying the independent MCP update."""
+
+    current_version: str | None
+    latest_version: str | None
+    install_method: str
+    up_to_date: bool | None
+    command: tuple[str, ...] | None
+
+
+@dataclass(frozen=True)
+class UpdatePlan:
+    """Immutable explicit-update plan, prepared before either environment mutates."""
+
+    kbagent: KbagentUpdatePlan
+    mcp: McpUpdatePlan
+
 
 # MCP_UV_PRERELEASE_FLAG / MCP_PIP_PRERELEASE_FLAG are re-exported from
 # constants (imported above) so existing callers can keep importing them from
@@ -126,7 +159,7 @@ def get_update_timeout() -> float:
 def build_kbagent_upgrade_command(
     *, prerelease: bool = False, target_version: str | None = None, wheel_url: str | None = None
 ) -> list[str] | None:
-    """Build the argv command to upgrade kbagent in-place.
+    """Build the argv command to recreate the kbagent tool environment.
 
     Used by both ``kbagent update`` (explicit) and the startup
     auto-update hook so the two paths stay byte-for-byte consistent --
@@ -142,14 +175,9 @@ def build_kbagent_upgrade_command(
             are the newest available -- the default-deny behaviour we
             want for cron-driven auto-update so stable users never
             silently land on a beta release.
-        target_version: When set together with ``prerelease=True``, append
-            ``@v<target_version>`` to the git+ source URL so uv installs
-            the exact commit pointed to by the tag. Critical when betas
-            live on a feature branch instead of main -- without this, uv
-            resolves the default branch and silently installs the stale
-            main HEAD even though the version fetcher advertised the
-            beta tag. Ignored for stable upgrades (the auto-update path
-            always tracks main, which IS the latest stable).
+        target_version: Exact target release. Git fallbacks are always pinned
+            to ``@v<target_version>``; mutable ``main`` is never safe for a
+            recovery operation.
         wheel_url: When set, install the prebuilt wheel at this URL (a GitHub
             Release asset) via a PEP 508 direct reference instead of building
             from ``git+`` source -- the issue #353 fast path that skips the
@@ -162,70 +190,86 @@ def build_kbagent_upgrade_command(
         neither ``uv`` nor ``pip`` is on ``PATH`` (in which case the
         caller surfaces a manual-install hint).
     """
-    # Prebuilt-wheel fast path (issue #353): when the caller resolved a Release
-    # asset URL, install the ready-made wheel via a PEP 508 direct reference
-    # instead of git-building from source. The bundled npm/React build is what
-    # makes git+ installs take minutes on WSL; the wheel is a seconds download.
-    # wheel_url already pins the exact version, so prerelease / target_version
-    # (git-source knobs) do not apply here.
-    if wheel_url is not None:
-        spec = (
-            f"keboola-cli[server] @ {wheel_url}"
-            if has_server_extras()
-            else f"keboola-cli @ {wheel_url}"
+    # Compatibility for callers that only render a non-actionable command.
+    # Every production update path supplies ``target_version`` and therefore
+    # takes the exact, full-reinstall branch below.
+    if target_version is None:
+        legacy_source = wheel_url or KBAGENT_INSTALL_SOURCE
+        legacy_has_server = has_server_extras()
+        legacy_spec = (
+            f"keboola-cli[server] @ {legacy_source}"
+            if legacy_has_server
+            else f"keboola-cli @ {legacy_source}"
+            if wheel_url
+            else legacy_source
         )
         uv_path = shutil.which("uv")
         if uv_path:
-            return [uv_path, "tool", "install", "--force", spec]
+            if wheel_url:
+                cmd = [uv_path, "tool", "install", "--force"]
+            elif legacy_has_server:
+                cmd = [uv_path, "tool", "install", "--force", "--with", "keboola-cli[server]"]
+            else:
+                cmd = [uv_path, "tool", "install", "--upgrade"]
+            if prerelease:
+                cmd.append("--prerelease=allow")
+            cmd.append(legacy_spec if wheel_url else legacy_source)
+            return cmd
         pip_path = shutil.which("pip")
         if pip_path is None:
             return None
-        return [pip_path, "install", "--upgrade", spec]
+        cmd = [pip_path, "install"]
+        if prerelease:
+            cmd.append("--pre")
+        cmd.append("--upgrade")
+        cmd.append(legacy_spec)
+        return cmd
 
-    # Tag-pin the install source ONLY for beta opt-in (Variant B fix).
-    # Stable upgrades let uv resolve main HEAD as before -- main IS
-    # the stable channel, so an extra HTTP round-trip to fetch the
-    # tag name would be pure overhead.
-    install_source = KBAGENT_INSTALL_SOURCE
-    if prerelease and target_version:
-        install_source = f"{KBAGENT_INSTALL_SOURCE}@v{target_version}"
-    has_server = has_server_extras()
+    # The wheel is already an exact release artifact. When it is unavailable,
+    # pin the source fallback to the corresponding immutable Git tag.
+    install_source = wheel_url or f"{KBAGENT_INSTALL_SOURCE}@v{target_version}"
+    spec = f"keboola-cli{'[server]' if has_server_extras() else ''} @ {install_source}"
     uv_path = shutil.which("uv")
     if uv_path:
-        if has_server:
-            # We pair ``--with`` with ``--force`` (rather than
-            # ``--upgrade``) because ``uv tool install`` rejects
-            # ``--upgrade`` together with ``--with`` when the additional
-            # spec resolves to a different version than the existing
-            # tool environment -- ``--force`` is uv's documented way to
-            # reapply both in one shot.
-            cmd = [
-                uv_path,
-                "tool",
-                "install",
-                "--force",
-                "--with",
-                "keboola-cli[server]",
-                install_source,
-            ]
-        else:
-            cmd = [uv_path, "tool", "install", "--upgrade", install_source]
+        cmd = [uv_path, "tool", "install", "--force", "--reinstall"]
         if prerelease:
-            # Insert before the source spec so uv parses it as a global
-            # resolver flag (not a positional arg).
-            cmd.insert(-1, "--prerelease=allow")
+            cmd.append("--prerelease=allow")
+        cmd.append(spec)
         return cmd
     pip_path = shutil.which("pip")
     if pip_path is None:
         return None
-    # pip extras syntax: the [server] suffix attaches to the project
-    # name in the PEP 508 spec; for git+ URLs we wrap with the project
-    # name on the left of the URL.
-    install_spec = f"keboola-cli[server] @ {install_source}" if has_server else install_source
-    cmd = [pip_path, "install", "--upgrade", install_spec]
+    # Pip cannot recreate a uv-managed tool environment transactionally; it
+    # remains a best-effort fallback and is called out in failure guidance.
+    cmd = [pip_path, "install", "--upgrade"]
     if prerelease:
-        cmd.insert(2, "--pre")
+        cmd.append("--pre")
+    cmd.append(spec)
     return cmd
+
+
+def _render_command(command: tuple[str, ...]) -> str:
+    """Render argv for the current platform's interactive shell."""
+    if os.name == "nt":
+        return subprocess.list2cmdline(command)
+    return shlex.join(command)
+
+
+def _recovery_command(command: tuple[str, ...] | None, target_version: str | None) -> str | None:
+    """Render an exact forced-reinstall command safe to copy after failure."""
+    if command is not None:
+        executable = command[0].replace("\\", "/").rsplit("/", maxsplit=1)[-1].casefold()
+        if executable in {"uv", "uv.exe"}:
+            recovery = ("uv", *command[1:])
+        else:
+            prerelease = ("--prerelease=allow",) if "--pre" in command else ()
+            recovery = ("uv", "tool", "install", "--force", "--reinstall", *prerelease, command[-1])
+        return _render_command(recovery)
+    if target_version is None:
+        return None
+    extras = "[server]" if has_server_extras() else ""
+    source = f"keboola-cli{extras} @ {KBAGENT_INSTALL_SOURCE}@v{target_version}"
+    return _render_command(("uv", "tool", "install", "--force", "--reinstall", source))
 
 
 def _get_local_mcp_version(timeout: float = MCP_PROBE_TIMEOUT) -> str | None:
@@ -457,6 +501,8 @@ def _detect_mcp_install_method() -> str:
 def _perform_mcp_update(
     method: str | None = None,
     timeout: float = MCP_UPGRADE_TIMEOUT,
+    *,
+    command: tuple[str, ...] | None = None,
 ) -> tuple[bool, str]:
     """Run the appropriate upgrade command for keboola-mcp-server.
 
@@ -464,43 +510,27 @@ def _perform_mcp_update(
         method: Optional install method; if None, detect via
             :func:`_detect_mcp_install_method`.
         timeout: Subprocess timeout in seconds.
+        command: Prepared command. Supplying it guarantees this apply phase
+            does not probe PATH or rebuild commands.
 
     Returns:
         Tuple of ``(success, output_or_reason)``.
     """
-    if method is None:
-        method = _detect_mcp_install_method()
-
-    cmd: list[str] | None = None
-    if method == "uv_tool":
-        uv_path = shutil.which("uv")
-        if uv_path is None:
-            return False, "uv not found on PATH"
-        # --prerelease=allow is mandatory: see MCP_UV_PRERELEASE_FLAG (issue
-        # #324). Without it uv backtracks to a stale MCP and exits 0.
-        cmd = [uv_path, "tool", "upgrade", MCP_UV_PRERELEASE_FLAG, MCP_PACKAGE_NAME]
-    elif method == "pip_env":
-        pip_path = shutil.which("pip")
-        if pip_path is None:
-            return False, "pip not found on PATH"
-        cmd = [pip_path, "install", "--upgrade", MCP_PIP_PRERELEASE_FLAG, MCP_PACKAGE_NAME]
-    elif method == "uvx":
-        # Promote uvx-cache install to a persistent `uv tool install`.
-        # The previous strategy (`uvx --refresh ... <bin> --version`) was
-        # broken: the upstream MCP binary does NOT honour --version (it
-        # rejects the arg and exits non-zero), so the upgrade banner
-        # always reported failure even when the cache refresh itself
-        # worked. `uv tool install --upgrade` does the equivalent
-        # refresh AND moves the binary to PATH so subsequent runs use the
-        # faster `uv_tool` detection path. Bug B fix from issue #263.
-        uv_path = shutil.which("uv")
-        if uv_path is None:
-            return False, "uv not found on PATH (needed to promote uvx cache to uv tool)"
-        cmd = [uv_path, "tool", "install", "--upgrade", MCP_UV_PRERELEASE_FLAG, MCP_PACKAGE_NAME]
-    elif method == "none":
-        return False, "keboola-mcp-server is not installed"
+    if command is not None:
+        cmd = list(command)
     else:
-        return False, f"unknown install method: {method!r}"
+        if method is None:
+            method = _detect_mcp_install_method()
+        cmd = build_mcp_upgrade_command(method)
+
+    if cmd is None:
+        if method == "none":
+            return False, "keboola-mcp-server is not installed"
+        if method in {"uv_tool", "uvx"}:
+            return False, "uv not found on PATH"
+        if method == "pip_env":
+            return False, "pip not found on PATH"
+        return False, f"could not build MCP upgrade command for {method!r}"
 
     try:
         result = subprocess.run(
@@ -516,6 +546,34 @@ def _perform_mcp_update(
         return False, f"upgrade timed out after {timeout}s"
     except OSError as exc:
         return False, f"subprocess error: {exc}"
+
+
+def build_mcp_upgrade_command(method: str) -> list[str] | None:
+    """Build an MCP command during planning, before kbagent can mutate."""
+    if method == "uv_tool":
+        uv_path = shutil.which("uv")
+        if uv_path is None:
+            return None
+        return [uv_path, "tool", "upgrade", MCP_UV_PRERELEASE_FLAG, MCP_PACKAGE_NAME]
+    if method == "pip_env":
+        pip_path = shutil.which("pip")
+        if pip_path is None:
+            return None
+        return [pip_path, "install", "--upgrade", MCP_PIP_PRERELEASE_FLAG, MCP_PACKAGE_NAME]
+    if method == "uvx":
+        # Promote uvx-cache install to a persistent `uv tool install`.
+        # The previous strategy (`uvx --refresh ... <bin> --version`) was
+        # broken: the upstream MCP binary does NOT honour --version (it
+        # rejects the arg and exits non-zero), so the upgrade banner
+        # always reported failure even when the cache refresh itself
+        # worked. `uv tool install --upgrade` does the equivalent
+        # refresh AND moves the binary to PATH so subsequent runs use the
+        # faster `uv_tool` detection path. Bug B fix from issue #263.
+        uv_path = shutil.which("uv")
+        if uv_path is None:
+            return None
+        return [uv_path, "tool", "install", "--upgrade", MCP_UV_PRERELEASE_FLAG, MCP_PACKAGE_NAME]
+    return None
 
 
 def _fetch_kbagent_latest_version(
@@ -658,6 +716,61 @@ def _is_up_to_date(local: str | None, latest: str | None) -> bool | None:
         return None
 
 
+def prepare_kbagent_update_plan(
+    latest_version: str | None, *, include_prerelease: bool = False
+) -> KbagentUpdatePlan:
+    """Prepare the terminal self-reinstall without mutating any environment."""
+    up_to_date = _is_up_to_date(__version__, latest_version)
+    command: tuple[str, ...] | None = None
+    if up_to_date is False and latest_version is not None:
+        wheel_url = resolve_kbagent_wheel_url(latest_version)
+        built = build_kbagent_upgrade_command(
+            prerelease=include_prerelease,
+            target_version=latest_version,
+            wheel_url=wheel_url,
+        )
+        command = tuple(built) if built is not None else None
+    return KbagentUpdatePlan(
+        current_version=__version__,
+        latest_version=latest_version,
+        up_to_date=up_to_date,
+        command=command,
+        recovery_command=(
+            _recovery_command(command, latest_version) if up_to_date is False else None
+        ),
+    )
+
+
+def prepare_mcp_update_plan(latest_version: str | None) -> McpUpdatePlan:
+    """Prepare MCP discovery and its command before a self-update begins."""
+    install_method = _detect_mcp_install_method()
+    current_version = _get_local_mcp_version()
+    up_to_date = _is_up_to_date(current_version, latest_version)
+    command: tuple[str, ...] | None = None
+    if up_to_date is not True and install_method != "none":
+        built = build_mcp_upgrade_command(install_method)
+        command = tuple(built) if built is not None else None
+    return McpUpdatePlan(
+        current_version=current_version,
+        latest_version=latest_version,
+        install_method=install_method,
+        up_to_date=up_to_date,
+        command=command,
+    )
+
+
+def prepare_update_plan(*, include_prerelease: bool = False) -> UpdatePlan:
+    """Complete all update lookups before either updater is allowed to run."""
+    # Fetch both latest-version values first. This ordering prevents a mutated
+    # kbagent environment from making a later PyPI HTTPS check fail.
+    kbagent_latest = _fetch_kbagent_latest_version(include_prerelease=include_prerelease)
+    mcp_latest = _fetch_mcp_latest_version()
+    return UpdatePlan(
+        kbagent=prepare_kbagent_update_plan(kbagent_latest, include_prerelease=include_prerelease),
+        mcp=prepare_mcp_update_plan(mcp_latest),
+    )
+
+
 class VersionService:
     """Business logic for version detection and update checks.
 
@@ -755,7 +868,7 @@ class VersionService:
         # would copy a stable-channel install command even though
         # latest_version advertised a beta tag -- silently landing on the
         # wrong version.
-        kbagent_target_version = kbagent_latest if include_prerelease else None
+        kbagent_target_version = kbagent_latest
         # Mirror the _update_kbagent path (issue #353, NB-1): advertise the
         # prebuilt-wheel install command when the asset exists, so a programmatic
         # consumer copy-pasting `upgrade_command` from `kbagent version --json`
@@ -823,8 +936,13 @@ class VersionService:
                     "message": str,     # Human-readable single-line summary
                 }
         """
-        kbagent_result = self._update_kbagent(include_prerelease=include_prerelease)
-        mcp_result = self._update_mcp()
+        plan = prepare_update_plan(include_prerelease=include_prerelease)
+
+        # MCP is independent and must finish before the terminal kbagent
+        # reinstall. Re-probing it afterwards is safe because kbagent has not
+        # yet changed its own environment.
+        mcp_result = self._update_mcp(plan.mcp)
+        kbagent_result = self._update_kbagent(plan.kbagent)
 
         any_updated = bool(kbagent_result.get("updated") or mcp_result.get("updated"))
         summary = self._compose_update_summary(kbagent_result, mcp_result)
@@ -888,22 +1006,15 @@ class VersionService:
         return " | ".join(parts)
 
     @staticmethod
-    def _update_kbagent(*, include_prerelease: bool = False) -> dict[str, Any]:
-        """Run the kbagent self-upgrade subprocess (or short-circuit).
-
-        Args:
-            include_prerelease: When True (driven by ``kbagent update --beta``
-                or ``KBAGENT_INCLUDE_PRERELEASE=1``), the version lookup
-                considers beta / rc releases and the install command
-                propagates ``--prerelease=allow`` so the resolver accepts
-                PEP 440 pre-release tags like ``0.43.0b1``.
-        """
-        old_version = __version__
-        kbagent_latest = _fetch_kbagent_latest_version(include_prerelease=include_prerelease)
-        up_to_date = _is_up_to_date(old_version, kbagent_latest)
+    def _update_kbagent(plan: KbagentUpdatePlan) -> dict[str, Any]:
+        """Apply a precomputed terminal self-reinstall without new probes."""
+        old_version = plan.current_version
+        kbagent_latest = plan.latest_version
+        up_to_date = plan.up_to_date
 
         if up_to_date is True:
             return {
+                "planned": True,
                 "updated": False,
                 "up_to_date": True,
                 "current_version": old_version,
@@ -911,42 +1022,32 @@ class VersionService:
                 "message": f"kbagent v{old_version} is already up to date.",
             }
 
-        # Tag-pin the install URL ONLY for beta opt-in (Variant B fix).
-        # Stable upgrades intentionally pass target_version=None so uv
-        # resolves main HEAD as before -- main IS the stable channel.
-        target_version = kbagent_latest if include_prerelease else None
-        # Prefer the prebuilt-wheel Release asset (issue #353) when present;
-        # resolve_kbagent_wheel_url returns None for older releases without an
-        # asset, in which case build_kbagent_upgrade_command keeps the git+ path.
-        wheel_url = resolve_kbagent_wheel_url(kbagent_latest)
-        cmd = build_kbagent_upgrade_command(
-            prerelease=include_prerelease, target_version=target_version, wheel_url=wheel_url
-        )
-        if cmd is None:
-            with_flag = "--with 'keboola-cli[server]' " if has_server_extras() else ""
-            pre_flag = "--prerelease=allow " if include_prerelease else ""
-            tag_suffix = f"@v{target_version}" if target_version else ""
+        if plan.command is None:
             return {
+                "planned": True,
                 "updated": False,
+                "up_to_date": up_to_date,
                 "current_version": old_version,
                 "latest_version": kbagent_latest,
                 "message": (
-                    "Neither 'uv' nor 'pip' found on PATH. "
-                    f"Install manually: uv tool install --upgrade {pre_flag}{with_flag}"
-                    f"{KBAGENT_INSTALL_SOURCE}{tag_suffix}"
+                    "Could not prepare a self-update command. "
+                    f"Recover with: {plan.recovery_command or 'uv tool install --force --reinstall'}"
                 ),
+                "recovery_command": plan.recovery_command,
             }
 
         try:
             result = subprocess.run(
-                cmd,
+                list(plan.command),
                 capture_output=True,
                 text=True,
                 timeout=get_update_timeout(),
             )
             if result.returncode == 0:
                 return {
+                    "planned": True,
                     "updated": True,
+                    "up_to_date": False,
                     "current_version": old_version,
                     "latest_version": kbagent_latest,
                     "message": f"Updated kbagent from v{old_version} to v{kbagent_latest}. "
@@ -954,35 +1055,51 @@ class VersionService:
                     "output": result.stdout.strip(),
                 }
             return {
+                "planned": True,
                 "updated": False,
+                "up_to_date": False,
                 "current_version": old_version,
                 "latest_version": kbagent_latest,
                 "message": f"Update failed: {result.stderr.strip()}",
                 "output": result.stderr.strip(),
+                "recovery_command": plan.recovery_command,
             }
         except subprocess.TimeoutExpired:
             timeout_s = int(get_update_timeout())
             return {
+                "planned": True,
                 "updated": False,
+                "up_to_date": False,
                 "current_version": old_version,
                 "latest_version": kbagent_latest,
                 "message": (
-                    f"Update still building after {timeout_s}s (slow git+ source build). "
-                    "It will finish on a later run; raise KBAGENT_UPDATE_TIMEOUT to wait longer."
+                    f"Update timed out after {timeout_s}s. Recover with: {plan.recovery_command}"
                 ),
+                "recovery_command": plan.recovery_command,
+            }
+        except OSError as exc:
+            return {
+                "planned": True,
+                "updated": False,
+                "up_to_date": False,
+                "current_version": old_version,
+                "latest_version": kbagent_latest,
+                "message": f"Update failed: {exc}",
+                "recovery_command": plan.recovery_command,
             }
 
     @staticmethod
-    def _update_mcp() -> dict[str, Any]:
+    def _update_mcp(plan: McpUpdatePlan) -> dict[str, Any]:
         """Run the keboola-mcp-server upgrade subprocess (or short-circuit)."""
-        method = _detect_mcp_install_method()
-        local_version = _get_local_mcp_version()
-        latest_version = _fetch_mcp_latest_version()
-        up_to_date = _is_up_to_date(local_version, latest_version)
+        method = plan.install_method
+        local_version = plan.current_version
+        latest_version = plan.latest_version
+        up_to_date = plan.up_to_date
 
         # Short-circuit: detected and up-to-date.
         if up_to_date is True:
             return {
+                "planned": True,
                 "updated": False,
                 "up_to_date": True,
                 "current_version": local_version,
@@ -994,7 +1111,9 @@ class VersionService:
         # Short-circuit: nothing to upgrade against.
         if method == "none":
             return {
+                "planned": True,
                 "updated": False,
+                "up_to_date": up_to_date,
                 "current_version": local_version,
                 "latest_version": latest_version,
                 "install_method": method,
@@ -1005,7 +1124,20 @@ class VersionService:
             }
 
         # Run the upgrade.
-        success, output = _perform_mcp_update(method=method, timeout=MCP_UPGRADE_TIMEOUT)
+        if plan.command is None:
+            return {
+                "planned": True,
+                "updated": False,
+                "up_to_date": up_to_date,
+                "current_version": local_version,
+                "latest_version": latest_version,
+                "install_method": method,
+                "message": f"Could not prepare MCP upgrade command for {method}.",
+            }
+
+        success, output = _perform_mcp_update(
+            method=method, timeout=MCP_UPGRADE_TIMEOUT, command=plan.command
+        )
         post_version = _get_local_mcp_version() if success else local_version
 
         # Bug E fix from issue #263: subprocess returncode == 0 is NOT
@@ -1044,7 +1176,9 @@ class VersionService:
             )
 
         return {
+            "planned": True,
             "updated": actually_updated,
+            "up_to_date": False if actually_updated else up_to_date,
             "current_version": local_version,
             "latest_version": latest_version,
             "post_upgrade_version": post_version,

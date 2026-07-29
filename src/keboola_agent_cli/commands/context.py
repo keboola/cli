@@ -139,6 +139,16 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent component detail --component-id ID [--project NAME]
     Show component docs, config schema, and examples count.
 
+  kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--config-id ID [--row-id ID] | --config-data JSON|@file|-) [--branch ID] [--timeout N]
+    (since 0.73.0) Run a synchronous component action (testConnection, getTables,
+    ...) on the dedicated sync-actions service. ACTION_NAME is freeform --
+    valid names are component-defined (see component detail synchronous_actions).
+    --row-id shallow-merges the row over the root config at TOP level only
+    (row parameters/storage keys replace root wholesale -- NOT a deep merge;
+    MCP run_sync_action parity). --config-data sends explicit configData
+    verbatim and skips the config fetch. Response shape is action-specific
+    (opaque pass-through).
+
 ### Configuration Browsing
 
   kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID] [--include-rows]
@@ -207,6 +217,12 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [-i] [-r] [--branch ID]
     Search config bodies for string/regex. Reports match location in JSON tree. Branch-aware.
+
+  kbagent config examples --component-id ID [--project NAME] [--row]
+    (since 0.73.0) Sample root/row configurations for a component, straight from
+    the AI-service component detail (same data the UI shows). --row limits to
+    row examples. --json emits {{component_id, root_examples, row_examples}} --
+    structured dicts, ideal as a starting point before config new / row-create.
 
   kbagent config variables-set --project NAME --component-id ID --config-id ID --var KEY=VALUE [--var ...] [--replace] [--variables-id ID] [--values-id ID] [--branch ID] [--dry-run]
     Assign variables to any config. Auto-creates the backing keboola.variables + default row
@@ -437,6 +453,31 @@ remain branch-aware because modifying a dev branch is the expected intent.
     (swap-tables, dropping columns) first needs a branch-local copy. This materializes that copy (one-way:
     default -> branch). Branch is mandatory; service guards before any HTTP call when no branch is set.
 
+### Table Snapshots (point-in-time backup + restore-as-new-table)
+
+  kbagent storage snapshot-create --project NAME --table-id ID [--description D] [--branch ID]
+    Create a snapshot of a table: data + columns + primary key at a point in time (async job; polls to
+    completion). The receipt carries the new snapshot_id -- keep it, restores are addressed by it.
+
+  kbagent storage snapshots --project NAME --table-id ID [--limit N] [--branch ID]
+    List snapshots of a table (id, createdTime, description, creator). Production endpoint by default.
+
+  kbagent storage snapshot-detail --project NAME --snapshot-id ID
+    One snapshot's detail. Snapshot IDs are global (not table-scoped); the detail includes the source
+    table object (id, columns, primaryKey), so this is how a bare snapshot ID is traced back to its table.
+
+  kbagent storage table-from-snapshot --project NAME --snapshot-id ID --bucket-id ID --name NAME [--branch ID] [--dry-run]
+    Create a NEW table from an existing snapshot (snapshot restore; async job). Restores the snapshot's
+    data, columns, and primary key into --bucket-id under --name. --name is REQUIRED (the API rejects an
+    omitted/empty name). The destination bucket must exist; a table with the same name must not (no
+    overwrite semantics -- restore under a new name, verify, then swap or delete the old table yourself).
+    Goes through the classic tables-async endpoint, NOT tables-definition -- so it is a separate command,
+    not a flag on create-table.
+
+  kbagent storage snapshot-delete --project NAME --snapshot-id ID [--snapshot-id ...] [--dry-run] [--yes]
+    Delete one or more snapshots (destructive: forecloses restores; source tables untouched).
+    Batch-tolerant: one failure does not abort the rest; exit 1 if any ID failed.
+
 ### Storage Descriptions
 
   kbagent storage describe-bucket --project NAME --bucket-id ID [--text STR | --file PATH | --stdin] [--branch ID]
@@ -615,10 +656,18 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent flow detail --project NAME --flow-id ID [--branch ID]
     Show phases, transitions (next[].goto + conditions), typed tasks, and full configuration.
 
-  kbagent flow schema [--full --project NAME]
-    Plain: print the offline conditional-flow YAML template. --full fetches and dumps the
-    live JSON Schema from the stack (AI Service configurationSchema for keboola.flow) and
-    REQUIRES --project (the schema is no longer bundled).
+  kbagent flow schema [--full [--project NAME]]
+    Plain: print the offline conditional-flow YAML template. --full with --project
+    fetches the live JSON Schema from the stack (source=live); --full WITHOUT
+    --project serves the bundled authoritative snapshot (source=bundled,
+    since 0.73.0 -- previously an error).
+
+  kbagent flow examples [--component-id keboola.flow|keboola.orchestrator]
+    (since 0.73.0) Bundled example flow configurations (vendored from
+    keboola-mcp-server), fully offline. Default keboola.flow (conditional);
+    keboola.orchestrator serves legacy examples with an informational-only
+    warning (kbagent cannot create or edit orchestrator flows). --json emits
+    the bare list of example configs.
 
   kbagent flow validate --file YAML|@file|- [--project NAME]
     With --project: fetch the live schema from the stack -> full structural + semantic
@@ -915,24 +964,33 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
     Initialize sync working directory. --git-branching enables git-to-Keboola branch mapping.
 
-  kbagent sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
+  kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
     Download configs as local files. Idempotent, protects local modifications.
     --force (semantics corrected since 0.53.0): re-pull over locally-modified configs.
     A config edited locally whose remote is UNCHANGED is PRESERVED (its pending delta stays
     pushable -- NOT discarded, NOT silently re-stamped). A true merge conflict (the config
     changed BOTH locally and on the remote since the last pull) ABORTS the pull (exit 1,
     SYNC_CONFLICT) listing each conflict; resolve via sync diff then push-or-discard, then pull.
-    To intentionally drop local edits, delete the file/dir and pull. Applies to rows too.
+    --theirs (since 0.72.0): remote wins everywhere -- overwrites locally-modified configs
+    and rows, restores deleted/missing files, resolves conflicts by taking remote (no abort).
+    The supported way to reconcile a drifted tree with production (no manifest surgery).
+    Since 0.72.0 plain pull also re-materializes a tracked config whose local dir is missing
+    (manifest<->disk invariant), so delete-dir-then-pull refetches. Applies to rows too.
+    Config-level isDisabled round-trips (since 0.72.0) as sparse `is_disabled: true` in
+    _config.yml -- absent key means enabled; pull writes it, diff surfaces drift, push sends it.
     --job-limit controls max recent jobs per config (default 5). For large projects,
     automatically falls back to per-config job fetching to ensure all configs get job history.
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
     --branch (since 0.47.0): per-invocation dev-branch override. Same semantics as sync push/diff.
 
   kbagent sync status [--directory DIR]
-    Show local changes since last pull (SHA256-based). Also returns
-    plaintext_secret_warnings (since 0.55.0): in-sync configs/rows whose
-    #-secrets are still plaintext on the remote (pre-0.54.0 leak; #378). Fix =
-    re-push on >=0.54.0 + rotate (version history keeps the plaintext).
+    Show local changes since last pull (SHA256-based). LOCAL check only --
+    it never contacts the API, so it cannot see remote drift; use sync diff
+    for a local-vs-remote audit (human output says so since 0.72.0).
+    Also returns plaintext_secret_warnings (since 0.55.0): in-sync
+    configs/rows whose #-secrets are still plaintext on the remote
+    (pre-0.54.0 leak; #378). Fix = re-push on >=0.54.0 + rotate (version
+    history keeps the plaintext).
 
   kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
     3-way diff: local vs pull-time snapshot vs remote. Detects conflicts.
@@ -959,6 +1017,13 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     the branch id.
     --no-name-drift-warnings (since 0.47.0): suppress the cosmetic name_drift_warnings
     array from the result envelope.
+    Never-fetched guard (since 0.72.0): a manifest entry with an empty pull_hash and no
+    local files (pre-0.72 name-collision phantom) is NEVER planned as a remote DELETE;
+    diff/push exclude it and report it under never_fetched with a warning -- run sync pull
+    to materialize it. Local deletion of a properly-pulled config still deletes on push.
+    Adopted-by-id writeback (since 0.72.0): pushing an untracked local file whose
+    _keboola.config_id resolves on the branch (adopt-update, #482) now also writes the
+    manifest entry, so follow-up diffs are stable and a later local delete is detected.
 
   kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]
     Clone a reference synced tree into a fresh target project + parameterize it
@@ -1005,6 +1070,11 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
   kbagent semantic-layer show --project P [--model M] [--type T]
     Show a model's entities. --type filter: dataset|metric|relationship|constraint|glossary.
     Without --type prints a per-type count summary.
+
+  kbagent semantic-layer schema --project P (--type model|dataset|metric|relationship|constraint|glossary[,TYPE...] | --all)
+    (since 0.73.0) Live JSON Schema per semantic object type, fetched from the
+    deployed metastore (never bundled -- cannot drift). Exactly one of
+    --type/--all. --json emits {{project, schemas: [{{type, schema}}]}}.
 
   kbagent semantic-layer search-context --project P [--pattern G ...] [--type model|dataset|metric|relationship|constraint|glossary|all] [--limit N]
     (since 0.47.0) Project-wide glob search across semantic-layer entity names.
@@ -1206,10 +1276,16 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   See agent-tasks-cli-workflow.md skill reference for full walkthroughs.
 
-### MCP Tools (Multi-Project)
+### MCP Tools (Multi-Project) -- DEPRECATED since 0.74.0
+
+  The MCP passthrough is on a removal track (epic #390): every catalog tool
+  has a native command. Prefer the native command in ALL new work -- `tool
+  list` prints the replacement in the cli_equivalent column and `tool call`
+  warns with it (stderr in human mode; additive "deprecation" key in --json).
 
   kbagent tool list [--project NAME] [--branch ID]
-    List MCP tools with inputSchema. Use --json to inspect accepted parameters.
+    List MCP tools with inputSchema + cli_equivalent. Use --json to inspect
+    accepted parameters.
 
   kbagent tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]
     Call an MCP tool. Read tools auto-query all projects. Write tools need --project.
@@ -1250,6 +1326,40 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   kbagent kai history [--project NAME] [--limit N]
     List recent Kai chat sessions. Default limit: 10.
+
+### SQL Transformations (since v0.73.0)
+
+  kbagent transformation create --project NAME --name NAME (--sql 'SELECT ...' | --sql-file PATH) [--created-table NAME ...] [--component-id ID] [--description D] [--branch ID] [--dry-run]
+    Create a SQL transformation. Component id derived from the project
+    default_backend (snowflake -> keboola.snowflake-transformation,
+    bigquery -> keboola.google-bigquery-transformation; other backends
+    require --component-id). SQL is split one statement per script element;
+    a single block "Blocks" with one code "Code" is created (UI/MCP parity).
+    Each --created-table T adds output mapping T -> out.c-<cleaned-name>.<T>.
+
+  kbagent transformation show --project NAME --config-id ID [--component-id ID] [--branch ID]
+    Print the block/code tree with synthetic positional ids b{{i}} / b{{i}}.c{{j}}
+    plus storage mappings. Without --component-id every known SQL
+    transformation component is probed (404s skipped). ALWAYS run show
+    before edit -- ids renumber after every structural change.
+
+  kbagent transformation edit --project NAME --config-id ID --change-description TEXT (--op JSON ... | --op-file ops.json) [--storage JSON|@file|-] [--component-id ID] [--branch ID] [--dry-run]
+    Apply structured ops to blocks/codes: add_block, remove_block,
+    rename_block, add_code, remove_code, rename_code, set_code, add_script,
+    str_replace. Ops in one batch apply sequentially against BATCH-START ids
+    (mid-batch structural changes do not renumber within the batch).
+    --storage REPLACES configuration.storage wholesale -- include every
+    mapping you want to keep. --dry-run previews the resulting tree + op
+    summary without writing.
+
+### Documentation Q&A (since v0.73.0)
+
+  kbagent docs query "QUESTION" [--project NAME]
+    Answer a natural-language question from the Keboola documentation via the
+    AI Service (server-side RAG; no local corpus). Returns the answer text
+    plus source URLs. --json emits {{query, text, source_urls}}. Unlike
+    `kai ask` this does NOT see project data -- it is documentation-only,
+    works with any token, and is the right tool for "how do I ..." questions.
 
 ### Developer Portal (since v0.49.0)
 

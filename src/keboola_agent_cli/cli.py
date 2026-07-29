@@ -14,6 +14,7 @@ from .commands.config import config_app
 from .commands.context import context_command
 from .commands.data_app import data_app_app
 from .commands.dev_portal import dev_portal_app
+from .commands.docs import docs_app
 from .commands.doctor import doctor_command
 from .commands.encrypt import encrypt_app
 from .commands.feature import feature_app
@@ -37,6 +38,7 @@ from .commands.stream import stream_app
 from .commands.sync import sync_app
 from .commands.token import token_app
 from .commands.tool import tool_app
+from .commands.transformation import transformation_app
 from .commands.version import update_command, version_command
 from .commands.workspace import workspace_app
 from .config_store import ConfigStore, resolve_config_dir
@@ -52,6 +54,7 @@ from .services.config_service import ConfigService
 from .services.data_app_git_service import DataAppGitService
 from .services.data_app_service import DataAppService
 from .services.deep_lineage_service import DeepLineageService
+from .services.docs_service import DocsService
 from .services.doctor_service import DoctorService
 from .services.encrypt_service import EncryptService
 from .services.feature_service import FeatureService
@@ -69,6 +72,7 @@ from .services.schedule_service import ScheduleService
 from .services.search_service import SearchService
 from .services.semantic_layer_service import SemanticLayerService
 from .services.sharing_service import SharingService
+from .services.snapshot_service import SnapshotService
 from .services.storage_service import StorageService
 from .services.stream_service import StreamService
 from .services.sync_service import SyncService
@@ -119,6 +123,8 @@ app.add_typer(stream_app, name="stream", rich_help_panel=_BROWSE)
 app.add_typer(sharing_app, name="sharing", rich_help_panel=_BROWSE)
 app.add_typer(lineage_app, name="lineage", rich_help_panel=_BROWSE)
 app.add_typer(kai_app, name="kai", rich_help_panel=_BROWSE)
+app.add_typer(docs_app, name="docs", rich_help_panel=_BROWSE)
+app.add_typer(transformation_app, name="transformation", rich_help_panel=_BROWSE)
 
 # -- Flows --
 _FLOWS = "Flows"
@@ -321,6 +327,7 @@ def main(
     branch_service = BranchService(config_store=config_store)
     sharing_service = SharingService(config_store=config_store)
     search_service = SearchService(config_store=config_store)
+    snapshot_service = SnapshotService(config_store=config_store)
     storage_service = StorageService(config_store=config_store)
     stream_service = StreamService(config_store=config_store)
     token_service = TokenService(config_store=config_store)
@@ -335,6 +342,7 @@ def main(
     semantic_layer_service = SemanticLayerService(config_store=config_store)
     repo_validate_service = RepoValidateService(config_store=config_store)
     kai_service = KaiService(config_store=config_store)
+    docs_service = DocsService(config_store=config_store)
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
     version_service = VersionService()
     http_forwarder_service = HttpForwarderService()
@@ -377,6 +385,7 @@ def main(
     ctx.obj["branch_service"] = branch_service
     ctx.obj["sharing_service"] = sharing_service
     ctx.obj["search_service"] = search_service
+    ctx.obj["snapshot_service"] = snapshot_service
     ctx.obj["storage_service"] = storage_service
     ctx.obj["stream_service"] = stream_service
     ctx.obj["token_service"] = token_service
@@ -391,6 +400,7 @@ def main(
     ctx.obj["semantic_layer_service"] = semantic_layer_service
     ctx.obj["repo_validate_service"] = repo_validate_service
     ctx.obj["kai_service"] = kai_service
+    ctx.obj["docs_service"] = docs_service
     ctx.obj["doctor_service"] = doctor_service
     ctx.obj["version_service"] = version_service
     ctx.obj["http_forwarder_service"] = http_forwarder_service

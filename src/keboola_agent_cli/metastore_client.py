@@ -108,6 +108,33 @@ class MetastoreClient(BaseHttpClient):
             return items
         return [i for i in items if (i.get("attributes") or {}).get("modelUUID") == model_uuid]
 
+    def get_schema(self, item_type: SemanticType, version: str | None = None) -> dict[str, Any]:
+        """Fetch the JSON Schema (or version listing) for a semantic object type.
+
+        ``GET /api/v1/schema/{item_type}[/{version}]``. The schema is
+        **server-emitted** so it always matches the deployed metastore
+        version — never a hand-rolled static copy (it would drift the moment
+        the metastore evolves). Live behavior (verified 2026-07): the bare
+        endpoint returns a ``{"versions": [...]}`` listing with NO schema
+        body; the actual JSON Schema lives at ``/{version}``. The service
+        layer resolves the default version. No ``{"data": ...}`` envelope on
+        either form, so the body is passed through verbatim.
+        """
+        path = f"/api/v1/schema/{item_type}/{version}" if version else f"/api/v1/schema/{item_type}"
+        response = self._do_request("GET", path)
+        body = response.json()
+        if not isinstance(body, dict):
+            raise KeboolaApiError(
+                message=(
+                    f"Unexpected metastore schema response format for "
+                    f"{item_type!r} (expected a JSON object)."
+                ),
+                status_code=response.status_code,
+                error_code=ErrorCode.API_ERROR,
+                retryable=False,
+            )
+        return body
+
     def get_item(self, item_type: SemanticType, item_id: str) -> dict[str, Any]:
         """Fetch a single item by its UUID.
 

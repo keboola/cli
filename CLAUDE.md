@@ -78,7 +78,10 @@ src/keboola_agent_cli/
   # LAYER 3 -- HTTP clients (all inherit BaseHttpClient in http_base.py:
   #            shared 429/5xx retry + exponential backoff)
   http_base.py          # BaseHttpClient - shared retry/backoff + common HTTP infra
-  client.py             # Storage API + Queue API      (X-StorageApi-Token)
+  client/               # Storage API + Queue API package (X-StorageApi-Token);
+                        #   split by endpoint family (storage_tables/storage_files/configs/
+                        #   queue/tokens/branches/stream/query/workspaces/misc + _core/_transfer),
+                        #   composed into one KeboolaClient via mixins (#520)
   manage_client.py      # Manage API                   (X-KBC-ManageApiToken)
   ai_client.py          # AI Service API               (component schemas, Kai)
   data_science_client.py # Data Science API            (data apps)
@@ -112,11 +115,11 @@ tests/                  # ~137 files; mirror the layers (one test_<module>.py pe
 ## Architecture: 3-Layer Design
 
 ```
-CLI Commands (commands/)  -->  Services (services/)  -->  API Client (client.py, manage_client.py)
+CLI Commands (commands/)  -->  Services (services/)  -->  API Client (client/, manage_client.py)
   Typer, output                 Business logic             HTTP, endpoints
 ```
 
-- API changes: modify only the relevant LAYER 3 client (`client.py`, `manage_client.py`, ...)
+- API changes: modify only the relevant LAYER 3 client (`client/` package, `manage_client.py`, ...)
 - Business logic changes: modify only `services/`
 - UI changes: modify only `commands/`
 
@@ -124,7 +127,7 @@ CLI Commands (commands/)  -->  Services (services/)  -->  API Client (client.py,
 
 Seven clients, all inheriting `BaseHttpClient` (`http_base.py`) which provides shared retry/backoff logic (429/5xx, exponential backoff, 3 retries) and common HTTP infrastructure:
 
-- **KeboolaClient** (`client.py`): Storage API + Queue API, auth via `X-StorageApi-Token`
+- **KeboolaClient** (`client/` package): Storage API + Queue API, auth via `X-StorageApi-Token`
 - **ManageClient** (`manage_client.py`): Manage API, auth via `X-KBC-ManageApiToken`
 - **AiServiceClient** (`ai_client.py`): AI Service API (component schemas, Kai), URL derived as `ai.{stack_suffix}`
 - **DataScienceClient** (`data_science_client.py`): Data Science API (data apps)
@@ -344,6 +347,14 @@ kbagent storage delete-column --project NAME --table-id ID --column COL [--colum
 kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes]
 kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
+kbagent storage snapshot-create --project NAME --table-id ID [--description D] [--branch ID]
+kbagent storage snapshots --project NAME --table-id ID [--limit N] [--branch ID]
+kbagent storage snapshot-detail --project NAME --snapshot-id ID
+kbagent storage snapshot-delete --project NAME --snapshot-id ID [--snapshot-id ...] [--dry-run] [--yes]
+kbagent storage table-from-snapshot --project NAME --snapshot-id ID --bucket-id ID --name NAME [--branch ID] [--dry-run]
+# Snapshots (0.75.0+, #512): point-in-time table backup (data+columns+PK) and restore as a NEW table.
+#   table-from-snapshot goes through the classic tables-async endpoint (NOT tables-definition), --name is
+#   REQUIRED (API rejects empty), no overwrite -- restore under a new name, then swap/delete yourself.
 kbagent storage describe-bucket --project NAME --bucket-id ID [--text STR | --file PATH | --stdin] [--branch ID]
 kbagent storage describe-table --project NAME --table-id ID [--text STR | --file PATH | --stdin] [--branch ID]
 kbagent storage describe-column --project NAME --table-id ID --column NAME=DESC [--column ...] [--branch ID]
@@ -410,6 +421,11 @@ kbagent permissions check OPERATION
 
 kbagent tool list [--project NAME] [--branch ID]
 kbagent tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]
+# tool group DEPRECATED (0.74.0+, epic #390): every catalog tool has a native command -- tool list
+#   prints a cli_equivalent column, tool call warns with the exact replacement (stderr; --json adds
+#   an additive "deprecation" key). Parity map = src/keboola_agent_cli/mcp_parity.py; weekly
+#   mcp-parity-canary workflow (make parity-check) diffs it against upstream TOOLS.md. The group
+#   (and `agent --type mcp_tool`) will be removed after the deprecation window.
 
 kbagent branch list [--project NAME]
 kbagent branch create --project ALIAS --name "..." [--description "..."]
@@ -468,12 +484,19 @@ kbagent data-app git-credentials-create --project NAME --app-id ID --type ssh_ke
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
+kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--config-id ID [--row-id ID] | --config-data JSON|@file|-) [--branch ID] [--timeout N]
+# sync-action (0.73.0+): POST sync-actions.{stack}/actions; ACTION_NAME freeform (component-defined,
+#   e.g. testConnection/getTables); --row-id shallow-merges row over root at TOP level only (row
+#   parameters/storage keys replace root wholesale, MCP parity -- NOT deep merge); --config-data
+#   sends explicit configData verbatim (skips fetch); branchId omitted from body for production.
+kbagent config examples --component-id ID [--project NAME] [--row]
 kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR] [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run --allow-plaintext-on-encrypt-failure]
 
 # sync: GitOps -- configs as local files. init/pull/push/diff are filesystem-local (no serve REST surface).
 kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
-kbagent sync pull --project ALIAS [--all-projects] [--force] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
-# `sync pull --force` is conflict-aware (since 0.53.0): locally-modified config whose remote is UNCHANGED is preserved (delta stays pushable, never silently re-stamped); a true merge conflict (local AND remote both changed since last pull) aborts (exit 1, SYNC_CONFLICT, --json lists details.conflicts); local-untouched + remote-changed takes remote. Discard local edits on purpose by deleting the file/dir then pulling.
+kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
+# `sync pull --force` is conflict-aware (since 0.53.0): locally-modified config whose remote is UNCHANGED is preserved (delta stays pushable, never silently re-stamped); a true merge conflict (local AND remote both changed since last pull) aborts (exit 1, SYNC_CONFLICT, --json lists details.conflicts); local-untouched + remote-changed takes remote.
+# `sync pull --theirs` (0.72.0+) is the supported reconcile path for a drifted tree: remote wins everywhere -- overwrites locally-modified configs/rows, restores deleted/missing files, resolves conflicts by taking remote (no abort). Since 0.72.0 plain pull also re-materializes a tracked config whose local dir was deleted (manifest<->disk invariant), so delete-dir-then-pull refetches; config-level isDisabled round-trips as sparse `is_disabled: true` in _config.yml (pull/diff/push).
 kbagent sync status [--directory DIR]
 kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
 kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
@@ -514,6 +537,7 @@ kbagent semantic-layer model create --project P --name N [--description D] [--sq
 kbagent semantic-layer model delete --project P --model M [--yes]
 kbagent semantic-layer show --project P [--model M] [--type dataset|metric|relationship|constraint|glossary]
 kbagent semantic-layer search-context --project P [--pattern G ...] [--type model|dataset|metric|relationship|constraint|glossary|all] [--limit N]
+kbagent semantic-layer schema --project P (--type model|dataset|metric|relationship|constraint|glossary[,TYPE...] | --all)
 kbagent semantic-layer get-context --project P --context-id ID
 kbagent semantic-layer validate --project P [--model M] [--deep]
 kbagent semantic-layer export --project P [--model M] [--output PATH]
@@ -579,9 +603,26 @@ kbagent kai chat --message "msg" [--chat-id ID] [--project NAME]
 kbagent kai chat-detail --chat-id ID [--project NAME]
 kbagent kai history [--project NAME] [--limit N]
 
+kbagent transformation create --project NAME --name NAME (--sql 'SELECT ...' | --sql-file PATH) [--created-table NAME ...] [--component-id ID] [--description D] [--branch ID] [--dry-run]
+kbagent transformation show --project NAME --config-id ID [--component-id ID] [--branch ID]
+kbagent transformation edit --project NAME --config-id ID --change-description TEXT (--op JSON ... | --op-file ops.json) [--storage JSON|@file|-] [--component-id ID] [--branch ID] [--dry-run]
+# transformation (0.73.0+): native SQL-transformation editing (port of MCP create/update_sql_transformation, #396).
+#   create: component derived from the project default_backend (snowflake|bigquery; other backends need
+#   --component-id); SQL split one-statement-per-script[] element; single block "Blocks"/code "Code";
+#   each --created-table T maps to out.c-<cleaned-name>.<T>. show: synthetic positional ids b{i}/b{i}.c{j};
+#   when --component-id omitted, all known SQL transformation components are tried. edit: 9 ops
+#   (add/remove/rename block+code, set_code, add_script, str_replace) applied sequentially against
+#   batch-start ids -- ALWAYS `transformation show` first, ids renumber after structural ops;
+#   --storage REPLACES configuration.storage wholesale; --dry-run previews without PUT.
+
+kbagent docs query "QUESTION" [--project NAME]
+# (0.73.0+) Documentation Q&A via the AI Service (server-side RAG). Unlike kai ask it does NOT
+#   see project data; works with any token. --json emits {query, text, source_urls}.
+
 kbagent flow list [--project NAME] [--branch ID] [--with-schedules]
 kbagent flow detail --project NAME --flow-id ID [--branch ID]
-kbagent flow schema [--full --project NAME]
+kbagent flow schema [--full [--project NAME]]
+kbagent flow examples [--component-id keboola.flow|keboola.orchestrator]
 kbagent flow validate --file @flow.yaml|- [--project NAME]
 kbagent flow new --project NAME --name NAME [--description D] [--file @path.yaml|-|JSON] [--branch ID]
 kbagent flow update --project NAME --flow-id ID [--name N] [--description D] [--file @path.yaml|-|JSON] [--branch ID]
@@ -595,8 +636,12 @@ kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
 #   Schema-fetch failure (network/empty) does NOT block the write: structural check skipped,
 #   semantic checks still run, a "structural schema validation skipped" warning is surfaced.
 # flow validate: with --project fetches the live schema (full validation; fetch failure ->
-#   semantic-only + note); without --project runs semantic-only + a note. flow schema --full
-#   requires --project (fetches live schema); plain flow schema is the offline YAML template.
+#   semantic-only + note); without --project runs semantic-only + a note. flow schema --full:
+#   with --project fetches the live schema (source=live); without --project serves the bundled
+#   authoritative snapshot (source=bundled, 0.73.0+). Plain flow schema is the offline YAML template.
+# flow examples (0.73.0+): bundled example flow configs (vendored from keboola-mcp-server), offline.
+#   Default keboola.flow; keboola.orchestrator serves legacy examples informational-only (kbagent
+#   cannot create/edit orchestrator flows). --json emits the bare list of configs.
 # flow schedule (0.66.1+) also activates the config on the Scheduler Service so the cron fires;
 #   activation failure keeps the config written, sets activated=false + warning, exit stays 0.
 #   flow schedule-remove deregisters from the service before deleting each config.
@@ -619,6 +664,9 @@ kbagent update [--beta]
 # source build; falls back to git+ when absent). Env `KBAGENT_UPDATE_TIMEOUT` (integer
 # seconds, default 300) raises the self-update subprocess timeout for the slow git+
 # fallback on WSL. Bootstrap install: `curl -LsSf .../main/install.sh | sh`.
+# Since 0.76.2 self-update completes discovery first, updates MCP before the terminal
+# exact-version full kbagent reinstall, then immediately re-executes; failures print a
+# copy-paste recovery command.
 kbagent changelog [--limit N] [--full]
 # Default shows a one-line summary (first sentence) per version; --full / -v expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]
