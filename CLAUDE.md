@@ -242,6 +242,15 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
     Forgetting any of these does not fail tests or lint -- it ships an AI agent that quietly recommends commands that do not exist on the user's installed kbagent version, or refuses commands that do. Treat the change as **not done** until every applicable file has been updated.
 
+18. **Session-sentinel guards are CI-enforced.** `make check-sentinel-guards`
+    (in `make check`) rejects three kinds of drift: a `config.json` credential
+    write that is not sentinel-aware, a `BaseHttpClient` subclass that neither
+    declares `SESSION_AUTH_FEATURE` nor is recorded as bearer-capable, and a
+    `require_static_token` guard missing from `SESSION_UNSUPPORTED_FEATURES`
+    (`services/_auth_registration.py`) -- the tuple `auth login` /
+    `auth register-projects` disclose and every doc surface defers to. Run
+    `python scripts/check_sentinel_guards.py --list` to see the inventory.
+
 ## Claude Code Plugin (Marketplace)
 
 This repo doubles as a Claude Code plugin marketplace. The plugin lives in `plugins/kbagent/` and exposes four AI surfaces: a CLI (`kbagent`), a skill (`kbagent`), a slash command (`/keboola`), and a specialist subagent (`keboola-expert`). All are namespaced under `kbagent:`.
