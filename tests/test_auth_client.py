@@ -497,6 +497,40 @@ class TestRefresh:
 
         assert excinfo.value.error_code == ErrorCode.SESSION_EXPIRED
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "The refresh token has expired.",
+            "Refresh token expired.",
+            "Refresh token revoked.",
+            "Refresh token family revoked.",
+            "This refresh token is no longer valid.",
+            "Unknown refreshToken.",
+        ],
+    )
+    def test_400_verdict_on_the_token_maps_to_session_expired(
+        self, httpx_mock, message: str
+    ) -> None:
+        """Word order and verb form vary by server; the verdict is what decides.
+
+        Fixed phrases would miss all of these, leaving a dead session unpurged so
+        every later command repeats one opaque error forever.
+        """
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            json={"message": message},
+            status_code=400,
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert excinfo.value.error_code == ErrorCode.SESSION_EXPIRED
+
     def test_400_naming_the_field_without_a_verdict_is_not_remapped(self, httpx_mock) -> None:
         """A validation error about the field is our own bug, not a dead token.
 

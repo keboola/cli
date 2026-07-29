@@ -59,14 +59,25 @@ _DEVICE_ERROR_EXPIRED = "expired_token"
 # consulted for 400 -- see `_is_rejected_grant` for why 401 needs no marker.
 # Matched case-insensitively against the mapped error message.
 #
-# Every entry states a VERDICT on the token ("invalid", "expired"), never just
-# the field name: a 400 that merely mentions the refresh token can equally be
-# the auth service rejecting a malformed request body -- our own bug -- and
-# purging on that would destroy a still-valid credential.
-_GRANT_REJECTION_MARKERS = (
-    "invalid_grant",
-    "invalid refresh token",
-    "expired refresh token",
+# The OAuth token is decisive on its own.
+_GRANT_REJECTION_MARKERS = ("invalid_grant",)
+
+# Otherwise a 400 must name the credential AND pass a verdict on it. Requiring
+# both halves rather than fixed phrases is what keeps two failure modes apart
+# without guessing the server's exact wording: "The refresh token has expired."
+# and "Refresh token revoked." are rejections whatever the word order, while
+# "The refresh token must be a string." names the field and passes no verdict --
+# that is a malformed request, i.e. our own bug, and purging a still-valid
+# credential over it would force an avoidable re-login.
+_GRANT_SUBJECT_MARKERS = ("refresh token", "refreshtoken")
+_GRANT_VERDICT_MARKERS = (
+    "invalid",
+    "expired",
+    "revoked",
+    "not valid",
+    "no longer valid",
+    "unknown",
+    "rejected",
 )
 
 
@@ -87,14 +98,19 @@ def _is_rejected_grant(exc: KeboolaApiError) -> bool:
 
     A 400 is ambiguous -- it can also mean we sent a malformed body, i.e.
     our own bug -- and purging on that would destroy a still-valid refresh
-    token and force an avoidable re-login. So 400 requires a marker in the
-    message before it is classified as a rejected grant.
+    token and force an avoidable re-login. So a 400 counts only when it
+    carries `invalid_grant`, or names the refresh token AND passes a verdict
+    on it (see the marker tuples above for why both halves are required).
     """
     if exc.status_code == 401:
         return True
     if exc.status_code == 400:
         message = (exc.message or "").lower()
-        return any(marker in message for marker in _GRANT_REJECTION_MARKERS)
+        if any(marker in message for marker in _GRANT_REJECTION_MARKERS):
+            return True
+        names_the_token = any(marker in message for marker in _GRANT_SUBJECT_MARKERS)
+        passes_a_verdict = any(marker in message for marker in _GRANT_VERDICT_MARKERS)
+        return names_the_token and passes_a_verdict
     return False
 
 
