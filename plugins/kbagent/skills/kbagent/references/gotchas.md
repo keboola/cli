@@ -124,6 +124,28 @@ Versioning convention:
   the credential -- config version history keeps the old plaintext. Read-only,
   no API call.
 
+## `--change-description` is the version audit line; `--description` is the display name (since v0.77.0, #505)
+
+- **Two different fields, similar names.** `config update` / `config row-update`
+  accept both. `--description` overwrites the configuration's **display
+  description** (the text shown in the UI, persisted on the config itself).
+  `--change-description` writes the **new version's `changeDescription`** -- the
+  one-line "why" in version history. Passing the wrong one either clobbers a
+  description someone wrote, or buries the reason for the change.
+- **Omitting it is safe.** Without the flag kbagent keeps the previous
+  auto-generated default verbatim (`Updated metadata + configuration via kbagent
+  config update`), so existing callers see no behavior change.
+- **`--dry-run` echoes it.** The dry-run result carries `change_description`
+  (JSON) / a `changeDescription:` line (human), so the audit text can be
+  reviewed before the write -- unlike the version number, which does not exist
+  until the PUT lands.
+- **Read it back from the config, not a version list.** `config detail` returns
+  the current version's `changeDescription` at the top level; there is no
+  `config versions` command.
+- **Not available on creates.** `config new`, `config row-create`, `flow new`,
+  and `flow update` do NOT take the flag -- their client methods have no such
+  parameter yet. Only the two update paths are covered.
+
 ## `config create/update` + rows auto-encrypt `#`-prefixed secrets before write (since v0.54.0, closes #378)
 
 - **Before v0.54.0 this was a plaintext leak.** `config new --push`,
