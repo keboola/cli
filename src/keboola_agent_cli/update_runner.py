@@ -468,18 +468,21 @@ def collect_finished_deferred_update() -> DeferredUpdateReport | None:
         return None
 
     exit_file = _exit_path()
+    reported = exit_file.is_file()
     raw_exit: str | None = None
-    if exit_file.is_file():
+    if reported:
         try:
             raw_exit = exit_file.read_text(encoding="utf-8").strip()
         except OSError:
-            raw_exit = None
+            # The helper reported, we just cannot read it. That is a failure to
+            # surface, not a helper that vanished.
+            logger.debug("Could not read the deferred-update exit file", exc_info=True)
     elif not _marker_is_stale(marker):
         return None  # helper is still waiting for kbagent to exit
 
     _clear_deferred_state()
 
-    status, exit_code = _classify_exit(raw_exit, marker_is_stale=raw_exit is None)
+    status, exit_code = _classify_exit(raw_exit, helper_reported=reported)
     return DeferredUpdateReport(
         status=status,
         from_version=str(marker.get("from_version") or "unknown"),
@@ -491,16 +494,23 @@ def collect_finished_deferred_update() -> DeferredUpdateReport | None:
 
 
 def _classify_exit(
-    raw_exit: str | None, *, marker_is_stale: bool
+    raw_exit: str | None, *, helper_reported: bool
 ) -> tuple[DeferredUpdateStatus, int | None]:
     """Map the helper's exit file to a status.
 
     Anything that is neither a clean exit code nor the explicit "gave up"
     marker counts as a failure -- an unparseable result is exactly the case
     where the user needs the recovery command, so it must not be optimistic.
+
+    Args:
+        raw_exit: Contents of the exit file, or None when there was nothing
+            readable there.
+        helper_reported: Whether an exit file existed at all. A helper that
+            wrote something unreadable FAILED; one that never wrote at all is
+            LOST (killed, or the machine rebooted mid-wait).
     """
     if raw_exit is None:
-        return (DeferredUpdateStatus.LOST if marker_is_stale else DeferredUpdateStatus.FAILED), None
+        return (DeferredUpdateStatus.FAILED if helper_reported else DeferredUpdateStatus.LOST), None
     if raw_exit == DEFERRED_UPDATE_ABANDONED_MARKER:
         return DeferredUpdateStatus.ABANDONED, None
     try:
