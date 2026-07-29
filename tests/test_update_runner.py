@@ -8,6 +8,7 @@ that a slow installer is never killed.
 """
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -32,6 +33,7 @@ from keboola_agent_cli.update_runner import (
     is_update_pending,
     quote_for_powershell,
     request_deferred_update,
+    resolve_powershell,
     run_install,
     should_defer,
 )
@@ -355,3 +357,111 @@ class TestCollectFinishedDeferredUpdate:
     def test_a_stale_marker_does_not_block_a_new_schedule(self, tmp_path: Path) -> None:
         self._write_marker(tmp_path, age_seconds=DEFERRED_UPDATE_STALE_SECONDS + 60)
         assert is_update_pending() is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="exercises the real PowerShell helper")
+class TestWaiterScriptOnWindows:
+    """Run the generated helper for real on the Windows CI runner.
+
+    Everything above pins the script's *text*. This runs it, which is the only
+    way to know the PowerShell actually parses and behaves -- the script is
+    authored on machines that cannot execute it.
+    """
+
+    @staticmethod
+    def _already_exited_pid() -> int:
+        """A PID that is guaranteed gone, so `Wait-Process` takes its error path."""
+        process = subprocess.Popen([sys.executable, "-c", "pass"])
+        process.wait()
+        return process.pid
+
+    def _run_helper(self, script: str) -> None:
+        powershell = resolve_powershell()
+        assert powershell is not None, "Windows must always provide an in-box PowerShell"
+        subprocess.run(build_helper_command(powershell, script), check=True, timeout=180)
+
+    def test_installer_exit_code_is_recorded(self, tmp_path: Path) -> None:
+        exit_file = tmp_path / DEFERRED_UPDATE_EXIT_FILENAME
+        install_log = tmp_path / "install.log"
+        request = DeferredUpdateRequest(
+            from_version="1.0.0",
+            target_version="2.0.0",
+            install_command=(sys.executable, "-c", "print('installed')"),
+            recovery_command=None,
+        )
+
+        self._run_helper(
+            build_waiter_script(
+                request,
+                pid=self._already_exited_pid(),
+                exit_file=exit_file,
+                install_log=install_log,
+                max_wait_seconds=60,
+                poll_seconds=1,
+                # Nothing is named `kbagent` on the runner, so the wait loop
+                # falls straight through to the install.
+                process_name="kbagent",
+            )
+        )
+
+        assert exit_file.read_text().strip() == "0"
+        assert "installed" in install_log.read_text()
+
+    def test_failing_installer_is_reported_not_swallowed(self, tmp_path: Path) -> None:
+        exit_file = tmp_path / DEFERRED_UPDATE_EXIT_FILENAME
+        request = DeferredUpdateRequest(
+            from_version="1.0.0",
+            target_version="2.0.0",
+            install_command=(sys.executable, "-c", "import sys; sys.exit(3)"),
+            recovery_command=None,
+        )
+
+        self._run_helper(
+            build_waiter_script(
+                request,
+                pid=self._already_exited_pid(),
+                exit_file=exit_file,
+                install_log=tmp_path / "install.log",
+                max_wait_seconds=60,
+                poll_seconds=1,
+                process_name="kbagent",
+            )
+        )
+
+        assert exit_file.read_text().strip() == "3"
+
+    def test_gives_up_without_installing_while_a_process_is_still_running(
+        self, tmp_path: Path
+    ) -> None:
+        """The branch that protects the environment: something is still holding it.
+
+        Watching this very interpreter's own name guarantees the loop keeps
+        finding a live process, which is the situation a `kbagent serve` creates.
+        """
+        exit_file = tmp_path / DEFERRED_UPDATE_EXIT_FILENAME
+        sentinel = tmp_path / "must-not-exist.txt"
+        request = DeferredUpdateRequest(
+            from_version="1.0.0",
+            target_version="2.0.0",
+            install_command=(
+                sys.executable,
+                "-c",
+                f"import pathlib; pathlib.Path({str(sentinel)!r}).write_text('ran')",
+            ),
+            recovery_command=None,
+        )
+
+        self._run_helper(
+            build_waiter_script(
+                request,
+                pid=self._already_exited_pid(),
+                exit_file=exit_file,
+                install_log=tmp_path / "install.log",
+                max_wait_seconds=3,
+                poll_seconds=1,
+                process_name=Path(sys.executable).stem,
+            )
+        )
+
+        assert exit_file.read_text().strip() == DEFERRED_UPDATE_ABANDONED_MARKER
+        assert not sentinel.exists(), "the installer must not touch a live environment"
