@@ -93,6 +93,15 @@ Versioning convention:
   `flow validate --project` fetch the live schema from the AI Service and so
   fail -- they do NOT degrade to the semantic-only validation they fall back to
   when a schema fetch merely errors.
+- **`config new` depends on the flag shape, not just `--no-validate`.** The
+  scaffold step calls the AI Service unconditionally, and it runs unless BOTH
+  `--push` and `--no-files` are set. So plain `config new` and
+  `config new --push` fail on a session project regardless of `--no-validate`.
+  Only `config new --push --no-files` skips the scaffold; that shape then still
+  hits the AI Service if you pass an explicit `--configuration` without
+  `--no-validate`, because body validation is the other AI call. Working
+  combination on a session project: `--push --no-files` plus either
+  `--no-validate` or no explicit body.
 - **`kbagent serve` DOES serve session projects -- it is not on the fail-fast
   list.** It delegates to the same already-guarded services, so the REST API
   and web UI work against a sentinel-token project. Two things follow that are

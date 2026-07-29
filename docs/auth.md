@@ -205,9 +205,10 @@ looks odd, and every path that would spend it as a credential refuses to.
 | The importable SDK (`keboola_agent_cli.Client`) | `AUTH_NOT_SUPPORTED_ON_STACK` — construct it with a static token ([Python SDK](sdk.md)) |
 
 `SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py` is the
-in-code version of this list. `auth login` and `auth status` print it, and
-`--json` ships it as `session_unsupported_features`, so you learn the
-restrictions up front rather than at first use.
+in-code version of this list. `auth login` and `auth register-projects` print it
+once they have registered something, and carry it as
+`session_unsupported_features` in `--json`, so you learn the restrictions up
+front rather than at first use. `auth status` does not carry that field.
 
 Notes worth knowing before you hit them:
 
@@ -219,12 +220,16 @@ Notes worth knowing before you hit them:
   schema from the AI Service, so on a session project they fail rather than
   falling back to the semantic-only validation they use when the schema fetch
   merely errors.
-- **`config` mostly works; `config new` does not.** `config list`, `detail`,
-  `search`, `update`, the row and metadata subcommands and `variables-*` are
-  pure Storage calls. `config new` fetches the component schema from the AI
-  Service to build the scaffold, before any write and regardless of
-  `--no-validate`, so it fails on a session project. Write the config with
-  `config update` (or `sync push`) instead.
+- **`config` mostly works; `config new` depends on its flags.** `config list`,
+  `detail`, `search`, `update`, the row and metadata subcommands and
+  `variables-*` are pure Storage calls. `config new` builds its scaffold from the
+  component schema fetched from the AI Service, and the scaffold is only skipped
+  for `--push --no-files` (`commands/config.py:1335`) — so the default
+  scaffold-writing form fails on a session project no matter what
+  `--no-validate` says. `config new --push --no-files` stays on the Storage path
+  as long as validation does not fire: pass `--no-validate`, or omit an explicit
+  `--configuration` body, which auto-skips it. Otherwise write the config with
+  `config update` (or `sync push`).
 - **The failure is immediate and typed**, not an opaque 401 from the service:
   the guard fires before the client is even constructed and names the feature
   it refused.
