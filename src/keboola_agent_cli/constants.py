@@ -668,10 +668,15 @@ AUTH_LOCK_TIMEOUT: float = 30.0
 # stuck and exit 5, which is false. Tighter than DEFAULT_TIMEOUT on every phase:
 # a refresh that takes longer than this is useless anyway.
 AUTH_REFRESH_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=5.0, write=2.0, pool=2.0)
-# Worst-case wall clock a refresh can add to the lock hold: the httpx phases are
-# sequential and each carries its own deadline, so the bound is their sum -- and
-# it stays the whole bound only because `AuthClient.refresh` runs as a single
-# attempt, outside `BaseHttpClient`'s retry loop. Must keep clear headroom under
+# Hard ceiling on the wall clock a refresh may add to the lock hold, ENFORCED by
+# `SessionTokenProvider._refresh_within_budget` around the request rather than
+# inferred from AUTH_REFRESH_TIMEOUT: httpx applies `read` and `write` per I/O
+# operation, not per request, and exposes no total-duration option, so a server
+# that trickles a response one chunk at a time stays inside those per-phase
+# deadlines indefinitely. The value is the sum of the phases -- the lowest
+# ceiling that cannot fire before each phase has had its own chance -- and it
+# stays a true ceiling only because `AuthClient.refresh` is a single attempt,
+# outside `BaseHttpClient`'s retry loop. Must keep clear headroom under
 # AUTH_LOCK_TIMEOUT, which `tests/test_auth_client.py` asserts.
 AUTH_REFRESH_MAX_WALL_CLOCK: float = sum(
     phase

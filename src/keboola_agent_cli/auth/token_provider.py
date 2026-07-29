@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Protocol
 
 import httpx
 
-from ..constants import AUTH_REFRESH_MARGIN
+from ..constants import AUTH_REFRESH_MARGIN, AUTH_REFRESH_MAX_WALL_CLOCK
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import normalize_stack_url
 from .models import CliTokenResponse, IntrospectResponse, StackSession
@@ -179,11 +179,11 @@ class SessionTokenProvider:
 
         Holding a lock across network I/O is only safe while the hold stays
         shorter than the `AUTH_LOCK_TIMEOUT` every other holder waits, so
-        `AuthClient.refresh` is a single attempt bounded by
-        `AUTH_REFRESH_MAX_WALL_CLOCK` (< half of `AUTH_LOCK_TIMEOUT`). Without
-        that bound a slow auth service would make concurrent processes report
-        this lock as stuck -- with a `ConfigError` (exit 5) that names the
-        wrong cause.
+        `AuthClient.refresh` is a single attempt and `_refresh_within_budget`
+        caps it at `AUTH_REFRESH_MAX_WALL_CLOCK` (< half of
+        `AUTH_LOCK_TIMEOUT`). Without that cap a slow auth service would make
+        concurrent processes report this lock as stuck -- with a `ConfigError`
+        (exit 5) that names the wrong cause.
         """
         with self._state_store.transaction():
             session = self._state_store.get_session(self._stack_url)
@@ -213,11 +213,58 @@ class SessionTokenProvider:
 
             return self._perform_refresh(session)
 
+    def _refresh_within_budget(self, client: AuthClient, refresh_token: str) -> CliTokenResponse:
+        """Issue the refresh request under a hard wall-clock ceiling.
+
+        `AuthClient.refresh` already carries short per-phase httpx timeouts, but
+        httpx applies `read` / `write` per I/O operation and has no
+        total-duration option, so a server that trickles a response stays inside
+        them for as long as it likes. The `auth.json` lock is held across this
+        call while every other holder waits only `AUTH_LOCK_TIMEOUT`, so the
+        hold needs a ceiling that does not depend on the server's cooperation.
+
+        A request still running at the deadline is abandoned rather than awaited:
+        the worker is a daemon thread, and unwinding past the caller's
+        `with self._build_client()` closes the client under it, which aborts the
+        socket. The lock is released as the caller unwinds -- which is the
+        property being protected.
+
+        Cost of abandoning: the server may have rotated a pair that is then
+        discarded, leaving the on-disk refresh token one generation stale. That
+        is the same state any lost response leaves behind, and the server's 30 s
+        idempotent grace window is what forgives it (see `AuthClient.refresh`).
+        """
+        rotated: list[CliTokenResponse] = []
+        failure: list[BaseException] = []
+
+        def _run() -> None:
+            try:
+                rotated.append(client.refresh(refresh_token))
+            except BaseException as exc:  # re-raised on the caller's thread below
+                failure.append(exc)
+
+        worker = threading.Thread(target=_run, name="kbagent-auth-refresh", daemon=True)
+        worker.start()
+        worker.join(AUTH_REFRESH_MAX_WALL_CLOCK)
+        if worker.is_alive():
+            raise KeboolaApiError(
+                message=(
+                    f"Refreshing your Keboola login at {self._stack_url} exceeded its "
+                    f"{AUTH_REFRESH_MAX_WALL_CLOCK:.0f}s budget. Run the command again."
+                ),
+                status_code=0,
+                error_code=ErrorCode.TIMEOUT,
+                retryable=True,
+            )
+        if failure:
+            raise failure[0]
+        return rotated[0]
+
     def _perform_refresh(self, session: StackSession) -> str:
         """Step 7: the network refresh call, plus persist-before-use (step 7a/b)."""
         with self._build_client() as client:
             try:
-                tokens = client.refresh(session.refresh_token)
+                tokens = self._refresh_within_budget(client, session.refresh_token)
             except KeboolaApiError as exc:
                 if exc.error_code == ErrorCode.SESSION_EXPIRED:
                     # Family-revoked / invalid_grant: purge before re-raising

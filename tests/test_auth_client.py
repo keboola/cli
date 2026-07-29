@@ -497,6 +497,28 @@ class TestRefresh:
 
         assert excinfo.value.error_code == ErrorCode.SESSION_EXPIRED
 
+    def test_400_naming_the_field_without_a_verdict_is_not_remapped(self, httpx_mock) -> None:
+        """A validation error about the field is our own bug, not a dead token.
+
+        `SessionTokenProvider` purges `auth.json` on `SESSION_EXPIRED`, so
+        classifying a malformed-request 400 that way would force an avoidable
+        re-login on a refresh token the server never rejected.
+        """
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            json={"message": "The refresh token must be a string."},
+            status_code=400,
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.refresh("kbc_rt_valid")
+        finally:
+            client.close()
+
+        assert excinfo.value.error_code != ErrorCode.SESSION_EXPIRED
+
     def test_other_400_is_not_remapped(self, httpx_mock) -> None:
         """A 400 unrelated to invalid_grant keeps the generic error mapping."""
         httpx_mock.add_response(
@@ -531,7 +553,12 @@ class TestRefreshLockHoldBudget:
     """
 
     def test_budget_leaves_clear_headroom_under_the_lock_acquire_timeout(self) -> None:
-        """The arithmetic bound, asserted so a future timeout bump cannot break it."""
+        """Relationship between the two constants, so a later bump cannot close the gap.
+
+        This asserts arithmetic only. That the ceiling is actually *enforced* --
+        the httpx per-phase timeouts cannot do it -- is asserted where the lock
+        is held, in `tests/test_token_provider.py::TestRefreshWallClockCeiling`.
+        """
         assert AUTH_REFRESH_MAX_WALL_CLOCK * 2 <= AUTH_LOCK_TIMEOUT
 
     def test_request_carries_the_constrained_timeout(self, httpx_mock) -> None:

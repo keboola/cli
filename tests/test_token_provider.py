@@ -27,6 +27,7 @@ import json
 import multiprocessing
 import os
 import threading
+import time
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -37,6 +38,7 @@ import filelock
 import httpx
 import pytest
 
+from keboola_agent_cli.auth import token_provider as tp_mod
 from keboola_agent_cli.auth.auth_client import AuthClient
 from keboola_agent_cli.auth.models import CliTokenResponse, StackSession
 from keboola_agent_cli.auth.state_store import AuthStateStore
@@ -410,6 +412,152 @@ class TestRefreshTimeout:
 
         assert provider.get_access_token() == "kbc_at_rotated_1"
         assert fake.calls == ["kbc_rt_original", "kbc_rt_original"]
+
+
+# ----------------------------------------------------------------------------
+# The wall-clock ceiling on the lock hold (review F2)
+# ----------------------------------------------------------------------------
+
+
+class _StalledAuthClient(AuthClient):
+    """Fake that mimics a server trickling a response: `refresh` does not return.
+
+    This is the shape httpx's per-phase `read` / `write` timeouts cannot catch --
+    they are applied per I/O operation, so a response that keeps dribbling resets
+    them forever. Closing the client releases the call, exactly as closing a real
+    `httpx.Client` aborts an in-flight socket.
+    """
+
+    def __init__(self, *, late_tokens: CliTokenResponse | None = None) -> None:
+        self.calls: list[str] = []
+        self.entered = threading.Event()
+        self._released = threading.Event()
+        self._late_tokens = late_tokens
+
+    def __enter__(self) -> _StalledAuthClient:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._released.set()
+
+    def release(self) -> None:
+        """Let the stalled call finish, as a server finally answering would."""
+        self._released.set()
+
+    def refresh(self, refresh_token: str) -> CliTokenResponse:
+        self.calls.append(refresh_token)
+        self.entered.set()
+        # Bounded so a broken ceiling cannot park this thread for the whole suite.
+        self._released.wait(timeout=30)
+        if self._late_tokens is not None:
+            return self._late_tokens
+        raise KeboolaApiError(
+            "Connection closed while refreshing.",
+            error_code=ErrorCode.CONNECTION_ERROR,
+            retryable=True,
+        )
+
+
+class TestRefreshWallClockCeiling:
+    """The lock hold is capped by `AUTH_REFRESH_MAX_WALL_CLOCK`, enforced here.
+
+    `AUTH_REFRESH_TIMEOUT` cannot provide this: httpx applies `read` / `write`
+    per I/O operation and has no total-duration option, so summing the phases
+    describes a hope, not a bound. What every other process actually depends on
+    is that `auth.json.lock` comes free within its `AUTH_LOCK_TIMEOUT` -- and
+    that is what these tests assert.
+    """
+
+    @staticmethod
+    def _provider(store: AuthStateStore, client: _StalledAuthClient) -> SessionTokenProvider:
+        return SessionTokenProvider(STACK_URL, store, client_factory=lambda _url: client)
+
+    def test_a_stalled_refresh_gives_up_at_the_ceiling(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(tp_mod, "AUTH_REFRESH_MAX_WALL_CLOCK", 0.2)
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        client = _StalledAuthClient()
+        provider = self._provider(store, client)
+
+        started = time.monotonic()
+        with pytest.raises(KeboolaApiError) as exc_info:
+            provider.get_access_token()
+        elapsed = time.monotonic() - started
+
+        assert client.entered.is_set(), "the request must actually have been issued"
+        assert exc_info.value.error_code == ErrorCode.TIMEOUT
+        assert exc_info.value.retryable is True
+        # Generous, but far below the 30 s wait every other lock holder would
+        # otherwise sit through before blaming a "stuck" process.
+        assert elapsed < 5.0
+
+    def test_the_file_lock_comes_free_after_the_ceiling_fires(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The property the ceiling exists for, probed the way another process sees it."""
+        monkeypatch.setattr(tp_mod, "AUTH_REFRESH_MAX_WALL_CLOCK", 0.2)
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        client = _StalledAuthClient()
+
+        with pytest.raises(KeboolaApiError):
+            self._provider(store, client).get_access_token()
+
+        probe = filelock.FileLock(str(store.lock_path), timeout=0)
+        probe.acquire()  # filelock.Timeout if the abandoned refresh still holds it
+        probe.release()
+
+    def test_the_still_valid_session_survives(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ceiling breach says nothing about the refresh token, so it must stay."""
+        monkeypatch.setattr(tp_mod, "AUTH_REFRESH_MAX_WALL_CLOCK", 0.2)
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+
+        with pytest.raises(KeboolaApiError):
+            self._provider(store, _StalledAuthClient()).get_access_token()
+
+        persisted = store.get_session(STACK_URL)
+        assert persisted is not None
+        assert persisted.refresh_token == "kbc_rt_original"
+
+    def test_a_rotation_that_lands_after_the_ceiling_is_never_persisted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Persistence stays on the thread that holds the lock.
+
+        The abandoned worker may still be handed a rotated pair. Writing it from
+        there would touch `auth.json` with no lock held, so it is discarded --
+        the stale-by-one-generation refresh token on disk is what the server's
+        idempotent grace window exists to forgive.
+        """
+        monkeypatch.setattr(tp_mod, "AUTH_REFRESH_MAX_WALL_CLOCK", 0.2)
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        client = _StalledAuthClient(
+            late_tokens=CliTokenResponse(
+                accessToken="kbc_at_too_late",
+                refreshToken="kbc_rt_too_late",
+                expiresIn=3600,
+                sessionId="session-1",
+            )
+        )
+
+        with pytest.raises(KeboolaApiError):
+            self._provider(store, client).get_access_token()
+        client.release()
+        time.sleep(0.2)  # give the abandoned worker every chance to write
+
+        persisted = store.get_session(STACK_URL)
+        assert persisted is not None
+        assert persisted.access_token == "kbc_at_original"
+        assert persisted.refresh_token == "kbc_rt_original"
 
 
 # ----------------------------------------------------------------------------

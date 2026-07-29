@@ -30,7 +30,6 @@ from ..constants import (
     AUTH_DEVICE_TOKEN_PATH,
     AUTH_PKCE_AUTHORIZE_PATH,
     AUTH_PKCE_TOKEN_PATH,
-    AUTH_REFRESH_MAX_WALL_CLOCK,
     AUTH_REFRESH_TIMEOUT,
     AUTH_SESSIONS_PATH,
     AUTH_TOKEN_INTROSPECT_PATH,
@@ -59,11 +58,15 @@ _DEVICE_ERROR_EXPIRED = "expired_token"
 # Substrings that identify a rejected grant in a 400 response body. Only
 # consulted for 400 -- see `_is_rejected_grant` for why 401 needs no marker.
 # Matched case-insensitively against the mapped error message.
+#
+# Every entry states a VERDICT on the token ("invalid", "expired"), never just
+# the field name: a 400 that merely mentions the refresh token can equally be
+# the auth service rejecting a malformed request body -- our own bug -- and
+# purging on that would destroy a still-valid credential.
 _GRANT_REJECTION_MARKERS = (
     "invalid_grant",
     "invalid refresh token",
     "expired refresh token",
-    "refresh token",
 )
 
 
@@ -295,8 +298,13 @@ class AuthClient(BaseHttpClient):
         other holder of that lock waits only `AUTH_LOCK_TIMEOUT`; three
         retries at the default 30 s read timeout plus backoff would let a slow
         refresh outlast it, so a merely slow auth service would make every
-        concurrent kbagent process report the lock as stuck. The bound is
-        `AUTH_REFRESH_MAX_WALL_CLOCK`.
+        concurrent kbagent process report the lock as stuck.
+
+        These per-phase timeouts do not by themselves bound the call: httpx
+        applies `read` / `write` per I/O operation, so a trickled response
+        never trips them. The total is capped by the caller --
+        `SessionTokenProvider._refresh_within_budget` enforces
+        `AUTH_REFRESH_MAX_WALL_CLOCK`, which is where the lock hold is owned.
 
         Dropping the retry costs little: on failure the old refresh token is
         still on disk and still inside the server's 30 second idempotent grace
@@ -331,8 +339,8 @@ class AuthClient(BaseHttpClient):
         except httpx.TimeoutException as exc:
             raise KeboolaApiError(
                 message=(
-                    f"Refreshing your Keboola login at {self._base_url} timed out "
-                    f"(hard budget {AUTH_REFRESH_MAX_WALL_CLOCK:.0f}s). Run the command again."
+                    f"Refreshing your Keboola login at {self._base_url} timed out. "
+                    "Run the command again."
                 ),
                 status_code=0,
                 error_code=ErrorCode.TIMEOUT,
